@@ -129,6 +129,22 @@ dongles:
         description: "Amateur 2m band — 144 to 148 MHz"
         decoders: []
 
+      - id: mw-broadcast
+        name: "MW Broadcast"
+        centerFrequency: 1000000      # 1000 kHz — center of MW band
+        sampleRate: 2400000           # covers ~530–2400 kHz
+        fftSize: 8192
+        fftFps: 15
+        defaultMode: am
+        defaultTuneOffset: 485000     # tune to 1485 kHz (Broadcast Italia C-QUAM)
+        defaultBandwidth: 10000
+        gain: 49.6
+        description: "MW broadcast band — 530 to 1700 kHz (direct sampling required)"
+        decoders: []
+        # NOTE: MW reception requires direct sampling mode on the dongle.
+        # Set directSampling: 2 at the dongle level, or use a separate
+        # dongle config dedicated to HF/MW.
+
   # ─── Docker sidecar rtl_tcp ─────────────────────────────
   # Run rtl_tcp in a separate container with USB passthrough:
   #

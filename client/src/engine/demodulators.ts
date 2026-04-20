@@ -1003,9 +1003,12 @@ class CQuamDemodulator implements Demodulator {
       }
 
       // 5. C-QUAM stereo extraction
-      const LpR = env * cosGamma - 1.0;
-      const safeCosGamma = Math.abs(cosGamma) > 1e-9 ? cosGamma : 1e-9;
-      const LmR = Q / safeCosGamma;
+      // cosGamma can converge to ±1 depending on PLL lock polarity;
+      // use absolute value for envelope correction and sign for L-R
+      const absCosGamma = Math.abs(cosGamma) > 1e-9 ? Math.abs(cosGamma) : 1e-9;
+      const cosSign = cosGamma >= 0 ? 1 : -1;
+      const LpR = env * absCosGamma - 1.0;
+      const LmR = (Q * cosSign) / absCosGamma;
       let rawL = 0.5 * (LpR + LmR);
       let rawR = 0.5 * (LpR - LmR);
 
@@ -1024,8 +1027,8 @@ class CQuamDemodulator implements Demodulator {
         gSampleCount = 0;
       }
 
-      // 7. Lock level tracking
-      lockLevel += 0.001 * (Math.max(0, I / env) - lockLevel);
+      // 7. Lock level tracking (use abs — PLL can lock at 0° or 180°)
+      lockLevel += 0.001 * (Math.abs(I / env) - lockLevel);
 
       // 8. Notch filter — left channel (Direct Form II biquad)
       const wn0l = rawL - na1 * w1L - na2 * w2L;
