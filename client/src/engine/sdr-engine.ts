@@ -12,12 +12,14 @@ import {
   MSG_FFT_ADPCM,
   MSG_IQ,
   MSG_IQ_ADPCM,
+  MSG_IQ_VBR,
   MSG_AUDIO,
   MSG_META,
   MSG_DECODER,
   MSG_SIGNAL_LEVEL,
   DEMOD_MODES,
   ImaAdpcmDecoder,
+  VbrDecoder,
   decodeFftAdpcm,
   type ServerMeta,
   type ClientCommand,
@@ -43,6 +45,9 @@ export class SdrEngine {
 
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
+
+  // VBR decoder for IQ sub-band (stateful, streaming)
+  private iqVbrDecoder = new VbrDecoder();
 
   // Auto-range tracking
   private autoRangeMin = -60;
@@ -248,67 +253,7 @@ export class SdrEngine {
       case MSG_IQ: {
         // Per-user IQ sub-band data → client-side demodulation → audio
         const iqData = new Int16Array(payload);
-        this.bwIqSamples += iqData.length / 2;
-
-        // Squelch gate: if squelch is set and signal is below threshold, mute audio.
-        // During grace period after tune/mode change, bypass squelch so the
-        // jitter buffer can fill and the signal level can stabilize.
-        const squelchLevel = store.squelch();
-        const inGracePeriod = performance.now() < this.squelchBypassUntil;
-        const squelchOpen = squelchLevel === null || inGracePeriod || store.signalLevel() >= squelchLevel;
-
-        // Determine if stereo decoding should be attempted:
-        // 1. User has stereo enabled (toggle switch)
-        // 2. Demodulator supports it
-        // 3. Signal level exceeds threshold
-        const stereoAllowed = store.stereoEnabled()
-          && this.demodulator.stereoCapable
-          && this.demodulator.processStereo != null
-          && store.signalLevel() >= store.stereoThreshold();
-
-        // Use stereo path when allowed
-        if (stereoAllowed) {
-          const stereoResult = this.demodulator.processStereo!(iqData);
-          this.iqInCount += iqData.length / 2;
-
-          if (stereoResult.stereo) {
-            this.audioOutCount += stereoResult.left.length;
-            if (stereoResult.left.length > 0 && squelchOpen) {
-              this.audio.pushStereoAudio(stereoResult.left, stereoResult.right);
-            }
-            // Update stereo detection state
-            if (!store.stereoDetected()) {
-              store.setStereoDetected(true);
-            }
-          } else {
-            this.audioOutCount += stereoResult.left.length;
-            if (stereoResult.left.length > 0 && squelchOpen) {
-              this.audio.pushDemodulatedAudio(stereoResult.left);
-            }
-            if (store.stereoDetected()) {
-              store.setStereoDetected(false);
-            }
-          }
-        } else {
-          const audioSamples = this.demodulator.process(iqData);
-          this.iqInCount += iqData.length / 2;
-          this.audioOutCount += audioSamples.length;
-          if (audioSamples.length > 0 && squelchOpen) {
-            this.audio.pushDemodulatedAudio(audioSamples);
-          }
-          if (store.stereoDetected()) {
-            store.setStereoDetected(false);
-          }
-        }
-
-        const now = performance.now();
-        if (now - this.lastAudioLog > 30000) {
-          const elapsed = (now - this.lastAudioLog) / 1000;
-          console.debug(`[SDR Audio] IQ in: ${Math.round(this.iqInCount / elapsed)}/s, Audio out: ${Math.round(this.audioOutCount / elapsed)}/s, Stereo: ${store.stereoDetected()}`);
-          this.iqInCount = 0;
-          this.audioOutCount = 0;
-          this.lastAudioLog = now;
-        }
+        this.processIqData(iqData);
         break;
       }
 
@@ -320,43 +265,14 @@ export class SdrEngine {
         const decoded = this.iqAdpcmDecoder.decode(adpcmData);
         // Trim to exact sample count (ADPCM may produce +1 sample if odd count)
         const iqData = sampleCount < decoded.length ? decoded.subarray(0, sampleCount) : decoded;
-        this.bwIqSamples += iqData.length / 2;
+        this.processIqData(iqData);
+        break;
+      }
 
-        // Reuse the same demodulation path as MSG_IQ
-        const squelchLevel2 = store.squelch();
-        const inGracePeriod2 = performance.now() < this.squelchBypassUntil;
-        const squelchOpen2 = squelchLevel2 === null || inGracePeriod2 || store.signalLevel() >= squelchLevel2;
-
-        const stereoAllowed2 = store.stereoEnabled()
-          && this.demodulator.stereoCapable
-          && this.demodulator.processStereo != null
-          && store.signalLevel() >= store.stereoThreshold();
-
-        if (stereoAllowed2) {
-          const stereoResult = this.demodulator.processStereo!(iqData);
-          this.iqInCount += iqData.length / 2;
-          if (stereoResult.stereo) {
-            this.audioOutCount += stereoResult.left.length;
-            if (stereoResult.left.length > 0 && squelchOpen2) {
-              this.audio.pushStereoAudio(stereoResult.left, stereoResult.right);
-            }
-            if (!store.stereoDetected()) store.setStereoDetected(true);
-          } else {
-            this.audioOutCount += stereoResult.left.length;
-            if (stereoResult.left.length > 0 && squelchOpen2) {
-              this.audio.pushDemodulatedAudio(stereoResult.left);
-            }
-            if (store.stereoDetected()) store.setStereoDetected(false);
-          }
-        } else {
-          const audioSamples = this.demodulator.process(iqData);
-          this.iqInCount += iqData.length / 2;
-          this.audioOutCount += audioSamples.length;
-          if (audioSamples.length > 0 && squelchOpen2) {
-            this.audio.pushDemodulatedAudio(audioSamples);
-          }
-          if (store.stereoDetected()) store.setStereoDetected(false);
-        }
+      case MSG_IQ_VBR: {
+        // VBR-compressed IQ sub-band: LMS predictor + Golomb-Rice blocks
+        const iqData = this.iqVbrDecoder.decodeMessage(payload);
+        this.processIqData(iqData);
         break;
       }
 
@@ -474,6 +390,73 @@ export class SdrEngine {
   }
 
   /**
+   * Common IQ demodulation pipeline shared by MSG_IQ, MSG_IQ_ADPCM, MSG_IQ_VBR.
+   * Handles squelch gating, stereo detection, and audio push.
+   */
+  private processIqData(iqData: Int16Array): void {
+    this.bwIqSamples += iqData.length / 2;
+
+    // Squelch gate: if squelch is set and signal is below threshold, mute audio.
+    // During grace period after tune/mode change, bypass squelch so the
+    // jitter buffer can fill and the signal level can stabilize.
+    const squelchLevel = store.squelch();
+    const inGracePeriod = performance.now() < this.squelchBypassUntil;
+    const squelchOpen = squelchLevel === null || inGracePeriod || store.signalLevel() >= squelchLevel;
+
+    // Determine if stereo decoding should be attempted:
+    // 1. User has stereo enabled (toggle switch)
+    // 2. Demodulator supports it
+    // 3. Signal level exceeds threshold
+    const stereoAllowed = store.stereoEnabled()
+      && this.demodulator.stereoCapable
+      && this.demodulator.processStereo != null
+      && store.signalLevel() >= store.stereoThreshold();
+
+    // Use stereo path when allowed
+    if (stereoAllowed) {
+      const stereoResult = this.demodulator.processStereo!(iqData);
+      this.iqInCount += iqData.length / 2;
+
+      if (stereoResult.stereo) {
+        this.audioOutCount += stereoResult.left.length;
+        if (stereoResult.left.length > 0 && squelchOpen) {
+          this.audio.pushStereoAudio(stereoResult.left, stereoResult.right);
+        }
+        if (!store.stereoDetected()) {
+          store.setStereoDetected(true);
+        }
+      } else {
+        this.audioOutCount += stereoResult.left.length;
+        if (stereoResult.left.length > 0 && squelchOpen) {
+          this.audio.pushDemodulatedAudio(stereoResult.left);
+        }
+        if (store.stereoDetected()) {
+          store.setStereoDetected(false);
+        }
+      }
+    } else {
+      const audioSamples = this.demodulator.process(iqData);
+      this.iqInCount += iqData.length / 2;
+      this.audioOutCount += audioSamples.length;
+      if (audioSamples.length > 0 && squelchOpen) {
+        this.audio.pushDemodulatedAudio(audioSamples);
+      }
+      if (store.stereoDetected()) {
+        store.setStereoDetected(false);
+      }
+    }
+
+    const now = performance.now();
+    if (now - this.lastAudioLog > 30000) {
+      const elapsed = (now - this.lastAudioLog) / 1000;
+      console.debug(`[SDR Audio] IQ in: ${Math.round(this.iqInCount / elapsed)}/s, Audio out: ${Math.round(this.audioOutCount / elapsed)}/s, Stereo: ${store.stereoDetected()}`);
+      this.iqInCount = 0;
+      this.audioOutCount = 0;
+      this.lastAudioLog = now;
+    }
+  }
+
+  /**
    * Update bandwidth/throughput stats every 1 second.
    * Pushes rates into the store and maintains a rolling history for the sparkline.
    */
@@ -534,9 +517,10 @@ export class SdrEngine {
             this.demodulator.setInputSampleRate(meta.iqSampleRate);
           }
         }
-        // Flush audio on new subscription and reset ADPCM decoder
+        // Flush audio on new subscription and reset codec decoders
         this.audio.resetBuffer();
         this.iqAdpcmDecoder.reset();
+        this.iqVbrDecoder.reset();
         // Re-send codec preferences so the server applies them to this subscription
         if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
           this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
@@ -737,8 +721,9 @@ export class SdrEngine {
 
   setIqCodec(codec: CodecType): void {
     store.setIqCodec(codec);
-    // Reset ADPCM decoder when switching codecs
+    // Reset codec decoders when switching codecs
     this.iqAdpcmDecoder.reset();
+    this.iqVbrDecoder.reset();
     this.send({ cmd: 'codec', iqCodec: codec });
   }
 
@@ -770,6 +755,8 @@ export class SdrEngine {
     this.audio.setEqHighMid(store.eqHighMid());
     this.audio.setEqHigh(store.eqHigh());
     this.audio.setLoudness(store.loudness());
+    // Tell server to start sending IQ data now that audio is enabled
+    this.send({ cmd: 'audio_enabled', enabled: true });
   }
 
   // ---- Resize Handling ----

@@ -20,14 +20,18 @@ import {
   packIqMessage,
   packFftAdpcmMessage,
   packIqAdpcmMessage,
+  packIqVbrMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
   MSG_IQ,
   MSG_IQ_ADPCM,
+  MSG_IQ_VBR,
   MSG_DECODER,
   ImaAdpcmEncoder,
   encodeFftAdpcm,
+  VbrEncoder,
+  packVbrBlocks,
 } from '@node-sdr/shared';
 import { DongleManager } from './dongle-manager.js';
 import { DecoderManager, type DecoderMessage } from './decoder-manager.js';
@@ -46,6 +50,8 @@ interface ConnectedClient {
   iqCodec: CodecType;
   /** Per-client ADPCM encoder for IQ stream (stateful, streaming) */
   iqAdpcmEncoder: ImaAdpcmEncoder | null;
+  /** Per-client VBR encoder for IQ stream (stateful, streaming) */
+  iqVbrEncoder: VbrEncoder | null;
 }
 
 export class WebSocketManager {
@@ -218,7 +224,7 @@ export class WebSocketManager {
     //   'adpcm' → MSG_IQ_ADPCM (4:1 compression, streaming state per client)
     const IQ_BACKPRESSURE = 1024 * 1024;
     for (const client of this.clients.values()) {
-      if (client.session.dongleId === dongleId && client.iqExtractor) {
+      if (client.session.dongleId === dongleId && client.iqExtractor && client.session.audioEnabled) {
         try {
           const raw = client.ws.raw as any;
           if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > IQ_BACKPRESSURE) {
@@ -232,6 +238,12 @@ export class WebSocketManager {
             if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
               const adpcm = client.iqAdpcmEncoder.encode(subBand);
               client.ws.send(packIqAdpcmMessage(adpcm, subBand.length));
+            } else if (client.iqCodec === 'vbr' && client.iqVbrEncoder) {
+              const blocks = client.iqVbrEncoder.encode(subBand);
+              if (blocks.length > 0) {
+                const packed = packVbrBlocks(blocks);
+                client.ws.send(packIqVbrMessage(packed));
+              }
             } else {
               client.ws.send(packIqMessage(subBand));
             }
@@ -285,12 +297,14 @@ export class WebSocketManager {
         volume: 0.8,
         squelch: null,
         muted: false,
+        audioEnabled: false,
       },
       isAdmin: false,
       iqExtractor: null,
       fftCodec: 'none',
       iqCodec: 'none',
       iqAdpcmEncoder: null,
+      iqVbrEncoder: null,
     };
 
     this.clients.set(clientId, client);
@@ -380,6 +394,11 @@ export class WebSocketManager {
 
       case 'mute':
         client.session.muted = cmd.muted;
+        break;
+
+      case 'audio_enabled':
+        client.session.audioEnabled = cmd.enabled;
+        logger.info({ clientId: client.id, audioEnabled: cmd.enabled }, 'Client audio state changed');
         break;
 
       case 'waterfall_settings':
@@ -486,8 +505,18 @@ export class WebSocketManager {
         } else {
           client.iqAdpcmEncoder.reset();
         }
+        client.iqVbrEncoder = null;
+      } else if (cmd.iqCodec === 'vbr') {
+        // Create or reset per-client VBR encoder
+        if (!client.iqVbrEncoder) {
+          client.iqVbrEncoder = new VbrEncoder();
+        } else {
+          client.iqVbrEncoder.reset();
+        }
+        client.iqAdpcmEncoder = null;
       } else {
         client.iqAdpcmEncoder = null;
+        client.iqVbrEncoder = null;
       }
       logger.info({ clientId: client.id, iqCodec: cmd.iqCodec }, 'Client IQ codec changed');
     }

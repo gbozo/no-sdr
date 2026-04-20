@@ -841,10 +841,24 @@ const SMeter: Component = () => {
 
 // ---- Codec Settings ----
 const CodecSettings: Component = () => {
-  const codecs: { value: CodecType; label: string }[] = [
+  const fftCodecs: { value: CodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
   ];
+
+  const iqCodecs: { value: CodecType; label: string }[] = [
+    { value: 'none', label: 'None' },
+    { value: 'adpcm', label: 'ADPCM' },
+    { value: 'vbr', label: 'VBR' },
+  ];
+
+  const iqRatioHint = () => {
+    switch (store.iqCodec()) {
+      case 'adpcm': return '4:1';
+      case 'vbr': return '3-10:1';
+      default: return 'raw';
+    }
+  };
 
   return (
     <div class="sdr-panel">
@@ -861,7 +875,7 @@ const CodecSettings: Component = () => {
             </span>
           </div>
           <div class="flex gap-1">
-            <For each={codecs}>
+            <For each={fftCodecs}>
               {(c) => (
                 <button
                   class={`sdr-mode-btn flex-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
@@ -880,11 +894,11 @@ const CodecSettings: Component = () => {
               IQ
             </label>
             <span class="text-[9px] font-mono text-text-dim">
-              {store.iqCodec() === 'adpcm' ? '4:1' : 'raw'}
+              {iqRatioHint()}
             </span>
           </div>
           <div class="flex gap-1">
-            <For each={codecs}>
+            <For each={iqCodecs}>
               {(c) => (
                 <button
                   class={`sdr-mode-btn flex-1 ${store.iqCodec() === c.value ? 'active' : ''}`}

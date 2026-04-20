@@ -114,6 +114,8 @@ export interface ClientSession {
   squelch: number | null;
   /** Whether audio is muted */
   muted: boolean;
+  /** Whether the client has enabled audio playback (IQ data only sent when true) */
+  audioEnabled: boolean;
 }
 
 // ---- Configuration (YAML) ----
