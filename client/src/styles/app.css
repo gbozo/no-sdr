@@ -1,0 +1,319 @@
+/* ============================================================
+   node-sdr — Tailwind CSS v4 Theme
+   ============================================================
+   All configuration via @theme directive (no tailwind.config.js).
+   Multi-theme support via CSS custom properties + @custom-variant.
+   ============================================================ */
+
+@import "tailwindcss";
+
+/* ---- Custom Variants for UI Themes ---- */
+@custom-variant crt (&:where([data-theme="crt"], [data-theme="crt"] *));
+@custom-variant vfd (&:where([data-theme="vfd"], [data-theme="vfd"] *));
+
+/* ---- SDR Theme Definition ---- */
+@theme {
+  /* Override default color namespace */
+  --color-*: initial;
+
+  /* Core colors */
+  --color-black: #000000;
+  --color-white: #ffffff;
+  --color-transparent: transparent;
+
+  /* SDR Background scale (near-black, blue-tinted) */
+  --color-sdr-base: #07090e;
+  --color-sdr-surface: #0b1018;
+  --color-sdr-elevated: #101520;
+  --color-sdr-card: #0d1219;
+  --color-sdr-hover: #161d28;
+  --color-sdr-active: #1a2435;
+  --color-sdr-overlay: rgba(8, 13, 20, 0.75);
+  --color-sdr-glass: rgba(16, 25, 37, 0.82);
+
+  /* Accent colors */
+  --color-cyan: #4aa3ff;
+  --color-cyan-light: #6bb3ff;
+  --color-cyan-dim: rgba(74, 163, 255, 0.16);
+  --color-green: #38c180;
+  --color-green-dim: rgba(56, 193, 128, 0.18);
+  --color-amber: #d6a85e;
+  --color-amber-dim: rgba(214, 168, 94, 0.18);
+  --color-red: #e25d5d;
+  --color-red-dim: rgba(226, 93, 93, 0.16);
+  --color-purple: #8f7bd6;
+
+  /* Neon / data visualization */
+  --color-neon-green: #00ff88;
+  --color-neon-yellow: #ffcc00;
+  --color-neon-orange: #ff8800;
+  --color-neon-red: #ff3366;
+
+  /* Text scale */
+  --color-text-primary: #d7e0ee;
+  --color-text-secondary: #9fb0c7;
+  --color-text-dim: #6f7f94;
+  --color-text-muted: #445266;
+  --color-text-inverse: #0b1118;
+
+  /* Border */
+  --color-border: #263246;
+  --color-border-light: #354458;
+  --color-border-focus: #4aa3ff;
+
+  /* Status */
+  --color-status-online: #38c180;
+  --color-status-warning: #d6a85e;
+  --color-status-error: #e25d5d;
+  --color-status-offline: #6f7f94;
+
+  /* Typography */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-display: 'DSEG7 Classic', 'Share Tech Mono', 'JetBrains Mono', monospace;
+
+  /* Shadows */
+  --shadow-glow-cyan: 0 0 18px rgba(74, 163, 255, 0.16);
+  --shadow-glow-green: 0 0 12px rgba(56, 193, 128, 0.2);
+  --shadow-glow-amber: 0 0 12px rgba(214, 168, 94, 0.2);
+  --shadow-glow-red: 0 0 12px rgba(226, 93, 93, 0.2);
+  --shadow-panel: 0 4px 8px rgba(0, 0, 0, 0.35);
+  --shadow-panel-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* Animations */
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+  --animate-blink: blink 1s step-end infinite;
+
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+}
+
+/* ---- Dynamic Theme Variables ---- */
+:root {
+  --sdr-accent: var(--color-cyan);
+  --sdr-accent-light: var(--color-cyan-light);
+  --sdr-accent-dim: var(--color-cyan-dim);
+  --sdr-glow: var(--shadow-glow-cyan);
+  --sdr-freq-color: var(--color-cyan);
+}
+
+/* CRT Green theme */
+[data-theme="crt"] {
+  --sdr-accent: #33ff77;
+  --sdr-accent-light: #55ff99;
+  --sdr-accent-dim: rgba(51, 255, 119, 0.16);
+  --sdr-glow: 0 0 18px rgba(51, 255, 119, 0.2);
+  --sdr-freq-color: #33ff77;
+}
+
+/* Amber VFD theme */
+[data-theme="vfd"] {
+  --sdr-accent: #ffaa00;
+  --sdr-accent-light: #ffcc44;
+  --sdr-accent-dim: rgba(255, 170, 0, 0.16);
+  --sdr-glow: 0 0 18px rgba(255, 170, 0, 0.2);
+  --sdr-freq-color: #ffaa00;
+}
+
+/* ---- Component Styles ---- */
+@layer components {
+  /* SDR Panel */
+  .sdr-panel {
+    background-color: var(--color-sdr-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+  }
+
+  /* SDR Panel Header with accent bar */
+  .sdr-panel-header {
+    position: relative;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-secondary);
+  }
+
+  .sdr-panel-header::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 3px;
+    background: var(--sdr-accent);
+    border-radius: 0 2px 2px 0;
+  }
+
+  /* Custom range slider */
+  .sdr-range {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    height: 20px;
+    width: 100%;
+  }
+
+  .sdr-range::-webkit-slider-runnable-track {
+    height: 4px;
+    background: var(--color-border);
+    border-radius: 2px;
+  }
+
+  .sdr-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--sdr-accent);
+    border-radius: 50%;
+    margin-top: -5px;
+    box-shadow: 0 0 6px var(--sdr-accent-dim);
+    transition: box-shadow 0.15s;
+  }
+
+  .sdr-range::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 12px var(--sdr-accent);
+  }
+
+  .sdr-range::-moz-range-track {
+    height: 4px;
+    background: var(--color-border);
+    border-radius: 2px;
+  }
+
+  .sdr-range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: var(--sdr-accent);
+    border: none;
+    border-radius: 50%;
+    box-shadow: 0 0 6px var(--sdr-accent-dim);
+  }
+
+  /* Scanline overlay effect */
+  .sdr-scanlines {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    opacity: 0.06;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.15) 2px,
+      rgba(0, 0, 0, 0.15) 4px
+    );
+  }
+
+  /* Dot grid background texture */
+  .sdr-dot-grid {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    opacity: 0.03;
+    background-image: radial-gradient(circle, var(--sdr-accent) 0.5px, transparent 0.5px);
+    background-size: 16px 16px;
+  }
+
+  /* Button styles */
+  .sdr-btn {
+    padding: 6px 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 4px;
+    transition: all 0.15s;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .sdr-btn-primary {
+    background: var(--sdr-accent);
+    color: var(--color-text-inverse);
+    box-shadow: var(--sdr-glow);
+  }
+
+  .sdr-btn-primary:hover {
+    background: var(--sdr-accent-light);
+  }
+
+  .sdr-btn-ghost {
+    background: transparent;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+  }
+
+  .sdr-btn-ghost:hover {
+    background: var(--color-sdr-hover);
+    color: var(--color-text-primary);
+  }
+
+  /* Mode button (for AM/FM/SSB/etc. selector) */
+  .sdr-mode-btn {
+    padding: 6px 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 3px;
+    transition: all 0.15s;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    background: transparent;
+  }
+
+  .sdr-mode-btn:hover {
+    color: var(--color-text-primary);
+    background: var(--color-sdr-hover);
+  }
+
+  .sdr-mode-btn.active {
+    background: var(--sdr-accent);
+    color: var(--color-text-inverse);
+    box-shadow: var(--sdr-glow);
+  }
+}
+
+/* ---- Global Styles ---- */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-border-light);
+  }
+
+  ::selection {
+    background: var(--sdr-accent-dim);
+    color: var(--color-text-primary);
+  }
+}

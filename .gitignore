@@ -1,0 +1,32 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Config overrides
+config/local.yaml
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.db-journal
+
+# Build caches
+.cache/
+.parcel-cache/

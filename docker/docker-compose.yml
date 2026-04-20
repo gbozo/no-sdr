@@ -1,0 +1,25 @@
+# ============================================
+# node-sdr — Docker Compose
+# ============================================
+# USB passthrough required for RTL-SDR access.
+# On Linux: --device /dev/bus/usb
+# On macOS: not directly supported (use VM).
+# ============================================
+
+services:
+  node-sdr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../config:/app/config:ro
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+    # Required for USB access on Linux
+    privileged: true
