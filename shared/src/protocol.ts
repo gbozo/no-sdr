@@ -92,10 +92,19 @@ export function packFftMessage(fftData: Float32Array): ArrayBuffer {
 }
 
 /**
- * Pack compressed FFT data (Uint8Array 0-255) into a binary message
+ * Pack compressed FFT data (Uint8Array 0-255) into a binary message.
+ * Includes a 4-byte header: [minDb as Int16, maxDb as Int16] so the client
+ * can reconstruct Float32 dB values without relying on local settings.
  */
-export function packCompressedFftMessage(data: Uint8Array): ArrayBuffer {
-  return packBinaryMessage(MSG_FFT_COMPRESSED, data.buffer as ArrayBuffer);
+export function packCompressedFftMessage(data: Uint8Array, minDb: number, maxDb: number): ArrayBuffer {
+  // Header: 4 bytes (Int16 minDb + Int16 maxDb) + payload
+  const buf = new ArrayBuffer(1 + 4 + data.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_COMPRESSED);
+  view.setInt16(1, Math.round(minDb), true); // little-endian
+  view.setInt16(3, Math.round(maxDb), true);
+  new Uint8Array(buf, 5).set(data);
+  return buf;
 }
 
 /**

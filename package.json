@@ -11,9 +11,10 @@
     "client"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=server",
+    "dev": "npm run build --workspace=shared && (npm run dev --workspace=shared & npm run dev --workspace=server & npm run dev --workspace=client & wait)",
+    "dev:demo": "npm run build --workspace=shared && (NODE_SDR_DEMO=1 npm run dev --workspace=shared & NODE_SDR_DEMO=1 npm run dev --workspace=server & npm run dev --workspace=client & wait)",
+    "dev:server": "npm run dev --workspace=server",
     "dev:client": "npm run dev --workspace=client",
-    "dev:demo": "NODE_SDR_DEMO=1 npm run dev --workspace=server",
     "build": "npm run build --workspace=shared && npm run build --workspace=client && npm run build --workspace=server",
     "build:client": "npm run build --workspace=client",
     "build:server": "npm run build --workspace=server",

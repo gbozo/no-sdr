@@ -119,9 +119,27 @@ export class WaterfallRenderer {
 
     // Use 1:1 pixel mapping (no DPR scaling) for waterfall — each pixel = 1 row
     if (this.canvas.width !== cw || this.canvas.height !== ch) {
+      // Preserve existing waterfall content across resize by cloning to an offscreen canvas
+      const oldW = this.canvas.width;
+      const oldH = this.canvas.height;
+      let snapshot: HTMLCanvasElement | null = null;
+
+      if (oldW > 0 && oldH > 0) {
+        snapshot = document.createElement('canvas');
+        snapshot.width = oldW;
+        snapshot.height = oldH;
+        snapshot.getContext('2d')!.drawImage(this.canvas, 0, 0);
+      }
+
+      // Setting width/height clears the canvas
       this.canvas.width = cw;
       this.canvas.height = ch;
       this.rowImageData = null; // force recreate
+
+      // Restore: stretch old content to new dimensions
+      if (snapshot) {
+        this.ctx.drawImage(snapshot, 0, 0, oldW, oldH, 0, 0, cw, ch);
+      }
     }
 
     this.w = cw;

@@ -14,8 +14,11 @@ import {
   packBinaryMessage,
   packMetaMessage,
   packFftMessage,
+  packCompressedFftMessage,
+  compressFft,
   packIqMessage,
   MSG_FFT,
+  MSG_FFT_COMPRESSED,
   MSG_IQ,
   MSG_DECODER,
 } from '@node-sdr/shared';
@@ -145,17 +148,32 @@ export class WebSocketManager {
     this.iqBytes += data.length;
     const fftFrames = processor.processIqData(data);
 
+    // Compress and broadcast FFT to all clients subscribed to this dongle.
+    // Uses Uint8 quantization (MSG_FFT_COMPRESSED) with a fixed dB range,
+    // reducing bandwidth ~4x vs Float32 (MSG_FFT). The min/max dB values
+    // are embedded in the message header so clients decompress correctly.
+    const FFT_MIN_DB = -130;
+    const FFT_MAX_DB = 0;
+
     for (const fftData of fftFrames) {
       this.fftCount++;
-      // Broadcast FFT to all clients subscribed to this dongle
-      const fftMsg = packFftMessage(fftData);
+      const compressed = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+      const fftMsg = packCompressedFftMessage(compressed, FFT_MIN_DB, FFT_MAX_DB);
       this.broadcastToDongle(dongleId, fftMsg);
     }
 
-    // Send per-client IQ sub-band (frequency-shifted + decimated)
+    // Send per-client IQ sub-band (frequency-shifted + decimated).
+    // IQ data is critical for audio continuity, so we use a higher
+    // backpressure threshold (1 MB) before dropping.
+    const IQ_BACKPRESSURE = 1024 * 1024;
     for (const client of this.clients.values()) {
       if (client.session.dongleId === dongleId && client.iqExtractor) {
         try {
+          const raw = client.ws.raw as any;
+          if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > IQ_BACKPRESSURE) {
+            // Skip IQ for severely congested clients
+            continue;
+          }
           const subBand = client.iqExtractor.process(data);
           if (subBand.length > 0) {
             this.iqOutSamples += subBand.length / 2; // count IQ pairs
@@ -437,13 +455,37 @@ export class WebSocketManager {
     }
   }
 
+  // Backpressure: max bytes queued per client before we start dropping FFT frames.
+  // 256 KB is generous — at ~60 KB/s compressed FFT + IQ, this is ~4 seconds of buffer.
+  private static readonly BACKPRESSURE_THRESHOLD = 256 * 1024;
+  private backpressureWarned = new Set<string>();
+
   /**
-   * Broadcast a binary message to all clients subscribed to a dongle
+   * Broadcast a binary message to all clients subscribed to a dongle.
+   * Applies backpressure: skips clients whose send buffer exceeds the threshold.
+   * This prevents unbounded memory growth when a client's network is slow.
    */
   private broadcastToDongle(dongleId: string, data: ArrayBuffer): void {
     for (const client of this.clients.values()) {
       if (client.session.dongleId === dongleId) {
         try {
+          // Check backpressure via the underlying ws WebSocket's bufferedAmount
+          const raw = client.ws.raw as any;
+          if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > WebSocketManager.BACKPRESSURE_THRESHOLD) {
+            // Skip this frame for this slow client
+            if (!this.backpressureWarned.has(client.id)) {
+              logger.warn(
+                { clientId: client.id, buffered: raw.bufferedAmount },
+                'Backpressure: skipping FFT frame for slow client',
+              );
+              this.backpressureWarned.add(client.id);
+            }
+            continue;
+          }
+          // Clear warning flag when buffer drains
+          if (this.backpressureWarned.has(client.id)) {
+            this.backpressureWarned.delete(client.id);
+          }
           client.ws.send(data);
         } catch {
           // Client may have disconnected

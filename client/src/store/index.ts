@@ -65,6 +65,7 @@ function createStore() {
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [decoderPanelOpen, setDecoderPanelOpen] = createSignal(false);
   const [isAdmin, setIsAdmin] = createSignal(false);
+  const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
 
   // ---- Bandwidth / Throughput Metrics ----
   const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec
@@ -121,6 +122,7 @@ function createStore() {
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,
+    meterStyle, setMeterStyle,
 
     // Bandwidth / Throughput
     fftRate, setFftRate,

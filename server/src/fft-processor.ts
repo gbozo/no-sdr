@@ -21,6 +21,8 @@ export interface FftProcessorOptions {
   window?: 'blackman-harris' | 'hann' | 'hamming' | 'none';
   /** Averaging factor (0 = no averaging, 0.9 = heavy smoothing) */
   averaging: number;
+  /** Target FFT output frame rate (fps). 0 = unlimited. Default 30. */
+  targetFps?: number;
 }
 
 export class FftProcessor {
@@ -42,6 +44,13 @@ export class FftProcessor {
   // FFT normalization: 10 * log10(N²) + window coherent gain correction
   private normalizationDb: number;
 
+  // Rate limiting: accumulate FFT frames and emit at target FPS
+  private targetFps: number;
+  private minFrameInterval: number; // ms between emitted frames
+  private lastEmitTime = 0;
+  private pendingFrame: Float32Array | null = null; // latest averaged frame waiting to be emitted
+  private framesAccumulated = 0; // how many raw frames were averaged into pendingFrame
+
   constructor(private options: FftProcessorOptions) {
     this.fftSize = options.fftSize;
     this.averaging = options.averaging;
@@ -52,9 +61,11 @@ export class FftProcessor {
     this.windowFunc = this.createWindow(options.window ?? 'blackman-harris');
     this.samplesNeeded = this.fftSize * 2; // 2 bytes per sample (I+Q interleaved uint8)
     this.normalizationDb = this.computeNormalization();
+    this.targetFps = options.targetFps ?? 30;
+    this.minFrameInterval = this.targetFps > 0 ? 1000 / this.targetFps : 0;
 
     logger.debug(
-      { fftSize: this.fftSize, window: options.window ?? 'blackman-harris', normalizationDb: this.normalizationDb.toFixed(1) },
+      { fftSize: this.fftSize, window: options.window ?? 'blackman-harris', normalizationDb: this.normalizationDb.toFixed(1), targetFps: this.targetFps },
       'FFT processor initialized',
     );
   }
@@ -62,24 +73,56 @@ export class FftProcessor {
   /**
    * Feed raw IQ data from rtl_sdr. Returns FFT frames as they become available.
    * rtl_sdr outputs unsigned 8-bit interleaved I/Q: [I0, Q0, I1, Q1, ...]
+   *
+   * When targetFps > 0, internally computes all FFT frames but only emits
+   * at the target rate. Intermediate frames are averaged into a pending buffer
+   * so no spectral information is lost — it's just temporally downsampled.
    */
   processIqData(rawData: Buffer): Float32Array[] {
     // Accumulate incoming data
     this.iqAccumulator = Buffer.concat([this.iqAccumulator, rawData]);
 
-    const frames: Float32Array[] = [];
+    const emitted: Float32Array[] = [];
 
     // Process complete FFT frames
     while (this.iqAccumulator.length >= this.samplesNeeded) {
       const frame = this.processOneFrame(this.iqAccumulator.subarray(0, this.samplesNeeded));
-      frames.push(frame);
 
-      // Advance buffer (50% overlap for smoother waterfall)
-      const advance = this.samplesNeeded; // no overlap for now; can do /2 for 50%
+      // Advance buffer (no overlap for now; can do /2 for 50%)
+      const advance = this.samplesNeeded;
       this.iqAccumulator = this.iqAccumulator.subarray(advance);
+
+      // Rate limiting: accumulate into pending frame, emit at target FPS
+      if (this.minFrameInterval <= 0) {
+        // No rate limit — emit every frame
+        emitted.push(frame);
+        continue;
+      }
+
+      // Accumulate: running average of all frames within this interval
+      if (!this.pendingFrame) {
+        this.pendingFrame = new Float32Array(frame);
+        this.framesAccumulated = 1;
+      } else {
+        // Incremental mean: avg = avg + (new - avg) / count
+        this.framesAccumulated++;
+        const n = this.framesAccumulated;
+        for (let i = 0; i < frame.length; i++) {
+          this.pendingFrame[i] += (frame[i] - this.pendingFrame[i]) / n;
+        }
+      }
+
+      // Check if enough time has passed to emit
+      const now = Date.now();
+      if (now - this.lastEmitTime >= this.minFrameInterval) {
+        emitted.push(this.pendingFrame);
+        this.pendingFrame = null;
+        this.framesAccumulated = 0;
+        this.lastEmitTime = now;
+      }
     }
 
-    return frames;
+    return emitted;
   }
 
   private processOneFrame(rawIq: Buffer): Float32Array {
@@ -193,6 +236,9 @@ export class FftProcessor {
   reset(): void {
     this.iqAccumulator = Buffer.alloc(0);
     this.averagedMagnitudes = null;
+    this.pendingFrame = null;
+    this.framesAccumulated = 0;
+    this.lastEmitTime = 0;
   }
 
   /**

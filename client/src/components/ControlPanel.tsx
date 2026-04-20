@@ -2,7 +2,7 @@
 // node-sdr — Control Panel (Sidebar)
 // ============================================================
 
-import { Component, For, Show, createSignal, createResource, onMount } from 'solid-js';
+import { Component, For, Show, createSignal, createResource, onMount, onCleanup, createEffect } from 'solid-js';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 import { DEMOD_MODES } from '@node-sdr/shared';
@@ -12,20 +12,17 @@ import { getPaletteNames } from '../engine/palettes.js';
 const ControlPanel: Component = () => {
   return (
     <div class="flex flex-col gap-3 p-3 overflow-y-auto h-full">
+      {/* S-Meter */}
+      <SMeter />
+
       {/* Mode Selector */}
       <ModeSelector />
 
       {/* Audio Controls */}
       <AudioControls />
 
-      {/* Bandwidth Control */}
-      <BandwidthControl />
-
       {/* Waterfall Settings */}
       <WaterfallSettings />
-
-      {/* S-Meter */}
-      <SMeter />
 
       {/* Connection Status */}
       <ConnectionStatus />
@@ -61,6 +58,27 @@ const ModeSelector: Component = () => {
         </div>
         <div class="mt-2 text-[9px] text-text-dim font-mono">
           {DEMOD_MODES[store.mode()]?.description ?? ''}
+        </div>
+
+        {/* Filter Bandwidth slider */}
+        <div class="mt-3 pt-2 border-t border-border/40">
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Filter BW
+            </label>
+            <span class="text-[9px] font-mono text-text-dim">
+              {(store.bandwidth() / 1000).toFixed(1)} kHz
+            </span>
+          </div>
+          <input
+            type="range"
+            min={DEMOD_MODES[store.mode()]?.bandwidthRange[0] ?? 100}
+            max={DEMOD_MODES[store.mode()]?.bandwidthRange[1] ?? 200000}
+            step={100}
+            value={store.bandwidth()}
+            onInput={(e) => engine.setBandwidth(parseInt(e.currentTarget.value))}
+            class="sdr-range"
+          />
         </div>
       </div>
     </div>
@@ -319,35 +337,7 @@ const EqBand: Component<{
   );
 };
 
-// ---- Bandwidth Control ----
-const BandwidthControl: Component = () => {
-  const modeInfo = () => DEMOD_MODES[store.mode()];
 
-  return (
-    <div class="sdr-panel">
-      <div class="sdr-panel-header">Bandwidth</div>
-      <div class="p-3">
-        <div class="flex justify-between items-center mb-1">
-          <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-            Filter BW
-          </label>
-          <span class="text-[9px] font-mono text-text-dim">
-            {(store.bandwidth() / 1000).toFixed(1)} kHz
-          </span>
-        </div>
-        <input
-          type="range"
-          min={modeInfo()?.bandwidthRange[0] ?? 100}
-          max={modeInfo()?.bandwidthRange[1] ?? 200000}
-          step={100}
-          value={store.bandwidth()}
-          onInput={(e) => engine.setBandwidth(parseInt(e.currentTarget.value))}
-          class="sdr-range"
-        />
-      </div>
-    </div>
-  );
-};
 
 // ---- Waterfall Settings ----
 const WaterfallSettings: Component = () => {
@@ -452,14 +442,46 @@ const WaterfallSettings: Component = () => {
 
 // ---- S-Meter ----
 const SMeter: Component = () => {
+  // Peak hold: tracks the highest level and decays slowly
+  let peakPct = 0;
+  let peakDecayTimer: ReturnType<typeof setInterval> | undefined;
+  const [peakHold, setPeakHold] = createSignal(0);
+
+  // Canvas ref for needle meter
+  let canvasRef: HTMLCanvasElement | undefined;
+  let rafId: number | undefined;
+
+  // Start peak decay timer on mount
+  onMount(() => {
+    peakDecayTimer = setInterval(() => {
+      // Decay peak by 0.5% per tick (50ms interval ≈ 10 seconds from full to zero)
+      if (peakPct > 0) {
+        peakPct = Math.max(0, peakPct - 0.5);
+        setPeakHold(peakPct);
+      }
+    }, 50);
+  });
+
+  onCleanup(() => {
+    if (peakDecayTimer) clearInterval(peakDecayTimer);
+    if (rafId) cancelAnimationFrame(rafId);
+  });
+
   const pct = () => {
     const level = store.signalLevel();
-    // Map dynamic range based on current waterfall range
     const min = store.waterfallMin();
     const max = store.waterfallMax();
     const range = max - min;
     if (range === 0) return 0;
-    return Math.max(0, Math.min(100, ((level - min) / range) * 100));
+    const p = Math.max(0, Math.min(100, ((level - min) / range) * 100));
+
+    // Update peak if current exceeds it
+    if (p > peakPct) {
+      peakPct = p;
+      setPeakHold(p);
+    }
+
+    return p;
   };
 
   const barColor = () => {
@@ -470,30 +492,345 @@ const SMeter: Component = () => {
     return 'bg-green';
   };
 
+  // Needle meter: smoothed angle for fluid movement
+  let smoothedPct = 0;
+
+  // Draw classic analog S-meter (Kenwood/Yaesu style)
+  const drawNeedleMeter = () => {
+    const canvas = canvasRef;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // ── Warm backlit face background ──
+    const bgGrad = ctx.createRadialGradient(w / 2, h * 0.35, 0, w / 2, h * 0.35, w * 0.7);
+    bgGrad.addColorStop(0, '#faf6e8');      // warm white center
+    bgGrad.addColorStop(0.5, '#f5edd4');    // yellowish warmth
+    bgGrad.addColorStop(1, '#e8dfc0');      // darker edges — aged paper
+    ctx.fillStyle = bgGrad;
+    ctx.beginPath();
+    ctx.roundRect(0, 0, w, h, 3);
+    ctx.fill();
+
+    // Subtle inner shadow / bezel
+    ctx.strokeStyle = 'rgba(160, 140, 100, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(0.5, 0.5, w - 1, h - 1, 3);
+    ctx.stroke();
+
+    // ── Geometry ──
+    const cx = w / 2;
+    const cy = h - 10;
+    const radius = Math.min(w * 0.40, h - 28);
+    const startAngle = Math.PI * 0.83;
+    const endAngle = Math.PI * 0.17;
+    const sweep = (2 * Math.PI - startAngle + endAngle);
+
+    // Smooth the needle
+    const targetPct = pct();
+    smoothedPct += (targetPct - smoothedPct) * 0.15;
+
+    const pctToAngle = (p: number) => startAngle + (p / 100) * sweep;
+
+    // ── Scale definitions ──
+    // Top scale: S-units (S1–S9, then +10 to +60 dB over S9)
+    const sScale = [
+      { label: '1',   pct: 0 },
+      { label: '2',   pct: 7.1 },
+      { label: '3',   pct: 14.3 },
+      { label: '4',   pct: 21.4 },
+      { label: '5',   pct: 28.6 },
+      { label: '6',   pct: 35.7 },
+      { label: '7',   pct: 42.9 },
+      { label: '8',   pct: 50.0 },
+      { label: '9',   pct: 57.1 },
+      { label: '+10', pct: 66.7 },
+      { label: '+20', pct: 71.4 },
+      { label: '+30', pct: 78.6 },
+      { label: '+40', pct: 85.7 },
+      { label: '+50', pct: 92.9 },
+      { label: '+60', pct: 100 },
+    ];
+
+    // Bottom scale: dB (rough mapping)
+    const dbScale = [
+      { label: '-54', pct: 0 },
+      { label: '-42', pct: 14.3 },
+      { label: '-30', pct: 28.6 },
+      { label: '-18', pct: 42.9 },
+      { label: '-6',  pct: 57.1 },
+      { label: '0',   pct: 66.7 },
+      { label: '+10', pct: 71.4 },
+      { label: '+20', pct: 78.6 },
+      { label: '+30', pct: 85.7 },
+      { label: '+40', pct: 92.9 },
+      { label: '+50', pct: 100 },
+    ];
+
+    // Minor ticks between major S-units (every ~3.57%)
+    const minorTicks: number[] = [];
+    for (let p = 0; p <= 100; p += 3.57) {
+      minorTicks.push(p);
+    }
+
+    // ── "S" label ──
+    const sLabelSize = Math.max(11, w * 0.045);
+    ctx.font = `bold italic ${sLabelSize}px serif`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#2a2520';
+    const sLabelAngle = pctToAngle(-6);
+    ctx.fillText('S', cx + (radius + 12) * Math.cos(sLabelAngle), cy + (radius + 12) * Math.sin(sLabelAngle));
+
+    // ── Top arc: S-unit scale ──
+    const outerR = radius + 5;
+    const tickFont = Math.max(7, w * 0.027);
+    const smallTickFont = Math.max(6, w * 0.022);
+
+    // Draw colored arc segments behind the scale
+    // Green zone: S1–S9
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR - 1, pctToAngle(0), pctToAngle(57.1), false);
+    ctx.strokeStyle = 'rgba(40, 100, 60, 0.12)';
+    ctx.lineWidth = 8;
+    ctx.stroke();
+
+    // Red zone: S9+
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR - 1, pctToAngle(57.1), pctToAngle(100), false);
+    ctx.strokeStyle = 'rgba(180, 30, 30, 0.12)';
+    ctx.lineWidth = 8;
+    ctx.stroke();
+
+    // Minor tick marks
+    ctx.strokeStyle = 'rgba(80, 70, 50, 0.25)';
+    ctx.lineWidth = 0.5;
+    for (const mp of minorTicks) {
+      const a = pctToAngle(mp);
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
+      ctx.lineTo(cx + (outerR - 3) * cos, cy + (outerR - 3) * sin);
+      ctx.stroke();
+    }
+
+    // Major S-unit ticks and labels
+    ctx.font = `bold ${tickFont}px "Arial", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (const su of sScale) {
+      const a = pctToAngle(su.pct);
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+
+      // Major tick
+      ctx.beginPath();
+      ctx.moveTo(cx + (outerR + 3) * cos, cy + (outerR + 3) * sin);
+      ctx.lineTo(cx + (outerR - 6) * cos, cy + (outerR - 6) * sin);
+      ctx.strokeStyle = su.pct > 57.1 ? '#b01e1e' : '#2a2520';
+      ctx.lineWidth = su.pct === 57.1 ? 1.5 : 1;
+      ctx.stroke();
+
+      // Label
+      const lr = outerR + (su.label.length > 2 ? 14 : 11);
+      ctx.fillStyle = su.pct > 57.1 ? '#b01e1e' : '#2a2520';
+      ctx.font = su.pct > 57.1
+        ? `bold ${smallTickFont}px "Arial", sans-serif`
+        : `bold ${tickFont}px "Arial", sans-serif`;
+      ctx.fillText(su.label, cx + lr * cos, cy + lr * sin);
+    }
+
+    // ── Bottom arc: dB scale ──
+    const innerR = radius - 8;
+    ctx.font = `${smallTickFont}px "Arial", sans-serif`;
+
+    // Thin arc for dB scale
+    ctx.beginPath();
+    ctx.arc(cx, cy, innerR, pctToAngle(0), pctToAngle(100), false);
+    ctx.strokeStyle = 'rgba(80, 70, 50, 0.15)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+
+    for (const db of dbScale) {
+      const a = pctToAngle(db.pct);
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+
+      // Tick inward
+      ctx.beginPath();
+      ctx.moveTo(cx + innerR * cos, cy + innerR * sin);
+      ctx.lineTo(cx + (innerR - 4) * cos, cy + (innerR - 4) * sin);
+      ctx.strokeStyle = 'rgba(80, 70, 50, 0.4)';
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+
+      // Label
+      const lr = innerR - 10;
+      ctx.fillStyle = 'rgba(80, 70, 50, 0.6)';
+      ctx.font = `${smallTickFont}px "Arial", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(db.label, cx + lr * cos, cy + lr * sin);
+    }
+
+    // "dB" label
+    ctx.font = `italic ${smallTickFont}px "Arial", sans-serif`;
+    ctx.fillStyle = 'rgba(80, 70, 50, 0.5)';
+    ctx.textAlign = 'right';
+    const dbLabelAngle = pctToAngle(106);
+    ctx.fillText('dB', cx + (innerR - 6) * Math.cos(dbLabelAngle), cy + (innerR - 6) * Math.sin(dbLabelAngle));
+
+    // ── Peak hold ghost needle ──
+    const peakAngle = pctToAngle(peakHold());
+    const peakLen = radius - 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + 3 * Math.cos(peakAngle + Math.PI / 2), cy + 3 * Math.sin(peakAngle + Math.PI / 2));
+    ctx.lineTo(cx + peakLen * Math.cos(peakAngle), cy + peakLen * Math.sin(peakAngle));
+    ctx.lineTo(cx + 3 * Math.cos(peakAngle - Math.PI / 2), cy + 3 * Math.sin(peakAngle - Math.PI / 2));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(180, 30, 30, 0.10)';
+    ctx.fill();
+
+    // ── Main needle (red, classic tapered shape) ──
+    const needleAngle = pctToAngle(smoothedPct);
+    const needleLen = radius + 1;
+    const needleTailLen = 10;
+
+    // Needle shadow
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 2;
+
+    // Tapered needle body
+    ctx.beginPath();
+    // Tail (thick end behind pivot)
+    ctx.moveTo(
+      cx - needleTailLen * Math.cos(needleAngle) + 2.5 * Math.cos(needleAngle + Math.PI / 2),
+      cy - needleTailLen * Math.sin(needleAngle) + 2.5 * Math.sin(needleAngle + Math.PI / 2)
+    );
+    ctx.lineTo(
+      cx - needleTailLen * Math.cos(needleAngle) - 2.5 * Math.cos(needleAngle + Math.PI / 2),
+      cy - needleTailLen * Math.sin(needleAngle) - 2.5 * Math.sin(needleAngle + Math.PI / 2)
+    );
+    // Tip (sharp point)
+    ctx.lineTo(
+      cx + needleLen * Math.cos(needleAngle),
+      cy + needleLen * Math.sin(needleAngle)
+    );
+    ctx.closePath();
+    ctx.fillStyle = '#cc2222';
+    ctx.fill();
+
+    // Thin center line for realism
+    ctx.beginPath();
+    ctx.moveTo(cx - needleTailLen * Math.cos(needleAngle), cy - needleTailLen * Math.sin(needleAngle));
+    ctx.lineTo(cx + needleLen * Math.cos(needleAngle), cy + needleLen * Math.sin(needleAngle));
+    ctx.strokeStyle = '#a01818';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    ctx.restore();
+
+    // Pivot cap (black circle with highlight)
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx - 1, cy - 1, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.fill();
+
+    // ── dB readout below the scales ──
+    const readoutSize = Math.max(8, w * 0.032);
+    ctx.font = `${readoutSize}px "Arial", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(60, 50, 35, 0.5)';
+    ctx.fillText(`${store.signalLevel().toFixed(0)} dBm`, cx, cy - radius * 0.32);
+
+    // Schedule next frame
+    rafId = requestAnimationFrame(drawNeedleMeter);
+  };
+
+  // Start/stop animation when meter style changes
+  createEffect(() => {
+    if (store.meterStyle() === 'needle') {
+      // Kick off render loop next frame (canvas should be in DOM by then)
+      rafId = requestAnimationFrame(drawNeedleMeter);
+    } else {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = undefined;
+      }
+    }
+  });
+
+  const toggleStyle = () => {
+    store.setMeterStyle(store.meterStyle() === 'bar' ? 'needle' : 'bar');
+  };
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Signal</div>
+      <div class="sdr-panel-header">
+        <span>Signal</span>
+        <button
+          class="ml-auto text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors uppercase tracking-wider"
+          onClick={toggleStyle}
+          title={`Switch to ${store.meterStyle() === 'bar' ? 'needle' : 'bar'} meter`}
+        >
+          {store.meterStyle() === 'bar' ? 'Needle' : 'Bar'}
+        </button>
+      </div>
       <div class="p-3">
-        <div class="flex justify-between text-[9px] text-text-dim font-mono mb-1">
-          <span>S-Meter</span>
-          <span class="text-text-secondary">{store.signalLevel().toFixed(0)} dB</span>
-        </div>
-        <div class="h-2.5 bg-sdr-base rounded-sm border border-border overflow-hidden relative">
-          <div class="absolute inset-0 flex">
-            <For each={Array(9).fill(0)}>
-              {() => <div class="flex-1 border-r border-border/30" />}
-            </For>
+        <Show when={store.meterStyle() === 'bar'}>
+          <div class="flex justify-between text-[9px] text-text-dim font-mono mb-1">
+            <span>S-Meter</span>
+            <span class="text-text-secondary">{store.signalLevel().toFixed(0)} dB</span>
           </div>
-          <div
-            class={`h-full rounded-sm transition-[width] duration-100 ease-linear
-                    ${barColor()} shadow-[0_0_8px_currentColor]`}
-            style={{ width: `${pct()}%` }}
+          <div class="h-2.5 bg-sdr-base rounded-sm border border-border overflow-hidden relative">
+            {/* Segment dividers */}
+            <div class="absolute inset-0 flex">
+              <For each={Array(9).fill(0)}>
+                {() => <div class="flex-1 border-r border-border/30" />}
+              </For>
+            </div>
+            {/* Current level bar */}
+            <div
+              class={`h-full rounded-sm transition-[width] duration-100 ease-linear
+                      ${barColor()} shadow-[0_0_8px_currentColor]`}
+              style={{ width: `${pct()}%` }}
+            />
+            {/* Peak hold indicator */}
+            <div
+              class="absolute top-0 bottom-0 w-[2px] bg-text-secondary opacity-80 transition-[left] duration-75 ease-linear"
+              style={{ left: `${peakHold()}%` }}
+            />
+          </div>
+          <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
+            <span>S1</span><span>3</span><span>5</span><span>7</span><span>9</span>
+            <span>+20</span><span>+40</span><span>+60</span>
+          </div>
+        </Show>
+        <Show when={store.meterStyle() === 'needle'}>
+          <canvas
+            ref={canvasRef}
+            class="w-full rounded-sm"
+            style={{ height: '110px' }}
           />
-        </div>
-        <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
-          <span>S1</span><span>3</span><span>5</span><span>7</span><span>9</span>
-          <span>+20</span><span>+40</span><span>+60</span>
-        </div>
+        </Show>
       </div>
     </div>
   );

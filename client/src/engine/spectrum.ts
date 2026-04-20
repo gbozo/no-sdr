@@ -13,6 +13,10 @@ export class SpectrumRenderer {
   private gridColor: string;
   private ready = false;
 
+  // Throttle rendering to ~30fps (same as waterfall)
+  private lastDrawTime = 0;
+  private readonly minFrameInterval = 33; // ms (~30fps)
+
   constructor(
     private canvas: HTMLCanvasElement,
     minDb: number = -120,
@@ -29,10 +33,16 @@ export class SpectrumRenderer {
   }
 
   /**
-   * Draw the spectrum for one FFT frame
+   * Draw the spectrum for one FFT frame.
+   * Throttled to ~30fps to avoid excessive redraws.
    */
   draw(fftData: Float32Array): void {
     if (fftData.length === 0) return;
+
+    // Throttle to ~30fps
+    const now = performance.now();
+    if (now - this.lastDrawTime < this.minFrameInterval) return;
+    this.lastDrawTime = now;
 
     if (!this.ready) {
       this.resize();

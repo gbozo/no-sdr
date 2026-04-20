@@ -180,14 +180,27 @@ export class SdrEngine {
       }
 
       case MSG_FFT_COMPRESSED: {
-        // Decompress uint8 to float32 dB values
-        const compressed = new Uint8Array(payload);
+        this.bwFftFrames++;
+        // Decompress uint8 to float32 dB values.
+        // Header: 4 bytes [Int16 minDb, Int16 maxDb] (little-endian)
+        const headerView = new DataView(payload);
+        const compMinDb = headerView.getInt16(0, true);
+        const compMaxDb = headerView.getInt16(2, true);
+        const compRange = compMaxDb - compMinDb;
+        const compressed = new Uint8Array(payload, 4);
         const fftData = new Float32Array(compressed.length);
-        const minDb = store.waterfallMin();
-        const range = store.waterfallMax() - minDb;
         for (let i = 0; i < compressed.length; i++) {
-          fftData[i] = minDb + (compressed[i] / 255) * range;
+          fftData[i] = compMinDb + (compressed[i] / 255) * compRange;
         }
+
+        // Auto-range: adapt waterfall min/max to actual data
+        if (store.waterfallAutoRange()) {
+          this.updateAutoRange(fftData);
+        }
+
+        // Compute signal level at tuned frequency for S-meter
+        this.updateSignalLevel(fftData);
+
         this.waterfall?.drawRow(fftData);
         this.spectrum?.draw(fftData);
         this.spectrum?.drawTuningIndicator(
@@ -352,8 +365,8 @@ export class SdrEngine {
   private signalLevelFrameCount = 0;
   private updateSignalLevel(fftData: Float32Array): void {
     this.signalLevelFrameCount++;
-    // Update every 8 frames (~4 times/sec at 30fps)
-    if (this.signalLevelFrameCount % 8 !== 0) return;
+    // Update every 2 frames (~15 times/sec at 30fps)
+    if (this.signalLevelFrameCount % 2 !== 0) return;
 
     const sampleRate = store.sampleRate();
     if (sampleRate <= 0 || fftData.length === 0) return;
