@@ -347,9 +347,14 @@ class PilotPll {
 
   // Pilot detection via SNR: compare narrowband pilot energy to broadband noise
   private pilotDetected = false;
+  private _blendFactor = 0;    // continuous 0-1 stereo blend (0=mono, 1=full stereo)
   private pilotEnergy = 0;     // smoothed energy of BPF'd pilot
   private noiseEnergy = 0;     // smoothed broadband composite energy
-  private energyAlpha = 0.0005; // very slow smoothing (~2000 sample time constant)
+  private energyAlpha = 0.002; // smoothing (~500 sample time constant ≈ 2ms at 240kHz)
+
+  // Detection hold timer — prevents rapid on/off cycling
+  private holdCounter = 0;
+  private readonly holdSamples: number; // ~200ms worth of samples
 
   // Bandpass filter for pilot extraction (used for detection only)
   private bpf: BiquadFilter;
@@ -358,6 +363,7 @@ class PilotPll {
     this.sampleRate = sampleRate;
     this.freq = 19000; // 19 kHz
     this.phaseIncrement = 2 * Math.PI * this.freq / sampleRate;
+    this.holdSamples = Math.round(sampleRate * 0.2); // 200ms hold
 
     // PLL loop bandwidth ~50 Hz (tight enough for stable lock, fast enough to acquire)
     const BL = 50;
@@ -367,8 +373,9 @@ class PilotPll {
     this.alpha = Kp;
     this.beta = Ki;
 
-    // Narrow BPF at 19 kHz for pilot detection (Q=50 → ~380 Hz bandwidth)
-    this.bpf = BiquadFilter.bandpass(19000, 50, sampleRate);
+    // Narrow BPF at 19 kHz for pilot detection (Q=30 → ~633 Hz bandwidth)
+    // Slightly wider than before (was Q=50) for more robust detection
+    this.bpf = BiquadFilter.bandpass(19000, 30, sampleRate);
   }
 
   /**
@@ -400,16 +407,36 @@ class PilotPll {
     this.noiseEnergy = this.noiseEnergy * (1 - this.energyAlpha) + (composite * composite) * this.energyAlpha;
 
     // SNR = pilot energy / total energy
-    // A real 19 kHz pilot at ~10% injection produces SNR > 0.01 (pilot is narrowband)
-    // Broadband noise spreads energy evenly, so pilot BPF output is tiny relative to total
     const snr = this.noiseEnergy > 1e-12 ? this.pilotEnergy / this.noiseEnergy : 0;
 
-    // Hysteresis: ON above 0.008, OFF below 0.003
-    if (this.pilotDetected) {
-      this.pilotDetected = snr > 0.003;
+    // Hysteresis with hold timer:
+    // - Turn ON when SNR exceeds upper threshold
+    // - Turn OFF only after SNR stays below lower threshold for holdSamples (~200ms)
+    // This prevents rapid toggling from multipath fading or signal fluctuations
+    if (snr > 0.006) {
+      this.pilotDetected = true;
+      this.holdCounter = this.holdSamples;
+    } else if (snr < 0.002) {
+      if (this.holdCounter > 0) {
+        this.holdCounter--;
+      } else {
+        this.pilotDetected = false;
+      }
     } else {
-      this.pilotDetected = snr > 0.008;
+      // In the hysteresis band — maintain current state, keep hold alive if detected
+      if (this.pilotDetected) {
+        this.holdCounter = this.holdSamples;
+      }
     }
+
+    // Continuous stereo blend factor: smooth transition from mono to stereo
+    // Maps SNR range [0.002, 0.012] to blend [0.0, 1.0]
+    const targetBlend = this.pilotDetected
+      ? Math.max(0, Math.min(1, (snr - 0.002) / (0.012 - 0.002)))
+      : 0;
+    // Smooth blend factor (fast attack for stereo onset, slow release for graceful fade)
+    const blendAlpha = targetBlend > this._blendFactor ? 0.015 : 0.003;
+    this._blendFactor += blendAlpha * (targetBlend - this._blendFactor);
 
     // Return cos(2 × phase) for 38 kHz L-R demod
     return Math.cos(2 * this.phase);
@@ -419,18 +446,25 @@ class PilotPll {
     return this.pilotDetected;
   }
 
+  get blendFactor(): number {
+    return this._blendFactor;
+  }
+
   reset(): void {
     this.phase = 0;
     this.freqError = 0;
     this.pilotEnergy = 0;
     this.noiseEnergy = 0;
     this.pilotDetected = false;
+    this._blendFactor = 0;
+    this.holdCounter = 0;
     this.bpf.reset();
   }
 
   setSampleRate(rate: number): void {
     this.sampleRate = rate;
     this.phaseIncrement = 2 * Math.PI * this.freq / rate;
+    this.holdSamples = Math.round(rate * 0.2);
 
     const BL = 50;
     const dampingFactor = 0.707;
@@ -439,7 +473,7 @@ class PilotPll {
     this.alpha = Kp;
     this.beta = Ki;
 
-    this.bpf = BiquadFilter.bandpass(19000, 50, rate);
+    this.bpf = BiquadFilter.bandpass(19000, 30, rate);
   }
 }
 
@@ -641,15 +675,17 @@ class FmDemodulator implements Demodulator {
       // 5. Low-pass L-R to 15 kHz
       const lr = lrLpf.process(lrRaw);
 
-      // 6. Stereo matrix
+      // 6. Stereo matrix with SNR-proportional blend
+      //    blend=0: pure mono (L+R on both), blend=1: full stereo
+      const blend = pll.blendFactor;
       let left: number;
       let right: number;
 
-      if (pll.detected) {
-        left = (lpr + lr) / 2;
-        right = (lpr - lr) / 2;
+      if (blend > 0.001) {
+        left = lpr + blend * lr;
+        right = lpr - blend * lr;
       } else {
-        // No pilot → mono (L+R on both)
+        // Pure mono — no L-R contribution
         left = lpr;
         right = lpr;
       }
@@ -675,7 +711,7 @@ class FmDemodulator implements Demodulator {
 
     const mono = new Float32Array(monoOut);
 
-    if (pll.detected) {
+    if (pll.blendFactor > 0.01) {
       return {
         mono,
         left: new Float32Array(leftOut),
@@ -813,6 +849,264 @@ class AmDemodulator implements Demodulator {
   setBandwidth(hz: number): void {
     const cutoff = Math.min(hz / 2, 5000);
     this.lpFilter.design(cutoff / this.inputSampleRate);
+  }
+}
+
+
+/**
+ * C-QUAM (Compatible QAM) AM Stereo Demodulator
+ *
+ * Motorola C-QUAM (1977) — the dominant AM stereo standard worldwide.
+ * Patents expired — fully public domain.
+ *
+ * Signal model:
+ *   s(t) = A(t)·cos(ωt + θ(t))
+ *   A(t) = Ac·(1 + Ms·(L+R))          — envelope carries mono L+R
+ *   θ(t) = arctan(Md·(L-R)/(1+Ms·S))  — phase carries stereo L-R
+ *   + 25 Hz pilot in phase domain (flag only)
+ *
+ * Decoding: PLL → envelope + quadrature → cosGamma correction → L/R matrix
+ * Reference: VK4MTV/CQUAM-AM-Stereo-Universal-Tuner-for-GNUradio
+ */
+class CQuamDemodulator implements Demodulator {
+  readonly name = 'AM Stereo (C-QUAM)';
+  readonly mode: DemodMode = 'am-stereo';
+  readonly stereoCapable = true;
+
+  private inputSampleRate = 48_000;
+
+  // PLL state
+  private omega2 = 0;       // frequency integrator
+  private cosGamma = 1.0;   // C-QUAM envelope correction factor
+  private vcoRe = 1.0;      // VCO complex phasor — real part
+  private vcoIm = 0.0;      // VCO complex phasor — imaginary part
+
+  // PLL gains (2nd-order, zeta=0.707, omegaN=100)
+  private alpha = 0;
+  private beta = 0;
+
+  // 25 Hz Goertzel pilot detection
+  private gCoeff = 0;
+  private gS1 = 0;
+  private gS2 = 0;
+  private gBlockSize = 0;
+  private gSampleCount = 0;
+  private pilotMag = 0;
+  private lockLevel = 0;
+
+  // Notch filter state (biquad, per-channel)
+  private nb0 = 0; private nb1 = 0; private nb2 = 0;
+  private na1 = 0; private na2 = 0;
+  private w1L = 0; private w2L = 0;
+  private w1R = 0; private w2R = 0;
+
+  // Audio post-processing
+  private dcBlockerL: DcBlocker;
+  private dcBlockerR: DcBlocker;
+  private agcL: Agc;
+  private agcR: Agc;
+  private lpFilterL: FirFilter;
+  private lpFilterR: FirFilter;
+
+  constructor() {
+    this.dcBlockerL = new DcBlocker();
+    this.dcBlockerR = new DcBlocker();
+    this.agcL = new Agc(0.3, 0.01, 0.0001, 100);
+    this.agcR = new Agc(0.3, 0.01, 0.0001, 100);
+    this.lpFilterL = new FirFilter(31, 5000 / this.inputSampleRate);
+    this.lpFilterR = new FirFilter(31, 5000 / this.inputSampleRate);
+    this.computePllGains();
+    this.computeGoertzelCoeff();
+    this.designNotchFilter(9000, 50);
+  }
+
+  private computePllGains(): void {
+    const T = 1 / this.inputSampleRate;
+    const zeta = 0.707;
+    const omegaN = 100;
+    const denom = 1 + 2 * zeta * omegaN * T + (omegaN * T) ** 2;
+    this.alpha = (2 * zeta * omegaN * T) / denom;
+    this.beta = ((omegaN * T) ** 2) / denom;
+  }
+
+  private computeGoertzelCoeff(): void {
+    this.gCoeff = 2 * Math.cos(2 * Math.PI * 25 / this.inputSampleRate);
+    // Evaluate pilot every ~50ms (at least one full 25 Hz cycle)
+    this.gBlockSize = Math.round(this.inputSampleRate * 0.05);
+  }
+
+  private designNotchFilter(freq: number, Q: number): void {
+    const w0 = 2 * Math.PI * freq / this.inputSampleRate;
+    const alphaN = Math.sin(w0) / (2 * Q);
+    const cosW0 = Math.cos(w0);
+    const a0 = 1 + alphaN;
+    this.nb0 = 1 / a0;
+    this.nb1 = -2 * cosW0 / a0;
+    this.nb2 = 1 / a0;
+    this.na1 = -2 * cosW0 / a0;
+    this.na2 = (1 - alphaN) / a0;
+  }
+
+  process(iq: Int16Array): Float32Array {
+    // Mono path: sum L+R (standard AM envelope detection with C-QUAM correction)
+    const stereo = this.processStereo(iq);
+    const n = stereo.left.length;
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      mono[i] = 0.5 * (stereo.left[i] + stereo.right[i]);
+    }
+    return mono;
+  }
+
+  processStereo(iq: Int16Array): StereoAudio {
+    const n = iq.length >> 1;
+    const left = new Float32Array(n);
+    const right = new Float32Array(n);
+
+    let { omega2, cosGamma, vcoRe, vcoIm, gS1, gS2, gSampleCount } = this;
+    let { w1L, w2L, w1R, w2R, lockLevel } = this;
+    const { alpha, beta, gCoeff, nb0, nb1, nb2, na1, na2, gBlockSize } = this;
+    const scale = 1 / 32768;
+
+    for (let i = 0; i < n; i++) {
+      const inI = iq[i * 2] * scale;
+      const inQ = iq[i * 2 + 1] * scale;
+
+      // 1. Complex demodulation: bb = input * conjugate(vco)
+      const I = inI * vcoRe + inQ * vcoIm;
+      const Q = -inI * vcoIm + inQ * vcoRe;
+
+      // 2. Fast envelope approximation
+      const absI = Math.abs(I);
+      const absQ = Math.abs(Q);
+      const env = (absI > absQ ? absI + 0.4 * absQ : absQ + 0.4 * absI) + 1e-9;
+
+      // 3. PLL phase error + frequency integrator
+      const det = Q / env;
+      omega2 += beta * det;
+      cosGamma += 0.005 * (I / env - cosGamma);
+
+      // 4. VCO phase update (incremental rotation)
+      const dPhz = alpha * det + omega2;
+      const cd = Math.cos(dPhz);
+      const sd = Math.sin(dPhz);
+      const newVcoRe = vcoRe * cd + vcoIm * sd;
+      const newVcoIm = -vcoRe * sd + vcoIm * cd;
+      vcoRe = newVcoRe;
+      vcoIm = newVcoIm;
+
+      // Renormalize VCO every 512 samples to prevent magnitude drift
+      if ((i & 511) === 0) {
+        const mag = Math.sqrt(vcoRe * vcoRe + vcoIm * vcoIm);
+        vcoRe /= mag;
+        vcoIm /= mag;
+      }
+
+      // 5. C-QUAM stereo extraction
+      const LpR = env * cosGamma - 1.0;
+      const safeCosGamma = Math.abs(cosGamma) > 1e-9 ? cosGamma : 1e-9;
+      const LmR = Q / safeCosGamma;
+      let rawL = 0.5 * (LpR + LmR);
+      let rawR = 0.5 * (LpR - LmR);
+
+      // 6. 25 Hz Goertzel pilot detection
+      const s0 = LmR + gCoeff * gS1 - gS2;
+      gS2 = gS1;
+      gS1 = s0;
+      gSampleCount++;
+
+      // Evaluate pilot magnitude periodically
+      if (gSampleCount >= gBlockSize) {
+        const power = gS1 * gS1 + gS2 * gS2 - gS1 * gS2 * gCoeff;
+        this.pilotMag = 0.9 * this.pilotMag + 0.1 * (Math.sqrt(Math.max(0, power)) / gSampleCount);
+        gS1 = 0;
+        gS2 = 0;
+        gSampleCount = 0;
+      }
+
+      // 7. Lock level tracking
+      lockLevel += 0.001 * (Math.max(0, I / env) - lockLevel);
+
+      // 8. Notch filter — left channel (Direct Form II biquad)
+      const wn0l = rawL - na1 * w1L - na2 * w2L;
+      rawL = nb0 * wn0l + nb1 * w1L + nb2 * w2L;
+      w2L = w1L;
+      w1L = wn0l;
+
+      // 9. Notch filter — right channel
+      const wn0r = rawR - na1 * w1R - na2 * w2R;
+      rawR = nb0 * wn0r + nb1 * w1R + nb2 * w2R;
+      w2R = w1R;
+      w1R = wn0r;
+
+      // 10. LP filter + DC block + AGC per channel
+      left[i] = this.agcL.process(this.dcBlockerL.process(this.lpFilterL.process(rawL)));
+      right[i] = this.agcR.process(this.dcBlockerR.process(this.lpFilterR.process(rawR)));
+    }
+
+    // Save state back
+    this.omega2 = omega2;
+    this.cosGamma = cosGamma;
+    this.vcoRe = vcoRe;
+    this.vcoIm = vcoIm;
+    this.gS1 = gS1;
+    this.gS2 = gS2;
+    this.gSampleCount = gSampleCount;
+    this.w1L = w1L;
+    this.w2L = w2L;
+    this.w1R = w1R;
+    this.w2R = w2R;
+    this.lockLevel = lockLevel;
+
+    // Stereo detection: PLL locked + 25 Hz pilot present
+    const isStereo = lockLevel > 0.8 && this.pilotMag > 0.001;
+
+    return { left, right, stereo: isStereo };
+  }
+
+  reset(): void {
+    this.omega2 = 0;
+    this.cosGamma = 1.0;
+    this.vcoRe = 1.0;
+    this.vcoIm = 0.0;
+    this.gS1 = 0;
+    this.gS2 = 0;
+    this.gSampleCount = 0;
+    this.pilotMag = 0;
+    this.lockLevel = 0;
+    this.w1L = 0;
+    this.w2L = 0;
+    this.w1R = 0;
+    this.w2R = 0;
+    this.dcBlockerL.reset();
+    this.dcBlockerR.reset();
+    this.agcL.reset();
+    this.agcR.reset();
+    this.lpFilterL.reset();
+    this.lpFilterR.reset();
+  }
+
+  setInputSampleRate(rate: number): void {
+    this.inputSampleRate = rate;
+    this.computePllGains();
+    this.computeGoertzelCoeff();
+    this.designNotchFilter(9000, 50);
+    this.lpFilterL.design(5000 / rate);
+    this.lpFilterR.design(5000 / rate);
+  }
+
+  setBandwidth(hz: number): void {
+    const cutoff = Math.min(hz / 2, 10000);
+    this.lpFilterL.design(cutoff / this.inputSampleRate);
+    this.lpFilterR.design(cutoff / this.inputSampleRate);
+    // Adapt notch to channel spacing
+    if (hz >= 18000) {
+      this.designNotchFilter(10000, 50);
+    } else if (hz >= 9000) {
+      this.designNotchFilter(9000, 50);
+    } else {
+      this.designNotchFilter(hz / 2, 30);
+    }
   }
 }
 
@@ -1049,6 +1343,9 @@ export function getDemodulator(mode: DemodMode): Demodulator {
       break;
     case 'am':
       demod = new AmDemodulator();
+      break;
+    case 'am-stereo':
+      demod = new CQuamDemodulator();
       break;
     case 'usb':
       demod = new SsbDemodulator(true);

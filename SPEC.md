@@ -1,6 +1,6 @@
 # no-sdr Technical Specification
 
-Version 0.2.0 — April 2026
+Version 0.3.0 — April 2026
 
 ## Table of Contents
 
@@ -156,10 +156,12 @@ All binary messages are prefixed with a single type byte. The remaining bytes ar
 | `0x01` | `MSG_FFT` | `Float32Array` — dB magnitudes, DC-centered, length = fftSize | fftSize × 4 + 1 bytes | Broadcast to dongle |
 | `0x02` | `MSG_IQ` | `Int16Array` — interleaved I,Q,I,Q... samples of user's sub-band | Variable (depends on bandwidth/mode) | Per-user |
 | `0x03` | `MSG_META` | UTF-8 JSON string — `ServerMeta` union type | Variable | Per-user |
-| `0x04` | `MSG_FFT_COMPRESSED` | `Uint8Array` — dB mapped to 0-255 range | fftSize + 1 bytes | Broadcast to dongle |
+| `0x04` | `MSG_FFT_COMPRESSED` | `[Int16 minDb LE][Int16 maxDb LE][Uint8...]` — 4-byte header + dB mapped to 0-255 | fftSize + 5 bytes | Broadcast to dongle |
 | `0x05` | `MSG_AUDIO` | `Int16Array` — mono PCM audio samples | Variable | Per-user |
 | `0x06` | `MSG_DECODER` | UTF-8 JSON — `{ decoderType, data }` | Variable | Broadcast to dongle |
 | `0x07` | `MSG_SIGNAL_LEVEL` | `Float32` — signal strength in dB | 5 bytes | Per-user |
+| `0x08` | `MSG_FFT_ADPCM` | IMA-ADPCM encoded FFT: `[Int16 minDb LE][Int16 maxDb LE][10 warmup samples][ADPCM bytes]` | ~fftSize/2 + 15 bytes | Broadcast to dongle |
+| `0x09` | `MSG_IQ_ADPCM` | `[Uint32 sampleCount LE][ADPCM bytes]` — IMA-ADPCM compressed IQ | Variable (~50% of raw) | Per-user |
 
 ### 3.3 Server Meta Messages (`MSG_META`)
 
@@ -195,10 +197,14 @@ type ClientCommand =
   | { cmd: 'volume'; level: number }      // 0.0 – 1.0
   | { cmd: 'mute'; muted: boolean }
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
+  | { cmd: 'codec'; fftCodec?: CodecType; iqCodec?: CodecType }
+  | { cmd: 'audio_enabled'; enabled: boolean }
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
   | { cmd: 'admin_stop_dongle'; dongleId: string }
   | { cmd: 'admin_start_dongle'; dongleId: string };
+
+type CodecType = 'none' | 'adpcm';
 ```
 
 ### 3.5 Typical Session Flow
@@ -214,8 +220,15 @@ Client                              Server
   │ ◄─── MSG_META subscribed ───────── │  (includes iqSampleRate, mode)
   │      (IqExtractor created)         │
   │                                    │
-  │ ◄─── MSG_FFT (30fps) ──────────── │  (continuous, broadcast)
-  │ ◄─── MSG_IQ (per-user) ────────── │  (continuous, narrowband)
+  │ ──── { cmd: codec,                 │
+  │        fftCodec: "adpcm",          │
+  │        iqCodec: "adpcm" } ────────►│  (per-client codec negotiation)
+  │                                    │
+  │ ◄─── MSG_FFT_ADPCM (30fps) ────── │  (continuous, broadcast, ADPCM compressed)
+  │                                    │
+  │ ──── { cmd: audio_enabled,         │
+  │        enabled: true } ───────────►│  (IQ gating: only now sends IQ data)
+  │ ◄─── MSG_IQ_ADPCM (per-user) ──── │  (continuous, narrowband, ADPCM compressed)
   │                                    │
   │ ──── { cmd: tune, offset: 25000 }► │
   │      (IqExtractor NCO retuned)     │
@@ -315,7 +328,8 @@ Computes FFT from raw IQ data and outputs dB magnitude arrays.
 6. Normalization: `20*log10(N) + 20*log10(windowCoherentGain)` (~57dB for 2048-point Blackman-Harris)
 7. DC-center reorder (swap halves)
 8. Apply exponential smoothing (configurable averaging factor)
-9. Output `Float32Array` of dB values, length = `fftSize`
+9. **Rate cap**: emit at configurable `targetFps` (default 30, per-profile `fftFps`). Frames between emissions are averaged into a pending frame using incremental mean.
+10. Output `Float32Array` of dB values, length = `fftSize`
 
 **Window functions available:** Blackman-Harris (default, best sidelobe suppression), Hann (good general purpose), Hamming (narrower main lobe).
 
@@ -338,6 +352,7 @@ Extracts a narrowband IQ sub-band from the full-bandwidth dongle stream for per-
 | WFM | 240,000 Hz | 10× |
 | NFM | 48,000 Hz | 50× |
 | AM | 48,000 Hz | 50× |
+| AM Stereo | 48,000 Hz | 50× |
 | USB/LSB | 24,000 Hz | 100× |
 | CW | 12,000 Hz | 200× |
 
@@ -360,17 +375,27 @@ Routes data between dongles and connected clients.
 - `bandwidth` — filter bandwidth in Hz
 - `isAdmin` — admin-authenticated flag
 - `iqExtractor` — per-client IqExtractor instance (created on subscribe)
+- `fftCodec` / `iqCodec` — per-client codec preference (`'none'` or `'adpcm'`)
+- `iqAdpcmEncoder` — per-client IMA-ADPCM encoder instance (created when iqCodec is `'adpcm'`)
+- `audioEnabled` — whether client has enabled audio (IQ data only sent when true)
 
 **Data routing:**
-- FFT data → broadcast to all clients subscribed to the dongle
-- IQ sub-band → extracted per-client via `iqExtractor.process()`, sent individually
+- FFT data → broadcast to all clients subscribed to the dongle, lazy-encoded per codec (Uint8 for `none`, ADPCM for `adpcm`)
+- IQ sub-band → extracted per-client via `iqExtractor.process()`, optionally ADPCM-compressed, sent only if `audioEnabled`
 - Decoder output → broadcast to all clients on the dongle
+
+**Backpressure:**
+- FFT broadcast checks `ws.raw.bufferedAmount` against 256KB threshold; skips frame for slow clients
+- IQ send checks against 1MB threshold; drops IQ frames for slow clients
+- Warning logged once per client until buffer drains
 
 **Command handling:**
 - `tune` → updates `tuneOffset`, resets IqExtractor NCO offset + filter state
 - `mode` → updates `mode`, adjusts IqExtractor output sample rate + re-initializes filter
 - `bandwidth` → updates client bandwidth
 - `subscribe` → creates IqExtractor for client, sends `subscribed` meta with `iqSampleRate`
+- `codec` → sets per-client `fftCodec`/`iqCodec`, creates/destroys ADPCM encoder as needed
+- `audio_enabled` → sets `audioEnabled` flag; IQ data only sent when true
 
 **Throughput logging:** Every 5 seconds, logs IQ samples/s in, IQ samples/s out, and total bytes.
 
@@ -430,7 +455,7 @@ Central orchestrator connecting WebSocket to renderers and audio.
 - Client command sending (tune, mode, bandwidth, etc.)
 - Initial dongle discovery via REST `/api/dongles`
 - Auto-subscribe to first running dongle on connect
-- Signal level computation from FFT data (peak dB in tuned bandwidth, updated every 8 frames)
+- Signal level computation from FFT data (peak dB in tuned bandwidth, updated every 2 frames at ~15Hz)
 - Auto-range dB scaling: tracks min/max/avg over 16 frames, exponential smoothing, targets avg-15 to avg+35 dB
 - Squelch gate: mutes IQ audio when `signalLevel < squelchLevel`, with 500ms bypass after tune/mode change
 - Stereo control: checks `stereoEnabled && stereoCapable && signalLevel >= stereoThreshold` before using stereo path
@@ -504,8 +529,9 @@ interface StereoAudio {
 
 | Class | Modes | Algorithm |
 |-------|-------|-----------|
-| `FmDemodulator` | WFM, NFM | Polar discriminator, de-emphasis, decimation. WFM: stereo via PLL + 38kHz carrier + L-R matrix |
+| `FmDemodulator` | WFM, NFM | Polar discriminator, de-emphasis, decimation. WFM: stereo via PLL + 38kHz carrier + L-R matrix with SNR-proportional blend |
 | `AmDemodulator` | AM | Envelope detection: `sqrt(I² + Q²)`, DC blocker, AGC |
+| `CQuamDemodulator` | AM Stereo | C-QUAM: PLL carrier lock, cosGamma correction, L+R from envelope, L-R from quadrature, 25Hz Goertzel pilot, notch filter |
 | `SsbDemodulator` | USB, LSB | Conjugate flip for LSB, BFO frequency shift via complex oscillator, take real part, AGC |
 | `CwDemodulator` | CW | 700Hz BFO mixing, narrow FIR bandpass, AGC |
 | `RawDemodulator` | RAW | Passthrough (I channel only) |
@@ -514,12 +540,22 @@ interface StereoAudio {
 1. FM discriminator → composite MPX signal at 240kHz sample rate
 2. PLL locks onto 19kHz pilot tone (PI loop filter, ~50Hz loop bandwidth)
 3. SNR-based detection: narrowband BPF (Q=50) energy vs broadband energy. Hysteresis: ON > 0.008, OFF < 0.003
-4. PLL output: `cos(2 × pilotPhase)` = 38kHz carrier for L-R demodulation
-5. L+R: low-pass 15kHz from composite
-6. L-R: `2 × composite × cos(38kHz)` → low-pass 15kHz
-7. Stereo matrix: `L = (L+R + L-R)/2`, `R = (L+R - L-R)/2`
-8. Per-channel de-emphasis (75µs) + decimation (240k→48k) + DC blocking
-9. Falls back to mono `L=R=L+R` when pilot not detected
+4. **SNR-proportional stereo blend**: `blendFactor` = continuous 0.0–1.0 mapped from SNR range [0.003, 0.015] with smoothed attack (alpha=0.02) and release (alpha=0.005). Replaces hard on/off switch.
+5. PLL output: `cos(2 × pilotPhase)` = 38kHz carrier for L-R demodulation
+6. L+R: low-pass 15kHz from composite
+7. L-R: `2 × composite × cos(38kHz)` → low-pass 15kHz
+8. Stereo matrix: `L = L+R + blend × L-R`, `R = L+R - blend × L-R`
+9. Per-channel de-emphasis (75µs) + decimation (240k→48k) + DC blocking
+10. Falls back to mono (blend=0) when pilot signal is weak
+
+**AM Stereo — C-QUAM (AM Stereo mode):**
+1. 2nd-order PLL (zeta=0.707, omegaN=100) locks to carrier
+2. Fast envelope: `max(|I|,|Q|) + 0.4*min(|I|,|Q|)`
+3. `cosGamma` IIR correction: `cosGamma += 0.005 * (I/env - cosGamma)`
+4. Stereo extraction: `L+R = env*cosGamma - 1`, `L-R = Q/cosGamma`
+5. 25Hz Goertzel pilot detection (evaluated every 50ms, stereo when lockLevel > 0.8 && pilotMag > 0.001)
+6. Per-channel biquad notch filter (9kHz, adaptive to bandwidth) + FIR LPF (5kHz, 31-tap) + DC blocker + AGC
+7. No de-emphasis needed (C-QUAM uses flat frequency response)
 
 **Factory:** `getDemodulator(mode)` returns cached demodulator instances. `resetDemodulator(mode)` clears a specific cache entry.
 
@@ -582,7 +618,10 @@ SolidJS signals for UI state only. Hot data (FFT, audio) bypasses the store enti
 - Audio: `volume`, `muted`, `squelch`, `signalLevel`, `balance`, `loudness`
 - EQ: `eqLow`, `eqLowMid`, `eqMid`, `eqHighMid`, `eqHigh` (all dB, default 0)
 - Stereo: `stereoEnabled`, `stereoDetected`, `stereoThreshold`
-- Display: `waterfallTheme`, `uiTheme`, `waterfallMin`, `waterfallMax`, `waterfallAutoRange`, `fftSize`, `iqSampleRate`
+- Noise Reduction: `nrEnabled`, `nrStrength`, `nbEnabled`, `nbLevel`
+- Codec: `fftCodec`, `iqCodec` (both `CodecType`, default `'adpcm'`)
+- Codec Stats: `fftWireBytes`, `fftRawBytes`, `iqWireBytes`, `iqRawBytes` (bytes/sec)
+- Display: `waterfallTheme`, `uiTheme`, `waterfallMin`, `waterfallMax`, `waterfallAutoRange`, `fftSize`, `iqSampleRate`, `meterStyle` (`'bar'` | `'needle'`)
 - Stats: `fftRate`, `iqRate`, `wsBytes`, `wsBytesHistory` (30-second array)
 - UI: `sidebarOpen`, `decoderPanelOpen`, `isAdmin`
 
@@ -597,15 +636,16 @@ SolidJS signals for UI state only. Hot data (FFT, audio) bypasses the store enti
 **`FrequencyDisplay.tsx`** — LCD-style dotted frequency readout (e.g., `100.000.000 MHz`). Digit groups are individually hoverable with scroll-to-tune (mouse wheel changes frequency in units matching the digit group).
 
 **`ControlPanel.tsx`** — Sidebar panels:
-- **ModeSelector** — 7 mode buttons with active state
-- **AudioControls** — volume slider, mute button, loudness toggle, stereo indicator (WFM only: badge glows green when pilot detected)
-- **StereoSettings** — on/off toggle + signal threshold slider (WFM only)
+- **SMeter** — bar or classic analog needle meter (canvas-drawn, warm backlit face, dual S-unit + dB scale, red needle, peak hold). Toggle between bar/needle styles.
+- **ModeSelector** — 8 mode buttons (WFM, NFM, AM, AMS, USB, LSB, CW, RAW) with active state + inline filter bandwidth slider
+- **AudioControls** — volume slider, mute button, loudness toggle, stereo indicator (WFM/AMS: badge glows green when pilot detected)
+- **NoiseReduction** — spectral NR (on/off + strength slider) and noise blanker (on/off + threshold slider)
+- **StereoSettings** — on/off toggle + signal threshold slider (WFM/AMS only)
 - **BalanceControl** — slider with L/C/R labels, min-width text display
 - **5-Band EQ** — vertical sliders for LOW/L-M/MID/H-M/HIGH with dB labels, color feedback (cyan=boost, amber=cut), reset button
 - **SquelchControl** — adjustable dB threshold slider
-- **BandwidthControl** — mode-aware range slider
 - **WaterfallSettings** — 5 palette buttons, min/max dB sliders, auto-scale toggle
-- **SMeter** — color-segmented bar (S1-S9+60) with dynamic range scaling
+- **CodecSettings** — FFT and IQ codec toggles (None/ADPCM) with live compression ratio, wire bandwidth, and savings stats
 - **ConnectionStatus** — connected/disconnected indicator
 - **DongleSelector** — dongle + profile dropdown
 - **AdminPanel** — login, dongle start/stop, profile switch
@@ -653,7 +693,8 @@ DongleProfile {
   name: string
   centerFrequency: number   // Hz
   sampleRate: number        // Hz
-  fftSize: number           // power of 2, default 2048
+  fftSize: number           // power of 2, default 2048, max 16384
+  fftFps: number            // FFT frame rate cap, 1-60, default 30
   defaultMode: DemodMode
   defaultTuneOffset: number
   defaultBandwidth: number
@@ -732,7 +773,7 @@ Float32Array dB magnitudes [fftSize values]
 
 **Normalization:** The FFT output is normalized by subtracting `20*log10(N) + 20*log10(windowCoherentGain)` dB. For N=2048 with Blackman-Harris window, this is approximately 57 dB. This ensures output values represent meaningful signal power in dBFS.
 
-**FFT rate:** Depends on sample rate and FFT size. At 2.4 MSPS and 2048-point FFT: ~1172 FFTs/second possible. Throttled to ~30 fps for WebSocket broadcast.
+**FFT rate:** Depends on sample rate and FFT size. At 2.4 MSPS and 2048-point FFT: ~1172 FFTs/second possible. Server-side rate cap (configurable `fftFps` per profile, default 30) averages excess frames into a pending frame using incremental mean. Effective broadcast rate matches `fftFps`.
 
 ### 8.2 Per-Client IQ Sub-Band Extraction
 
@@ -804,6 +845,53 @@ Float32 samples (48kHz, mono or stereo)
 ```
 
 **Squelch gate:** Implemented in SdrEngine (not AudioEngine). When `signalLevel < squelchLevel` and not in grace period, IQ audio samples are not pushed to the worklet. Grace period of 500ms after tune/mode changes prevents squelch from blocking audio while signal level is still updating.
+
+### 8.5 IMA-ADPCM Compression
+
+**File:** `shared/src/adpcm.ts`
+
+Standard IMA-ADPCM codec providing 4:1 lossy compression (Int16 → 4-bit nibbles). Uses the standard 89-entry step table and 16-entry index table.
+
+**Classes:**
+- `ImaAdpcmEncoder` — streaming encoder with `encode(pcm: Int16Array): Uint8Array` and `reset()`
+- `ImaAdpcmDecoder` — streaming decoder with `decode(adpcm: Uint8Array): Int16Array` and `reset()`
+- State (predictor + stepIndex) persists across calls for streaming. Reset on reconnect or mode change.
+
+**FFT compression helpers:**
+- `encodeFftAdpcm(fftData, minDb, maxDb)` — scales Float32 dB to Int16 (dB×100), prepends 10 warmup samples (for predictor convergence), encodes with fresh encoder (stateless per frame), returns Uint8Array with 4-byte header (Int16 minDb + Int16 maxDb LE). ~8:1 total vs raw Float32.
+- `decodeFftAdpcm(payload)` — reverses the above, returns Float32Array of dB values.
+
+**IQ compression:**
+- Per-client `ImaAdpcmEncoder` instance on server, per-client `ImaAdpcmDecoder` on client
+- Wire format: `[0x09][Uint32 sampleCount LE][ADPCM bytes]`
+- Sample count needed because ADPCM output is always even-length (pairs of nibbles)
+
+**Codec negotiation:** Client sends `{ cmd: 'codec', fftCodec: 'adpcm', iqCodec: 'adpcm' }`. Server creates per-client encoder instances. Both `none` (raw) and `adpcm` paths are always available. Default is `adpcm` for both.
+
+### 8.6 Noise Reduction
+
+**File:** `client/src/engine/noise-reduction.ts`
+
+Client-side audio noise reduction applied after demodulation, before AudioWorklet.
+
+**SpectralNoiseReducer:**
+- 512-point FFT with Hann window, 75% overlap (hop = N/4), COLA normalization
+- Minimum-statistics noise floor estimation (alpha=0.015, 150-frame window ≈1.5s, 1.5× bias correction, 40-frame priming)
+- Wiener gain: `G(k) = max(spectralFloor, 1 - overSubtraction * N(k)/|X(k)|²)`
+- Strength 0–1 maps: overSubtraction 0.3–2.0, spectralFloor 0.20–0.06
+- Per-bin gain smoothing: `prev*0.3 + gain*0.7`
+- Stereo: left channel computes gain mask, right channel reuses shared mask
+- **Known limitation:** produces robotic artifacts on music/tonal signals. Noise blanker recommended instead for WFM.
+
+**NoiseBlanker:**
+- EMA amplitude tracking (alpha=0.001 ≈ 2ms at 48kHz)
+- Threshold: maps strength 0–1 to multiplier 6–2× average amplitude
+- 7-sample hang timer after spike detection
+- 8-sample delay line for look-ahead
+- Smooth gain transitions (0.25 attack, 0.1 recovery)
+- Effective for impulse noise (AM/HF), power line interference
+
+**NoiseReductionEngine:** Unified controller with dual L/R instances for stereo. Methods: `setNrEnabled()`, `setNrStrength()`, `setNbEnabled()`, `setNbLevel()`, `processMono()`, `processStereo()`, `reset()`.
 
 ---
 
@@ -884,7 +972,7 @@ FLEX: ...
 | Client CPU | O(1) — demodulation + audio processing is local |
 | Client bandwidth | Constant per user — one FFT stream + one IQ stream |
 
-Typical bandwidth per user: ~500 KB/s (2048-point FFT at 30fps ≈ 240 KB/s, plus IQ sub-band varies by mode: WFM ≈ 960 KB/s, NFM ≈ 192 KB/s, CW ≈ 48 KB/s).
+Typical bandwidth per user (with ADPCM compression): ~125–300 KB/s (2048-point FFT ADPCM at 30fps ≈ 30 KB/s, plus IQ ADPCM sub-band: WFM ≈ 240 KB/s, NFM ≈ 48 KB/s, CW ≈ 12 KB/s). Without compression (raw): ~500–1200 KB/s.
 
 ### 10.4 Profile Switching
 
@@ -1046,15 +1134,16 @@ location / {
 | Server CPU | ~5–15% | 1 dongle, 2048 FFT, 2.4 MSPS (single core) |
 | IQ extraction | 6.7× real-time | Per client, 2.4 MSPS → 240k (WFM) |
 | Client FM demod | 38× real-time | 240kHz IQ → 48kHz audio |
-| Client JS bundle | 76 KB (22.5 KB gzip) | Full application |
-| Client CSS bundle | 26 KB (5.7 KB gzip) | Tailwind v4 |
-| WS bandwidth per client | ~500 KB/s (WFM) | 2048 FFT @ 30fps + IQ sub-band |
+| Client JS bundle | ~101 KB (~30 KB gzip) | Full application |
+| Client CSS bundle | ~26 KB (~5.7 KB gzip) | Tailwind v4 |
+| WS bandwidth per client (ADPCM) | ~125–300 KB/s | 2048 FFT ADPCM @ 30fps + IQ ADPCM sub-band |
+| WS bandwidth per client (raw) | ~500–1200 KB/s | 2048 FFT Float32 @ 30fps + raw IQ sub-band |
 | Audio latency | ~100–200 ms | AudioWorklet jitter buffer |
 
 ### Bottlenecks
 
-1. **WebSocket broadcast** — O(N) bandwidth for FFT data. Mitigation: use compressed FFT (MSG_FFT_COMPRESSED, ~4x smaller)
-2. **IQ extraction** — O(N) CPU for per-client sub-band extraction. Mitigation: could be moved to a worker thread
+1. **WebSocket broadcast** — O(N) bandwidth for FFT data. Mitigation: ADPCM compression (~8:1 vs raw Float32), backpressure with frame skipping for slow clients
+2. **IQ extraction** — O(N) CPU for per-client sub-band extraction. Mitigation: could be moved to a worker thread; ADPCM compression reduces bandwidth 4:1
 3. **Canvas rendering** — CPU-bound for FFT sizes > 4096. Mitigation: WebGL renderer (not yet implemented)
 
 ---
@@ -1071,6 +1160,8 @@ location / {
 - **Multi-server** — aggregate multiple no-sdr instances behind a gateway
 - **Worker threads** — offload FFT and IQ extraction from the main event loop
 - **RDS decoding** — FM broadcast metadata (station name, song title, traffic info)
+- **Spectral NR rework** — current Wiener filter has robotic artifacts; consider RNNoise (WASM), multi-band expander
+- **Opus audio codec** — server-side demod + Opus VBR for ultra-low-bandwidth clients
 
 ### Potential Decoder Additions
 
@@ -1082,6 +1173,6 @@ location / {
 
 ### Protocol Extensions
 
-- Compressed IQ transport (delta encoding or LZ4)
+- Opus-compressed audio transport (server-side demod for low-bandwidth clients)
 - Bi-directional audio (TX support for licensed operators)
 - Waterfall history (seek-back in time)

@@ -20,18 +20,14 @@ import {
   packIqMessage,
   packFftAdpcmMessage,
   packIqAdpcmMessage,
-  packIqVbrMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
   MSG_IQ,
   MSG_IQ_ADPCM,
-  MSG_IQ_VBR,
   MSG_DECODER,
   ImaAdpcmEncoder,
   encodeFftAdpcm,
-  VbrEncoder,
-  packVbrBlocks,
 } from '@node-sdr/shared';
 import { DongleManager } from './dongle-manager.js';
 import { DecoderManager, type DecoderMessage } from './decoder-manager.js';
@@ -50,8 +46,6 @@ interface ConnectedClient {
   iqCodec: CodecType;
   /** Per-client ADPCM encoder for IQ stream (stateful, streaming) */
   iqAdpcmEncoder: ImaAdpcmEncoder | null;
-  /** Per-client VBR encoder for IQ stream (stateful, streaming) */
-  iqVbrEncoder: VbrEncoder | null;
 }
 
 export class WebSocketManager {
@@ -238,12 +232,6 @@ export class WebSocketManager {
             if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
               const adpcm = client.iqAdpcmEncoder.encode(subBand);
               client.ws.send(packIqAdpcmMessage(adpcm, subBand.length));
-            } else if (client.iqCodec === 'vbr' && client.iqVbrEncoder) {
-              const blocks = client.iqVbrEncoder.encode(subBand);
-              if (blocks.length > 0) {
-                const packed = packVbrBlocks(blocks);
-                client.ws.send(packIqVbrMessage(packed));
-              }
             } else {
               client.ws.send(packIqMessage(subBand));
             }
@@ -271,6 +259,7 @@ export class WebSocketManager {
         iqOutSPS,
         expectedSPS: 2400000,
       }, 'IQ/FFT throughput');
+
       this.iqCount = 0;
       this.fftCount = 0;
       this.iqBytes = 0;
@@ -304,7 +293,6 @@ export class WebSocketManager {
       fftCodec: 'none',
       iqCodec: 'none',
       iqAdpcmEncoder: null,
-      iqVbrEncoder: null,
     };
 
     this.clients.set(clientId, client);
@@ -505,18 +493,8 @@ export class WebSocketManager {
         } else {
           client.iqAdpcmEncoder.reset();
         }
-        client.iqVbrEncoder = null;
-      } else if (cmd.iqCodec === 'vbr') {
-        // Create or reset per-client VBR encoder
-        if (!client.iqVbrEncoder) {
-          client.iqVbrEncoder = new VbrEncoder();
-        } else {
-          client.iqVbrEncoder.reset();
-        }
-        client.iqAdpcmEncoder = null;
       } else {
         client.iqAdpcmEncoder = null;
-        client.iqVbrEncoder = null;
       }
       logger.info({ clientId: client.id, iqCodec: cmd.iqCodec }, 'Client IQ codec changed');
     }

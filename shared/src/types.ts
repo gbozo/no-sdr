@@ -84,7 +84,7 @@ export interface DecoderConfig {
 
 // ---- Demodulation ----
 
-export type DemodMode = 'wfm' | 'nfm' | 'am' | 'usb' | 'lsb' | 'cw' | 'raw';
+export type DemodMode = 'wfm' | 'nfm' | 'am' | 'am-stereo' | 'usb' | 'lsb' | 'cw' | 'raw';
 
 export type DigitalMode =
   | 'adsb'
@@ -141,6 +141,35 @@ export interface DongleConfig {
   profiles: DongleProfile[];
   /** Auto-start first profile on server boot */
   autoStart: boolean;
+
+  // ---- Hardware options ----
+
+  /** Direct sampling mode: 0=off (default), 1=I-ADC input, 2=Q-ADC input.
+   *  Bypasses the tuner for HF reception (0–28 MHz). */
+  directSampling?: 0 | 1 | 2;
+
+  /** Enable bias-T power on the antenna connector (default: false).
+   *  Powers LNAs, active antennas, or upconverters via coax. */
+  biasT?: boolean;
+
+  /** RTL2832U digital AGC (default: false).
+   *  Adjusts the ADC's digital gain; usually combined with manual tuner gain. */
+  digitalAgc?: boolean;
+
+  /** Offset tuning / zero-IF shift (default: false).
+   *  Moves the DC spike away from the center frequency. Useful for E4000 tuners. */
+  offsetTuning?: boolean;
+
+  /** Tuner IF gain stages (array of [stage, tenthsOfDb]).
+   *  Stage numbering is tuner-specific (e.g., E4000 has stages 1-6).
+   *  Example: [[1, 60], [2, 90]] sets stage 1 to 6.0 dB, stage 2 to 9.0 dB. */
+  ifGain?: [number, number][];
+
+  /** Tuner bandwidth in Hz (default: automatic / same as sample rate).
+   *  Only supported by R820T/R828D tuners. Narrows the hardware anti-alias filter.
+   *  Local: requires rtl-sdr-blog fork (passes -w flag). Not in stock rtl_sdr.
+   *  rtl_tcp: not in standard protocol; requires modified server. */
+  tunerBandwidth?: number;
 }
 
 // ---- Waterfall & Display ----

@@ -39,13 +39,21 @@ interface DongleState {
 
 // ---- rtl_tcp protocol constants ----
 // rtl_tcp command structure: 1 byte command + 4 bytes parameter (big-endian)
-const RTL_TCP_CMD_SET_FREQ       = 0x01;
-const RTL_TCP_CMD_SET_SAMPLERATE = 0x02;
-const RTL_TCP_CMD_SET_GAIN_MODE  = 0x03; // 0=auto, 1=manual
-const RTL_TCP_CMD_SET_GAIN       = 0x04; // gain in tenths of dB
-const RTL_TCP_CMD_SET_FREQ_CORR  = 0x05; // PPM
-const RTL_TCP_CMD_SET_AGC_MODE   = 0x08; // 0=off, 1=on
-const RTL_TCP_HEADER_SIZE        = 12;   // "RTL0" magic + tuner type (4) + gain count (4)
+const RTL_TCP_CMD_SET_FREQ            = 0x01;
+const RTL_TCP_CMD_SET_SAMPLERATE      = 0x02;
+const RTL_TCP_CMD_SET_GAIN_MODE       = 0x03; // 0=auto, 1=manual
+const RTL_TCP_CMD_SET_GAIN            = 0x04; // gain in tenths of dB
+const RTL_TCP_CMD_SET_FREQ_CORR       = 0x05; // PPM
+const RTL_TCP_CMD_SET_IF_GAIN         = 0x06; // (stage << 16) | (gain & 0xFFFF), gain in tenths of dB
+const RTL_TCP_CMD_SET_TEST_MODE       = 0x07; // 0=off, 1=on
+const RTL_TCP_CMD_SET_AGC_MODE        = 0x08; // 0=off, 1=on (RTL2832U digital AGC)
+const RTL_TCP_CMD_SET_DIRECT_SAMPLING = 0x09; // 0=off, 1=I-ADC, 2=Q-ADC
+const RTL_TCP_CMD_SET_OFFSET_TUNING   = 0x0A; // 0=off, 1=on
+const RTL_TCP_CMD_SET_RTL_XTAL        = 0x0B; // Hz
+const RTL_TCP_CMD_SET_TUNER_XTAL      = 0x0C; // Hz
+const RTL_TCP_CMD_SET_GAIN_BY_INDEX   = 0x0D; // index into gain table
+const RTL_TCP_CMD_SET_BIAS_TEE        = 0x0E; // 0=off, 1=on
+const RTL_TCP_HEADER_SIZE             = 12;   // "RTL0" magic + tuner type (4) + gain count (4)
 
 export class DongleManager extends EventEmitter {
   private dongles = new Map<string, DongleState>();
@@ -163,6 +171,16 @@ export class DongleManager extends EventEmitter {
       args.push('-g', profile.gain.toString());
     }
 
+    // Direct sampling mode (HF reception)
+    if (state.config.directSampling && state.config.directSampling > 0) {
+      args.push('-D', state.config.directSampling.toString());
+    }
+
+    // Tuner bandwidth (requires rtl-sdr-blog fork or compatible binary with -w flag)
+    if (state.config.tunerBandwidth && state.config.tunerBandwidth > 0) {
+      args.push('-w', state.config.tunerBandwidth.toString());
+    }
+
     // Extra args from source config
     if (source.extraArgs?.length) {
       args.push(...source.extraArgs);
@@ -266,6 +284,41 @@ export class DongleManager extends EventEmitter {
       } else {
         this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0); // auto gain
         this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);  // enable AGC
+      }
+
+      // ---- Hardware options (dongle-level) ----
+
+      // Direct sampling (HF reception via I/Q-ADC bypass)
+      if (state.config.directSampling !== undefined && state.config.directSampling > 0) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, state.config.directSampling);
+        logger.info({ dongleId, mode: state.config.directSampling }, 'Direct sampling enabled');
+      }
+
+      // Bias-T power on antenna connector
+      if (state.config.biasT) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+        logger.info({ dongleId }, 'Bias-T enabled');
+      }
+
+      // RTL2832U digital AGC
+      if (state.config.digitalAgc) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+        logger.info({ dongleId }, 'Digital AGC enabled');
+      }
+
+      // Offset tuning (zero-IF shift, useful for E4000 tuner)
+      if (state.config.offsetTuning) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_OFFSET_TUNING, 1);
+        logger.info({ dongleId }, 'Offset tuning enabled');
+      }
+
+      // Tuner IF gain stages
+      if (state.config.ifGain?.length) {
+        for (const [stage, tenthsDb] of state.config.ifGain) {
+          const param = ((stage & 0xFFFF) << 16) | (tenthsDb & 0xFFFF);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_IF_GAIN, param);
+          logger.info({ dongleId, stage, gainTenthsDb: tenthsDb }, 'IF gain stage set');
+        }
       }
 
       this.emit('dongle-started', dongleId, profile);

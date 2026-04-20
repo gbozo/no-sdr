@@ -54,8 +54,9 @@ Think of it as your own private [WebSDR](http://websdr.org) that you can run at 
 
 ### Radio
 
-- **7 analog demodulation modes** — WFM (stereo), NFM, AM, USB, LSB, CW, Raw IQ
-- **Stereo FM** — PLL-based 19kHz pilot detection, L-R DSB-SC demodulation with per-channel de-emphasis
+- **8 analog demodulation modes** — WFM (stereo), NFM, AM, AM Stereo (C-QUAM), USB, LSB, CW, Raw IQ
+- **Stereo FM** — PLL-based 19kHz pilot detection, L-R DSB-SC demodulation with SNR-proportional stereo blend
+- **AM Stereo (C-QUAM)** — Motorola C-QUAM decoding with PLL carrier lock, 25Hz Goertzel pilot detection, per-channel notch filter
 - **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
 - **Multi-user** — everyone shares the same waterfall; each user tunes independently within the dongle's bandwidth
 - **Multi-dongle** — configure multiple RTL-SDR devices, each with its own frequency profiles
@@ -69,14 +70,15 @@ Think of it as your own private [WebSDR](http://websdr.org) that you can run at 
 - **Auto-range** — automatic dB scaling based on signal statistics, or manual min/max control
 - **Spectrum analyzer** — real-time power spectral density with tuning indicator and bandwidth overlay
 - **Frequency display** — LCD-style readout with scroll-to-tune digit groups
-- **S-meter** — signal strength indicator with color breakpoints (green → amber → red)
+- **S-meter** — bar or classic analog needle meter with warm backlit face, dual scale (S-units + dB), red needle with peak hold indicator
 - **Bandwidth meter** — real-time SVG sparkline showing WebSocket throughput + FFT frame rate
 - **3 UI themes** — LCD (cyan), CRT (phosphor green), VFD (amber)
 
 ### Audio
 
 - **Client-side DSP** — demodulation runs entirely in the browser via pure TypeScript
-- **Stereo output** — stereo FM with user toggle, signal threshold, and pilot detection indicator
+- **Stereo output** — stereo FM with SNR-proportional blend, C-QUAM AM stereo with pilot detection
+- **Noise reduction** — spectral subtraction (Wiener filter) + impulse noise blanker with adjustable strength
 - **AudioWorklet** — low-latency audio playback with 100ms jitter buffer
 - **5-band parametric EQ** — LOW 80Hz, L-MID 500Hz, MID 1.5kHz, H-MID 4kHz, HIGH 12kHz (all ±12dB)
 - **Balance** — stereo pan control (-100% left to +100% right)
@@ -85,6 +87,10 @@ Think of it as your own private [WebSDR](http://websdr.org) that you can run at 
 
 ### Infrastructure
 
+- **IMA-ADPCM compression** — 4:1 lossy compression for FFT and IQ streams, per-client codec negotiation
+- **Server-side FFT rate cap** — configurable fps per profile (default 30) with inter-frame averaging
+- **WebSocket backpressure** — bufferedAmount-based frame skipping prevents server memory bloat
+- **Audio-gated IQ** — server only sends per-user IQ data after client enables audio playback
 - **Demo mode** — built-in signal simulator for development and demos, no hardware needed
 - **rtl_tcp support** — connect to remote RTL-SDR dongles over TCP (Docker sidecars, remote antennas)
 - **Docker ready** — multi-stage Dockerfile with USB passthrough for RTL-SDR
@@ -250,9 +256,10 @@ Profiles can be created, updated, and deleted at runtime via the admin REST API.
 
 | Mode | Description | Bandwidth | Notes |
 |------|-------------|-----------|-------|
-| **WFM** | Wideband FM (broadcast radio) | 150–200 kHz | Stereo FM with PLL pilot detection |
+| **WFM** | Wideband FM (broadcast radio) | 150–200 kHz | Stereo FM with PLL pilot detection, SNR-proportional blend |
 | **NFM** | Narrowband FM (VHF/UHF comms) | 5–25 kHz | De-emphasis filter |
 | **AM** | Amplitude Modulation (aviation, shortwave) | 3–10 kHz | Envelope detection + AGC |
+| **AMS** | AM Stereo (C-QUAM) | 6–20 kHz | Motorola C-QUAM with PLL + 25Hz pilot detection |
 | **USB** | Upper Sideband (HF amateur, marine) | 1–4 kHz | BFO complex oscillator |
 | **LSB** | Lower Sideband (HF amateur, CB) | 1–4 kHz | Conjugate flip + BFO |
 | **CW** | Continuous Wave / Morse code | 50–1000 Hz | 700Hz BFO + narrow bandpass |
@@ -403,7 +410,8 @@ Contributions are welcome. Please:
 
 ### Areas Where Help Is Needed
 
-- **Testing** — unit tests for DSP, protocol, config validation
+- **Testing** — unit tests for DSP, protocol, config validation, ADPCM codec
+- **Spectral NR** — current Wiener filter has robotic artifacts; needs rework (RNNoise WASM, multi-band expander)
 - **WebGL waterfall** — GPU-accelerated rendering for large FFT sizes
 - **Recording** — IQ recording and playback (SigMF format)
 - **Bookmarks** — frequency bookmark management

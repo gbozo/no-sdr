@@ -39,13 +39,10 @@ export const MSG_FFT_ADPCM = 0x08;
 /** ADPCM-compressed IQ — Int16 interleaved I/Q encoded as IMA-ADPCM nibbles */
 export const MSG_IQ_ADPCM = 0x09;
 
-/** VBR-compressed IQ — LMS predictor + Golomb-Rice entropy coded blocks */
-export const MSG_IQ_VBR = 0x0a;
-
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT and IQ data */
-export type CodecType = 'none' | 'adpcm' | 'vbr';
+export type CodecType = 'none' | 'adpcm';
 
 // ---- Client Command Types ----
 
@@ -191,14 +188,4 @@ export function packIqAdpcmMessage(adpcmData: Uint8Array, sampleCount: number): 
   return buf;
 }
 
-/**
- * Pack VBR-compressed IQ data into a binary message.
- * Header: [type byte 0x0A] [packed VBR blocks from packVbrBlocks()]
- */
-export function packIqVbrMessage(vbrPayload: Uint8Array): ArrayBuffer {
-  const buf = new ArrayBuffer(1 + vbrPayload.length);
-  const view = new Uint8Array(buf);
-  view[0] = MSG_IQ_VBR;
-  view.set(vbrPayload, 1);
-  return buf;
-}
+

@@ -21,6 +21,9 @@ const ControlPanel: Component = () => {
       {/* Audio Controls */}
       <AudioControls />
 
+      {/* Noise Reduction */}
+      <NoiseReduction />
+
       {/* Waterfall Settings */}
       <WaterfallSettings />
 
@@ -41,7 +44,7 @@ const ControlPanel: Component = () => {
 
 // ---- Mode Selector ----
 const ModeSelector: Component = () => {
-  const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw'];
+  const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'am-stereo', 'usb', 'lsb', 'cw', 'raw'];
 
   return (
     <div class="sdr-panel">
@@ -341,6 +344,102 @@ const EqBand: Component<{
 };
 
 
+
+// ---- Noise Reduction ----
+const NoiseReduction: Component = () => {
+  return (
+    <div class="sdr-panel">
+      <div class="sdr-panel-header">Noise Reduction</div>
+      <div class="p-3 space-y-3">
+        {/* Spectral NR */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Spectral NR
+            </label>
+            <button
+              class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
+                      transition-all duration-150
+                      ${store.nrEnabled()
+                        ? 'bg-cyan text-text-inverse shadow-glow-cyan'
+                        : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+              onClick={() => engine.setNrEnabled(!store.nrEnabled())}
+              title="Spectral noise reduction — reduces background noise using Wiener filter"
+            >
+              {store.nrEnabled() ? 'On' : 'Off'}
+            </button>
+          </div>
+          <Show when={store.nrEnabled()}>
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-[9px] font-mono text-text-dim">
+                  Strength
+                </label>
+                <span class="text-[9px] font-mono text-text-dim">
+                  {Math.round(store.nrStrength() * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(store.nrStrength() * 100)}
+                onInput={(e) => engine.setNrStrength(parseInt(e.currentTarget.value) / 100)}
+                class="sdr-range"
+              />
+              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                Wiener filter — min. statistics noise floor estimation
+              </div>
+            </div>
+          </Show>
+        </div>
+
+        {/* Noise Blanker */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Noise Blanker
+            </label>
+            <button
+              class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
+                      transition-all duration-150
+                      ${store.nbEnabled()
+                        ? 'bg-cyan text-text-inverse shadow-glow-cyan'
+                        : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+              onClick={() => engine.setNbEnabled(!store.nbEnabled())}
+              title="Noise blanker — removes impulse noise (clicks, pops)"
+            >
+              {store.nbEnabled() ? 'On' : 'Off'}
+            </button>
+          </div>
+          <Show when={store.nbEnabled()}>
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-[9px] font-mono text-text-dim">
+                  Threshold
+                </label>
+                <span class="text-[9px] font-mono text-text-dim">
+                  {Math.round(store.nbLevel() * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(store.nbLevel() * 100)}
+                onInput={(e) => engine.setNbLevel(parseInt(e.currentTarget.value) / 100)}
+                class="sdr-range"
+              />
+              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                Impulse blanker — EMA amplitude tracking + hang timer
+              </div>
+            </div>
+          </Show>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ---- Waterfall Settings ----
 const WaterfallSettings: Component = () => {
@@ -849,15 +948,42 @@ const CodecSettings: Component = () => {
   const iqCodecs: { value: CodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
-    { value: 'vbr', label: 'VBR' },
   ];
 
-  const iqRatioHint = () => {
-    switch (store.iqCodec()) {
-      case 'adpcm': return '4:1';
-      case 'vbr': return '3-10:1';
-      default: return 'raw';
-    }
+  // Format bytes/sec into human-readable string
+  const formatRate = (bytes: number) => {
+    if (bytes === 0) return '—';
+    if (bytes < 1024) return `${bytes} B/s`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB/s`;
+  };
+
+  // Compute compression ratio
+  const fftRatio = () => {
+    const raw = store.fftRawBytes();
+    const wire = store.fftWireBytes();
+    if (wire === 0 || raw === 0) return null;
+    return raw / wire;
+  };
+
+  const iqRatio = () => {
+    const raw = store.iqRawBytes();
+    const wire = store.iqWireBytes();
+    if (wire === 0 || raw === 0) return null;
+    return raw / wire;
+  };
+
+  const ratioText = (ratio: number | null) => {
+    if (ratio === null) return '—';
+    return `${ratio.toFixed(1)}:1`;
+  };
+
+  const savingsText = (raw: number, wire: number) => {
+    if (raw === 0 || wire === 0) return '';
+    const saved = raw - wire;
+    if (saved <= 0) return '';
+    const pct = ((saved / raw) * 100).toFixed(0);
+    return `(-${pct}%)`;
   };
 
   return (
@@ -871,7 +997,9 @@ const CodecSettings: Component = () => {
               FFT
             </label>
             <span class="text-[9px] font-mono text-text-dim">
-              {store.fftCodec() === 'adpcm' ? '~8:1' : '~4:1'}
+              {ratioText(fftRatio())}
+              {' '}
+              <span class="text-neon">{formatRate(store.fftWireBytes())}</span>
             </span>
           </div>
           <div class="flex gap-1">
@@ -894,7 +1022,9 @@ const CodecSettings: Component = () => {
               IQ
             </label>
             <span class="text-[9px] font-mono text-text-dim">
-              {iqRatioHint()}
+              {ratioText(iqRatio())}
+              {' '}
+              <span class="text-neon">{formatRate(store.iqWireBytes())}</span>
             </span>
           </div>
           <div class="flex gap-1">
@@ -908,6 +1038,26 @@ const CodecSettings: Component = () => {
                 </button>
               )}
             </For>
+          </div>
+        </div>
+        {/* Stats summary */}
+        <div class="border-t border-border/40 pt-1.5 text-[8px] font-mono text-text-dim leading-relaxed">
+          <div class="flex justify-between">
+            <span>Total wire</span>
+            <span class="text-text-secondary">{formatRate(store.fftWireBytes() + store.iqWireBytes())}</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Uncompressed equiv.</span>
+            <span class="text-text-secondary">{formatRate(store.fftRawBytes() + store.iqRawBytes())}</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Savings</span>
+            <span class="text-neon">
+              {savingsText(
+                store.fftRawBytes() + store.iqRawBytes(),
+                store.fftWireBytes() + store.iqWireBytes()
+              )}
+            </span>
           </div>
         </div>
       </div>

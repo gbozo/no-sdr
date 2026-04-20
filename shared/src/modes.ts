@@ -57,6 +57,17 @@ export const DEMOD_MODES: Record<DemodMode, DemodModeInfo> = {
     hasAudio: true,
     sideband: 'both',
   },
+  'am-stereo': {
+    id: 'am-stereo',
+    name: 'AM Stereo (C-QUAM)',
+    shortName: 'AMS',
+    description: 'Motorola C-QUAM AM stereo broadcast',
+    bandwidthRange: [6_000, 20_000],
+    defaultBandwidth: 10_000,
+    minSampleRate: 48_000,
+    hasAudio: true,
+    sideband: 'both',
+  },
   usb: {
     id: 'usb',
     name: 'Upper Sideband',

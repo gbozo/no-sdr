@@ -44,7 +44,7 @@ function createStore() {
   const [signalLevel, setSignalLevel] = createSignal(-120); // dB
   const [stereoDetected, setStereoDetected] = createSignal(false);
   const [stereoEnabled, setStereoEnabled] = createSignal(true); // user toggle: allow stereo decoding
-  const [stereoThreshold, setStereoThreshold] = createSignal(-40); // dB — minimum signal level to attempt stereo
+  const [stereoThreshold, setStereoThreshold] = createSignal(-60); // dB — minimum signal level to attempt stereo
   const [balance, setBalance] = createSignal(0); // -1 (left) to +1 (right), 0 = center
   const [eqLow, setEqLow] = createSignal(0);        // dB gain, -12 to +12 — 80 Hz lowshelf
   const [eqLowMid, setEqLowMid] = createSignal(0); // dB gain, -12 to +12 — 500 Hz peaking
@@ -52,6 +52,12 @@ function createStore() {
   const [eqHighMid, setEqHighMid] = createSignal(0);// dB gain, -12 to +12 — 4 kHz peaking
   const [eqHigh, setEqHigh] = createSignal(0);      // dB gain, -12 to +12 — 12 kHz highshelf
   const [loudness, setLoudness] = createSignal(false); // loudness enhancement on/off
+
+  // ---- Noise Reduction ----
+  const [nrEnabled, setNrEnabled] = createSignal(false);        // spectral NR on/off
+  const [nrStrength, setNrStrength] = createSignal(0.5);        // 0-1 aggressiveness
+  const [nbEnabled, setNbEnabled] = createSignal(false);        // noise blanker on/off
+  const [nbLevel, setNbLevel] = createSignal(0.5);              // 0-1 blanker sensitivity
 
   // ---- Display ----
   const [waterfallTheme, setWaterfallTheme] = createSignal<WaterfallColorTheme>('turbo');
@@ -69,14 +75,20 @@ function createStore() {
   const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
 
   // ---- Codec Preferences ----
-  const [fftCodec, setFftCodec] = createSignal<CodecType>('none');
-  const [iqCodec, setIqCodec] = createSignal<CodecType>('none');
+  const [fftCodec, setFftCodec] = createSignal<CodecType>('adpcm');
+  const [iqCodec, setIqCodec] = createSignal<CodecType>('adpcm');
 
   // ---- Bandwidth / Throughput Metrics ----
   const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec
   const [iqRate, setIqRate] = createSignal(0);           // IQ samples/sec
   const [wsBytes, setWsBytes] = createSignal(0);         // WebSocket bytes/sec (total inbound)
   const [wsBytesHistory, setWsBytesHistory] = createSignal<number[]>([]); // last 30 seconds
+
+  // ---- Codec Performance Stats (bytes/sec) ----
+  const [fftWireBytes, setFftWireBytes] = createSignal(0);   // FFT wire bytes/sec (compressed)
+  const [fftRawBytes, setFftRawBytes] = createSignal(0);     // FFT equivalent raw bytes/sec
+  const [iqWireBytes, setIqWireBytes] = createSignal(0);     // IQ wire bytes/sec (compressed)
+  const [iqRawBytes, setIqRawBytes] = createSignal(0);       // IQ equivalent raw bytes/sec
 
   return {
     // Connection
@@ -114,6 +126,12 @@ function createStore() {
     eqHigh, setEqHigh,
     loudness, setLoudness,
 
+    // Noise Reduction
+    nrEnabled, setNrEnabled,
+    nrStrength, setNrStrength,
+    nbEnabled, setNbEnabled,
+    nbLevel, setNbLevel,
+
     // Display
     waterfallTheme, setWaterfallTheme,
     uiTheme, setUITheme,
@@ -138,6 +156,12 @@ function createStore() {
     iqRate, setIqRate,
     wsBytes, setWsBytes,
     wsBytesHistory, setWsBytesHistory,
+
+    // Codec Performance Stats
+    fftWireBytes, setFftWireBytes,
+    fftRawBytes, setFftRawBytes,
+    iqWireBytes, setIqWireBytes,
+    iqRawBytes, setIqRawBytes,
   };
 }
 

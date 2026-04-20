@@ -12,14 +12,12 @@ import {
   MSG_FFT_ADPCM,
   MSG_IQ,
   MSG_IQ_ADPCM,
-  MSG_IQ_VBR,
   MSG_AUDIO,
   MSG_META,
   MSG_DECODER,
   MSG_SIGNAL_LEVEL,
   DEMOD_MODES,
   ImaAdpcmDecoder,
-  VbrDecoder,
   decodeFftAdpcm,
   type ServerMeta,
   type ClientCommand,
@@ -30,6 +28,7 @@ import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
 import { AudioEngine } from './audio.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
+import { NoiseReductionEngine } from './noise-reduction.js';
 import { store } from '../store/index.js';
 
 export class SdrEngine {
@@ -46,8 +45,9 @@ export class SdrEngine {
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
 
-  // VBR decoder for IQ sub-band (stateful, streaming)
-  private iqVbrDecoder = new VbrDecoder();
+  // Noise reduction engine (spectral NR + noise blanker)
+  private nr = new NoiseReductionEngine();
+
 
   // Auto-range tracking
   private autoRangeMin = -60;
@@ -67,6 +67,11 @@ export class SdrEngine {
   private bwFftFrames = 0;
   private bwIqSamples = 0;
   private bwTotalBytes = 0;
+  // Codec performance tracking (wire = actual bytes received, raw = uncompressed equivalent)
+  private bwFftWireBytes = 0;
+  private bwFftRawBytes = 0;
+  private bwIqWireBytes = 0;
+  private bwIqRawBytes = 0;
   private bwLastUpdate = performance.now();
   private bwHistoryMax = 30; // keep 30 seconds of history
 
@@ -172,6 +177,9 @@ export class SdrEngine {
       case MSG_FFT: {
         this.bwFftFrames++;
         const fftData = new Float32Array(payload);
+        // Track codec stats: MSG_FFT is raw Float32, no compression
+        this.bwFftWireBytes += payload.byteLength;
+        this.bwFftRawBytes += payload.byteLength;
 
         // Auto-range: adapt waterfall min/max to actual data
         if (store.waterfallAutoRange()) {
@@ -194,6 +202,8 @@ export class SdrEngine {
 
       case MSG_FFT_COMPRESSED: {
         this.bwFftFrames++;
+        // Track codec stats: Uint8 compressed FFT (4-byte header + Uint8 bins)
+        this.bwFftWireBytes += payload.byteLength;
         // Decompress uint8 to float32 dB values.
         // Header: 4 bytes [Int16 minDb, Int16 maxDb] (little-endian)
         const headerView = new DataView(payload);
@@ -205,6 +215,7 @@ export class SdrEngine {
         for (let i = 0; i < compressed.length; i++) {
           fftData[i] = compMinDb + (compressed[i] / 255) * compRange;
         }
+        this.bwFftRawBytes += fftData.length * 4; // equivalent Float32 size
 
         // Auto-range: adapt waterfall min/max to actual data
         if (store.waterfallAutoRange()) {
@@ -227,7 +238,9 @@ export class SdrEngine {
       case MSG_FFT_ADPCM: {
         this.bwFftFrames++;
         // Decode ADPCM-compressed FFT: Int16 (dB×100) with warmup padding → Float32 dB
+        this.bwFftWireBytes += payload.byteLength;
         const fftData = decodeFftAdpcm(payload);
+        this.bwFftRawBytes += fftData.length * 4; // equivalent Float32 size
 
         if (store.waterfallAutoRange()) {
           this.updateAutoRange(fftData);
@@ -253,25 +266,22 @@ export class SdrEngine {
       case MSG_IQ: {
         // Per-user IQ sub-band data → client-side demodulation → audio
         const iqData = new Int16Array(payload);
+        this.bwIqWireBytes += payload.byteLength;
+        this.bwIqRawBytes += payload.byteLength; // no compression
         this.processIqData(iqData);
         break;
       }
 
       case MSG_IQ_ADPCM: {
         // ADPCM-compressed IQ sub-band: decode nibbles → Int16 interleaved I/Q
+        this.bwIqWireBytes += payload.byteLength;
         const iqHeaderView = new DataView(payload);
         const sampleCount = iqHeaderView.getUint32(0, true);
         const adpcmData = new Uint8Array(payload, 4);
         const decoded = this.iqAdpcmDecoder.decode(adpcmData);
         // Trim to exact sample count (ADPCM may produce +1 sample if odd count)
         const iqData = sampleCount < decoded.length ? decoded.subarray(0, sampleCount) : decoded;
-        this.processIqData(iqData);
-        break;
-      }
-
-      case MSG_IQ_VBR: {
-        // VBR-compressed IQ sub-band: LMS predictor + Golomb-Rice blocks
-        const iqData = this.iqVbrDecoder.decodeMessage(payload);
+        this.bwIqRawBytes += iqData.length * 2; // equivalent Int16 size
         this.processIqData(iqData);
         break;
       }
@@ -328,9 +338,9 @@ export class SdrEngine {
     if (count === 0) return;
     const avg = sum / count;
 
-    // Target: noise floor ~20% from bottom, strong signals visible at top
-    // Use median-like approach: min = avg - 15dB, max = avg + 35dB
-    const targetMin = avg - 15;
+    // Target: noise floor ~10% from bottom, strong signals visible at top
+    // Use median-like approach: min = avg - 10dB, max = avg + 35dB
+    const targetMin = avg - 10;
     const targetMax = Math.max(avg + 35, max + 5);
 
     // Smooth towards target (slow adaptation)
@@ -390,7 +400,7 @@ export class SdrEngine {
   }
 
   /**
-   * Common IQ demodulation pipeline shared by MSG_IQ, MSG_IQ_ADPCM, MSG_IQ_VBR.
+   * Common IQ demodulation pipeline shared by MSG_IQ and MSG_IQ_ADPCM.
    * Handles squelch gating, stereo detection, and audio push.
    */
   private processIqData(iqData: Int16Array): void {
@@ -418,17 +428,21 @@ export class SdrEngine {
       this.iqInCount += iqData.length / 2;
 
       if (stereoResult.stereo) {
-        this.audioOutCount += stereoResult.left.length;
-        if (stereoResult.left.length > 0 && squelchOpen) {
-          this.audio.pushStereoAudio(stereoResult.left, stereoResult.right);
+        // Apply noise reduction to stereo audio
+        const filtered = this.nr.processStereo(stereoResult.left, stereoResult.right);
+        this.audioOutCount += filtered.left.length;
+        if (filtered.left.length > 0 && squelchOpen) {
+          this.audio.pushStereoAudio(filtered.left, filtered.right);
         }
         if (!store.stereoDetected()) {
           store.setStereoDetected(true);
         }
       } else {
-        this.audioOutCount += stereoResult.left.length;
-        if (stereoResult.left.length > 0 && squelchOpen) {
-          this.audio.pushDemodulatedAudio(stereoResult.left);
+        // Apply noise reduction to mono audio
+        const filtered = this.nr.processMono(stereoResult.left);
+        this.audioOutCount += filtered.length;
+        if (filtered.length > 0 && squelchOpen) {
+          this.audio.pushDemodulatedAudio(filtered);
         }
         if (store.stereoDetected()) {
           store.setStereoDetected(false);
@@ -437,9 +451,11 @@ export class SdrEngine {
     } else {
       const audioSamples = this.demodulator.process(iqData);
       this.iqInCount += iqData.length / 2;
-      this.audioOutCount += audioSamples.length;
-      if (audioSamples.length > 0 && squelchOpen) {
-        this.audio.pushDemodulatedAudio(audioSamples);
+      // Apply noise reduction to mono audio
+      const filtered = this.nr.processMono(audioSamples);
+      this.audioOutCount += filtered.length;
+      if (filtered.length > 0 && squelchOpen) {
+        this.audio.pushDemodulatedAudio(filtered);
       }
       if (store.stereoDetected()) {
         store.setStereoDetected(false);
@@ -470,6 +486,12 @@ export class SdrEngine {
     const bytesPerSec = Math.round(this.bwTotalBytes / elapsed);
     store.setWsBytes(bytesPerSec);
 
+    // Codec performance stats
+    store.setFftWireBytes(Math.round(this.bwFftWireBytes / elapsed));
+    store.setFftRawBytes(Math.round(this.bwFftRawBytes / elapsed));
+    store.setIqWireBytes(Math.round(this.bwIqWireBytes / elapsed));
+    store.setIqRawBytes(Math.round(this.bwIqRawBytes / elapsed));
+
     // Rolling history (keep last N seconds)
     const history = store.wsBytesHistory().slice(-(this.bwHistoryMax - 1));
     history.push(bytesPerSec);
@@ -478,6 +500,10 @@ export class SdrEngine {
     this.bwFftFrames = 0;
     this.bwIqSamples = 0;
     this.bwTotalBytes = 0;
+    this.bwFftWireBytes = 0;
+    this.bwFftRawBytes = 0;
+    this.bwIqWireBytes = 0;
+    this.bwIqRawBytes = 0;
     this.bwLastUpdate = now;
   }
 
@@ -520,7 +546,6 @@ export class SdrEngine {
         // Flush audio on new subscription and reset codec decoders
         this.audio.resetBuffer();
         this.iqAdpcmDecoder.reset();
-        this.iqVbrDecoder.reset();
         // Re-send codec preferences so the server applies them to this subscription
         if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
           this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
@@ -625,6 +650,8 @@ export class SdrEngine {
     this.demodulator.setBandwidth(store.bandwidth());
     // Flush stale audio data
     this.audio.resetBuffer();
+    // Reset noise reduction state for new mode
+    this.nr.reset();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'mode', mode });
@@ -712,6 +739,28 @@ export class SdrEngine {
     }
   }
 
+  // ---- Noise Reduction ----
+
+  setNrEnabled(enabled: boolean): void {
+    store.setNrEnabled(enabled);
+    this.nr.setNrEnabled(enabled);
+  }
+
+  setNrStrength(strength: number): void {
+    store.setNrStrength(strength);
+    this.nr.setNrStrength(strength);
+  }
+
+  setNbEnabled(enabled: boolean): void {
+    store.setNbEnabled(enabled);
+    this.nr.setNbEnabled(enabled);
+  }
+
+  setNbLevel(level: number): void {
+    store.setNbLevel(level);
+    this.nr.setNbLevel(level);
+  }
+
   // ---- Codec Settings ----
 
   setFftCodec(codec: CodecType): void {
@@ -723,7 +772,6 @@ export class SdrEngine {
     store.setIqCodec(codec);
     // Reset codec decoders when switching codecs
     this.iqAdpcmDecoder.reset();
-    this.iqVbrDecoder.reset();
     this.send({ cmd: 'codec', iqCodec: codec });
   }
 

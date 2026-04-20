@@ -35,7 +35,7 @@ const DongleProfileSchema = z.object({
     message: 'fftSize must be a power of 2 between 256 and 16384',
   }).default(2048),
   fftFps: z.number().int().min(1).max(60).default(30),
-  defaultMode: z.enum(['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw']).default('nfm'),
+  defaultMode: z.enum(['wfm', 'nfm', 'am', 'am-stereo', 'usb', 'lsb', 'cw', 'raw']).default('nfm'),
   defaultTuneOffset: z.number().default(0),
   defaultBandwidth: z.number().positive().default(12_500),
   gain: z.number().nullable().default(null),
@@ -60,6 +60,20 @@ const DongleConfigSchema = z.object({
   source: SourceConfigSchema,
   profiles: z.array(DongleProfileSchema).min(1),
   autoStart: z.boolean().default(true),
+
+  // ---- Hardware options ----
+  /** Direct sampling mode: 0=off, 1=I-ADC, 2=Q-ADC (HF reception) */
+  directSampling: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0).optional(),
+  /** Bias-T power on antenna connector */
+  biasT: z.boolean().default(false).optional(),
+  /** RTL2832U digital AGC */
+  digitalAgc: z.boolean().default(false).optional(),
+  /** Offset tuning (zero-IF shift, useful for E4000) */
+  offsetTuning: z.boolean().default(false).optional(),
+  /** Tuner IF gain stages: [[stage, tenthsOfDb], ...] */
+  ifGain: z.array(z.tuple([z.number().int().min(1).max(6), z.number().int()])).optional(),
+  /** Tuner bandwidth in Hz (R820T/R828D only) */
+  tunerBandwidth: z.number().int().positive().optional(),
 });
 
 const ServerConfigSchema = z.object({
