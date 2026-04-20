@@ -22,6 +22,7 @@ import {
 import { DongleManager } from './dongle-manager.js';
 import { DecoderManager, type DecoderMessage } from './decoder-manager.js';
 import { FftProcessor } from './fft-processor.js';
+import { IqExtractor, getOutputSampleRate } from './iq-extractor.js';
 import { logger } from './logger.js';
 
 interface ConnectedClient {
@@ -29,6 +30,7 @@ interface ConnectedClient {
   ws: WSContext;
   session: ClientSession;
   isAdmin: boolean;
+  iqExtractor: IqExtractor | null;
 }
 
 export class WebSocketManager {
@@ -92,6 +94,8 @@ export class WebSocketManager {
         centerFreq: profile.centerFrequency,
         sampleRate: profile.sampleRate,
         fftSize: profile.fftSize,
+        iqSampleRate: getOutputSampleRate(profile.defaultMode),
+        mode: profile.defaultMode,
       }));
     });
   }
@@ -122,19 +126,69 @@ export class WebSocketManager {
   /**
    * Handle IQ data from a dongle: compute FFT, broadcast to subscribers
    */
+  private iqCount = 0;
+  private fftCount = 0;
+  private iqBytes = 0;
+  private iqOutSamples = 0;
+  private lastLogTime = 0;
+
   private handleIqData(dongleId: string, data: Buffer): void {
     const processor = this.fftProcessors.get(dongleId);
-    if (!processor) return;
+    if (!processor) {
+      if (this.iqCount++ % 100 === 0) {
+        logger.warn({ dongleId }, 'No FFT processor for dongle (IQ data dropped)');
+      }
+      return;
+    }
 
+    this.iqCount++;
+    this.iqBytes += data.length;
     const fftFrames = processor.processIqData(data);
 
     for (const fftData of fftFrames) {
+      this.fftCount++;
       // Broadcast FFT to all clients subscribed to this dongle
       const fftMsg = packFftMessage(fftData);
       this.broadcastToDongle(dongleId, fftMsg);
+    }
 
-      // TODO: For each client, extract IQ sub-band and send per-user data
-      // This is where per-user tuning happens
+    // Send per-client IQ sub-band (frequency-shifted + decimated)
+    for (const client of this.clients.values()) {
+      if (client.session.dongleId === dongleId && client.iqExtractor) {
+        try {
+          const subBand = client.iqExtractor.process(data);
+          if (subBand.length > 0) {
+            this.iqOutSamples += subBand.length / 2; // count IQ pairs
+            client.ws.send(packIqMessage(subBand));
+          }
+        } catch {
+          // Client may have disconnected
+        }
+      }
+    }
+
+    // Log throughput every 5 seconds
+    const now = Date.now();
+    if (now - this.lastLogTime > 5000) {
+      const subscriberCount = [...this.clients.values()].filter(c => c.session.dongleId === dongleId).length;
+      const elapsed = (now - this.lastLogTime) / 1000;
+      const iqSamplesPerSec = Math.round(this.iqBytes / 2 / elapsed); // 2 bytes per IQ pair (uint8 I + uint8 Q)
+      const iqOutSPS = Math.round(this.iqOutSamples / elapsed);
+      logger.info({
+        dongleId,
+        iqChunks: this.iqCount,
+        fftFrames: this.fftCount,
+        subscribers: subscriberCount,
+        iqBytesTotal: this.iqBytes,
+        iqSPS: iqSamplesPerSec,
+        iqOutSPS,
+        expectedSPS: 2400000,
+      }, 'IQ/FFT throughput');
+      this.iqCount = 0;
+      this.fftCount = 0;
+      this.iqBytes = 0;
+      this.iqOutSamples = 0;
+      this.lastLogTime = now;
     }
   }
 
@@ -158,6 +212,7 @@ export class WebSocketManager {
         muted: false,
       },
       isAdmin: false,
+      iqExtractor: null,
     };
 
     this.clients.set(clientId, client);
@@ -223,10 +278,14 @@ export class WebSocketManager {
 
       case 'tune':
         client.session.tuneOffset = cmd.offset;
+        client.iqExtractor?.setTuneOffset(cmd.offset);
+        client.iqExtractor?.reset();
         break;
 
       case 'mode':
         client.session.mode = cmd.mode as any;
+        client.iqExtractor?.setOutputSampleRate(getOutputSampleRate(cmd.mode));
+        client.iqExtractor?.reset();
         break;
 
       case 'bandwidth':
@@ -299,6 +358,14 @@ export class WebSocketManager {
     client.session.tuneOffset = profile.defaultTuneOffset;
     this.dongleManager.updateClientCount(dongleId, 1);
 
+    // Create per-client IQ extractor for demodulation
+    const iqOutputRate = getOutputSampleRate(profile.defaultMode);
+    client.iqExtractor = new IqExtractor({
+      inputSampleRate: profile.sampleRate,
+      outputSampleRate: iqOutputRate,
+      tuneOffset: profile.defaultTuneOffset,
+    });
+
     this.sendMeta(client.ws, {
       type: 'subscribed',
       dongleId,
@@ -306,6 +373,8 @@ export class WebSocketManager {
       centerFreq: profile.centerFrequency,
       sampleRate: profile.sampleRate,
       fftSize: profile.fftSize,
+      iqSampleRate: iqOutputRate,
+      mode: profile.defaultMode,
     });
 
     logger.info(

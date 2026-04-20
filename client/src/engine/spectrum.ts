@@ -11,6 +11,7 @@ export class SpectrumRenderer {
   private accentColor: string;
   private fillColor: string;
   private gridColor: string;
+  private ready = false;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -31,6 +32,13 @@ export class SpectrumRenderer {
    * Draw the spectrum for one FFT frame
    */
   draw(fftData: Float32Array): void {
+    if (fftData.length === 0) return;
+
+    if (!this.ready) {
+      this.resize();
+      if (!this.ready) return;
+    }
+
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
@@ -100,6 +108,8 @@ export class SpectrumRenderer {
    * Draw a tuning indicator at the given frequency offset
    */
   drawTuningIndicator(offset: number, bandwidth: number, sampleRate: number): void {
+    if (!this.ready) return;
+
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
@@ -154,8 +164,23 @@ export class SpectrumRenderer {
    */
   resize(): void {
     const rect = this.canvas.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+
+    if (w < 1 || h < 1) {
+      this.ready = false;
+      return;
+    }
+
     const dpr = window.devicePixelRatio || 1;
-    this.canvas.width = rect.width * dpr;
-    this.canvas.height = rect.height * dpr;
+    const newW = Math.round(w * dpr);
+    const newH = Math.round(h * dpr);
+
+    if (this.canvas.width !== newW || this.canvas.height !== newH) {
+      this.canvas.width = newW;
+      this.canvas.height = newH;
+    }
+
+    this.ready = true;
   }
 }

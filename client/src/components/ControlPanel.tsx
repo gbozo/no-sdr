@@ -71,7 +71,22 @@ const ModeSelector: Component = () => {
 const AudioControls: Component = () => {
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Audio</div>
+      <div class="sdr-panel-header">
+        <span>Audio</span>
+        {/* Stereo indicator — only visible when mode is WFM */}
+        <Show when={store.mode() === 'wfm'}>
+          <span
+            class={`ml-auto text-[9px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded border transition-all duration-500 ${
+              store.stereoDetected()
+                ? 'text-green border-green/40 bg-green-dim shadow-[0_0_6px_rgba(56,193,128,0.3)]'
+                : 'text-text-muted border-border bg-transparent opacity-50'
+            }`}
+            title={store.stereoDetected() ? 'Stereo pilot detected (19 kHz)' : 'No stereo pilot'}
+          >
+            STEREO
+          </span>
+        </Show>
+      </div>
       <div class="p-3 space-y-3">
         {/* Volume */}
         <div>
@@ -93,13 +108,158 @@ const AudioControls: Component = () => {
           />
         </div>
 
-        {/* Mute button */}
-        <button
-          class={`sdr-btn w-full ${store.muted() ? 'sdr-btn-primary' : 'sdr-btn-ghost'}`}
-          onClick={() => engine.setMuted(!store.muted())}
-        >
-          {store.muted() ? 'Unmute' : 'Mute'}
-        </button>
+        {/* Balance (L/R) */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Balance
+            </label>
+            <span class="text-[9px] font-mono text-text-dim min-w-[28px] text-right">
+              {store.balance() === 0 ? 'C' : store.balance() < 0 ? `L${Math.round(Math.abs(store.balance()) * 100)}` : `R${Math.round(store.balance() * 100)}`}
+            </span>
+          </div>
+          <div class="relative">
+            <input
+              type="range"
+              min={-100}
+              max={100}
+              value={Math.round(store.balance() * 100)}
+              onInput={(e) => engine.setBalance(parseInt(e.currentTarget.value) / 100)}
+              class="sdr-range"
+            />
+            {/* Center tick mark */}
+            <div class="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-text-dim pointer-events-none" />
+          </div>
+          <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
+            <span>L</span><span>C</span><span>R</span>
+          </div>
+        </div>
+
+        {/* Mute + Loudness row */}
+        <div class="flex gap-1.5">
+          <button
+            class={`sdr-btn flex-1 ${store.muted() ? 'sdr-btn-primary' : 'sdr-btn-ghost'}`}
+            onClick={() => engine.setMuted(!store.muted())}
+          >
+            {store.muted() ? 'Unmute' : 'Mute'}
+          </button>
+          <button
+            class={`sdr-btn flex-1 ${
+              store.loudness()
+                ? 'bg-amber text-text-inverse shadow-glow-amber font-bold'
+                : 'sdr-btn-ghost'
+            }`}
+            onClick={() => engine.setLoudness(!store.loudness())}
+            title="Loudness: compresses dynamic range and boosts quiet signals"
+          >
+            Loudness
+          </button>
+        </div>
+
+        {/* Stereo Settings (WFM only) */}
+        <Show when={store.mode() === 'wfm'}>
+          <div class="space-y-2">
+            <div class="flex justify-between items-center">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                Stereo
+              </label>
+              <button
+                class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
+                        transition-all duration-150
+                        ${store.stereoEnabled()
+                          ? 'bg-cyan text-text-inverse shadow-glow-cyan'
+                          : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+                onClick={() => engine.setStereoEnabled(!store.stereoEnabled())}
+                title={store.stereoEnabled() ? 'Stereo decoding enabled — click to force mono' : 'Stereo decoding disabled — click to enable'}
+              >
+                {store.stereoEnabled() ? 'On' : 'Off'}
+              </button>
+            </div>
+            {/* Stereo threshold — only show when stereo is enabled */}
+            <Show when={store.stereoEnabled()}>
+              <div>
+                <div class="flex justify-between items-center mb-1">
+                  <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                    Stereo Threshold
+                  </label>
+                  <span class="text-[9px] font-mono text-text-dim min-w-[36px] text-right">
+                    {store.stereoThreshold()} dB
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={-80}
+                  max={0}
+                  value={store.stereoThreshold()}
+                  onInput={(e) => engine.setStereoThreshold(parseInt(e.currentTarget.value))}
+                  class="sdr-range"
+                />
+                <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                  Decode stereo only when signal &gt; {store.stereoThreshold()} dB
+                </div>
+              </div>
+            </Show>
+          </div>
+        </Show>
+
+        {/* 5-Band Equalizer */}
+        <div>
+          <div class="flex justify-between items-center mb-2">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Equalizer
+            </label>
+            <button
+              class="text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors"
+              onClick={() => {
+                engine.setEqLow(0);
+                engine.setEqLowMid(0);
+                engine.setEqMid(0);
+                engine.setEqHighMid(0);
+                engine.setEqHigh(0);
+              }}
+              title="Reset EQ to flat"
+            >
+              Reset
+            </button>
+          </div>
+          <div class="flex gap-1">
+            {/* Low */}
+            <EqBand
+              label="LOW"
+              sublabel="80"
+              value={store.eqLow()}
+              onChange={(v) => engine.setEqLow(v)}
+            />
+            {/* Low-Mid */}
+            <EqBand
+              label="L-M"
+              sublabel="500"
+              value={store.eqLowMid()}
+              onChange={(v) => engine.setEqLowMid(v)}
+            />
+            {/* Mid */}
+            <EqBand
+              label="MID"
+              sublabel="1.5k"
+              value={store.eqMid()}
+              onChange={(v) => engine.setEqMid(v)}
+            />
+            {/* High-Mid */}
+            <EqBand
+              label="H-M"
+              sublabel="4k"
+              value={store.eqHighMid()}
+              onChange={(v) => engine.setEqHighMid(v)}
+            />
+            {/* High */}
+            <EqBand
+              label="HIGH"
+              sublabel="12k"
+              value={store.eqHigh()}
+              onChange={(v) => engine.setEqHigh(v)}
+            />
+          </div>
+        </div>
 
         {/* Squelch */}
         <div>
@@ -124,6 +284,37 @@ const AudioControls: Component = () => {
           />
         </div>
       </div>
+    </div>
+  );
+};
+
+// ---- EQ Band (vertical slider) ----
+const EqBand: Component<{
+  label: string;
+  sublabel: string;
+  value: number;
+  onChange: (dB: number) => void;
+}> = (props) => {
+  return (
+    <div class="flex-1 flex flex-col items-center gap-1">
+      <span class="text-[8px] font-mono text-text-dim">{props.label}</span>
+      <div class="h-20 flex items-center justify-center relative">
+        <input
+          type="range"
+          min={-12}
+          max={12}
+          step={1}
+          value={props.value}
+          onInput={(e) => props.onChange(parseInt(e.currentTarget.value))}
+          class="sdr-range-vertical"
+        />
+      </div>
+      <span class={`text-[8px] font-mono font-bold ${
+        props.value === 0 ? 'text-text-dim' : props.value > 0 ? 'text-cyan' : 'text-amber'
+      }`}>
+        {props.value > 0 ? '+' : ''}{props.value}
+      </span>
+      <span class="text-[7px] font-mono text-text-muted">{props.sublabel}</span>
     </div>
   );
 };
@@ -162,6 +353,17 @@ const BandwidthControl: Component = () => {
 const WaterfallSettings: Component = () => {
   const themes = getPaletteNames();
 
+  const handleAutoRange = () => {
+    const current = store.waterfallAutoRange();
+    store.setWaterfallAutoRange(!current);
+    if (!current) {
+      // Turning auto-range ON — engine will adapt on next FFT frame
+      console.log('[UI] Auto-range enabled');
+    } else {
+      console.log('[UI] Auto-range disabled, manual control');
+    }
+  };
+
   return (
     <div class="sdr-panel">
       <div class="sdr-panel-header">Waterfall</div>
@@ -185,8 +387,25 @@ const WaterfallSettings: Component = () => {
           </div>
         </div>
 
+        {/* Auto-Range Toggle */}
+        <div class="flex items-center justify-between">
+          <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            Auto Scale
+          </label>
+          <button
+            class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
+                    transition-all duration-150
+                    ${store.waterfallAutoRange()
+                      ? 'bg-cyan text-text-inverse shadow-glow-cyan'
+                      : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+            onClick={handleAutoRange}
+          >
+            {store.waterfallAutoRange() ? 'Auto' : 'Manual'}
+          </button>
+        </div>
+
         {/* Min dB */}
-        <div>
+        <div class={store.waterfallAutoRange() ? 'opacity-50 pointer-events-none' : ''}>
           <div class="flex justify-between items-center mb-1">
             <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
               Min Level
@@ -195,8 +414,8 @@ const WaterfallSettings: Component = () => {
           </div>
           <input
             type="range"
-            min={-160}
-            max={-20}
+            min={-100}
+            max={0}
             value={store.waterfallMin()}
             onInput={(e) => engine.setWaterfallRange(parseInt(e.currentTarget.value), store.waterfallMax())}
             class="sdr-range"
@@ -204,7 +423,7 @@ const WaterfallSettings: Component = () => {
         </div>
 
         {/* Max dB */}
-        <div>
+        <div class={store.waterfallAutoRange() ? 'opacity-50 pointer-events-none' : ''}>
           <div class="flex justify-between items-center mb-1">
             <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
               Max Level
@@ -213,12 +432,18 @@ const WaterfallSettings: Component = () => {
           </div>
           <input
             type="range"
-            min={-100}
-            max={0}
+            min={-60}
+            max={20}
             value={store.waterfallMax()}
             onInput={(e) => engine.setWaterfallRange(store.waterfallMin(), parseInt(e.currentTarget.value))}
             class="sdr-range"
           />
+        </div>
+
+        {/* Current range display */}
+        <div class="text-[8px] font-mono text-text-dim text-center">
+          Range: {store.waterfallMin()} to {store.waterfallMax()} dB
+          ({store.waterfallMax() - store.waterfallMin()} dB span)
         </div>
       </div>
     </div>
@@ -229,8 +454,12 @@ const WaterfallSettings: Component = () => {
 const SMeter: Component = () => {
   const pct = () => {
     const level = store.signalLevel();
-    // Map -120 to -20 dB range to 0-100%
-    return Math.max(0, Math.min(100, ((level + 120) / 100) * 100));
+    // Map dynamic range based on current waterfall range
+    const min = store.waterfallMin();
+    const max = store.waterfallMax();
+    const range = max - min;
+    if (range === 0) return 0;
+    return Math.max(0, Math.min(100, ((level - min) / range) * 100));
   };
 
   const barColor = () => {

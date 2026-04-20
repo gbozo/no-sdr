@@ -28,6 +28,7 @@ function createStore() {
   // ---- Tuning ----
   const [centerFrequency, setCenterFrequency] = createSignal(100_000_000);
   const [sampleRate, setSampleRate] = createSignal(2_400_000);
+  const [iqSampleRate, setIqSampleRate] = createSignal(240_000); // IQ sub-band rate from server
   const [tuneOffset, setTuneOffset] = createSignal(0);
   const [mode, setMode] = createSignal<DemodMode>('nfm');
   const [bandwidth, setBandwidth] = createSignal(12_500);
@@ -40,12 +41,23 @@ function createStore() {
   const [muted, setMuted] = createSignal(false);
   const [squelch, setSquelch] = createSignal<number | null>(null);
   const [signalLevel, setSignalLevel] = createSignal(-120); // dB
+  const [stereoDetected, setStereoDetected] = createSignal(false);
+  const [stereoEnabled, setStereoEnabled] = createSignal(true); // user toggle: allow stereo decoding
+  const [stereoThreshold, setStereoThreshold] = createSignal(-40); // dB — minimum signal level to attempt stereo
+  const [balance, setBalance] = createSignal(0); // -1 (left) to +1 (right), 0 = center
+  const [eqLow, setEqLow] = createSignal(0);        // dB gain, -12 to +12 — 80 Hz lowshelf
+  const [eqLowMid, setEqLowMid] = createSignal(0); // dB gain, -12 to +12 — 500 Hz peaking
+  const [eqMid, setEqMid] = createSignal(0);        // dB gain, -12 to +12 — 1.5 kHz peaking
+  const [eqHighMid, setEqHighMid] = createSignal(0);// dB gain, -12 to +12 — 4 kHz peaking
+  const [eqHigh, setEqHigh] = createSignal(0);      // dB gain, -12 to +12 — 12 kHz highshelf
+  const [loudness, setLoudness] = createSignal(false); // loudness enhancement on/off
 
   // ---- Display ----
   const [waterfallTheme, setWaterfallTheme] = createSignal<WaterfallColorTheme>('turbo');
   const [uiTheme, setUITheme] = createSignal<UITheme>('default');
-  const [waterfallMin, setWaterfallMin] = createSignal(-120);
-  const [waterfallMax, setWaterfallMax] = createSignal(-40);
+  const [waterfallMin, setWaterfallMin] = createSignal(-60);
+  const [waterfallMax, setWaterfallMax] = createSignal(-10);
+  const [waterfallAutoRange, setWaterfallAutoRange] = createSignal(true);
   const [waterfallSpeed, setWaterfallSpeed] = createSignal(30); // fps
   const [fftSize, setFftSize] = createSignal(2048);
 
@@ -53,6 +65,12 @@ function createStore() {
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [decoderPanelOpen, setDecoderPanelOpen] = createSignal(false);
   const [isAdmin, setIsAdmin] = createSignal(false);
+
+  // ---- Bandwidth / Throughput Metrics ----
+  const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec
+  const [iqRate, setIqRate] = createSignal(0);           // IQ samples/sec
+  const [wsBytes, setWsBytes] = createSignal(0);         // WebSocket bytes/sec (total inbound)
+  const [wsBytesHistory, setWsBytesHistory] = createSignal<number[]>([]); // last 30 seconds
 
   return {
     // Connection
@@ -68,6 +86,7 @@ function createStore() {
     // Tuning
     centerFrequency, setCenterFrequency,
     sampleRate, setSampleRate,
+    iqSampleRate, setIqSampleRate,
     tuneOffset, setTuneOffset,
     mode, setMode,
     bandwidth, setBandwidth,
@@ -78,12 +97,23 @@ function createStore() {
     muted, setMuted,
     squelch, setSquelch,
     signalLevel, setSignalLevel,
+    stereoDetected, setStereoDetected,
+    stereoEnabled, setStereoEnabled,
+    stereoThreshold, setStereoThreshold,
+    balance, setBalance,
+    eqLow, setEqLow,
+    eqLowMid, setEqLowMid,
+    eqMid, setEqMid,
+    eqHighMid, setEqHighMid,
+    eqHigh, setEqHigh,
+    loudness, setLoudness,
 
     // Display
     waterfallTheme, setWaterfallTheme,
     uiTheme, setUITheme,
     waterfallMin, setWaterfallMin,
     waterfallMax, setWaterfallMax,
+    waterfallAutoRange, setWaterfallAutoRange,
     waterfallSpeed, setWaterfallSpeed,
     fftSize, setFftSize,
 
@@ -91,6 +121,12 @@ function createStore() {
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,
+
+    // Bandwidth / Throughput
+    fftRate, setFftRate,
+    iqRate, setIqRate,
+    wsBytes, setWsBytes,
+    wsBytesHistory, setWsBytesHistory,
   };
 }
 

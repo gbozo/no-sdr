@@ -2,7 +2,7 @@
 // node-sdr — Main App Layout
 // ============================================================
 
-import { Component, onMount, onCleanup, Show, createSignal } from 'solid-js';
+import { Component, onMount, onCleanup, Show, createSignal, For, createMemo } from 'solid-js';
 import { store } from './store/index.js';
 import { engine } from './engine/sdr-engine.js';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
@@ -95,8 +95,8 @@ const App: Component = () => {
           </div>
 
           {/* Waterfall + Spectrum */}
-          <div class="flex-1 min-h-0 p-2">
-            <div class="h-full rounded-md overflow-hidden border border-border bg-black">
+          <div class="flex-1 min-h-0 p-2 flex flex-col">
+            <div class="flex-1 min-h-0 rounded-md overflow-hidden border border-border bg-black flex flex-col">
               <WaterfallDisplay />
             </div>
           </div>
@@ -105,7 +105,7 @@ const App: Component = () => {
 
       {/* Bottom Status Bar */}
       <footer class="h-7 bg-sdr-surface border-t border-border flex items-center px-4 shrink-0">
-        <div class="flex items-center gap-4 text-[8px] font-mono text-text-dim uppercase tracking-wider">
+        <div class="flex items-center gap-4 text-[8px] font-mono text-text-dim uppercase tracking-wider w-full">
           <span>
             Mode: <span class="text-text-secondary">{store.mode().toUpperCase()}</span>
           </span>
@@ -121,7 +121,11 @@ const App: Component = () => {
             </span>
           </Show>
           <div class="flex-1" />
-          <span>
+
+          {/* Bandwidth Meter with sparkline */}
+          <BandwidthMeter />
+
+          <span class="border-l border-border pl-4">
             Dongle: <span class="text-text-secondary">{store.activeDongleId() || '—'}</span>
           </span>
           <Show when={store.isAdmin()}>
@@ -129,6 +133,69 @@ const App: Component = () => {
           </Show>
         </div>
       </footer>
+    </div>
+  );
+};
+
+// Bandwidth meter with sparkline histogram
+const BandwidthMeter: Component = () => {
+  const formatRate = (bytes: number): string => {
+    if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB/s`;
+    if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB/s`;
+    return `${bytes} B/s`;
+  };
+
+  const history = () => store.wsBytesHistory();
+  const histMax = createMemo(() => {
+    const h = history();
+    if (h.length === 0) return 1;
+    return Math.max(...h, 1);
+  });
+
+  const barCount = 30;
+  const barWidth = 2;
+  const barGap = 1;
+  const sparkWidth = barCount * (barWidth + barGap) - barGap;
+  const sparkHeight = 14;
+
+  return (
+    <div class="flex items-center gap-2 border-l border-border pl-4">
+      {/* Mini sparkline histogram */}
+      <svg
+        width={sparkWidth}
+        height={sparkHeight}
+        class="opacity-70"
+        aria-label="Bandwidth history"
+      >
+        <For each={history().slice(-barCount)}>
+          {(value, i) => {
+            const h = () => Math.max(1, (value / histMax()) * sparkHeight);
+            const x = () => i() * (barWidth + barGap);
+            const isLast = () => i() === history().slice(-barCount).length - 1;
+            return (
+              <rect
+                x={x()}
+                y={sparkHeight - h()}
+                width={barWidth}
+                height={h()}
+                rx={0.5}
+                fill={isLast() ? 'var(--sdr-accent, #4aa3ff)' : 'var(--color-text-dim, #6f7f94)'}
+                opacity={isLast() ? 1 : 0.6}
+              />
+            );
+          }}
+        </For>
+      </svg>
+
+      {/* Rate text */}
+      <div class="flex flex-col leading-[1.1]">
+        <span class="text-text-secondary normal-case">
+          {formatRate(store.wsBytes())}
+        </span>
+        <span class="text-text-muted text-[7px] normal-case">
+          FFT {store.fftRate()}/s
+        </span>
+      </div>
     </div>
   );
 };

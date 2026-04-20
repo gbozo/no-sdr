@@ -133,6 +133,9 @@
   /* SDR Panel Header with accent bar */
   .sdr-panel-header {
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--color-border);
     font-family: var(--font-mono);
@@ -194,6 +197,52 @@
   .sdr-range::-moz-range-thumb {
     width: 14px;
     height: 14px;
+    background: var(--sdr-accent);
+    border: none;
+    border-radius: 50%;
+    box-shadow: 0 0 6px var(--sdr-accent-dim);
+  }
+
+  /* Vertical range slider (for EQ bands) */
+  .sdr-range-vertical {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    background: transparent;
+    cursor: pointer;
+    width: 20px;
+    height: 72px;
+  }
+
+  .sdr-range-vertical::-webkit-slider-runnable-track {
+    width: 4px;
+    background: var(--color-border);
+    border-radius: 2px;
+  }
+
+  .sdr-range-vertical::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--sdr-accent);
+    border-radius: 50%;
+    margin-left: -4px;
+    box-shadow: 0 0 6px var(--sdr-accent-dim);
+    transition: box-shadow 0.15s;
+  }
+
+  .sdr-range-vertical::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 12px var(--sdr-accent);
+  }
+
+  .sdr-range-vertical::-moz-range-track {
+    width: 4px;
+    background: var(--color-border);
+    border-radius: 2px;
+  }
+
+  .sdr-range-vertical::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
     background: var(--sdr-accent);
     border: none;
     border-radius: 50%;

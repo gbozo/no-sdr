@@ -2,6 +2,24 @@
 // node-sdr — Shared Type Definitions
 // ============================================================
 
+// ---- Connection Source ----
+
+/** How to connect to the SDR hardware */
+export type SourceType = 'local' | 'rtl_tcp' | 'demo';
+
+export interface SourceConfig {
+  /** Connection type: local (spawn rtl_sdr), rtl_tcp (remote TCP), demo (simulator) */
+  type: SourceType;
+  /** For rtl_tcp: hostname or IP address of the rtl_tcp server */
+  host?: string;
+  /** For rtl_tcp: TCP port (default 1234) */
+  port?: number;
+  /** For local: path to rtl_sdr binary (default: "rtl_sdr" from PATH) */
+  binary?: string;
+  /** For local: additional CLI arguments to rtl_sdr */
+  extraArgs?: string[];
+}
+
 // ---- Dongle & Hardware ----
 
 export interface DongleInfo {
@@ -10,6 +28,8 @@ export interface DongleInfo {
   deviceIndex: number;
   name: string;
   serial: string;
+  /** Connection source type */
+  source: SourceType;
   /** Currently active profile ID */
   activeProfileId: string | null;
   /** PPM correction */
@@ -112,6 +132,8 @@ export interface DongleConfig {
   name: string;
   serial?: string;
   ppmCorrection: number;
+  /** How to connect to this dongle's hardware */
+  source: SourceConfig;
   profiles: DongleProfile[];
   /** Auto-start first profile on server boot */
   autoStart: boolean;

@@ -2,7 +2,6 @@
 // node-sdr — Waterfall Renderer (Canvas 2D)
 // ============================================================
 // Imperative canvas rendering — no framework reactivity involved.
-// Pattern: scroll existing content down 1px, paint new row at top.
 // ============================================================
 
 import { getPalette, type Palette, type PaletteEntry } from './palettes.js';
@@ -13,19 +12,28 @@ export class WaterfallRenderer {
   private palette: Palette;
   private minDb: number;
   private maxDb: number;
+  private w = 0;
+  private h = 0;
+
+  // Reusable ImageData for one row to avoid GC pressure
+  private rowImageData: ImageData | null = null;
+
+  // Frame rate limiting — waterfall doesn't need >30fps
+  private lastDrawTime = 0;
+  private readonly minFrameInterval = 33; // ~30fps
 
   constructor(
     private canvas: HTMLCanvasElement,
     theme: WaterfallColorTheme = 'turbo',
-    minDb: number = -120,
-    maxDb: number = -40,
+    minDb: number = -60,
+    maxDb: number = -10,
   ) {
-    this.ctx = canvas.getContext('2d', { alpha: false })!;
+    this.ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     this.palette = getPalette(theme);
     this.minDb = minDb;
     this.maxDb = maxDb;
 
-    // Set canvas to fill its container
+    // Initial resize
     this.resize();
   }
 
@@ -33,17 +41,31 @@ export class WaterfallRenderer {
    * Draw one FFT row at the top, scrolling existing content down
    */
   drawRow(fftData: Float32Array): void {
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    if (fftData.length === 0 || this.w < 1 || this.h < 2) return;
 
-    // Scroll existing content down by 1 pixel
-    this.ctx.drawImage(this.canvas, 0, 0, w, h - 1, 0, 1, w, h - 1);
+    // Throttle to ~30fps
+    const now = performance.now();
+    if (now - this.lastDrawTime < this.minFrameInterval) return;
+    this.lastDrawTime = now;
 
-    // Create new row at top
-    const row = this.ctx.createImageData(w, 1);
-    const pixels = row.data;
+    const w = this.w;
+    const h = this.h;
+
+    // Scroll existing content down by 1 pixel using getImageData/putImageData
+    // This avoids the drawImage self-reference issue entirely
+    const existing = this.ctx.getImageData(0, 0, w, h - 1);
+    this.ctx.putImageData(existing, 0, 1);
+
+    // Create new row at top (reuse ImageData object if same width)
+    if (!this.rowImageData || this.rowImageData.width !== w) {
+      this.rowImageData = this.ctx.createImageData(w, 1);
+    }
+
+    const pixels = this.rowImageData.data;
     const bins = fftData.length;
     const range = this.maxDb - this.minDb;
+
+    if (range === 0) return;
 
     for (let x = 0; x < w; x++) {
       // Map pixel x to FFT bin index
@@ -53,16 +75,16 @@ export class WaterfallRenderer {
       // Normalize to 0-255 palette index
       const normalized = (db - this.minDb) / range;
       const palIdx = Math.max(0, Math.min(255, Math.round(normalized * 255)));
-      const [r, g, b] = this.palette[palIdx];
+      const color = this.palette[palIdx];
 
       const offset = x * 4;
-      pixels[offset] = r;
-      pixels[offset + 1] = g;
-      pixels[offset + 2] = b;
+      pixels[offset] = color[0];
+      pixels[offset + 1] = color[1];
+      pixels[offset + 2] = color[2];
       pixels[offset + 3] = 255;
     }
 
-    this.ctx.putImageData(row, 0, 0);
+    this.ctx.putImageData(this.rowImageData, 0, 0);
   }
 
   /**
@@ -81,14 +103,29 @@ export class WaterfallRenderer {
   }
 
   /**
-   * Resize canvas to match container
+   * Resize canvas to match container.
+   * Must be called when the container size changes (via ResizeObserver).
    */
   resize(): void {
     const rect = this.canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    this.canvas.width = rect.width * dpr;
-    this.canvas.height = rect.height * dpr;
-    this.ctx.scale(dpr, dpr);
+    const cw = Math.round(rect.width);
+    const ch = Math.round(rect.height);
+
+    if (cw < 1 || ch < 2) {
+      this.w = 0;
+      this.h = 0;
+      return;
+    }
+
+    // Use 1:1 pixel mapping (no DPR scaling) for waterfall — each pixel = 1 row
+    if (this.canvas.width !== cw || this.canvas.height !== ch) {
+      this.canvas.width = cw;
+      this.canvas.height = ch;
+      this.rowImageData = null; // force recreate
+    }
+
+    this.w = cw;
+    this.h = ch;
   }
 
   /**
@@ -105,7 +142,6 @@ export class WaterfallRenderer {
   pixelToFreqOffset(pixelX: number, sampleRate: number): number {
     const rect = this.canvas.getBoundingClientRect();
     const relativeX = pixelX / rect.width;
-    // Map 0..1 to -sampleRate/2 .. +sampleRate/2
     return (relativeX - 0.5) * sampleRate;
   }
 }

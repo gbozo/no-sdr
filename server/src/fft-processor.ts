@@ -39,6 +39,9 @@ export class FftProcessor {
   private iqAccumulator: Buffer = Buffer.alloc(0);
   private readonly samplesNeeded: number; // bytes needed for one FFT frame
 
+  // FFT normalization: 10 * log10(N²) + window coherent gain correction
+  private normalizationDb: number;
+
   constructor(private options: FftProcessorOptions) {
     this.fftSize = options.fftSize;
     this.averaging = options.averaging;
@@ -48,9 +51,10 @@ export class FftProcessor {
     this.iqBuffer = new Float32Array(this.fftSize * 2);
     this.windowFunc = this.createWindow(options.window ?? 'blackman-harris');
     this.samplesNeeded = this.fftSize * 2; // 2 bytes per sample (I+Q interleaved uint8)
+    this.normalizationDb = this.computeNormalization();
 
     logger.debug(
-      { fftSize: this.fftSize, window: options.window ?? 'blackman-harris' },
+      { fftSize: this.fftSize, window: options.window ?? 'blackman-harris', normalizationDb: this.normalizationDb.toFixed(1) },
       'FFT processor initialized',
     );
   }
@@ -102,8 +106,9 @@ export class FftProcessor {
       const re = this.complexOutput[srcIdx * 2];
       const im = this.complexOutput[srcIdx * 2 + 1];
       const mag = re * re + im * im;
-      // Convert to dB (10 * log10), with floor to avoid -Infinity
-      magnitudes[i] = 10 * Math.log10(Math.max(mag, 1e-20));
+      // Convert to dB with proper FFT normalization:
+      // dB = 10*log10(|X|²) - 10*log10(N²) - windowCorrectionDb
+      magnitudes[i] = 10 * Math.log10(Math.max(mag, 1e-20)) - this.normalizationDb;
     }
 
     // Apply exponential averaging for smoother display
@@ -161,6 +166,28 @@ export class FftProcessor {
   }
 
   /**
+   * Compute FFT normalization in dB.
+   * Accounts for FFT size (N²) and window function coherent gain.
+   * The coherent gain of a window is sum(w[i]) / N.
+   */
+  private computeNormalization(): number {
+    // FFT size normalization: 10 * log10(N²) = 20 * log10(N)
+    const fftNorm = 20 * Math.log10(this.fftSize);
+
+    // Window coherent gain: sum(w) / N
+    let windowSum = 0;
+    for (let i = 0; i < this.fftSize; i++) {
+      windowSum += this.windowFunc[i];
+    }
+    const coherentGain = windowSum / this.fftSize;
+    // Window correction in dB (for power): 20 * log10(coherentGain)
+    const windowCorrectionDb = 20 * Math.log10(coherentGain);
+
+    // Total normalization: subtract this from raw 10*log10(|X|²)
+    return fftNorm + windowCorrectionDb;
+  }
+
+  /**
    * Reset internal buffers (call when switching profiles)
    */
   reset(): void {
@@ -179,6 +206,7 @@ export class FftProcessor {
     this.iqBuffer = new Float32Array(newFftSize * 2);
     this.windowFunc = this.createWindow(this.options.window ?? 'blackman-harris');
     this.averagedMagnitudes = null;
+    this.normalizationDb = this.computeNormalization();
     (this as any).samplesNeeded = newFftSize * 2;
   }
 }

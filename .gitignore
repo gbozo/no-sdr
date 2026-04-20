@@ -30,3 +30,6 @@ logs/
 # Build caches
 .cache/
 .parcel-cache/
+
+# Serena
+.serena/

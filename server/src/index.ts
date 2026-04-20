@@ -13,7 +13,7 @@ import { cors } from 'hono/cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig, writeDefaultConfig } from './config.js';
+import { loadConfig, writeDefaultConfig, saveConfig } from './config.js';
 import { DongleManager } from './dongle-manager.js';
 import { DecoderManager } from './decoder-manager.js';
 import { WebSocketManager } from './ws-manager.js';
@@ -154,6 +154,85 @@ app.get('/api/admin/status', adminAuth, (c) => {
     memoryUsage: process.memoryUsage(),
     ...status,
   });
+});
+
+// ---- Admin: Profile CRUD ----
+
+// Create a new profile for a dongle
+app.post('/api/admin/dongles/:id/profiles', adminAuth, async (c) => {
+  const dongleId = c.req.param('id');
+  const body = await c.req.json().catch(() => null);
+  if (!body || !body.id || !body.name || !body.centerFrequency || !body.sampleRate) {
+    return c.json({
+      error: 'Required fields: id, name, centerFrequency, sampleRate',
+    }, 400);
+  }
+
+  // Apply defaults for optional fields
+  const profile = {
+    id: body.id,
+    dongleId,
+    name: body.name,
+    centerFrequency: body.centerFrequency,
+    sampleRate: body.sampleRate,
+    fftSize: body.fftSize ?? 2048,
+    defaultMode: body.defaultMode ?? 'nfm',
+    defaultTuneOffset: body.defaultTuneOffset ?? 0,
+    defaultBandwidth: body.defaultBandwidth ?? 12_500,
+    gain: body.gain ?? null,
+    description: body.description ?? '',
+    decoders: body.decoders ?? [],
+  };
+
+  try {
+    const profiles = dongleManager.addProfile(dongleId, profile);
+    saveConfig(dongleManager.getConfig());
+    return c.json({ ok: true, profiles }, 201);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Update an existing profile
+app.put('/api/admin/dongles/:id/profiles/:profileId', adminAuth, async (c) => {
+  const dongleId = c.req.param('id');
+  const profileId = c.req.param('profileId');
+  const body = await c.req.json().catch(() => null);
+  if (!body) {
+    return c.json({ error: 'Request body required' }, 400);
+  }
+
+  try {
+    const updated = dongleManager.updateProfile(dongleId, profileId, body);
+    saveConfig(dongleManager.getConfig());
+    return c.json({ ok: true, profile: updated });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Delete a profile
+app.delete('/api/admin/dongles/:id/profiles/:profileId', adminAuth, async (c) => {
+  const dongleId = c.req.param('id');
+  const profileId = c.req.param('profileId');
+
+  try {
+    dongleManager.deleteProfile(dongleId, profileId);
+    saveConfig(dongleManager.getConfig());
+    return c.json({ ok: true, message: `Profile ${profileId} deleted` });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Save current config to disk (admin utility)
+app.post('/api/admin/save-config', adminAuth, (c) => {
+  try {
+    saveConfig(dongleManager.getConfig());
+    return c.json({ ok: true, message: 'Configuration saved to disk' });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
 });
 
 // List running decoders

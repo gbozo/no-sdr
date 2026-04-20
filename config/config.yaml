@@ -4,47 +4,97 @@
 # Dongle profiles define frequency/sample rate/demod presets.
 # When an admin switches a dongle's profile, all connected
 # clients on that dongle are switched automatically.
+#
+# Source types:
+#   local   - spawn rtl_sdr as child process (default)
+#   rtl_tcp - connect to remote rtl_tcp server via TCP
+#   demo    - use built-in signal simulator (no hardware)
+#
+# Profiles can be managed at runtime via the admin REST API:
+#   POST   /api/admin/dongles/:id/profiles      (create)
+#   PUT    /api/admin/dongles/:id/profiles/:pid  (update)
+#   DELETE /api/admin/dongles/:id/profiles/:pid  (delete)
+#   POST   /api/admin/save-config                (persist to disk)
 # ============================================================
 
 server:
   host: "0.0.0.0"
   port: 3000
   adminPassword: "admin"
+  # demoMode: true   # uncomment to force ALL dongles into demo mode
 
 dongles:
-  - id: dongle-0
+  # ─── Local USB dongle (disabled — no hardware on this machine) ──
+  # - id: dongle-0
+  #   deviceIndex: 0
+  #   name: "RTL-SDR #0"
+  #   ppmCorrection: 0
+  #   source:
+  #     type: local
+  #   autoStart: true
+  #   profiles:
+  #     - id: fm-broadcast
+  #       name: "FM Broadcast"
+  #       centerFrequency: 100000000
+  #       sampleRate: 2400000
+  #       fftSize: 2048
+  #       defaultMode: wfm
+  #       defaultTuneOffset: 0
+  #       defaultBandwidth: 200000
+  #       gain: null
+  #       description: "FM broadcast band — 87.5 to 108 MHz"
+  #       decoders: []
+
+  #     - id: aviation
+  #       name: "Aviation VHF"
+  #       centerFrequency: 125000000
+  #       sampleRate: 2400000
+  #       fftSize: 2048
+  #       defaultMode: am
+  #       defaultTuneOffset: 0
+  #       defaultBandwidth: 8330
+  #       gain: 40
+  #       description: "Aviation communications — 118 to 137 MHz"
+  #       decoders: []
+
+  # ─── Remote rtl_tcp dongle ──────────────────────────────
+  - id: dongle-remote
     deviceIndex: 0
-    name: "RTL-SDR #0"
+    name: "Remote RTL-SDR (rtl_tcp)"
     ppmCorrection: 0
+    source:
+      type: rtl_tcp
+      host: "192.168.1.3"
+      port: 1234
     autoStart: true
     profiles:
       - id: fm-broadcast
         name: "FM Broadcast"
         centerFrequency: 100000000    # 100 MHz
-        sampleRate: 2400000           # 2.4 MSPS
+        sampleRate: 2400000
         fftSize: 2048
         defaultMode: wfm
         defaultTuneOffset: 0
-        defaultBandwidth: 200000      # 200 kHz
-        gain: null                    # auto gain
+        defaultBandwidth: 200000
+        gain: null
         description: "FM broadcast band — 87.5 to 108 MHz"
         decoders: []
 
       - id: aviation
         name: "Aviation VHF"
-        centerFrequency: 125000000    # 125 MHz
+        centerFrequency: 125000000
         sampleRate: 2400000
         fftSize: 2048
         defaultMode: am
         defaultTuneOffset: 0
-        defaultBandwidth: 8330        # 8.33 kHz (aviation channel spacing)
+        defaultBandwidth: 8330
         gain: 40
         description: "Aviation communications — 118 to 137 MHz"
         decoders: []
 
       - id: two-meter
         name: "2m Amateur"
-        centerFrequency: 146000000    # 146 MHz
+        centerFrequency: 146000000
         sampleRate: 2400000
         fftSize: 2048
         defaultMode: nfm
@@ -54,36 +104,58 @@ dongles:
         description: "Amateur 2m band — 144 to 148 MHz"
         decoders: []
 
-      - id: adsb
-        name: "ADS-B 1090"
-        centerFrequency: 1090000000   # 1090 MHz
-        sampleRate: 2000000           # 2 MSPS (required for ADS-B)
-        fftSize: 2048
-        defaultMode: raw
-        defaultTuneOffset: 0
-        defaultBandwidth: 1000000
-        gain: 50
-        description: "ADS-B aircraft tracking at 1090 MHz"
-        decoders:
-          - type: adsb
-            enabled: true
-            frequencyOffset: 0
-            bandwidth: 1000000
-            options: {}
+  # ─── Docker sidecar rtl_tcp ─────────────────────────────
+  # Run rtl_tcp in a separate container with USB passthrough:
+  #
+  # docker-compose.yml:
+  #   rtl_tcp:
+  #     image: kosdk/rtl_tcp
+  #     privileged: true
+  #     devices: ["/dev/bus/usb:/dev/bus/usb"]
+  #     command: rtl_tcp -a 0.0.0.0
+  #
+  # - id: dongle-docker
+  #   deviceIndex: 0
+  #   name: "Docker RTL-SDR"
+  #   ppmCorrection: 0
+  #   source:
+  #     type: rtl_tcp
+  #     host: "rtl_tcp"        # Docker Compose service name
+  #     port: 1234
+  #   autoStart: true
+  #   profiles:
+  #     - id: fm
+  #       name: "FM Broadcast"
+  #       centerFrequency: 100000000
+  #       sampleRate: 2400000
+  #       fftSize: 2048
+  #       defaultMode: wfm
+  #       defaultTuneOffset: 0
+  #       defaultBandwidth: 200000
+  #       gain: null
+  #       description: "FM broadcast via Docker rtl_tcp"
+  #       decoders: []
 
-      - id: marine
-        name: "Marine VHF"
-        centerFrequency: 159000000    # 159 MHz
-        sampleRate: 2400000
-        fftSize: 2048
-        defaultMode: nfm
-        defaultTuneOffset: 0
-        defaultBandwidth: 25000
-        gain: 40
-        description: "Marine VHF — 156 to 162 MHz"
-        decoders:
-          - type: ais
-            enabled: true
-            frequencyOffset: 3025000   # 162.025 MHz - 159 MHz
-            bandwidth: 25000
-            options: {}
+  # ─── Demo / Simulator ───────────────────────────────────
+  # Simulated dongle for UI development (no hardware needed).
+  # Or use: NODE_SDR_DEMO=1 npm run dev
+  #
+  # - id: dongle-demo
+  #   deviceIndex: 0
+  #   name: "Simulated SDR"
+  #   ppmCorrection: 0
+  #   source:
+  #     type: demo
+  #   autoStart: true
+  #   profiles:
+  #     - id: fm-demo
+  #       name: "Simulated FM"
+  #       centerFrequency: 100000000
+  #       sampleRate: 2400000
+  #       fftSize: 2048
+  #       defaultMode: wfm
+  #       defaultTuneOffset: 0
+  #       defaultBandwidth: 200000
+  #       gain: null
+  #       description: "Simulated FM broadcast signals"
+  #       decoders: []

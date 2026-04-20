@@ -15,11 +15,16 @@ const WaterfallDisplay: Component = () => {
     // Attach canvases to the engine
     engine.attachCanvases(waterfallRef, spectrumRef);
 
-    // Handle resize
+    // Handle resize — also fires immediately for initial sizing
     const observer = new ResizeObserver(() => {
       engine.handleResize();
     });
     observer.observe(containerRef);
+
+    // Ensure initial resize happens after layout settles
+    requestAnimationFrame(() => {
+      engine.handleResize();
+    });
 
     onCleanup(() => observer.disconnect());
   });

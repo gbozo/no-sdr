@@ -4,9 +4,15 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import { logger } from './logger.js';
+
+// ---- Project Root Detection ----
+// Works from server/src/ (tsx dev) or server/dist/ (compiled)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 // ---- Zod Schemas ----
 
@@ -36,12 +42,21 @@ const DongleProfileSchema = z.object({
   decoders: z.array(DecoderConfigSchema).default([]),
 });
 
+const SourceConfigSchema = z.object({
+  type: z.enum(['local', 'rtl_tcp', 'demo']).default('local'),
+  host: z.string().optional(),
+  port: z.number().int().positive().optional(),
+  binary: z.string().optional(),
+  extraArgs: z.array(z.string()).optional(),
+}).default({ type: 'local' });
+
 const DongleConfigSchema = z.object({
   id: z.string().min(1),
   deviceIndex: z.number().int().min(0).default(0),
   name: z.string().min(1),
   serial: z.string().optional(),
   ppmCorrection: z.number().default(0),
+  source: SourceConfigSchema,
   profiles: z.array(DongleProfileSchema).min(1),
   autoStart: z.boolean().default(true),
 });
@@ -61,18 +76,21 @@ export type ValidatedConfig = z.infer<typeof ServerConfigSchema>;
 // ---- Config Loading ----
 
 const CONFIG_SEARCH_PATHS = [
-  'config/config.yaml',
-  'config/config.yml',
-  'config.yaml',
-  'config.yml',
+  path.join(PROJECT_ROOT, 'config', 'config.yaml'),
+  path.join(PROJECT_ROOT, 'config', 'config.yml'),
+  path.join(PROJECT_ROOT, 'config.yaml'),
+  path.join(PROJECT_ROOT, 'config.yml'),
 ];
 
 /**
  * Load and validate configuration from YAML file.
- * Searches standard paths or uses NODE_SDR_CONFIG env var.
+ * Searches standard paths relative to project root, or uses NODE_SDR_CONFIG env var.
  */
 export function loadConfig(configPath?: string): ValidatedConfig {
-  const searchPaths = configPath ? [configPath] : CONFIG_SEARCH_PATHS;
+  const envPath = configPath ?? process.env.NODE_SDR_CONFIG;
+  const searchPaths = envPath
+    ? [path.resolve(envPath)]
+    : CONFIG_SEARCH_PATHS;
 
   let filePath: string | null = null;
   for (const p of searchPaths) {
@@ -92,6 +110,7 @@ export function loadConfig(configPath?: string): ValidatedConfig {
   }
 
   logger.info({ path: filePath }, 'Loading configuration');
+  resolvedConfigPath = filePath;
   const raw = fs.readFileSync(filePath, 'utf-8');
   const parsed = yaml.load(raw);
 
@@ -120,19 +139,21 @@ export function loadConfig(configPath?: string): ValidatedConfig {
 }
 
 function getDefaultConfig(): ValidatedConfig {
+  logger.info('Using default demo configuration (no config file found)');
   return {
     server: {
       host: '0.0.0.0',
       port: 3000,
       adminPassword: 'admin',
-      demoMode: false,
+      demoMode: true, // default to demo when no config file exists
     },
     dongles: [
       {
         id: 'dongle-0',
         deviceIndex: 0,
-        name: 'RTL-SDR #0',
+        name: 'Simulated SDR (Demo)',
         ppmCorrection: 0,
+        source: { type: 'demo' },
         autoStart: true,
         profiles: [
           {
@@ -145,7 +166,7 @@ function getDefaultConfig(): ValidatedConfig {
             defaultTuneOffset: 0,
             defaultBandwidth: 200_000,
             gain: null,
-            description: 'FM broadcast band — 87.5 to 108 MHz',
+            description: 'Simulated FM broadcast band — 87.5 to 108 MHz',
             decoders: [],
           },
         ],
@@ -154,10 +175,50 @@ function getDefaultConfig(): ValidatedConfig {
   };
 }
 
+// Store the resolved config file path for save operations
+let resolvedConfigPath: string | null = null;
+
+/**
+ * Save the current configuration back to the YAML file.
+ * Used for admin profile CRUD operations.
+ */
+export function saveConfig(config: ValidatedConfig): void {
+  const filePath = resolvedConfigPath ?? path.join(PROJECT_ROOT, 'config', 'config.yaml');
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const header = `# ============================================================
+# node-sdr Configuration
+# ============================================================
+# Dongle profiles define frequency/sample rate/demod presets.
+# When an admin switches a dongle's profile, all connected
+# clients on that dongle are switched automatically.
+#
+# Source types:
+#   local   - spawn rtl_sdr as child process (default)
+#   rtl_tcp - connect to remote rtl_tcp server via TCP
+#   demo    - use built-in signal simulator
+# ============================================================
+
+`;
+
+  const yamlStr = yaml.dump(config, {
+    indent: 2,
+    lineWidth: 120,
+    noRefs: true,
+    sortKeys: false,
+  });
+
+  fs.writeFileSync(filePath, header + yamlStr, 'utf-8');
+  logger.info({ path: filePath }, 'Configuration saved to disk');
+}
+
 /**
  * Write a default config file for first-time setup
  */
-export function writeDefaultConfig(filePath: string = 'config/config.yaml'): void {
+export function writeDefaultConfig(filePath: string = path.join(PROJECT_ROOT, 'config', 'config.yaml')): void {
   const config = getDefaultConfig();
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {

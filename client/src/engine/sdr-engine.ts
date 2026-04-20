@@ -14,13 +14,15 @@ import {
   MSG_META,
   MSG_DECODER,
   MSG_SIGNAL_LEVEL,
+  DEMOD_MODES,
   type ServerMeta,
   type ClientCommand,
+  type DemodMode,
 } from '@node-sdr/shared';
 import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
 import { AudioEngine } from './audio.js';
-import { getDemodulator, resetDemodulator, type Demodulator } from './demodulators.js';
+import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
 import { store } from '../store/index.js';
 
 export class SdrEngine {
@@ -33,6 +35,27 @@ export class SdrEngine {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
+
+  // Auto-range tracking
+  private autoRangeMin = -60;
+  private autoRangeMax = -10;
+
+  // Audio diagnostics
+  private iqInCount = 0;
+  private audioOutCount = 0;
+  private lastAudioLog = performance.now();
+  private autoRangeFrameCount = 0;
+
+  // Squelch grace period: after tuning/mode change, bypass squelch briefly
+  // so the jitter buffer can fill and signal level can stabilize.
+  private squelchBypassUntil = 0;
+
+  // Bandwidth / throughput tracking (updated every second)
+  private bwFftFrames = 0;
+  private bwIqSamples = 0;
+  private bwTotalBytes = 0;
+  private bwLastUpdate = performance.now();
+  private bwHistoryMax = 30; // keep 30 seconds of history
 
   // Callbacks for decoder data and meta messages
   onDecoderData?: (type: string, data: unknown) => void;
@@ -128,9 +151,23 @@ export class SdrEngine {
   private handleBinaryMessage(data: ArrayBuffer): void {
     const [type, payload] = unpackBinaryMessage(data);
 
+    // Track total inbound bytes for bandwidth meter
+    this.bwTotalBytes += data.byteLength;
+    this.updateBandwidthStats();
+
     switch (type) {
       case MSG_FFT: {
+        this.bwFftFrames++;
         const fftData = new Float32Array(payload);
+
+        // Auto-range: adapt waterfall min/max to actual data
+        if (store.waterfallAutoRange()) {
+          this.updateAutoRange(fftData);
+        }
+
+        // Compute signal level at tuned frequency for S-meter
+        this.updateSignalLevel(fftData);
+
         this.waterfall?.drawRow(fftData);
         this.spectrum?.draw(fftData);
         // Draw tuning indicator on spectrum
@@ -170,9 +207,66 @@ export class SdrEngine {
       case MSG_IQ: {
         // Per-user IQ sub-band data → client-side demodulation → audio
         const iqData = new Int16Array(payload);
-        const audioSamples = this.demodulator.process(iqData);
-        if (audioSamples.length > 0) {
-          this.audio.pushDemodulatedAudio(audioSamples);
+        this.bwIqSamples += iqData.length / 2;
+
+        // Squelch gate: if squelch is set and signal is below threshold, mute audio.
+        // During grace period after tune/mode change, bypass squelch so the
+        // jitter buffer can fill and the signal level can stabilize.
+        const squelchLevel = store.squelch();
+        const inGracePeriod = performance.now() < this.squelchBypassUntil;
+        const squelchOpen = squelchLevel === null || inGracePeriod || store.signalLevel() >= squelchLevel;
+
+        // Determine if stereo decoding should be attempted:
+        // 1. User has stereo enabled (toggle switch)
+        // 2. Demodulator supports it
+        // 3. Signal level exceeds threshold
+        const stereoAllowed = store.stereoEnabled()
+          && this.demodulator.stereoCapable
+          && this.demodulator.processStereo != null
+          && store.signalLevel() >= store.stereoThreshold();
+
+        // Use stereo path when allowed
+        if (stereoAllowed) {
+          const stereoResult = this.demodulator.processStereo!(iqData);
+          this.iqInCount += iqData.length / 2;
+
+          if (stereoResult.stereo) {
+            this.audioOutCount += stereoResult.left.length;
+            if (stereoResult.left.length > 0 && squelchOpen) {
+              this.audio.pushStereoAudio(stereoResult.left, stereoResult.right);
+            }
+            // Update stereo detection state
+            if (!store.stereoDetected()) {
+              store.setStereoDetected(true);
+            }
+          } else {
+            this.audioOutCount += stereoResult.left.length;
+            if (stereoResult.left.length > 0 && squelchOpen) {
+              this.audio.pushDemodulatedAudio(stereoResult.left);
+            }
+            if (store.stereoDetected()) {
+              store.setStereoDetected(false);
+            }
+          }
+        } else {
+          const audioSamples = this.demodulator.process(iqData);
+          this.iqInCount += iqData.length / 2;
+          this.audioOutCount += audioSamples.length;
+          if (audioSamples.length > 0 && squelchOpen) {
+            this.audio.pushDemodulatedAudio(audioSamples);
+          }
+          if (store.stereoDetected()) {
+            store.setStereoDetected(false);
+          }
+        }
+
+        const now = performance.now();
+        if (now - this.lastAudioLog > 30000) {
+          const elapsed = (now - this.lastAudioLog) / 1000;
+          console.debug(`[SDR Audio] IQ in: ${Math.round(this.iqInCount / elapsed)}/s, Audio out: ${Math.round(this.audioOutCount / elapsed)}/s, Stereo: ${store.stereoDetected()}`);
+          this.iqInCount = 0;
+          this.audioOutCount = 0;
+          this.lastAudioLog = now;
         }
         break;
       }
@@ -202,6 +296,120 @@ export class SdrEngine {
   }
 
   /**
+   * Auto-range: slowly adapt waterfall min/max dB to actual data.
+   * Uses exponential smoothing so the range is stable but responsive.
+   */
+  private updateAutoRange(fftData: Float32Array): void {
+    this.autoRangeFrameCount++;
+    // Only update every 16 frames (~0.5s at 30fps) to avoid jitter
+    if (this.autoRangeFrameCount % 16 !== 0) return;
+
+    // Compute data statistics (skip DC bin ±2 and edges)
+    const skip = Math.max(4, Math.floor(fftData.length * 0.02));
+    let sum = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    let count = 0;
+
+    for (let i = skip; i < fftData.length - skip; i++) {
+      const v = fftData[i];
+      if (!isFinite(v)) continue;
+      sum += v;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      count++;
+    }
+
+    if (count === 0) return;
+    const avg = sum / count;
+
+    // Target: noise floor ~20% from bottom, strong signals visible at top
+    // Use median-like approach: min = avg - 15dB, max = avg + 35dB
+    const targetMin = avg - 15;
+    const targetMax = Math.max(avg + 35, max + 5);
+
+    // Smooth towards target (slow adaptation)
+    const alpha = 0.15;
+    this.autoRangeMin = this.autoRangeMin * (1 - alpha) + targetMin * alpha;
+    this.autoRangeMax = this.autoRangeMax * (1 - alpha) + targetMax * alpha;
+
+    // Round and apply
+    const newMin = Math.round(this.autoRangeMin);
+    const newMax = Math.round(this.autoRangeMax);
+
+    if (newMin !== store.waterfallMin() || newMax !== store.waterfallMax()) {
+      store.setWaterfallMin(newMin);
+      store.setWaterfallMax(newMax);
+      this.waterfall?.setRange(newMin, newMax);
+      this.spectrum?.setRange(newMin, newMax);
+    }
+  }
+
+  /**
+   * Compute signal level at the tuned frequency from FFT data.
+   * Averages the dB values in the bins covering the current bandwidth.
+   */
+  private signalLevelFrameCount = 0;
+  private updateSignalLevel(fftData: Float32Array): void {
+    this.signalLevelFrameCount++;
+    // Update every 8 frames (~4 times/sec at 30fps)
+    if (this.signalLevelFrameCount % 8 !== 0) return;
+
+    const sampleRate = store.sampleRate();
+    if (sampleRate <= 0 || fftData.length === 0) return;
+
+    const tuneOffset = store.tuneOffset();
+    const bandwidth = store.bandwidth();
+    const bins = fftData.length;
+
+    // Map tuneOffset to bin index (0 = left edge, bins-1 = right edge)
+    // tuneOffset is relative to center: -sampleRate/2 to +sampleRate/2
+    const centerBin = Math.round(((tuneOffset / sampleRate) + 0.5) * (bins - 1));
+    const halfBwBins = Math.round((bandwidth / sampleRate) * bins / 2);
+
+    const startBin = Math.max(0, centerBin - halfBwBins);
+    const endBin = Math.min(bins - 1, centerBin + halfBwBins);
+
+    if (startBin >= endBin) return;
+
+    // Find peak signal level in the bandwidth (peak is more useful than average for S-meter)
+    let peak = -Infinity;
+    for (let i = startBin; i <= endBin; i++) {
+      const v = fftData[i];
+      if (isFinite(v) && v > peak) peak = v;
+    }
+
+    if (isFinite(peak)) {
+      store.setSignalLevel(peak);
+    }
+  }
+
+  /**
+   * Update bandwidth/throughput stats every 1 second.
+   * Pushes rates into the store and maintains a rolling history for the sparkline.
+   */
+  private updateBandwidthStats(): void {
+    const now = performance.now();
+    const elapsed = (now - this.bwLastUpdate) / 1000;
+    if (elapsed < 1) return;
+
+    store.setFftRate(Math.round(this.bwFftFrames / elapsed));
+    store.setIqRate(Math.round(this.bwIqSamples / elapsed));
+    const bytesPerSec = Math.round(this.bwTotalBytes / elapsed);
+    store.setWsBytes(bytesPerSec);
+
+    // Rolling history (keep last N seconds)
+    const history = store.wsBytesHistory().slice(-(this.bwHistoryMax - 1));
+    history.push(bytesPerSec);
+    store.setWsBytesHistory(history);
+
+    this.bwFftFrames = 0;
+    this.bwIqSamples = 0;
+    this.bwTotalBytes = 0;
+    this.bwLastUpdate = now;
+  }
+
+  /**
    * Handle JSON metadata messages
    */
   private handleMetaMessage(meta: ServerMeta): void {
@@ -217,13 +425,53 @@ export class SdrEngine {
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
+        if (meta.iqSampleRate) {
+          store.setIqSampleRate(meta.iqSampleRate);
+          // Tell demodulator the actual IQ sample rate from server
+          this.demodulator.setInputSampleRate(meta.iqSampleRate);
+        }
+        if (meta.mode) {
+          const m = meta.mode as DemodMode;
+          store.setMode(m);
+          // Set bandwidth to the mode's default so the UI shows the correct value
+          const modeInfo = DEMOD_MODES[m];
+          if (modeInfo) {
+            store.setBandwidth(modeInfo.defaultBandwidth);
+          }
+          this.demodulator = getDemodulator(m);
+          this.demodulator.reset();
+          this.demodulator.setBandwidth(store.bandwidth());
+          if (meta.iqSampleRate) {
+            this.demodulator.setInputSampleRate(meta.iqSampleRate);
+          }
+        }
+        // Flush audio on new subscription
+        this.audio.resetBuffer();
         break;
 
       case 'profile_changed':
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
-        // Reset waterfall
+        if (meta.iqSampleRate) {
+          store.setIqSampleRate(meta.iqSampleRate);
+        }
+        if (meta.mode) {
+          const m = meta.mode as DemodMode;
+          store.setMode(m);
+          const modeInfo = DEMOD_MODES[m];
+          if (modeInfo) {
+            store.setBandwidth(modeInfo.defaultBandwidth);
+          }
+          this.demodulator = getDemodulator(m);
+          this.demodulator.reset();
+          this.demodulator.setBandwidth(store.bandwidth());
+          if (meta.iqSampleRate) {
+            this.demodulator.setInputSampleRate(meta.iqSampleRate);
+          }
+        }
+        // Flush audio and reset waterfall
+        this.audio.resetBuffer();
         this.waterfall?.clear();
         break;
 
@@ -277,14 +525,30 @@ export class SdrEngine {
 
   tune(offsetHz: number): void {
     store.setTuneOffset(offsetHz);
+    // Reset demodulator and audio buffer to avoid stale filter state
+    this.demodulator.reset();
+    this.audio.resetBuffer();
+    // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
+    this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'tune', offset: offsetHz });
   }
 
   setMode(mode: string): void {
-    store.setMode(mode as any);
+    const m = mode as DemodMode;
+    store.setMode(m);
+    // Set bandwidth to the new mode's default
+    const modeInfo = DEMOD_MODES[m];
+    if (modeInfo) {
+      store.setBandwidth(modeInfo.defaultBandwidth);
+    }
     // Switch to the appropriate demodulator
-    this.demodulator = getDemodulator(mode as any);
+    this.demodulator = getDemodulator(m);
+    this.demodulator.reset();
     this.demodulator.setBandwidth(store.bandwidth());
+    // Flush stale audio data
+    this.audio.resetBuffer();
+    // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
+    this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'mode', mode });
   }
 
@@ -296,7 +560,8 @@ export class SdrEngine {
 
   setSquelch(db: number | null): void {
     store.setSquelch(db);
-    this.send({ cmd: 'squelch', db });
+    // Squelch is enforced client-side in the MSG_IQ handler —
+    // no server command needed since audio demodulation is local.
   }
 
   setVolume(level: number): void {
@@ -311,6 +576,64 @@ export class SdrEngine {
     this.send({ cmd: 'mute', muted });
   }
 
+  setBalance(value: number): void {
+    store.setBalance(value);
+    this.audio.setBalance(value);
+  }
+
+  setEqLow(dB: number): void {
+    store.setEqLow(dB);
+    this.audio.setEqLow(dB);
+  }
+
+  setEqLowMid(dB: number): void {
+    store.setEqLowMid(dB);
+    this.audio.setEqLowMid(dB);
+  }
+
+  setEqMid(dB: number): void {
+    store.setEqMid(dB);
+    this.audio.setEqMid(dB);
+  }
+
+  setEqHighMid(dB: number): void {
+    store.setEqHighMid(dB);
+    this.audio.setEqHighMid(dB);
+  }
+
+  setEqHigh(dB: number): void {
+    store.setEqHigh(dB);
+    this.audio.setEqHigh(dB);
+  }
+
+  setLoudness(enabled: boolean): void {
+    store.setLoudness(enabled);
+    this.audio.setLoudness(enabled);
+  }
+
+  setStereoEnabled(enabled: boolean): void {
+    store.setStereoEnabled(enabled);
+    // Also inform the FM demodulator so it can skip stereo processing entirely
+    if (this.demodulator.stereoCapable && 'setStereoEnabled' in this.demodulator) {
+      (this.demodulator as any).setStereoEnabled(enabled);
+    }
+    if (!enabled && store.stereoDetected()) {
+      store.setStereoDetected(false);
+    }
+    // Reset demodulator state and flush audio buffer to avoid stale filter
+    // data from the previous mono/stereo path causing silence or artifacts
+    this.demodulator.reset();
+    this.audio.resetBuffer();
+  }
+
+  setStereoThreshold(dB: number): void {
+    store.setStereoThreshold(dB);
+    // If current signal is below new threshold, clear stereo detection
+    if (store.signalLevel() < dB && store.stereoDetected()) {
+      store.setStereoDetected(false);
+    }
+  }
+
   // ---- Display Settings ----
 
   setWaterfallTheme(theme: string): void {
@@ -319,6 +642,8 @@ export class SdrEngine {
   }
 
   setWaterfallRange(minDb: number, maxDb: number): void {
+    // Manual range adjustment disables auto-range
+    store.setWaterfallAutoRange(false);
     store.setWaterfallMin(minDb);
     store.setWaterfallMax(maxDb);
     this.waterfall?.setRange(minDb, maxDb);
@@ -330,6 +655,13 @@ export class SdrEngine {
   async initAudio(): Promise<void> {
     await this.audio.init();
     this.audio.setVolume(store.volume());
+    this.audio.setBalance(store.balance());
+    this.audio.setEqLow(store.eqLow());
+    this.audio.setEqLowMid(store.eqLowMid());
+    this.audio.setEqMid(store.eqMid());
+    this.audio.setEqHighMid(store.eqHighMid());
+    this.audio.setEqHigh(store.eqHigh());
+    this.audio.setLoudness(store.loudness());
   }
 
   // ---- Resize Handling ----
