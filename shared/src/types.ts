@@ -50,6 +50,8 @@ export interface DongleProfile {
   sampleRate: number;
   /** FFT bin count (power of 2) */
   fftSize: number;
+  /** Target FFT output frame rate (fps, 1-60, default 30) */
+  fftFps: number;
   /** Default demodulation mode */
   defaultMode: DemodMode;
   /** Default demodulation frequency offset from center (Hz) */

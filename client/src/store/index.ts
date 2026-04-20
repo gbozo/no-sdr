@@ -7,6 +7,7 @@
 
 import { createSignal, createRoot } from 'solid-js';
 import type {
+  CodecType,
   DemodMode,
   WaterfallColorTheme,
   UITheme,
@@ -67,6 +68,10 @@ function createStore() {
   const [isAdmin, setIsAdmin] = createSignal(false);
   const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
 
+  // ---- Codec Preferences ----
+  const [fftCodec, setFftCodec] = createSignal<CodecType>('none');
+  const [iqCodec, setIqCodec] = createSignal<CodecType>('none');
+
   // ---- Bandwidth / Throughput Metrics ----
   const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec
   const [iqRate, setIqRate] = createSignal(0);           // IQ samples/sec
@@ -123,6 +128,10 @@ function createStore() {
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,
     meterStyle, setMeterStyle,
+
+    // Codec Preferences
+    fftCodec, setFftCodec,
+    iqCodec, setIqCodec,
 
     // Bandwidth / Throughput
     fftRate, setFftRate,

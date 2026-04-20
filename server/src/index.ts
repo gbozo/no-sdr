@@ -176,6 +176,7 @@ app.post('/api/admin/dongles/:id/profiles', adminAuth, async (c) => {
     centerFrequency: body.centerFrequency,
     sampleRate: body.sampleRate,
     fftSize: body.fftSize ?? 2048,
+    fftFps: body.fftFps ?? 30,
     defaultMode: body.defaultMode ?? 'nfm',
     defaultTuneOffset: body.defaultTuneOffset ?? 0,
     defaultBandwidth: body.defaultBandwidth ?? 12_500,

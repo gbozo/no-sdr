@@ -34,6 +34,7 @@ const DongleProfileSchema = z.object({
   fftSize: z.number().int().refine((n) => (n & (n - 1)) === 0 && n >= 256 && n <= 16384, {
     message: 'fftSize must be a power of 2 between 256 and 16384',
   }).default(2048),
+  fftFps: z.number().int().min(1).max(60).default(30),
   defaultMode: z.enum(['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw']).default('nfm'),
   defaultTuneOffset: z.number().default(0),
   defaultBandwidth: z.number().positive().default(12_500),
@@ -162,6 +163,7 @@ function getDefaultConfig(): ValidatedConfig {
             centerFrequency: 100_000_000,
             sampleRate: 2_400_000,
             fftSize: 2048,
+            fftFps: 30,
             defaultMode: 'wfm',
             defaultTuneOffset: 0,
             defaultBandwidth: 200_000,

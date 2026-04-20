@@ -6,7 +6,7 @@ import { Component, For, Show, createSignal, createResource, onMount, onCleanup,
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 import { DEMOD_MODES } from '@node-sdr/shared';
-import type { DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '@node-sdr/shared';
+import type { CodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '@node-sdr/shared';
 import { getPaletteNames } from '../engine/palettes.js';
 
 const ControlPanel: Component = () => {
@@ -23,6 +23,9 @@ const ControlPanel: Component = () => {
 
       {/* Waterfall Settings */}
       <WaterfallSettings />
+
+      {/* Codec Settings */}
+      <CodecSettings />
 
       {/* Connection Status */}
       <ConnectionStatus />
@@ -831,6 +834,68 @@ const SMeter: Component = () => {
             style={{ height: '110px' }}
           />
         </Show>
+      </div>
+    </div>
+  );
+};
+
+// ---- Codec Settings ----
+const CodecSettings: Component = () => {
+  const codecs: { value: CodecType; label: string }[] = [
+    { value: 'none', label: 'None' },
+    { value: 'adpcm', label: 'ADPCM' },
+  ];
+
+  return (
+    <div class="sdr-panel">
+      <div class="sdr-panel-header">Compression</div>
+      <div class="p-2 space-y-2">
+        {/* FFT Codec */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              FFT
+            </label>
+            <span class="text-[9px] font-mono text-text-dim">
+              {store.fftCodec() === 'adpcm' ? '~8:1' : '~4:1'}
+            </span>
+          </div>
+          <div class="flex gap-1">
+            <For each={codecs}>
+              {(c) => (
+                <button
+                  class={`sdr-mode-btn flex-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
+                  onClick={() => engine.setFftCodec(c.value)}
+                >
+                  {c.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+        {/* IQ Codec */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              IQ
+            </label>
+            <span class="text-[9px] font-mono text-text-dim">
+              {store.iqCodec() === 'adpcm' ? '4:1' : 'raw'}
+            </span>
+          </div>
+          <div class="flex gap-1">
+            <For each={codecs}>
+              {(c) => (
+                <button
+                  class={`sdr-mode-btn flex-1 ${store.iqCodec() === c.value ? 'active' : ''}`}
+                  onClick={() => engine.setIqCodec(c.value)}
+                >
+                  {c.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
       </div>
     </div>
   );

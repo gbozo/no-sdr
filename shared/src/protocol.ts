@@ -33,6 +33,17 @@ export const MSG_DECODER = 0x06;
 /** S-meter / signal level — Float32 dB value for user's tuned frequency */
 export const MSG_SIGNAL_LEVEL = 0x07;
 
+/** ADPCM-compressed FFT — Int16 dB×100 encoded as IMA-ADPCM nibbles with warmup padding */
+export const MSG_FFT_ADPCM = 0x08;
+
+/** ADPCM-compressed IQ — Int16 interleaved I/Q encoded as IMA-ADPCM nibbles */
+export const MSG_IQ_ADPCM = 0x09;
+
+// ---- Codec Types ----
+
+/** Available compression codecs for FFT and IQ data */
+export type CodecType = 'none' | 'adpcm';
+
 // ---- Client Command Types ----
 
 export type ClientCommand =
@@ -45,6 +56,7 @@ export type ClientCommand =
   | { cmd: 'volume'; level: number }
   | { cmd: 'mute'; muted: boolean }
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
+  | { cmd: 'codec'; fftCodec?: CodecType; iqCodec?: CodecType }
   // Admin commands
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
@@ -146,4 +158,31 @@ export function compressFft(
     out[i] = Math.max(0, Math.min(255, Math.round(normalized * 255)));
   }
   return out;
+}
+
+/**
+ * Pack ADPCM-compressed FFT data into a binary message.
+ * The payload is produced by encodeFftAdpcm() from adpcm.ts.
+ */
+export function packFftAdpcmMessage(adpcmPayload: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(1 + adpcmPayload.length);
+  const view = new Uint8Array(buf);
+  view[0] = MSG_FFT_ADPCM;
+  view.set(adpcmPayload, 1);
+  return buf;
+}
+
+/**
+ * Pack ADPCM-compressed IQ data into a binary message.
+ * Header: [type byte] [uint32 LE sampleCount] [adpcm nibbles]
+ * sampleCount is the original Int16 sample count (I and Q interleaved)
+ * so the decoder knows the exact output size.
+ */
+export function packIqAdpcmMessage(adpcmData: Uint8Array, sampleCount: number): ArrayBuffer {
+  const buf = new ArrayBuffer(1 + 4 + adpcmData.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_IQ_ADPCM);
+  view.setUint32(1, sampleCount, true); // little-endian
+  new Uint8Array(buf, 5).set(adpcmData);
+  return buf;
 }

@@ -8,6 +8,7 @@
 import type { WSContext } from 'hono/ws';
 import {
   type ClientCommand,
+  type CodecType,
   type ServerMeta,
   type ClientSession,
   type DongleProfile,
@@ -17,10 +18,16 @@ import {
   packCompressedFftMessage,
   compressFft,
   packIqMessage,
+  packFftAdpcmMessage,
+  packIqAdpcmMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
+  MSG_FFT_ADPCM,
   MSG_IQ,
+  MSG_IQ_ADPCM,
   MSG_DECODER,
+  ImaAdpcmEncoder,
+  encodeFftAdpcm,
 } from '@node-sdr/shared';
 import { DongleManager } from './dongle-manager.js';
 import { DecoderManager, type DecoderMessage } from './decoder-manager.js';
@@ -34,6 +41,11 @@ interface ConnectedClient {
   session: ClientSession;
   isAdmin: boolean;
   iqExtractor: IqExtractor | null;
+  /** Per-client codec preferences (default: 'none' = uncompressed) */
+  fftCodec: CodecType;
+  iqCodec: CodecType;
+  /** Per-client ADPCM encoder for IQ stream (stateful, streaming) */
+  iqAdpcmEncoder: ImaAdpcmEncoder | null;
 }
 
 export class WebSocketManager {
@@ -62,6 +74,7 @@ export class WebSocketManager {
         fftSize: profile.fftSize,
         sampleRate: profile.sampleRate,
         averaging: 0.3,
+        targetFps: profile.fftFps,
       }));
     });
 
@@ -86,6 +99,7 @@ export class WebSocketManager {
           fftSize: profile.fftSize,
           sampleRate: profile.sampleRate,
           averaging: 0.3,
+          targetFps: profile.fftFps,
         }));
       }
 
@@ -148,23 +162,60 @@ export class WebSocketManager {
     this.iqBytes += data.length;
     const fftFrames = processor.processIqData(data);
 
-    // Compress and broadcast FFT to all clients subscribed to this dongle.
-    // Uses Uint8 quantization (MSG_FFT_COMPRESSED) with a fixed dB range,
-    // reducing bandwidth ~4x vs Float32 (MSG_FFT). The min/max dB values
-    // are embedded in the message header so clients decompress correctly.
+    // Broadcast FFT to all clients subscribed to this dongle.
+    // Each client gets their preferred codec:
+    //   'none'  → MSG_FFT_COMPRESSED (Uint8 quantization, ~4x reduction)
+    //   'adpcm' → MSG_FFT_ADPCM (ADPCM on Int16 dB×100, ~8x reduction)
     const FFT_MIN_DB = -130;
     const FFT_MAX_DB = 0;
 
     for (const fftData of fftFrames) {
       this.fftCount++;
-      const compressed = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
-      const fftMsg = packCompressedFftMessage(compressed, FFT_MIN_DB, FFT_MAX_DB);
-      this.broadcastToDongle(dongleId, fftMsg);
+
+      // Pre-encode both formats lazily (only if at least one client needs them)
+      let uint8Msg: ArrayBuffer | null = null;
+      let adpcmMsg: ArrayBuffer | null = null;
+
+      for (const client of this.clients.values()) {
+        if (client.session.dongleId !== dongleId) continue;
+        try {
+          const raw = client.ws.raw as any;
+          if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > WebSocketManager.BACKPRESSURE_THRESHOLD) {
+            if (!this.backpressureWarned.has(client.id)) {
+              logger.warn({ clientId: client.id, buffered: raw.bufferedAmount }, 'Backpressure: skipping FFT frame for slow client');
+              this.backpressureWarned.add(client.id);
+            }
+            continue;
+          }
+          if (this.backpressureWarned.has(client.id)) {
+            this.backpressureWarned.delete(client.id);
+          }
+
+          if (client.fftCodec === 'adpcm') {
+            if (!adpcmMsg) {
+              const adpcmPayload = encodeFftAdpcm(fftData, FFT_MIN_DB, FFT_MAX_DB);
+              adpcmMsg = packFftAdpcmMessage(adpcmPayload);
+            }
+            client.ws.send(adpcmMsg);
+          } else {
+            if (!uint8Msg) {
+              const compressed = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+              uint8Msg = packCompressedFftMessage(compressed, FFT_MIN_DB, FFT_MAX_DB);
+            }
+            client.ws.send(uint8Msg);
+          }
+        } catch {
+          // Client may have disconnected
+        }
+      }
     }
 
     // Send per-client IQ sub-band (frequency-shifted + decimated).
     // IQ data is critical for audio continuity, so we use a higher
     // backpressure threshold (1 MB) before dropping.
+    // Each client gets their preferred codec:
+    //   'none'  → MSG_IQ (raw Int16, no compression)
+    //   'adpcm' → MSG_IQ_ADPCM (4:1 compression, streaming state per client)
     const IQ_BACKPRESSURE = 1024 * 1024;
     for (const client of this.clients.values()) {
       if (client.session.dongleId === dongleId && client.iqExtractor) {
@@ -177,7 +228,13 @@ export class WebSocketManager {
           const subBand = client.iqExtractor.process(data);
           if (subBand.length > 0) {
             this.iqOutSamples += subBand.length / 2; // count IQ pairs
-            client.ws.send(packIqMessage(subBand));
+
+            if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
+              const adpcm = client.iqAdpcmEncoder.encode(subBand);
+              client.ws.send(packIqAdpcmMessage(adpcm, subBand.length));
+            } else {
+              client.ws.send(packIqMessage(subBand));
+            }
           }
         } catch {
           // Client may have disconnected
@@ -231,6 +288,9 @@ export class WebSocketManager {
       },
       isAdmin: false,
       iqExtractor: null,
+      fftCodec: 'none',
+      iqCodec: 'none',
+      iqAdpcmEncoder: null,
     };
 
     this.clients.set(clientId, client);
@@ -326,6 +386,10 @@ export class WebSocketManager {
         // Client-side only, acknowledged
         break;
 
+      case 'codec':
+        this.handleCodecChange(client, cmd);
+        break;
+
       case 'admin_auth':
         this.handleAdminAuth(client, cmd.password);
         break;
@@ -405,6 +469,27 @@ export class WebSocketManager {
     if (client.session.dongleId) {
       this.dongleManager.updateClientCount(client.session.dongleId, -1);
       client.session.dongleId = '';
+    }
+  }
+
+  private handleCodecChange(client: ConnectedClient, cmd: ClientCommand & { cmd: 'codec' }): void {
+    if (cmd.fftCodec !== undefined) {
+      client.fftCodec = cmd.fftCodec;
+      logger.info({ clientId: client.id, fftCodec: cmd.fftCodec }, 'Client FFT codec changed');
+    }
+    if (cmd.iqCodec !== undefined) {
+      client.iqCodec = cmd.iqCodec;
+      if (cmd.iqCodec === 'adpcm') {
+        // Create or reset per-client ADPCM encoder
+        if (!client.iqAdpcmEncoder) {
+          client.iqAdpcmEncoder = new ImaAdpcmEncoder();
+        } else {
+          client.iqAdpcmEncoder.reset();
+        }
+      } else {
+        client.iqAdpcmEncoder = null;
+      }
+      logger.info({ clientId: client.id, iqCodec: cmd.iqCodec }, 'Client IQ codec changed');
     }
   }
 

@@ -9,14 +9,19 @@ import {
   unpackBinaryMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
+  MSG_FFT_ADPCM,
   MSG_IQ,
+  MSG_IQ_ADPCM,
   MSG_AUDIO,
   MSG_META,
   MSG_DECODER,
   MSG_SIGNAL_LEVEL,
   DEMOD_MODES,
+  ImaAdpcmDecoder,
+  decodeFftAdpcm,
   type ServerMeta,
   type ClientCommand,
+  type CodecType,
   type DemodMode,
 } from '@node-sdr/shared';
 import { WaterfallRenderer } from './waterfall.js';
@@ -35,6 +40,9 @@ export class SdrEngine {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
+
+  // ADPCM decoder for IQ sub-band (stateful, streaming)
+  private iqAdpcmDecoder = new ImaAdpcmDecoder();
 
   // Auto-range tracking
   private autoRangeMin = -60;
@@ -211,6 +219,26 @@ export class SdrEngine {
         break;
       }
 
+      case MSG_FFT_ADPCM: {
+        this.bwFftFrames++;
+        // Decode ADPCM-compressed FFT: Int16 (dB×100) with warmup padding → Float32 dB
+        const fftData = decodeFftAdpcm(payload);
+
+        if (store.waterfallAutoRange()) {
+          this.updateAutoRange(fftData);
+        }
+        this.updateSignalLevel(fftData);
+
+        this.waterfall?.drawRow(fftData);
+        this.spectrum?.draw(fftData);
+        this.spectrum?.drawTuningIndicator(
+          store.tuneOffset(),
+          store.bandwidth(),
+          store.sampleRate(),
+        );
+        break;
+      }
+
       case MSG_AUDIO: {
         const audioData = new Int16Array(payload);
         this.audio.pushAudio(audioData);
@@ -280,6 +308,54 @@ export class SdrEngine {
           this.iqInCount = 0;
           this.audioOutCount = 0;
           this.lastAudioLog = now;
+        }
+        break;
+      }
+
+      case MSG_IQ_ADPCM: {
+        // ADPCM-compressed IQ sub-band: decode nibbles → Int16 interleaved I/Q
+        const iqHeaderView = new DataView(payload);
+        const sampleCount = iqHeaderView.getUint32(0, true);
+        const adpcmData = new Uint8Array(payload, 4);
+        const decoded = this.iqAdpcmDecoder.decode(adpcmData);
+        // Trim to exact sample count (ADPCM may produce +1 sample if odd count)
+        const iqData = sampleCount < decoded.length ? decoded.subarray(0, sampleCount) : decoded;
+        this.bwIqSamples += iqData.length / 2;
+
+        // Reuse the same demodulation path as MSG_IQ
+        const squelchLevel2 = store.squelch();
+        const inGracePeriod2 = performance.now() < this.squelchBypassUntil;
+        const squelchOpen2 = squelchLevel2 === null || inGracePeriod2 || store.signalLevel() >= squelchLevel2;
+
+        const stereoAllowed2 = store.stereoEnabled()
+          && this.demodulator.stereoCapable
+          && this.demodulator.processStereo != null
+          && store.signalLevel() >= store.stereoThreshold();
+
+        if (stereoAllowed2) {
+          const stereoResult = this.demodulator.processStereo!(iqData);
+          this.iqInCount += iqData.length / 2;
+          if (stereoResult.stereo) {
+            this.audioOutCount += stereoResult.left.length;
+            if (stereoResult.left.length > 0 && squelchOpen2) {
+              this.audio.pushStereoAudio(stereoResult.left, stereoResult.right);
+            }
+            if (!store.stereoDetected()) store.setStereoDetected(true);
+          } else {
+            this.audioOutCount += stereoResult.left.length;
+            if (stereoResult.left.length > 0 && squelchOpen2) {
+              this.audio.pushDemodulatedAudio(stereoResult.left);
+            }
+            if (store.stereoDetected()) store.setStereoDetected(false);
+          }
+        } else {
+          const audioSamples = this.demodulator.process(iqData);
+          this.iqInCount += iqData.length / 2;
+          this.audioOutCount += audioSamples.length;
+          if (audioSamples.length > 0 && squelchOpen2) {
+            this.audio.pushDemodulatedAudio(audioSamples);
+          }
+          if (store.stereoDetected()) store.setStereoDetected(false);
         }
         break;
       }
@@ -458,8 +534,13 @@ export class SdrEngine {
             this.demodulator.setInputSampleRate(meta.iqSampleRate);
           }
         }
-        // Flush audio on new subscription
+        // Flush audio on new subscription and reset ADPCM decoder
         this.audio.resetBuffer();
+        this.iqAdpcmDecoder.reset();
+        // Re-send codec preferences so the server applies them to this subscription
+        if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
+          this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
+        }
         break;
 
       case 'profile_changed':
@@ -645,6 +726,20 @@ export class SdrEngine {
     if (store.signalLevel() < dB && store.stereoDetected()) {
       store.setStereoDetected(false);
     }
+  }
+
+  // ---- Codec Settings ----
+
+  setFftCodec(codec: CodecType): void {
+    store.setFftCodec(codec);
+    this.send({ cmd: 'codec', fftCodec: codec });
+  }
+
+  setIqCodec(codec: CodecType): void {
+    store.setIqCodec(codec);
+    // Reset ADPCM decoder when switching codecs
+    this.iqAdpcmDecoder.reset();
+    this.send({ cmd: 'codec', iqCodec: codec });
   }
 
   // ---- Display Settings ----
