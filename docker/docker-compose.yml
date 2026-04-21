@@ -8,9 +8,11 @@
 
 services:
   node-sdr:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    image: ghcr.io/gbozo/no-sdr:latest
+    # To build locally instead of pulling, uncomment below and comment out image:
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
     ports:
       - "3000:3000"
     volumes:
