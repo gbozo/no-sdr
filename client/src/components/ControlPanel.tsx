@@ -44,7 +44,7 @@ const ControlPanel: Component = () => {
 
 // ---- Mode Selector ----
 const ModeSelector: Component = () => {
-  const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'am-stereo', 'usb', 'lsb', 'cw', 'raw'];
+  const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw'];
 
   return (
     <div class="sdr-panel">
@@ -97,15 +97,18 @@ const AudioControls: Component = () => {
     <div class="sdr-panel">
       <div class="sdr-panel-header">
         <span>Audio</span>
-        {/* Stereo indicator — only visible when mode is WFM */}
-        <Show when={store.mode() === 'wfm'}>
+        {/* Stereo indicator — visible for WFM, AM (auto-detected), and AM Stereo */}
+        <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
           <span
             class={`ml-auto text-[9px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded border transition-all duration-500 ${
               store.stereoDetected()
                 ? 'text-green border-green/40 bg-green-dim shadow-[0_0_6px_rgba(56,193,128,0.3)]'
                 : 'text-text-muted border-border bg-transparent opacity-50'
             }`}
-            title={store.stereoDetected() ? 'Stereo pilot detected (19 kHz)' : 'No stereo pilot'}
+            title={store.stereoDetected()
+              ? (store.mode() === 'wfm' ? 'Stereo pilot detected (19 kHz)' : 'C-QUAM stereo pilot detected (25 Hz)')
+              : (store.mode() === 'wfm' ? 'No stereo pilot' : 'No C-QUAM stereo pilot')
+            }
           >
             STEREO
           </span>
@@ -180,8 +183,8 @@ const AudioControls: Component = () => {
           </button>
         </div>
 
-        {/* Stereo Settings (WFM only) */}
-        <Show when={store.mode() === 'wfm'}>
+        {/* Stereo Settings (WFM, AM, AM Stereo) */}
+        <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
           <div class="space-y-2">
             <div class="flex justify-between items-center">
               <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">

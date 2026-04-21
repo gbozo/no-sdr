@@ -796,7 +796,7 @@ class FmDemodulator implements Demodulator {
 class AmDemodulator implements Demodulator {
   readonly name = 'AM';
   readonly mode: DemodMode = 'am';
-  readonly stereoCapable = false;
+  stereoCapable = false;
 
   private dcBlocker: DcBlocker;
   private agc: Agc;
@@ -804,51 +804,182 @@ class AmDemodulator implements Demodulator {
   private inputSampleRate: number;
   private outputSampleRate = 48000;
 
+  // C-QUAM stereo detection: two-stage verification
+  // Stage 1: 25 Hz Goertzel pilot detector (cheap, runs always)
+  private gCoeff = 0;
+  private gS1 = 0;
+  private gS2 = 0;
+  private gBlockSize = 0;
+  private gSampleCount = 0;
+  private pilotMag = 0;
+  private pilotCandidate = false;
+
+  // Stage 2: C-QUAM PLL lock verification (runs only when pilot candidate)
+  private cquamDemod: CQuamDemodulator | null = null;
+  private verifyCount = 0;        // how many chunks we've fed to C-QUAM for verification
+  private readonly VERIFY_CHUNKS = 15; // ~0.5s of verification before declaring stereo
+  private stereoConfirmed = false;
+
   constructor() {
     this.inputSampleRate = 48_000;
     this.dcBlocker = new DcBlocker();
     this.agc = new Agc(0.3);
     this.lpFilter = new FirFilter(31, 4000 / this.inputSampleRate);
+    this.computeGoertzelCoeff();
+  }
+
+  private computeGoertzelCoeff(): void {
+    this.gCoeff = 2 * Math.cos(2 * Math.PI * 25 / this.inputSampleRate);
+    this.gBlockSize = Math.round(this.inputSampleRate * 0.08); // 80ms blocks
+  }
+
+  /** Stage 1: 25 Hz Goertzel on IQ phase — detects pilot candidate */
+  private detectPilotCandidate(iq: Int16Array): void {
+    const n = iq.length >> 1;
+    const scale = 1 / 32768;
+
+    for (let i = 0; i < n; i++) {
+      const I = iq[i * 2] * scale;
+      const Q = iq[i * 2 + 1] * scale;
+      const env = Math.abs(I) + 0.4 * Math.abs(Q) + 1e-9;
+      const phase = Q / env;
+
+      const s0 = phase + this.gCoeff * this.gS1 - this.gS2;
+      this.gS2 = this.gS1;
+      this.gS1 = s0;
+      this.gSampleCount++;
+
+      if (this.gSampleCount >= this.gBlockSize) {
+        const power = this.gS1 * this.gS1 + this.gS2 * this.gS2 - this.gS1 * this.gS2 * this.gCoeff;
+        this.pilotMag = 0.85 * this.pilotMag + 0.15 * (Math.sqrt(Math.max(0, power)) / this.gSampleCount);
+        this.gS1 = 0;
+        this.gS2 = 0;
+        this.gSampleCount = 0;
+
+        // Pilot candidate: moderately strong 25 Hz in phase domain
+        if (this.pilotMag > 0.005) {
+          if (!this.pilotCandidate) {
+            this.pilotCandidate = true;
+            this.verifyCount = 0;
+            // Lazy-init C-QUAM demodulator for verification
+            if (!this.cquamDemod) {
+              this.cquamDemod = new CQuamDemodulator();
+              this.cquamDemod.setInputSampleRate(this.inputSampleRate);
+            } else {
+              this.cquamDemod.reset();
+            }
+          }
+        } else if (this.pilotMag < 0.002) {
+          this.pilotCandidate = false;
+          if (this.stereoConfirmed) {
+            this.stereoConfirmed = false;
+            this.stereoCapable = false;
+          }
+        }
+      }
+    }
+  }
+
+  /** Stage 2: verify C-QUAM PLL lock — confirms real C-QUAM stereo */
+  private verifyCquamLock(iq: Int16Array): void {
+    if (!this.cquamDemod) return;
+
+    // Feed IQ to C-QUAM demod (result discarded, we just need the PLL state)
+    this.cquamDemod.processStereo(iq);
+    this.verifyCount++;
+
+    if (this.verifyCount >= this.VERIFY_CHUNKS) {
+      // Check if PLL actually locked AND pilot detected by C-QUAM's own Goertzel
+      if (this.cquamDemod.lockLevel > 0.7 && this.cquamDemod.pilotMag > 0.001) {
+        if (!this.stereoConfirmed) {
+          this.stereoConfirmed = true;
+          this.stereoCapable = true;
+        }
+      } else {
+        // PLL didn't lock — false alarm, not C-QUAM
+        this.pilotCandidate = false;
+        if (this.stereoConfirmed) {
+          this.stereoConfirmed = false;
+          this.stereoCapable = false;
+        }
+      }
+      // Keep verifying periodically (every VERIFY_CHUNKS)
+      this.verifyCount = this.VERIFY_CHUNKS - 5; // re-check every ~5 chunks
+    }
   }
 
   process(iq: Int16Array): Float32Array {
+    // Stage 1: always run pilot detection
+    this.detectPilotCandidate(iq);
+
+    // Stage 2: if pilot candidate found but not yet confirmed, run verification
+    if (this.pilotCandidate && !this.stereoConfirmed) {
+      this.verifyCquamLock(iq);
+    }
+
     const [iSamples, qSamples] = iqInt16ToFloat(iq);
     const n = iSamples.length;
     const output = new Float32Array(n);
 
     for (let k = 0; k < n; k++) {
-      // Envelope detection
       let sample = Math.sqrt(iSamples[k] * iSamples[k] + qSamples[k] * qSamples[k]);
-
-      // Low-pass filter
       sample = this.lpFilter.process(sample);
-
-      // Remove DC offset (envelope has a large DC component)
       sample = this.dcBlocker.process(sample);
-
-      // AGC
       sample = this.agc.process(sample);
-
       output[k] = sample;
     }
 
     return output;
   }
 
+  processStereo(iq: Int16Array): StereoAudio {
+    // Run pilot detection (stage 1 still needed for ongoing monitoring)
+    this.detectPilotCandidate(iq);
+
+    // Delegate to C-QUAM demodulator when confirmed
+    if (this.stereoConfirmed && this.cquamDemod) {
+      const result = this.cquamDemod.processStereo(iq);
+
+      // Continuously verify lock — if PLL loses lock, revert to mono
+      if (this.cquamDemod.lockLevel < 0.4) {
+        this.stereoConfirmed = false;
+        this.stereoCapable = false;
+        this.pilotCandidate = false;
+      }
+
+      return result;
+    }
+    // Fallback: mono as dual-mono
+    const mono = this.process(iq);
+    return { left: mono, right: new Float32Array(mono), stereo: false };
+  }
+
   reset(): void {
     this.dcBlocker.reset();
     this.agc.reset();
     this.lpFilter.reset();
+    this.gS1 = 0;
+    this.gS2 = 0;
+    this.gSampleCount = 0;
+    this.pilotMag = 0;
+    this.pilotCandidate = false;
+    this.stereoConfirmed = false;
+    this.stereoCapable = false;
+    this.verifyCount = 0;
+    this.cquamDemod?.reset();
   }
 
   setInputSampleRate(rate: number): void {
     this.inputSampleRate = rate;
     this.lpFilter.design(4000 / this.inputSampleRate);
+    this.computeGoertzelCoeff();
+    this.cquamDemod?.setInputSampleRate(rate);
   }
 
   setBandwidth(hz: number): void {
     const cutoff = Math.min(hz / 2, 5000);
     this.lpFilter.design(cutoff / this.inputSampleRate);
+    this.cquamDemod?.setBandwidth(hz);
   }
 }
 
