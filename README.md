@@ -46,7 +46,7 @@
 
 **no-sdr** turns cheap RTL-SDR USB dongles into a full-featured web-based radio receiver. Multiple users connect through their browser and independently tune, demodulate, and listen to signals — all sharing the same hardware. No plugins, no installs, just open a URL.
 
-Think of it as your own private [WebSDR](http://websdr.org) that you can run at home, in a hackerspace, or on a cloud VM with a remote antenna.
+Think of it as your own private, open [WebSDR](http://websdr.org) that you can run at home, in a hackerspace, or on a docker container (compose). Works in Raspberry Pi too. 
 
 *Made with ❤️ and patience, your friend George*
 
@@ -54,7 +54,7 @@ Think of it as your own private [WebSDR](http://websdr.org) that you can run at 
 
 ### Radio
 
-- **7 analog demodulation modes** — WFM (stereo), NFM, AM, USB, LSB, CW, Raw IQ
+- **7 analog demodulation modes** — WFM (stereo, RDS), NFM, AM (stereo), USB, LSB, CW, Raw IQ
 - **Stereo FM** — PLL-based 19kHz pilot detection, L-R DSB-SC demodulation with SNR-proportional stereo blend
 - **AM Stereo (C-QUAM) [EXPERIMENTAL]** — auto-detected in AM mode via two-stage verification (25Hz Goertzel pilot + PLL lock confirmation). When a C-QUAM station is detected, stereo decoding activates automatically. *This feature needs testers with access to C-QUAM AM stereo broadcasts — please report results via GitHub issues!*
 - **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
