@@ -39,10 +39,13 @@ export const MSG_FFT_ADPCM = 0x08;
 /** ADPCM-compressed IQ — Int16 interleaved I/Q encoded as IMA-ADPCM nibbles */
 export const MSG_IQ_ADPCM = 0x09;
 
+/** Deflate-compressed FFT — delta-encoded Uint8 dB values compressed with raw deflate */
+export const MSG_FFT_DEFLATE = 0x0B;
+
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT and IQ data */
-export type CodecType = 'none' | 'adpcm';
+export type CodecType = 'none' | 'adpcm' | 'deflate';
 
 // ---- Client Command Types ----
 
@@ -185,6 +188,28 @@ export function packIqAdpcmMessage(adpcmData: Uint8Array, sampleCount: number): 
   view.setUint8(0, MSG_IQ_ADPCM);
   view.setUint32(1, sampleCount, true); // little-endian
   new Uint8Array(buf, 5).set(adpcmData);
+  return buf;
+}
+
+/**
+ * Pack deflate-compressed FFT data into a binary message.
+ * Header: [type 0x0B] [Int16 minDb LE] [Int16 maxDb LE] [Uint16 binCount LE] [deflate payload]
+ * The deflate payload contains delta-encoded Uint8 dB values compressed with raw deflate.
+ * Delta encoding: first byte is absolute, subsequent bytes are (current - previous) as Int8.
+ */
+export function packFftDeflateMessage(
+  deflatePayload: Uint8Array,
+  minDb: number,
+  maxDb: number,
+  binCount: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(1 + 8 + deflatePayload.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_DEFLATE);
+  view.setInt16(1, Math.round(minDb), true);
+  view.setInt16(3, Math.round(maxDb), true);
+  view.setUint32(5, binCount, true);
+  new Uint8Array(buf, 9).set(deflatePayload);
   return buf;
 }
 

@@ -97,7 +97,7 @@ dongles:
         centerFrequency: 100000000    # 100 MHz
         sampleRate: 2400000
         fftSize: 8192
-        fftFps: 30
+        fftFps: 8
         defaultMode: wfm
         defaultTuneOffset: 0
         defaultBandwidth: 200000

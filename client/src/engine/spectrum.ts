@@ -78,14 +78,34 @@ export class SpectrumRenderer {
       ctx.fillText(`${db}`, 4, y - 2);
     }
 
+    // Precompute per-pixel dB values with peak-hold binning
+    const binsPerPixel = bins / w;
+    const pixelDb = new Float32Array(w);
+    for (let x = 0; x < w; x++) {
+      let db: number;
+      if (binsPerPixel <= 1) {
+        const binIdx = (x / (w - 1)) * (bins - 1);
+        const lo = Math.floor(binIdx);
+        const hi = Math.min(lo + 1, bins - 1);
+        const frac = binIdx - lo;
+        db = fftData[lo] + frac * (fftData[hi] - fftData[lo]);
+      } else {
+        const binStart = Math.floor(x * binsPerPixel);
+        const binEnd = Math.min(Math.floor((x + 1) * binsPerPixel), bins);
+        db = fftData[binStart];
+        for (let b = binStart + 1; b < binEnd; b++) {
+          if (fftData[b] > db) db = fftData[b];
+        }
+      }
+      pixelDb[x] = db;
+    }
+
     // Spectrum line + fill
     ctx.beginPath();
     ctx.moveTo(0, h);
 
     for (let x = 0; x < w; x++) {
-      const binIdx = Math.floor((x / (w - 1)) * (bins - 1));
-      const db = fftData[binIdx];
-      const normalized = (db - this.minDb) / range;
+      const normalized = (pixelDb[x] - this.minDb) / range;
       const y = h - Math.max(0, Math.min(1, normalized)) * h;
       ctx.lineTo(x, y);
     }
@@ -101,9 +121,7 @@ export class SpectrumRenderer {
     // Draw line on top
     ctx.beginPath();
     for (let x = 0; x < w; x++) {
-      const binIdx = Math.floor((x / (w - 1)) * (bins - 1));
-      const db = fftData[binIdx];
-      const normalized = (db - this.minDb) / range;
+      const normalized = (pixelDb[x] - this.minDb) / range;
       const y = h - Math.max(0, Math.min(1, normalized)) * h;
       if (x === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);

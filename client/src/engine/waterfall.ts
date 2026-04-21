@@ -52,7 +52,6 @@ export class WaterfallRenderer {
     const h = this.h;
 
     // Scroll existing content down by 1 pixel using getImageData/putImageData
-    // This avoids the drawImage self-reference issue entirely
     const existing = this.ctx.getImageData(0, 0, w, h - 1);
     this.ctx.putImageData(existing, 0, 1);
 
@@ -67,10 +66,27 @@ export class WaterfallRenderer {
 
     if (range === 0) return;
 
+    // Precompute bin-to-pixel mapping scale
+    const binsPerPixel = bins / w;
+
     for (let x = 0; x < w; x++) {
-      // Map pixel x to FFT bin index
-      const binIdx = Math.floor((x / (w - 1)) * (bins - 1));
-      const db = fftData[binIdx];
+      let db: number;
+      if (binsPerPixel <= 1) {
+        // More pixels than bins — interpolate
+        const binIdx = (x / (w - 1)) * (bins - 1);
+        const lo = Math.floor(binIdx);
+        const hi = Math.min(lo + 1, bins - 1);
+        const frac = binIdx - lo;
+        db = fftData[lo] + frac * (fftData[hi] - fftData[lo]);
+      } else {
+        // More bins than pixels — peak-hold (max) across mapped bins
+        const binStart = Math.floor(x * binsPerPixel);
+        const binEnd = Math.min(Math.floor((x + 1) * binsPerPixel), bins);
+        db = fftData[binStart];
+        for (let b = binStart + 1; b < binEnd; b++) {
+          if (fftData[b] > db) db = fftData[b];
+        }
+      }
 
       // Normalize to 0-255 palette index
       const normalized = (db - this.minDb) / range;

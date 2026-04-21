@@ -10,6 +10,7 @@ import {
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
+  MSG_FFT_DEFLATE,
   MSG_IQ,
   MSG_IQ_ADPCM,
   MSG_AUDIO,
@@ -24,6 +25,7 @@ import {
   type CodecType,
   type DemodMode,
 } from '@node-sdr/shared';
+import { inflateSync } from 'fflate';
 import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
 import { AudioEngine } from './audio.js';
@@ -90,7 +92,6 @@ export class SdrEngine {
   private attachRdsCallback(): void {
     if (this.demodulator.setRdsCallback) {
       this.demodulator.setRdsCallback((data: RdsData) => {
-        console.log('[RDS]', JSON.stringify(data));
         store.setRdsPs(data.ps);
         store.setRdsRt(data.rt);
         store.setRdsPty(data.ptyName);
@@ -277,6 +278,50 @@ export class SdrEngine {
           store.bandwidth(),
           store.sampleRate(),
         );
+        break;
+      }
+
+      case MSG_FFT_DEFLATE: {
+        this.bwFftFrames++;
+        this.bwFftWireBytes += payload.byteLength;
+        try {
+          // Header: [Int16 minDb LE] [Int16 maxDb LE] [Uint32 binCount LE] [deflate payload]
+          const headerView = new DataView(payload);
+          const deflMinDb = headerView.getInt16(0, true);
+          const deflMaxDb = headerView.getInt16(2, true);
+          const binCount = headerView.getUint32(4, true);
+          const deflPayload = new Uint8Array(payload, 8);
+          // Inflate the raw deflate payload
+          const delta = inflateSync(deflPayload);
+          // Undo delta encoding → Uint8 dB values
+          const uint8Bins = new Uint8Array(binCount);
+          uint8Bins[0] = delta[0];
+          for (let i = 1; i < binCount; i++) {
+            uint8Bins[i] = (uint8Bins[i - 1] + delta[i]) & 0xFF;
+          }
+          // Convert Uint8 (0-255) → Float32 dB using header min/max
+          const deflRange = deflMaxDb - deflMinDb;
+          const deflFftData = new Float32Array(binCount);
+          for (let i = 0; i < binCount; i++) {
+            deflFftData[i] = deflMinDb + (uint8Bins[i] / 255) * deflRange;
+          }
+          this.bwFftRawBytes += deflFftData.length * 4;
+
+          if (store.waterfallAutoRange()) {
+            this.updateAutoRange(deflFftData);
+          }
+          this.updateSignalLevel(deflFftData);
+
+          this.waterfall?.drawRow(deflFftData);
+          this.spectrum?.draw(deflFftData);
+          this.spectrum?.drawTuningIndicator(
+            store.tuneOffset(),
+            store.bandwidth(),
+            store.sampleRate(),
+          );
+        } catch (e) {
+          console.error('[FFT_DEFLATE] decode error:', e);
+        }
         break;
       }
 

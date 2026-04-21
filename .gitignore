@@ -33,3 +33,4 @@ logs/
 
 # Serena
 .serena/
+scripts/*.bin

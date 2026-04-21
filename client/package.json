@@ -1,6 +1,6 @@
 {
   "name": "@node-sdr/client",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@node-sdr/shared": "*",
+    "fflate": "^0.8.2",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {

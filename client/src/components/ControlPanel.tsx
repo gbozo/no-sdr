@@ -86,6 +86,29 @@ const ModeSelector: Component = () => {
             class="sdr-range"
           />
         </div>
+
+        {/* Squelch */}
+        <div class="mt-3 pt-2 border-t border-border/40">
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Squelch
+            </label>
+            <span class="text-[9px] font-mono text-text-dim">
+              {store.squelch() !== null ? `${store.squelch()} dB` : 'Off'}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={-150}
+            max={0}
+            value={store.squelch() ?? -150}
+            onInput={(e) => {
+              const val = parseInt(e.currentTarget.value);
+              engine.setSquelch(val <= -150 ? null : val);
+            }}
+            class="sdr-range"
+          />
+        </div>
       </div>
     </div>
   );
@@ -288,28 +311,6 @@ const AudioControls: Component = () => {
           </div>
         </div>
 
-        {/* Squelch */}
-        <div>
-          <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Squelch
-            </label>
-            <span class="text-[9px] font-mono text-text-dim">
-              {store.squelch() !== null ? `${store.squelch()} dB` : 'Off'}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={-150}
-            max={0}
-            value={store.squelch() ?? -150}
-            onInput={(e) => {
-              const val = parseInt(e.currentTarget.value);
-              engine.setSquelch(val <= -150 ? null : val);
-            }}
-            class="sdr-range"
-          />
-        </div>
       </div>
     </div>
   );
@@ -946,6 +947,7 @@ const CodecSettings: Component = () => {
   const fftCodecs: { value: CodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
+    { value: 'deflate', label: 'Deflate' },
   ];
 
   const iqCodecs: { value: CodecType; label: string }[] = [

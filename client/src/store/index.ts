@@ -75,7 +75,7 @@ function createStore() {
   const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
 
   // ---- Codec Preferences ----
-  const [fftCodec, setFftCodec] = createSignal<CodecType>('adpcm');
+  const [fftCodec, setFftCodec] = createSignal<CodecType>('deflate');
   const [iqCodec, setIqCodec] = createSignal<CodecType>('adpcm');
 
   // ---- Bandwidth / Throughput Metrics ----

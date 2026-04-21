@@ -6,6 +6,7 @@
 // ============================================================
 
 import type { WSContext } from 'hono/ws';
+import { deflateRawSync } from 'node:zlib';
 import {
   type ClientCommand,
   type CodecType,
@@ -19,10 +20,12 @@ import {
   compressFft,
   packIqMessage,
   packFftAdpcmMessage,
+  packFftDeflateMessage,
   packIqAdpcmMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
+  MSG_FFT_DEFLATE,
   MSG_IQ,
   MSG_IQ_ADPCM,
   MSG_DECODER,
@@ -172,9 +175,12 @@ export class WebSocketManager {
     for (const fftData of fftFrames) {
       this.fftCount++;
 
-      // Pre-encode both formats lazily (only if at least one client needs them)
+      // Pre-encode formats lazily (only if at least one client needs them)
       let uint8Msg: ArrayBuffer | null = null;
       let adpcmMsg: ArrayBuffer | null = null;
+      let deflateMsg: ArrayBuffer | null = null;
+      // Shared Uint8 quantized FFT (used by both 'none' and 'deflate' codecs)
+      let uint8Data: Uint8Array | null = null;
 
       for (const client of this.clients.values()) {
         if (client.session.dongleId !== dongleId) continue;
@@ -197,10 +203,31 @@ export class WebSocketManager {
               adpcmMsg = packFftAdpcmMessage(adpcmPayload);
             }
             client.ws.send(adpcmMsg);
+          } else if (client.fftCodec === 'deflate') {
+            if (!deflateMsg) {
+              // Quantize to Uint8, delta-encode, then deflate compress
+              if (!uint8Data) {
+                uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+              }
+              // Delta encode: first byte absolute, rest are (current - prev) as Int8
+              const delta = Buffer.allocUnsafe(uint8Data.length);
+              delta[0] = uint8Data[0];
+              for (let i = 1; i < uint8Data.length; i++) {
+                delta[i] = (uint8Data[i] - uint8Data[i - 1]) & 0xFF; // wrapping subtraction as uint8
+              }
+              const deflated = deflateRawSync(delta, { level: 6 });
+              deflateMsg = packFftDeflateMessage(
+                new Uint8Array(deflated.buffer, deflated.byteOffset, deflated.byteLength),
+                FFT_MIN_DB, FFT_MAX_DB, uint8Data.length,
+              );
+            }
+            client.ws.send(deflateMsg);
           } else {
             if (!uint8Msg) {
-              const compressed = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
-              uint8Msg = packCompressedFftMessage(compressed, FFT_MIN_DB, FFT_MAX_DB);
+              if (!uint8Data) {
+                uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+              }
+              uint8Msg = packCompressedFftMessage(uint8Data, FFT_MIN_DB, FFT_MAX_DB);
             }
             client.ws.send(uint8Msg);
           }
@@ -249,7 +276,7 @@ export class WebSocketManager {
       const elapsed = (now - this.lastLogTime) / 1000;
       const iqSamplesPerSec = Math.round(this.iqBytes / 2 / elapsed); // 2 bytes per IQ pair (uint8 I + uint8 Q)
       const iqOutSPS = Math.round(this.iqOutSamples / elapsed);
-      logger.info({
+      logger.debug({
         dongleId,
         iqChunks: this.iqCount,
         fftFrames: this.fftCount,
