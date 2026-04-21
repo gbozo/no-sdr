@@ -42,6 +42,15 @@ import { IqExtractor, getOutputSampleRate } from './iq-extractor.js';
 import { OpusAudioPipeline } from './opus-audio.js';
 import { logger } from './logger.js';
 
+/**
+ * Target IQ chunk duration in seconds.
+ * Server accumulates IQ extractor output into fixed-size chunks before sending.
+ * This ensures the client receives evenly-sized pieces regardless of how data
+ * arrives from the dongle (variable TCP/pipe chunks). Reduces jitter and
+ * improves audio continuity in the client AudioWorklet.
+ */
+const IQ_CHUNK_DURATION_S = 0.020; // 20ms — matches Opus frame size
+
 interface ConnectedClient {
   id: string;
   ws: WSContext;
@@ -55,6 +64,12 @@ interface ConnectedClient {
   iqAdpcmEncoder: ImaAdpcmEncoder | null;
   /** Per-client Opus audio pipeline (server-side demod + encode) */
   opusPipeline: OpusAudioPipeline | null;
+  /** IQ accumulation buffer for fixed-chunk sending (non-Opus codecs only) */
+  iqAccumBuffer: Int16Array | null;
+  /** Current write position in iqAccumBuffer (in Int16 elements) */
+  iqAccumPos: number;
+  /** Target chunk size in Int16 elements (IQ pairs × 2) */
+  iqAccumTarget: number;
 }
 
 export class WebSocketManager {
@@ -264,16 +279,15 @@ export class WebSocketManager {
             this.iqOutSamples += subBand.length / 2; // count IQ pairs
 
             if (client.iqCodec === 'opus' && client.opusPipeline) {
-              // Server-side demod + Opus encode
+              // Opus: server-side demod + Opus encode (has its own frame accumulation)
               const packets = client.opusPipeline.process(subBand);
               for (const { packet, samples, stereo } of packets) {
                 client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
               }
-            } else if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
-              const adpcm = client.iqAdpcmEncoder.encode(subBand);
-              client.ws.send(packIqAdpcmMessage(adpcm, subBand.length));
             } else {
-              client.ws.send(packIqMessage(subBand));
+              // IQ path (none/adpcm): accumulate into fixed-size chunks
+              // before sending to reduce client-side jitter
+              this.accumulateAndSendIq(client, subBand);
             }
           }
         } catch {
@@ -334,6 +348,9 @@ export class WebSocketManager {
       iqCodec: 'none',
       iqAdpcmEncoder: null,
       opusPipeline: null,
+      iqAccumBuffer: null,
+      iqAccumPos: 0,
+      iqAccumTarget: 0,
     };
 
     this.clients.set(clientId, client);
@@ -403,18 +420,23 @@ export class WebSocketManager {
         client.session.tuneOffset = cmd.offset;
         client.iqExtractor?.setTuneOffset(cmd.offset);
         client.iqExtractor?.reset();
+        // Flush IQ accumulation buffer to avoid stale data across tune
+        client.iqAccumPos = 0;
         break;
 
-      case 'mode':
+      case 'mode': {
         client.session.mode = cmd.mode as any;
-        client.iqExtractor?.setOutputSampleRate(getOutputSampleRate(cmd.mode));
+        const newRate = getOutputSampleRate(cmd.mode);
+        client.iqExtractor?.setOutputSampleRate(newRate);
         client.iqExtractor?.reset();
+        // Reset IQ accumulation buffer for new sample rate
+        this.resetIqAccumBuffer(client, newRate);
         // Update Opus pipeline for new mode/rate
         if (client.opusPipeline) {
-          const iqRate = getOutputSampleRate(cmd.mode);
-          client.opusPipeline.setMode(cmd.mode as DemodMode, iqRate);
+          client.opusPipeline.setMode(cmd.mode as DemodMode, newRate);
         }
         break;
+      }
 
       case 'bandwidth':
         client.session.bandwidth = cmd.hz;
@@ -473,6 +495,61 @@ export class WebSocketManager {
     }
   }
 
+  /**
+   * Reset the IQ accumulation buffer for a client.
+   * The buffer size targets IQ_CHUNK_DURATION_S of IQ data at the given sample rate.
+   * For WFM at 240kHz: 20ms × 240000 = 4800 IQ pairs = 9600 Int16 values.
+   * For NFM at 48kHz: 20ms × 48000 = 960 IQ pairs = 1920 Int16 values.
+   */
+  private resetIqAccumBuffer(client: ConnectedClient, sampleRate: number): void {
+    const iqPairs = Math.round(sampleRate * IQ_CHUNK_DURATION_S);
+    const int16Elements = iqPairs * 2; // I + Q per pair
+    client.iqAccumBuffer = new Int16Array(int16Elements);
+    client.iqAccumPos = 0;
+    client.iqAccumTarget = int16Elements;
+  }
+
+  /**
+   * Accumulate IQ data and send fixed-size chunks.
+   * Copies subBand data into the accumulation buffer and sends a message
+   * every time the buffer reaches the target size.
+   */
+  private accumulateAndSendIq(client: ConnectedClient, subBand: Int16Array): void {
+    if (!client.iqAccumBuffer) {
+      // No accumulation buffer — send directly (shouldn't happen)
+      this.sendIqDirect(client, subBand);
+      return;
+    }
+
+    let offset = 0;
+    while (offset < subBand.length) {
+      const remaining = client.iqAccumTarget - client.iqAccumPos;
+      const toCopy = Math.min(remaining, subBand.length - offset);
+
+      client.iqAccumBuffer.set(subBand.subarray(offset, offset + toCopy), client.iqAccumPos);
+      client.iqAccumPos += toCopy;
+      offset += toCopy;
+
+      if (client.iqAccumPos >= client.iqAccumTarget) {
+        // Buffer full — send the fixed-size chunk
+        this.sendIqDirect(client, client.iqAccumBuffer);
+        client.iqAccumPos = 0;
+      }
+    }
+  }
+
+  /**
+   * Send IQ data directly using the client's selected codec.
+   */
+  private sendIqDirect(client: ConnectedClient, iqData: Int16Array): void {
+    if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
+      const adpcm = client.iqAdpcmEncoder.encode(iqData);
+      client.ws.send(packIqAdpcmMessage(adpcm, iqData.length));
+    } else {
+      client.ws.send(packIqMessage(iqData));
+    }
+  }
+
   private handleSubscribe(client: ConnectedClient, dongleId: string, profileId?: string): void {
     // Unsubscribe from previous dongle
     if (client.session.dongleId) {
@@ -510,6 +587,9 @@ export class WebSocketManager {
       tuneOffset: profile.defaultTuneOffset,
     });
 
+    // Set up IQ accumulation buffer for fixed-chunk sending
+    this.resetIqAccumBuffer(client, iqOutputRate);
+
     this.sendMeta(client.ws, {
       type: 'subscribed',
       dongleId,
@@ -545,6 +625,8 @@ export class WebSocketManager {
       client.iqAdpcmEncoder = null;
       client.opusPipeline?.destroy();
       client.opusPipeline = null;
+      // Flush IQ accumulation buffer
+      client.iqAccumPos = 0;
 
       if (cmd.iqCodec === 'adpcm') {
         client.iqAdpcmEncoder = new ImaAdpcmEncoder();

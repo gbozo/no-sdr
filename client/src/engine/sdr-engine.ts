@@ -58,6 +58,10 @@ export class SdrEngine {
   // Noise reduction engine (spectral NR + noise blanker)
   private nr = new NoiseReductionEngine();
 
+  // Resampler state for sub-48kHz modes (SSB 24kHz, CW 12kHz → 48kHz)
+  private resampleRatio = 1; // inputRate / 48000 (1 = no resampling needed)
+  private resamplePhase = 0; // fractional sample position for interpolation
+
 
   // Auto-range tracking
   private autoRangeMin = -60;
@@ -113,6 +117,70 @@ export class SdrEngine {
       store.setRdsPi('');
       store.setRdsSynced(false);
     }
+  }
+
+  /**
+   * Update the resample ratio based on the demodulator's audio output rate.
+   * WFM/NFM/AM output at 48kHz (ratio = 1, no resampling needed).
+   * SSB outputs at 24kHz (ratio = 2). CW outputs at 12kHz (ratio = 4).
+   */
+  private updateResampleRatio(): void {
+    const iqRate = store.iqSampleRate();
+    const mode = store.mode();
+    // Demod output rates: WFM decimates 240k→48k internally. Others output at IQ rate.
+    let demodOutputRate: number;
+    if (mode === 'wfm') {
+      demodOutputRate = 48000; // WFM demod has internal 5:1 decimation
+    } else {
+      demodOutputRate = iqRate; // NFM/AM/SSB/CW output at IQ rate
+    }
+    this.resampleRatio = demodOutputRate >= 48000 ? 1 : 48000 / demodOutputRate;
+    this.resamplePhase = 0;
+  }
+
+  /**
+   * Resample audio from a lower sample rate to 48kHz using linear interpolation.
+   * Returns the input unchanged if resampleRatio is 1.
+   */
+  private resampleTo48k(samples: Float32Array): Float32Array {
+    if (this.resampleRatio <= 1) return samples;
+
+    const ratio = this.resampleRatio;
+    const outLen = Math.floor(samples.length * ratio);
+    const out = new Float32Array(outLen);
+    let phase = this.resamplePhase;
+    let outIdx = 0;
+
+    for (let i = 0; outIdx < outLen; ) {
+      // Integer and fractional parts of the source position
+      const srcPos = phase;
+      const srcIdx = Math.floor(srcPos);
+      const frac = srcPos - srcIdx;
+
+      if (srcIdx >= samples.length - 1) break;
+
+      // Linear interpolation between adjacent source samples
+      out[outIdx++] = samples[srcIdx] * (1 - frac) + samples[srcIdx + 1] * frac;
+      phase += 1 / ratio; // advance by one output sample's worth of input
+    }
+
+    // Save fractional phase for next call (maintain continuity)
+    this.resamplePhase = phase - Math.floor(phase);
+
+    return out.subarray(0, outIdx);
+  }
+
+  /**
+   * Resample stereo audio from a lower sample rate to 48kHz.
+   */
+  private resampleStereoTo48k(left: Float32Array, right: Float32Array): { left: Float32Array; right: Float32Array } {
+    if (this.resampleRatio <= 1) return { left, right };
+    // Save/restore phase so both channels use the same timing
+    const savedPhase = this.resamplePhase;
+    const resLeft = this.resampleTo48k(left);
+    this.resamplePhase = savedPhase;
+    const resRight = this.resampleTo48k(right);
+    return { left: resLeft, right: resRight };
   }
 
   /**
@@ -539,9 +607,11 @@ export class SdrEngine {
       if (stereoResult.stereo) {
         // Apply noise reduction to stereo audio
         const filtered = this.nr.processStereo(stereoResult.left, stereoResult.right);
-        this.audioOutCount += filtered.left.length;
-        if (filtered.left.length > 0 && squelchOpen) {
-          this.audio.pushStereoAudio(filtered.left, filtered.right);
+        // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
+        const resampled = this.resampleStereoTo48k(filtered.left, filtered.right);
+        this.audioOutCount += resampled.left.length;
+        if (resampled.left.length > 0 && squelchOpen) {
+          this.audio.pushStereoAudio(resampled.left, resampled.right);
         }
         if (!store.stereoDetected()) {
           store.setStereoDetected(true);
@@ -549,9 +619,11 @@ export class SdrEngine {
       } else {
         // Apply noise reduction to mono audio
         const filtered = this.nr.processMono(stereoResult.left);
-        this.audioOutCount += filtered.length;
-        if (filtered.length > 0 && squelchOpen) {
-          this.audio.pushDemodulatedAudio(filtered);
+        // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
+        const resampled = this.resampleTo48k(filtered);
+        this.audioOutCount += resampled.length;
+        if (resampled.length > 0 && squelchOpen) {
+          this.audio.pushDemodulatedAudio(resampled);
         }
         if (store.stereoDetected()) {
           store.setStereoDetected(false);
@@ -562,9 +634,11 @@ export class SdrEngine {
       this.iqInCount += iqData.length / 2;
       // Apply noise reduction to mono audio
       const filtered = this.nr.processMono(audioSamples);
-      this.audioOutCount += filtered.length;
-      if (filtered.length > 0 && squelchOpen) {
-        this.audio.pushDemodulatedAudio(filtered);
+      // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
+      const resampled = this.resampleTo48k(filtered);
+      this.audioOutCount += resampled.length;
+      if (resampled.length > 0 && squelchOpen) {
+        this.audio.pushDemodulatedAudio(resampled);
       }
       if (store.stereoDetected()) {
         store.setStereoDetected(false);
@@ -656,6 +730,8 @@ export class SdrEngine {
         // Flush audio on new subscription and reset codec decoders
         this.audio.resetBuffer();
         this.iqAdpcmDecoder.reset();
+        // Update resampler for this mode's output rate
+        this.updateResampleRatio();
         // Re-send codec preferences so the server applies them to this subscription
         if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
           this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
@@ -691,6 +767,8 @@ export class SdrEngine {
         // Flush audio and reset waterfall
         this.audio.resetBuffer();
         this.waterfall?.clear();
+        // Update resampler for new mode's output rate
+        this.updateResampleRatio();
         break;
 
       case 'admin_auth_ok':
@@ -768,6 +846,8 @@ export class SdrEngine {
     this.audio.resetBuffer();
     // Reset noise reduction state for new mode
     this.nr.reset();
+    // Update resampler for new mode's output rate
+    this.updateResampleRatio();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'mode', mode });

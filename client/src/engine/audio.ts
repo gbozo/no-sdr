@@ -123,8 +123,14 @@ export class AudioEngine {
           this.readPos = 0;
           this.buffered = 0; // samples currently buffered (same for L and R)
 
-          // Jitter buffer: don't start playing until we have this many samples
-          this.minBuffer = 4800; // 100ms at 48kHz
+          // Jitter buffer: don't start playing until we have this many samples.
+          // 150ms provides headroom for variable IQ chunk sizes from the server.
+          this.minBuffer = 7200; // 150ms at 48kHz
+          // Target buffer level for adaptive rate control.
+          // When playing, we aim to keep the buffer at this level (200ms).
+          // If buffer drifts above/below, we subtly adjust playback rate
+          // by skipping or duplicating one sample per render quantum.
+          this.targetBuffer = 9600; // 200ms at 48kHz
           this.playing = false;
 
           // Underrun detection
@@ -158,7 +164,7 @@ export class AudioEngine {
 
             // Check for overflow (buffer full) — drop oldest data
             if (this.buffered + len > this.bufferLen - 128) {
-              const drop = len + 2400; // drop an extra 50ms to avoid repeated overflow
+              const drop = len + 4800; // drop an extra 100ms to avoid repeated overflow
               this.readPos = (this.readPos + drop) % this.bufferLen;
               this.buffered = Math.max(0, this.buffered - drop);
             }
@@ -200,13 +206,36 @@ export class AudioEngine {
             return true;
           }
 
-          // Read samples from ring buffers
-          for (let i = 0; i < len; i++) {
-            outL[i] = this.bufferL[this.readPos];
-            if (outR) outR[i] = this.bufferR[this.readPos];
-            this.readPos = (this.readPos + 1) % this.bufferLen;
+          // Adaptive rate control: adjust consumption rate to keep buffer
+          // near the target level. This prevents both underruns and overflow
+          // from clock drift or variable chunk timing.
+          // - Buffer too full (>300ms): consume one extra sample (speed up ~0.8%)
+          // - Buffer too low (<100ms): consume one fewer sample (slow down ~0.8%)
+          // - Otherwise: consume exactly len samples (normal rate)
+          let consume = len;
+          if (this.buffered > this.targetBuffer + 4800) {
+            // Buffer growing too large — consume 1 extra to drain
+            consume = len + 1;
+          } else if (this.buffered < this.minBuffer && this.buffered >= len) {
+            // Buffer getting dangerously low — consume 1 fewer to build up
+            consume = len - 1;
           }
-          this.buffered -= len;
+
+          // Ensure we have enough samples
+          if (this.buffered < consume) consume = this.buffered;
+
+          // Read samples from ring buffer with simple rate adaptation.
+          // When consume != len, we use nearest-neighbor resampling
+          // (imperceptible at ±1 sample per 128).
+          for (let i = 0; i < len; i++) {
+            // Map output sample index to input sample index
+            const srcIdx = Math.min(Math.round(i * consume / len), consume - 1);
+            const pos = (this.readPos + srcIdx) % this.bufferLen;
+            outL[i] = this.bufferL[pos];
+            if (outR) outR[i] = this.bufferR[pos];
+          }
+          this.readPos = (this.readPos + consume) % this.bufferLen;
+          this.buffered -= consume;
 
           return true;
         }
