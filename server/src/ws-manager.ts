@@ -13,6 +13,7 @@ import {
   type ServerMeta,
   type ClientSession,
   type DongleProfile,
+  type DemodMode,
   packBinaryMessage,
   packMetaMessage,
   packFftMessage,
@@ -22,12 +23,14 @@ import {
   packFftAdpcmMessage,
   packFftDeflateMessage,
   packIqAdpcmMessage,
+  packAudioOpusMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
   MSG_FFT_DEFLATE,
   MSG_IQ,
   MSG_IQ_ADPCM,
+  MSG_AUDIO_OPUS,
   MSG_DECODER,
   ImaAdpcmEncoder,
   encodeFftAdpcm,
@@ -36,6 +39,7 @@ import { DongleManager } from './dongle-manager.js';
 import { DecoderManager, type DecoderMessage } from './decoder-manager.js';
 import { FftProcessor } from './fft-processor.js';
 import { IqExtractor, getOutputSampleRate } from './iq-extractor.js';
+import { OpusAudioPipeline } from './opus-audio.js';
 import { logger } from './logger.js';
 
 interface ConnectedClient {
@@ -49,6 +53,8 @@ interface ConnectedClient {
   iqCodec: CodecType;
   /** Per-client ADPCM encoder for IQ stream (stateful, streaming) */
   iqAdpcmEncoder: ImaAdpcmEncoder | null;
+  /** Per-client Opus audio pipeline (server-side demod + encode) */
+  opusPipeline: OpusAudioPipeline | null;
 }
 
 export class WebSocketManager {
@@ -243,6 +249,7 @@ export class WebSocketManager {
     // Each client gets their preferred codec:
     //   'none'  → MSG_IQ (raw Int16, no compression)
     //   'adpcm' → MSG_IQ_ADPCM (4:1 compression, streaming state per client)
+    //   'opus'  → MSG_AUDIO_OPUS (server-side demod + Opus encode, ~20-60x compression)
     const IQ_BACKPRESSURE = 1024 * 1024;
     for (const client of this.clients.values()) {
       if (client.session.dongleId === dongleId && client.iqExtractor && client.session.audioEnabled) {
@@ -256,7 +263,13 @@ export class WebSocketManager {
           if (subBand.length > 0) {
             this.iqOutSamples += subBand.length / 2; // count IQ pairs
 
-            if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
+            if (client.iqCodec === 'opus' && client.opusPipeline) {
+              // Server-side demod + Opus encode
+              const packets = client.opusPipeline.process(subBand);
+              for (const { packet, samples, stereo } of packets) {
+                client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
+              }
+            } else if (client.iqCodec === 'adpcm' && client.iqAdpcmEncoder) {
               const adpcm = client.iqAdpcmEncoder.encode(subBand);
               client.ws.send(packIqAdpcmMessage(adpcm, subBand.length));
             } else {
@@ -320,6 +333,7 @@ export class WebSocketManager {
       fftCodec: 'none',
       iqCodec: 'none',
       iqAdpcmEncoder: null,
+      opusPipeline: null,
     };
 
     this.clients.set(clientId, client);
@@ -344,6 +358,8 @@ export class WebSocketManager {
       if (client.session.dongleId) {
         this.dongleManager.updateClientCount(client.session.dongleId, -1);
       }
+      // Clean up WASM resources
+      client.opusPipeline?.destroy();
       this.clients.delete(clientId);
       logger.info({ clientId, total: this.clients.size }, 'Client disconnected');
     }
@@ -393,6 +409,11 @@ export class WebSocketManager {
         client.session.mode = cmd.mode as any;
         client.iqExtractor?.setOutputSampleRate(getOutputSampleRate(cmd.mode));
         client.iqExtractor?.reset();
+        // Update Opus pipeline for new mode/rate
+        if (client.opusPipeline) {
+          const iqRate = getOutputSampleRate(cmd.mode);
+          client.opusPipeline.setMode(cmd.mode as DemodMode, iqRate);
+        }
         break;
 
       case 'bandwidth':
@@ -414,6 +435,13 @@ export class WebSocketManager {
       case 'audio_enabled':
         client.session.audioEnabled = cmd.enabled;
         logger.info({ clientId: client.id, audioEnabled: cmd.enabled }, 'Client audio state changed');
+        break;
+
+      case 'stereo_enabled':
+        if (client.opusPipeline) {
+          client.opusPipeline.setStereoEnabled(cmd.enabled);
+          logger.info({ clientId: client.id, stereoEnabled: cmd.enabled }, 'Client stereo preference changed');
+        }
         break;
 
       case 'waterfall_settings':
@@ -513,17 +541,25 @@ export class WebSocketManager {
     }
     if (cmd.iqCodec !== undefined) {
       client.iqCodec = cmd.iqCodec;
+      // Reset previous codec state
+      client.iqAdpcmEncoder = null;
+      client.opusPipeline?.destroy();
+      client.opusPipeline = null;
+
       if (cmd.iqCodec === 'adpcm') {
-        // Create or reset per-client ADPCM encoder
-        if (!client.iqAdpcmEncoder) {
-          client.iqAdpcmEncoder = new ImaAdpcmEncoder();
+        client.iqAdpcmEncoder = new ImaAdpcmEncoder();
+      } else if (cmd.iqCodec === 'opus') {
+        if (OpusAudioPipeline.isAvailable()) {
+          const mode = (client.session.mode || 'nfm') as DemodMode;
+          const iqRate = getOutputSampleRate(mode);
+          client.opusPipeline = new OpusAudioPipeline(mode, iqRate);
+          logger.info({ clientId: client.id, mode, iqRate }, 'Opus pipeline created');
         } else {
-          client.iqAdpcmEncoder.reset();
+          logger.warn({ clientId: client.id }, 'Opus requested but @discordjs/opus not available — falling back to none');
+          client.iqCodec = 'none';
         }
-      } else {
-        client.iqAdpcmEncoder = null;
       }
-      logger.info({ clientId: client.id, iqCodec: cmd.iqCodec }, 'Client IQ codec changed');
+      logger.info({ clientId: client.id, iqCodec: client.iqCodec }, 'Client IQ codec changed');
     }
   }
 

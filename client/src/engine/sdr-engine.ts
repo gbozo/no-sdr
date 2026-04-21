@@ -14,6 +14,7 @@ import {
   MSG_IQ,
   MSG_IQ_ADPCM,
   MSG_AUDIO,
+  MSG_AUDIO_OPUS,
   MSG_META,
   MSG_DECODER,
   MSG_SIGNAL_LEVEL,
@@ -26,6 +27,7 @@ import {
   type DemodMode,
 } from '@node-sdr/shared';
 import { inflateSync } from 'fflate';
+import { OpusDecoder } from 'opus-decoder';
 import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
 import { AudioEngine } from './audio.js';
@@ -47,6 +49,11 @@ export class SdrEngine {
 
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
+
+  // Opus decoder for server-side demodulated audio (WASM, async init)
+  private opusDecoder: OpusDecoder | null = null;
+  private opusDecoderReady = false;
+  private opusDecoderChannels = 1;
 
   // Noise reduction engine (spectral NR + noise blanker)
   private nr = new NoiseReductionEngine();
@@ -354,6 +361,40 @@ export class SdrEngine {
         break;
       }
 
+      case MSG_AUDIO_OPUS: {
+        // Server-side demodulated + Opus-encoded audio (mono or stereo)
+        // Wire: [Uint16 sampleCount LE] [Uint8 channels] [Opus packet bytes]
+        this.bwIqWireBytes += payload.byteLength;
+        try {
+          const headerView = new DataView(payload);
+          const opusSamples = headerView.getUint16(0, true);
+          const channels = headerView.getUint8(2);
+          const opusPacket = new Uint8Array(payload, 3);
+
+          // Recreate decoder if channel count changed (async — drops frames until ready)
+          if (channels !== this.opusDecoderChannels) {
+            this.opusDecoderReady = false;
+            this.initOpusDecoder(channels); // fire-and-forget
+          }
+
+          if (this.opusDecoder && this.opusDecoderReady) {
+            const { channelData } = this.opusDecoder.decodeFrame(opusPacket);
+            this.bwIqRawBytes += opusSamples * channels * 2;
+
+            if (channels === 2 && channelData.length >= 2) {
+              this.audio.pushStereoAudio(channelData[0], channelData[1]);
+              if (!store.stereoDetected()) store.setStereoDetected(true);
+            } else {
+              this.audio.pushDemodulatedAudio(channelData[0]);
+              if (store.stereoDetected()) store.setStereoDetected(false);
+            }
+          }
+        } catch (e) {
+          console.error('[OPUS] decode error:', e);
+        }
+        break;
+      }
+
       case MSG_META: {
         const decoder = new TextDecoder();
         const json = decoder.decode(payload);
@@ -619,6 +660,10 @@ export class SdrEngine {
         if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
           this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
         }
+        // Re-send stereo preference for Opus path
+        if (store.iqCodec() === 'opus') {
+          this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
+        }
         break;
 
       case 'profile_changed':
@@ -789,7 +834,11 @@ export class SdrEngine {
 
   setStereoEnabled(enabled: boolean): void {
     store.setStereoEnabled(enabled);
-    // Also inform the FM demodulator so it can skip stereo processing entirely
+    // For Opus path: tell server to enable/disable stereo demod
+    if (store.iqCodec() === 'opus') {
+      this.send({ cmd: 'stereo_enabled', enabled });
+    }
+    // For IQ path: inform the local FM demodulator
     if (this.demodulator.stereoCapable && 'setStereoEnabled' in this.demodulator) {
       (this.demodulator as any).setStereoEnabled(enabled);
     }
@@ -840,10 +889,46 @@ export class SdrEngine {
   }
 
   setIqCodec(codec: CodecType): void {
-    store.setIqCodec(codec);
+    store.setIqCodec(codec as any);
     // Reset codec decoders when switching codecs
     this.iqAdpcmDecoder.reset();
+    // Initialize Opus decoder if switching to opus
+    if (codec === 'opus' && !this.opusDecoderReady) {
+      this.initOpusDecoder();
+    }
     this.send({ cmd: 'codec', iqCodec: codec });
+    // When switching to Opus, sync stereo preference to server
+    if (codec === 'opus') {
+      this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
+    }
+  }
+
+  /** Initialize Opus WASM decoder (async, one-time) */
+  private async initOpusDecoder(channels = 1): Promise<void> {
+    // Free existing decoder if channel count changed
+    if (this.opusDecoder) {
+      try { this.opusDecoder.free(); } catch { /* ignore */ }
+      this.opusDecoder = null;
+      this.opusDecoderReady = false;
+    }
+    try {
+      const isStereo = channels >= 2;
+      this.opusDecoder = new OpusDecoder({
+        sampleRate: 48000,
+        channels: isStereo ? 2 : 1,
+        streamCount: 1,
+        coupledStreamCount: isStereo ? 1 : 0,
+        channelMappingTable: isStereo ? [0, 1] : [0],
+      });
+      await this.opusDecoder.ready;
+      this.opusDecoderReady = true;
+      this.opusDecoderChannels = isStereo ? 2 : 1;
+      console.log(`[SDR] Opus decoder initialized (${this.opusDecoderChannels}ch)`);
+    } catch (e) {
+      console.error('[SDR] Failed to init Opus decoder:', e);
+      this.opusDecoder = null;
+      this.opusDecoderReady = false;
+    }
   }
 
   // ---- Display Settings ----

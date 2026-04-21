@@ -129,8 +129,12 @@ const AudioControls: Component = () => {
                 : 'text-text-muted border-border bg-transparent opacity-50'
             }`}
             title={store.stereoDetected()
-              ? (store.mode() === 'wfm' ? 'Stereo pilot detected (19 kHz)' : 'C-QUAM stereo pilot detected (25 Hz)')
-              : (store.mode() === 'wfm' ? 'No stereo pilot' : 'No C-QUAM stereo pilot')
+              ? (store.iqCodec() === 'opus'
+                ? 'Server-side stereo active (Opus)'
+                : store.mode() === 'wfm' ? 'Stereo pilot detected (19 kHz)' : 'C-QUAM stereo pilot detected (25 Hz)')
+              : (store.iqCodec() === 'opus'
+                ? 'No stereo from server'
+                : store.mode() === 'wfm' ? 'No stereo pilot' : 'No C-QUAM stereo pilot')
             }
           >
             STEREO
@@ -225,8 +229,8 @@ const AudioControls: Component = () => {
                 {store.stereoEnabled() ? 'On' : 'Off'}
               </button>
             </div>
-            {/* Stereo threshold — only show when stereo is enabled */}
-            <Show when={store.stereoEnabled()}>
+            {/* Stereo threshold — only for IQ path (not Opus — server handles detection) */}
+            <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus'}>
               <div>
                 <div class="flex justify-between items-center mb-1">
                   <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
@@ -247,6 +251,12 @@ const AudioControls: Component = () => {
                 <div class="text-[7px] font-mono text-text-muted mt-0.5">
                   Decode stereo only when signal &gt; {store.stereoThreshold()} dB
                 </div>
+              </div>
+            </Show>
+            {/* Opus stereo info */}
+            <Show when={store.stereoEnabled() && store.iqCodec() === 'opus'}>
+              <div class="text-[7px] font-mono text-text-muted">
+                Server-side stereo decoding via Opus
               </div>
             </Show>
           </div>
@@ -953,6 +963,7 @@ const CodecSettings: Component = () => {
   const iqCodecs: { value: CodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
+    { value: 'opus', label: 'Opus' },
   ];
 
   // Format bytes/sec into human-readable string

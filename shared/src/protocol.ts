@@ -41,11 +41,18 @@ export const MSG_IQ_ADPCM = 0x09;
 
 /** Deflate-compressed FFT — delta-encoded Uint8 dB values compressed with raw deflate */
 export const MSG_FFT_DEFLATE = 0x0B;
+export const MSG_AUDIO_OPUS = 0x0C;
 
 // ---- Codec Types ----
 
-/** Available compression codecs for FFT and IQ data */
-export type CodecType = 'none' | 'adpcm' | 'deflate';
+/** Available compression codecs for FFT data */
+export type FftCodecType = 'none' | 'adpcm' | 'deflate';
+
+/** Available codecs for IQ/audio data */
+export type IqCodecType = 'none' | 'adpcm' | 'opus';
+
+/** Union for backward compatibility */
+export type CodecType = FftCodecType | IqCodecType;
 
 // ---- Client Command Types ----
 
@@ -60,7 +67,8 @@ export type ClientCommand =
   | { cmd: 'mute'; muted: boolean }
   | { cmd: 'audio_enabled'; enabled: boolean }
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
-  | { cmd: 'codec'; fftCodec?: CodecType; iqCodec?: CodecType }
+  | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
+  | { cmd: 'stereo_enabled'; enabled: boolean }
   // Admin commands
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
@@ -210,6 +218,21 @@ export function packFftDeflateMessage(
   view.setInt16(3, Math.round(maxDb), true);
   view.setUint32(5, binCount, true);
   new Uint8Array(buf, 9).set(deflatePayload);
+  return buf;
+}
+
+/**
+ * Pack an Opus-encoded audio message.
+ * Wire format: [0x0C] [Uint16 sampleCount LE] [Opus packet bytes]
+ */
+export function packAudioOpusMessage(opusPacket: Uint8Array, sampleCount: number, channels = 1): ArrayBuffer {
+  // Wire: [0x0C] [Uint16 sampleCount LE] [Uint8 channels] [Opus packet bytes]
+  const buf = new ArrayBuffer(1 + 2 + 1 + opusPacket.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_AUDIO_OPUS);
+  view.setUint16(1, sampleCount, true);
+  view.setUint8(3, channels);
+  new Uint8Array(buf, 4).set(opusPacket);
   return buf;
 }
 
