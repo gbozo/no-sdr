@@ -80,7 +80,7 @@ function createStore() {
 
   // ---- Codec Preferences ----
   const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate');
-  const [iqCodec, setIqCodec] = createSignal<IqCodecType>('adpcm');
+  const [iqCodec, setIqCodec] = createSignal<IqCodecType>('opus');
 
   // ---- Bandwidth / Throughput Metrics ----
   const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec

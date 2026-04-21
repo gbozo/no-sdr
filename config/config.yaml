@@ -100,6 +100,20 @@ dongles:
         gain: null
         description: ''
         decoders: []
+        dongleId: dongle-1776773609495
+      - id: profile-1776794706768
+        dongleId: dongle-1776773609495
+        name: New Profile
+        centerFrequency: 100000000
+        sampleRate: 2400000
+        fftSize: 2048
+        fftFps: 30
+        defaultMode: wfm
+        defaultTuneOffset: 0
+        defaultBandwidth: 200000
+        gain: null
+        description: ''
+        decoders: []
     autoStart: true
     biasT: false
   - id: dongle-1776774191637
@@ -121,4 +135,5 @@ dongles:
         gain: null
         description: ''
         decoders: []
+        dongleId: dongle-1776774191637
     autoStart: true
