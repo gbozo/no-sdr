@@ -49,7 +49,7 @@ export const MSG_AUDIO_OPUS = 0x0C;
 export type FftCodecType = 'none' | 'adpcm' | 'deflate';
 
 /** Available codecs for IQ/audio data */
-export type IqCodecType = 'none' | 'adpcm' | 'opus';
+export type IqCodecType = 'none' | 'adpcm' | 'opus' | 'opus-hq';
 
 /** Union for backward compatibility */
 export type CodecType = FftCodecType | IqCodecType;

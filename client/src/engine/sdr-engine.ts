@@ -737,7 +737,7 @@ export class SdrEngine {
           this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
         }
         // Re-send stereo preference for Opus path
-        if (store.iqCodec() === 'opus') {
+        if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
           this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
         }
         break;
@@ -915,7 +915,7 @@ export class SdrEngine {
   setStereoEnabled(enabled: boolean): void {
     store.setStereoEnabled(enabled);
     // For Opus path: tell server to enable/disable stereo demod
-    if (store.iqCodec() === 'opus') {
+    if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
       this.send({ cmd: 'stereo_enabled', enabled });
     }
     // For IQ path: inform the local FM demodulator
@@ -973,12 +973,12 @@ export class SdrEngine {
     // Reset codec decoders when switching codecs
     this.iqAdpcmDecoder.reset();
     // Initialize Opus decoder if switching to opus
-    if (codec === 'opus' && !this.opusDecoderReady) {
+    if ((codec === 'opus' || codec === 'opus-hq') && !this.opusDecoderReady) {
       this.initOpusDecoder();
     }
     this.send({ cmd: 'codec', iqCodec: codec });
     // When switching to Opus, sync stereo preference to server
-    if (codec === 'opus') {
+    if (codec === 'opus' || codec === 'opus-hq') {
       this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
     }
   }

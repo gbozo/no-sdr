@@ -44,18 +44,49 @@
 
 ---
 
+<p align="center">
+  <img src="screenshots/no-sdr.jpeg" alt="no-sdr interface — waterfall, spectrum analyzer, and stereo FM with RDS" width="100%" />
+</p>
+
 **no-sdr** turns cheap RTL-SDR USB dongles into a full-featured web-based radio receiver. Multiple users connect through their browser and independently tune, demodulate, and listen to signals — all sharing the same hardware. No plugins, no installs, just open a URL.
 
 Think of it as your own private, open [WebSDR](http://websdr.org) that you can run at home, in a hackerspace, or on a docker container (compose). Works in Raspberry Pi too. 
 
 *Made with ❤️ and patience, your friend George*
 
+### Codec Performance
+
+<table>
+<tr>
+<td width="50%"><img src="screenshots/no-sdr-compression.jpeg" alt="no-sdr compression stats" width="100%" /></td>
+<td valign="top">
+
+**Waterfall (FFT)**
+| Codec | Ratio | Type |
+|-------|-------|------|
+| **Deflate** | 7.5–10:1 | Lossless (default) |
+| ADPCM | ~8:1 | Lossy |
+
+**Audio (IQ / Opus)**
+| Codec | Bandwidth | Type |
+|-------|-----------|------|
+| ADPCM | ~48 KB/s (default) | Lossy 4:1 on IQ |
+| **Opus** | ~4 KB/s | VBR 32kbps mono / 64kbps stereo |
+| **Opus HQ** | ~16 KB/s | VBR 128kbps mono / 192kbps stereo |
+
+Opus codecs use server-side demodulation with full stereo FM and C-QUAM support. Clients independently select their preferred codec — no restart needed.
+
+</td>
+</tr>
+</table>
+
 ## Features
 
 ### Radio
 
-- **7 analog demodulation modes** — WFM (stereo, RDS), NFM, AM (stereo), USB, LSB, CW, Raw IQ
+- **8 analog demodulation modes** — WFM (stereo, RDS), NFM, AM (stereo), USB, LSB, CW, Raw IQ
 - **Stereo FM** — PLL-based 19kHz pilot detection, L-R DSB-SC demodulation with SNR-proportional stereo blend
+- **RDS** — client-side FM RDS decoder extracts station name (PS), radio text (RT), programme type, PI code, and clock time with overlay on waterfall
 - **AM Stereo (C-QUAM) [EXPERIMENTAL]** — auto-detected in AM mode via two-stage verification (25Hz Goertzel pilot + PLL lock confirmation). When a C-QUAM station is detected, stereo decoding activates automatically. *This feature needs testers with access to C-QUAM AM stereo broadcasts — please report results via GitHub issues!*
 - **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
 - **Multi-user** — everyone shares the same waterfall; each user tunes independently within the dongle's bandwidth
@@ -79,7 +110,7 @@ Think of it as your own private, open [WebSDR](http://websdr.org) that you can r
 - **Client-side DSP** — demodulation runs entirely in the browser via pure TypeScript
 - **Stereo output** — stereo FM with SNR-proportional blend, auto-detected C-QUAM AM stereo (experimental)
 - **Noise reduction** — spectral subtraction (Wiener filter) + impulse noise blanker with adjustable strength
-- **AudioWorklet** — low-latency audio playback with 100ms jitter buffer
+- **AudioWorklet** — low-latency audio playback with adaptive jitter buffer (150ms min, 200ms target, ±1 sample/frame rate control)
 - **5-band parametric EQ** — LOW 80Hz, L-MID 500Hz, MID 1.5kHz, H-MID 4kHz, HIGH 12kHz (all ±12dB)
 - **Balance** — stereo pan control (-100% left to +100% right)
 - **Loudness** — dynamic compression with pre-boost for quiet signals
@@ -87,17 +118,24 @@ Think of it as your own private, open [WebSDR](http://websdr.org) that you can r
 
 ### Infrastructure
 
-- **IMA-ADPCM compression** — 4:1 lossy compression for FFT and IQ streams, per-client codec negotiation
+- **Multi-codec compression** — per-client codec negotiation for both FFT and IQ streams
+  - **FFT**: None (Uint8, 4:1), ADPCM (~8:1), Delta+Deflate (7.5–10:1 lossless, default)
+  - **IQ**: None (raw Int16), ADPCM (4:1, default), Opus VBR (server-side demod, 32kbps mono / 64kbps stereo), Opus HQ (128kbps mono / 192kbps stereo)
+- **Server-side Opus audio** — full WFM stereo PLL and C-QUAM demod on server with dynamic mono↔stereo encoder switching (opusscript WASM)
 - **Server-side FFT rate cap** — configurable fps per profile (default 30) with inter-frame averaging
+- **IQ chunk accumulation** — server buffers IQ into fixed 20ms chunks for consistent WebSocket messages
+- **Client-side resampler** — linear interpolation upsamples SSB (24kHz) and CW (12kHz) to 48kHz
 - **WebSocket backpressure** — bufferedAmount-based frame skipping prevents server memory bloat
 - **Audio-gated IQ** — server only sends per-user IQ data after client enables audio playback
+- **Dongle hardware options** — directSampling, biasT, digitalAgc, offsetTuning, ifGain, tunerBandwidth via config
 - **Demo mode** — built-in signal simulator for development and demos, no hardware needed
 - **rtl_tcp support** — connect to remote RTL-SDR dongles over TCP (Docker sidecars, remote antennas)
-- **Docker ready** — multi-stage Dockerfile with USB passthrough for RTL-SDR
+- **Docker ready** — multi-stage Dockerfile with USB passthrough for RTL-SDR, auto-publish to GHCR on release
 - **Raspberry Pi compatible** — runs on ARM64, tested on Pi 4/5
 - **Admin panel** — start/stop dongles, switch profiles, CRUD profiles, monitor status via REST API + UI
 - **YAML config** — validated at startup with Zod schemas, persisted on admin changes
 - **Per-client IQ extraction** — server-side NCO frequency shift + 4th-order Butterworth anti-alias filter + decimation
+- **Compression stats** — live wire bytes, raw equivalent, ratio, and savings displayed in UI
 
 ## Quick Start
 
@@ -164,6 +202,8 @@ RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
 | Build | [Vite 6](https://vite.dev) |
 | Styling | [Tailwind CSS v4](https://tailwindcss.com) |
 | FFT | [fft.js](https://github.com/nicedoc/fft.js) (radix-4, pure JS) |
+| Opus | [opusscript](https://github.com/abalabahaha/opusscript) (server WASM) + [opus-decoder](https://github.com/eshaz/wasm-audio-decoders) (client WASM) |
+| Deflate | Node.js zlib (server) + [fflate](https://github.com/101arrowz/fflate) (client) |
 | Config | YAML ([js-yaml](https://github.com/nodeca/js-yaml)) + [Zod](https://zod.dev) |
 | Logging | [pino](https://getpino.io) |
 | Language | TypeScript 5 (strict) |
@@ -256,7 +296,7 @@ Profiles can be created, updated, and deleted at runtime via the admin REST API.
 
 | Mode | Description | Bandwidth | Notes |
 |------|-------------|-----------|-------|
-| **WFM** | Wideband FM (broadcast radio) | 150–200 kHz | Stereo FM with PLL pilot detection, SNR-proportional blend |
+| **WFM** | Wideband FM (broadcast radio) | 150–200 kHz | Stereo FM with PLL pilot detection, SNR-proportional blend, RDS decoding |
 | **NFM** | Narrowband FM (VHF/UHF comms) | 5–25 kHz | De-emphasis filter |
 | **AM** | Amplitude Modulation (aviation, shortwave) | 3–10 kHz | Envelope detection + AGC; auto-detects C-QUAM stereo |
 | **USB** | Upper Sideband (HF amateur, marine) | 1–4 kHz | BFO complex oscillator |
@@ -392,9 +432,9 @@ npm run clean
 
 This is an npm workspaces monorepo with three packages:
 
-- **`shared/`** — Zero-dependency types, protocol constants, mode definitions
-- **`server/`** — Hono backend, hardware management, FFT, IQ extraction, WebSocket
-- **`client/`** — SolidJS frontend, Canvas renderers, DSP, stereo FM, AudioWorklet + EQ
+- **`shared/`** — Zero-dependency types, protocol constants, mode definitions, IMA-ADPCM codec
+- **`server/`** — Hono backend, hardware management, FFT, IQ extraction, Opus audio pipeline, WebSocket
+- **`client/`** — SolidJS frontend, Canvas renderers, DSP, stereo FM, RDS decoder, AudioWorklet + EQ
 
 Build order: `shared` → `client` → `server` (the server serves the built client).
 
@@ -417,7 +457,6 @@ Contributions are welcome. Please:
 - **Bookmarks** — frequency bookmark management
 - **Mobile UI** — responsive design for tablets and phones
 - **New decoders** — WASM ports of C decoders (FT8, DAB, etc.)
-- **RDS** — FM broadcast metadata decoding (station name, song title)
 
 ## License
 

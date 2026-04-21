@@ -658,10 +658,18 @@ export class OpusAudioPipeline {
   /** Force mono output even when stereo is detected (user preference) */
   private _forceMono = false;
 
-  constructor(mode: DemodMode, inputRate: number) {
+  /** Target bitrate for mono (stereo = 2x). Default: 32kbps mono / 64kbps stereo. HQ: 128kbps mono / 192kbps stereo. */
+  private monoBitrate: number;
+  private stereoBitrate: number;
+
+  constructor(mode: DemodMode, inputRate: number, hq = false) {
     this.mode = mode;
     this.inputRate = inputRate;
     this.demod = createDemod(mode, inputRate);
+
+    // Bitrate profiles: standard (32k/64k) vs HQ (128k/192k)
+    this.monoBitrate = hq ? 128_000 : 32_000;
+    this.stereoBitrate = hq ? 192_000 : 64_000;
 
     // Determine channel count
     this.channels = this.demod.isStereoCapable ? 2 : 1;
@@ -685,7 +693,7 @@ export class OpusAudioPipeline {
     }
     if (OpusScriptClass) {
       this.encoder = new OpusScriptClass(48_000, this.channels, OpusScriptClass.Application.AUDIO);
-      this.encoder.setBitrate(this.channels === 2 ? 64_000 : 32_000);
+      this.encoder.setBitrate(this.channels === 2 ? this.stereoBitrate : this.monoBitrate);
     }
   }
 

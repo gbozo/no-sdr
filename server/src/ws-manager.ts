@@ -278,7 +278,7 @@ export class WebSocketManager {
           if (subBand.length > 0) {
             this.iqOutSamples += subBand.length / 2; // count IQ pairs
 
-            if (client.iqCodec === 'opus' && client.opusPipeline) {
+            if ((client.iqCodec === 'opus' || client.iqCodec === 'opus-hq') && client.opusPipeline) {
               // Opus: server-side demod + Opus encode (has its own frame accumulation)
               const packets = client.opusPipeline.process(subBand);
               for (const { packet, samples, stereo } of packets) {
@@ -630,14 +630,15 @@ export class WebSocketManager {
 
       if (cmd.iqCodec === 'adpcm') {
         client.iqAdpcmEncoder = new ImaAdpcmEncoder();
-      } else if (cmd.iqCodec === 'opus') {
+      } else if (cmd.iqCodec === 'opus' || cmd.iqCodec === 'opus-hq') {
         if (OpusAudioPipeline.isAvailable()) {
           const mode = (client.session.mode || 'nfm') as DemodMode;
           const iqRate = getOutputSampleRate(mode);
-          client.opusPipeline = new OpusAudioPipeline(mode, iqRate);
-          logger.info({ clientId: client.id, mode, iqRate }, 'Opus pipeline created');
+          const hq = cmd.iqCodec === 'opus-hq';
+          client.opusPipeline = new OpusAudioPipeline(mode, iqRate, hq);
+          logger.info({ clientId: client.id, mode, iqRate, hq }, 'Opus pipeline created');
         } else {
-          logger.warn({ clientId: client.id }, 'Opus requested but @discordjs/opus not available — falling back to none');
+          logger.warn({ clientId: client.id }, 'Opus requested but opusscript not available — falling back to none');
           client.iqCodec = 'none';
         }
       }

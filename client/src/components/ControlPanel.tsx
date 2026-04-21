@@ -129,10 +129,10 @@ const AudioControls: Component = () => {
                 : 'text-text-muted border-border bg-transparent opacity-50'
             }`}
             title={store.stereoDetected()
-              ? (store.iqCodec() === 'opus'
+              ? (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq'
                 ? 'Server-side stereo active (Opus)'
                 : store.mode() === 'wfm' ? 'Stereo pilot detected (19 kHz)' : 'C-QUAM stereo pilot detected (25 Hz)')
-              : (store.iqCodec() === 'opus'
+              : (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq'
                 ? 'No stereo from server'
                 : store.mode() === 'wfm' ? 'No stereo pilot' : 'No C-QUAM stereo pilot')
             }
@@ -230,7 +230,7 @@ const AudioControls: Component = () => {
               </button>
             </div>
             {/* Stereo threshold — only for IQ path (not Opus — server handles detection) */}
-            <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus'}>
+            <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus' && store.iqCodec() !== 'opus-hq'}>
               <div>
                 <div class="flex justify-between items-center mb-1">
                   <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
@@ -254,7 +254,7 @@ const AudioControls: Component = () => {
               </div>
             </Show>
             {/* Opus stereo info */}
-            <Show when={store.stereoEnabled() && store.iqCodec() === 'opus'}>
+            <Show when={store.stereoEnabled() && (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq')}>
               <div class="text-[7px] font-mono text-text-muted">
                 Server-side stereo decoding via Opus
               </div>
@@ -964,6 +964,7 @@ const CodecSettings: Component = () => {
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
     { value: 'opus', label: 'Opus' },
+    { value: 'opus-hq', label: 'Opus HQ' },
   ];
 
   // Format bytes/sec into human-readable string

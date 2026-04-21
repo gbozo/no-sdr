@@ -1,6 +1,6 @@
 # no-sdr Technical Specification
 
-Version 0.3.0 — April 2026
+Version 0.8.0 — April 2026
 
 ## Table of Contents
 
@@ -162,6 +162,8 @@ All binary messages are prefixed with a single type byte. The remaining bytes ar
 | `0x07` | `MSG_SIGNAL_LEVEL` | `Float32` — signal strength in dB | 5 bytes | Per-user |
 | `0x08` | `MSG_FFT_ADPCM` | IMA-ADPCM encoded FFT: `[Int16 minDb LE][Int16 maxDb LE][10 warmup samples][ADPCM bytes]` | ~fftSize/2 + 15 bytes | Broadcast to dongle |
 | `0x09` | `MSG_IQ_ADPCM` | `[Uint32 sampleCount LE][ADPCM bytes]` — IMA-ADPCM compressed IQ | Variable (~50% of raw) | Per-user |
+| `0x0B` | `MSG_FFT_DEFLATE` | `[Int16 minDb LE][Int16 maxDb LE][Uint32 binCount LE][raw deflate bytes]` — delta+deflate lossless FFT | Variable (~12% of raw) | Broadcast to dongle |
+| `0x0C` | `MSG_AUDIO_OPUS` | `[Uint16 sampleCount LE][Uint8 channels][Opus packet bytes]` — server-side demodulated Opus VBR audio | Variable (~2–24 KB/s) | Per-user |
 
 ### 3.3 Server Meta Messages (`MSG_META`)
 
@@ -197,14 +199,17 @@ type ClientCommand =
   | { cmd: 'volume'; level: number }      // 0.0 – 1.0
   | { cmd: 'mute'; muted: boolean }
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
-  | { cmd: 'codec'; fftCodec?: CodecType; iqCodec?: CodecType }
+  | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
   | { cmd: 'audio_enabled'; enabled: boolean }
+  | { cmd: 'stereo_enabled'; enabled: boolean }
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
   | { cmd: 'admin_stop_dongle'; dongleId: string }
   | { cmd: 'admin_start_dongle'; dongleId: string };
 
-type CodecType = 'none' | 'adpcm';
+type FftCodecType = 'none' | 'adpcm' | 'deflate';
+type IqCodecType = 'none' | 'adpcm' | 'opus' | 'opus-hq';
+type CodecType = FftCodecType | IqCodecType;  // union for backward compat
 ```
 
 ### 3.5 Typical Session Flow
@@ -221,14 +226,17 @@ Client                              Server
   │      (IqExtractor created)         │
   │                                    │
   │ ──── { cmd: codec,                 │
-  │        fftCodec: "adpcm",          │
+  │        fftCodec: "deflate",        │
   │        iqCodec: "adpcm" } ────────►│  (per-client codec negotiation)
   │                                    │
-  │ ◄─── MSG_FFT_ADPCM (30fps) ────── │  (continuous, broadcast, ADPCM compressed)
+  │ ◄─── MSG_FFT_DEFLATE (30fps) ───── │  (continuous, broadcast, delta+deflate)
   │                                    │
   │ ──── { cmd: audio_enabled,         │
   │        enabled: true } ───────────►│  (IQ gating: only now sends IQ data)
   │ ◄─── MSG_IQ_ADPCM (per-user) ──── │  (continuous, narrowband, ADPCM compressed)
+  │                                    │
+  │ ──── { cmd: stereo_enabled,        │
+  │        enabled: true } ───────────►│  (server-side stereo toggle for Opus)
   │                                    │
   │ ──── { cmd: tune, offset: 25000 }► │
   │      (IqExtractor NCO retuned)     │
@@ -375,13 +383,17 @@ Routes data between dongles and connected clients.
 - `bandwidth` — filter bandwidth in Hz
 - `isAdmin` — admin-authenticated flag
 - `iqExtractor` — per-client IqExtractor instance (created on subscribe)
-- `fftCodec` / `iqCodec` — per-client codec preference (`'none'` or `'adpcm'`)
+- `fftCodec` — per-client FFT codec preference (`'none'` | `'adpcm'` | `'deflate'`)
+- `iqCodec` — per-client IQ codec preference (`'none'` | `'adpcm'` | `'opus'` | `'opus-hq'`)
 - `iqAdpcmEncoder` — per-client IMA-ADPCM encoder instance (created when iqCodec is `'adpcm'`)
+- `opusPipeline` — per-client Opus audio pipeline (created when iqCodec is `'opus'` or `'opus-hq'`), includes server-side demodulators
+- `iqAccumBuffer` — IQ accumulation buffer for fixed-size chunk delivery (~20ms per message)
 - `audioEnabled` — whether client has enabled audio (IQ data only sent when true)
 
 **Data routing:**
-- FFT data → broadcast to all clients subscribed to the dongle, lazy-encoded per codec (Uint8 for `none`, ADPCM for `adpcm`)
-- IQ sub-band → extracted per-client via `iqExtractor.process()`, optionally ADPCM-compressed, sent only if `audioEnabled`
+- FFT data → broadcast to all clients subscribed to the dongle, lazy-encoded per codec (Uint8 for `none`, ADPCM for `adpcm`, delta+deflate for `deflate`)
+- IQ sub-band → extracted per-client via `iqExtractor.process()`, accumulated into fixed ~20ms chunks, optionally ADPCM-compressed, sent only if `audioEnabled`
+- Opus audio → when `iqCodec` is `'opus'`/`'opus-hq'`, IQ is demodulated server-side and encoded as Opus VBR packets, sent as `MSG_AUDIO_OPUS`
 - Decoder output → broadcast to all clients on the dongle
 
 **Backpressure:**
@@ -394,8 +406,9 @@ Routes data between dongles and connected clients.
 - `mode` → updates `mode`, adjusts IqExtractor output sample rate + re-initializes filter
 - `bandwidth` → updates client bandwidth
 - `subscribe` → creates IqExtractor for client, sends `subscribed` meta with `iqSampleRate`
-- `codec` → sets per-client `fftCodec`/`iqCodec`, creates/destroys ADPCM encoder as needed
+- `codec` → sets per-client `fftCodec`/`iqCodec`, creates/destroys ADPCM encoder or Opus pipeline as needed
 - `audio_enabled` → sets `audioEnabled` flag; IQ data only sent when true
+- `stereo_enabled` → toggles stereo/mono for Opus pipeline (server-side stereo demod)
 
 **Throughput logging:** Every 5 seconds, logs IQ samples/s in, IQ samples/s out, and total bytes.
 
@@ -592,8 +605,9 @@ AudioContext.destination
 
 **AudioWorklet processor:**
 - Separate L/R ring buffers (3 seconds at 48kHz each)
-- Jitter buffer: 100ms minimum fill (4800 samples) before starting playback
-- Overflow protection: drops oldest data + 50ms headroom when buffer would exceed capacity
+- Jitter buffer: 150ms minimum fill (7200 samples) before starting playback, 200ms target (9600 samples)
+- Adaptive rate control: when buffer >300ms, consumes 129 samples/frame (drain); when <150ms, consumes 127 (fill); normal 128
+- Overflow protection: drops oldest data + 100ms headroom when buffer would exceed capacity
 - Underrun detection: goes silent and waits for minimum fill before resuming
 - Message protocol: `'reset'` (flush), `{ left, right? }` (stereo/mono), `Float32Array` (legacy mono)
 
@@ -619,7 +633,7 @@ SolidJS signals for UI state only. Hot data (FFT, audio) bypasses the store enti
 - EQ: `eqLow`, `eqLowMid`, `eqMid`, `eqHighMid`, `eqHigh` (all dB, default 0)
 - Stereo: `stereoEnabled`, `stereoDetected`, `stereoThreshold`
 - Noise Reduction: `nrEnabled`, `nrStrength`, `nbEnabled`, `nbLevel`
-- Codec: `fftCodec`, `iqCodec` (both `CodecType`, default `'adpcm'`)
+- Codec: `fftCodec` (`FftCodecType`, default `'deflate'`), `iqCodec` (`IqCodecType`, default `'adpcm'`)
 - Codec Stats: `fftWireBytes`, `fftRawBytes`, `iqWireBytes`, `iqRawBytes` (bytes/sec)
 - Display: `waterfallTheme`, `uiTheme`, `waterfallMin`, `waterfallMax`, `waterfallAutoRange`, `fftSize`, `iqSampleRate`, `meterStyle` (`'bar'` | `'needle'`)
 - Stats: `fftRate`, `iqRate`, `wsBytes`, `wsBytesHistory` (30-second array)
@@ -645,7 +659,7 @@ SolidJS signals for UI state only. Hot data (FFT, audio) bypasses the store enti
 - **5-Band EQ** — vertical sliders for LOW/L-M/MID/H-M/HIGH with dB labels, color feedback (cyan=boost, amber=cut), reset button
 - **SquelchControl** — adjustable dB threshold slider
 - **WaterfallSettings** — 5 palette buttons, min/max dB sliders, auto-scale toggle
-- **CodecSettings** — FFT and IQ codec toggles (None/ADPCM) with live compression ratio, wire bandwidth, and savings stats
+- **CodecSettings** — FFT codec toggles (None/ADPCM/Deflate) and IQ codec toggles (None/ADPCM/Opus/Opus HQ) with live compression ratio, wire bandwidth, and savings stats
 - **ConnectionStatus** — connected/disconnected indicator
 - **DongleSelector** — dongle + profile dropdown
 - **AdminPanel** — login, dongle start/stop, profile switch
@@ -671,13 +685,20 @@ ServerConfig {
 
 DongleConfig {
   id: string
-  deviceIndex?: number      // for local source
+  deviceIndex?: number        // for local source
   name: string
   serial?: string
-  ppmCorrection: number     // default 0
-  autoStart: boolean        // default true
+  ppmCorrection: number       // default 0
+  autoStart: boolean          // default true
   source: SourceConfig
   profiles: DongleProfile[]
+  // Hardware options (all optional)
+  directSampling?: 0 | 1 | 2 // 0=off, 1=I-branch, 2=Q-branch (for HF <24MHz)
+  biasT?: boolean             // bias-T power for active antennas
+  digitalAgc?: boolean        // RTL2832U internal digital AGC
+  offsetTuning?: boolean      // E4000 offset tuning mode
+  ifGain?: [number, number][] // IF gain stages [[stage, dB], ...] (E4000 only)
+  tunerBandwidth?: number     // hardware anti-alias filter Hz (rtl-sdr-blog fork)
 }
 
 SourceConfig {
@@ -693,7 +714,7 @@ DongleProfile {
   name: string
   centerFrequency: number   // Hz
   sampleRate: number        // Hz
-  fftSize: number           // power of 2, default 2048, max 16384
+  fftSize: number           // power of 2, default 2048, max 65536
   fftFps: number            // FFT frame rate cap, 1-60, default 30
   defaultMode: DemodMode
   defaultTuneOffset: number
@@ -836,7 +857,7 @@ After demodulation, audio passes through the Web Audio API graph:
 
 ```
 Float32 samples (48kHz, mono or stereo)
-    ↓ AudioWorklet jitter buffer (100ms min fill, 3s ring buffer)
+    ↓ AudioWorklet adaptive jitter buffer (150ms min fill, 200ms target, 3s ring buffer)
     ↓ StereoPannerNode (balance control)
     ↓ 5-band parametric EQ (lowshelf 80Hz → peaking 500Hz → peaking 1.5kHz → peaking 4kHz → highshelf 12kHz)
     ↓ Loudness: GainNode pre-boost (1.8× when ON) → DynamicsCompressorNode (threshold -30dB, ratio 8:1)
@@ -866,7 +887,7 @@ Standard IMA-ADPCM codec providing 4:1 lossy compression (Int16 → 4-bit nibble
 - Wire format: `[0x09][Uint32 sampleCount LE][ADPCM bytes]`
 - Sample count needed because ADPCM output is always even-length (pairs of nibbles)
 
-**Codec negotiation:** Client sends `{ cmd: 'codec', fftCodec: 'adpcm', iqCodec: 'adpcm' }`. Server creates per-client encoder instances. Both `none` (raw) and `adpcm` paths are always available. Default is `adpcm` for both.
+**Codec negotiation:** Client sends `{ cmd: 'codec', fftCodec: 'deflate', iqCodec: 'adpcm' }`. Server creates per-client encoder instances. FFT codecs: `none` (Uint8), `adpcm` (~8:1), `deflate` (~10:1 lossless, default). IQ codecs: `none` (raw Int16), `adpcm` (4:1, default), `opus` (32kbps server-side demod), `opus-hq` (128kbps server-side demod).
 
 ### 8.6 Noise Reduction
 
@@ -892,6 +913,134 @@ Client-side audio noise reduction applied after demodulation, before AudioWorkle
 - Effective for impulse noise (AM/HF), power line interference
 
 **NoiseReductionEngine:** Unified controller with dual L/R instances for stereo. Methods: `setNrEnabled()`, `setNrStrength()`, `setNbEnabled()`, `setNbLevel()`, `processMono()`, `processStereo()`, `reset()`.
+
+### 8.7 Delta+Deflate FFT Compression
+
+**Message type:** `MSG_FFT_DEFLATE` (0x0B)
+
+Lossless FFT compression using spatial delta encoding + zlib raw deflate. The default FFT codec.
+
+**Server encode pipeline:**
+1. `compressFft()` quantizes Float32 dB to Uint8 (0-255) with fixed range (-130 to 0 dB)
+2. Delta-encode the Uint8 array: first byte absolute, subsequent bytes are wrapping differences `uint8[i] - uint8[i-1]`
+3. Compress delta buffer with `zlib.deflateRawSync(delta, { level: 6 })`
+4. Prepend 8-byte header: `[Int16 minDb LE][Int16 maxDb LE][Uint32 binCount LE]`
+
+**Client decode pipeline:**
+1. Read 8-byte header (minDb, maxDb, binCount)
+2. Inflate with `fflate.inflateSync()` (14KB pure JS library)
+3. Undo delta: running sum to reconstruct Uint8 dB values
+4. Map Uint8 to Float32 dB using header min/max range
+
+**Performance:**
+- Real-world FM broadcast: ~10:1 vs raw Float32 (better than ADPCM's fixed 8:1 because real spectra have smooth gradients that delta+deflate exploits)
+- Demo simulator: ~7.5:1 at 16384 bins
+- ADPCM is fixed 8:1 regardless of spectrum content
+- Encode: ~20µs per frame, decode: ~60µs (vs ADPCM ~5µs each)
+- Default codec since v0.7.0
+
+### 8.8 Opus VBR Audio Compression
+
+**File:** `server/src/opus-audio.ts`
+
+Server-side demodulation + Opus VBR encoding for ultra-low-bandwidth audio delivery. When a client selects `iqCodec: 'opus'` or `'opus-hq'`, the server demodulates IQ data and sends compressed audio instead of raw IQ.
+
+**Two quality tiers:**
+
+| Codec | Mono Bitrate | Stereo Bitrate | Use Case |
+|-------|-------------|---------------|----------|
+| `opus` | 32 kbps | 64 kbps | Low bandwidth, voice-quality |
+| `opus-hq` | 128 kbps | 192 kbps | High quality, music-capable |
+
+**Server-side demodulators** (simplified versions of client-side DSP):
+- `FmStereoDemod` — WFM with PLL stereo (19kHz pilot, SNR-proportional blend, de-emphasis, 240k→48k decimation)
+- `CQuamStereoDemod` — C-QUAM AM stereo (PLL, cosGamma, 25Hz Goertzel pilot, notch filter)
+- `FmMonoDemod` — NFM with de-emphasis
+- `AmMonoDemod` — AM envelope detection + AGC
+- `SsbMonoDemod` — SSB with AGC
+- `CwMonoDemod` — CW with 700Hz BFO + AGC
+
+**Pipeline:**
+```
+IQ (Int16Array from IqExtractor)
+    ↓ Server-side demod → Float32 audio (mono or stereo)
+    ↓ Resample to 48kHz if needed (linear interpolation for SSB/CW)
+    ↓ Accumulate 960 samples (20ms frame)
+    ↓ Convert to Int16 PCM buffer
+    ↓ opusscript WASM encode → Opus packet (55-91 bytes typical)
+    ↓ Pack: [0x0C][Uint16 sampleCount][Uint8 channels][Opus bytes]
+    ↓ WebSocket send
+```
+
+**Dynamic stereo switching:** When the demodulator detects stereo (PLL lock + pilot), the pipeline switches from 1-channel to 2-channel Opus encoding dynamically. The `channels` byte in the wire format tells the client which mode each packet uses. Client auto-recreates the Opus decoder on stereo↔mono transitions.
+
+**Dependencies:** `opusscript` (Emscripten WASM, ~948KB) on server, `opus-decoder` (85.5KB inline WASM) on client.
+
+**Stereo control:** Client sends `{ cmd: 'stereo_enabled', enabled: boolean }` to toggle server-side stereo on/off. Server sets `forceMono` flag in the pipeline.
+
+### 8.9 Server-Side IQ Chunk Accumulation
+
+**File:** `server/src/ws-manager.ts`
+
+IQ extractor output is variable-sized (depends on dongle chunk size and decimation ratio). To prevent audio fragmentation, the server accumulates IQ samples into fixed ~20ms chunks before sending.
+
+**Per-client accumulation buffer:**
+- Target duration: 20ms (`IQ_CHUNK_DURATION_S = 0.020`)
+- Buffer size: `Math.ceil(sampleRate × 0.020) × 2 × 2` bytes (I+Q pairs as Int16)
+- WFM (240kHz): 9600 Int16 values per chunk
+- NFM (48kHz): 1920 Int16 values per chunk
+- CW (12kHz): 480 Int16 values per chunk
+
+Buffer is reset on subscribe, mode change, tune, and codec change. Opus path bypasses this (has its own 960-sample frame accumulation).
+
+### 8.10 Client-Side Resampler
+
+**File:** `client/src/engine/sdr-engine.ts`
+
+Demodulators for SSB (24kHz) and CW (12kHz) output audio at rates below the 48kHz AudioWorklet sample rate. A linear interpolation resampler upsamples to 48kHz.
+
+- `resampleRatio`: 1 for WFM/NFM/AM (48kHz output), 2 for SSB, 4 for CW
+- `resampleTo48k(samples)`: fractional phase linear interpolation with phase continuity across calls
+- `resampleStereoTo48k(left, right)`: synchronized dual-channel resampling
+- Applied after noise reduction, before AudioWorklet push
+
+### 8.11 RDS Decoder
+
+**File:** `client/src/engine/rds-decoder.ts`
+
+Client-side FM RDS (Radio Data System) decoder. Taps the composite MPX signal from the WFM FM discriminator at 240kHz.
+
+**DSP chain:**
+1. Cascaded BPF at 57kHz (2× biquad Q=10)
+2. NCO mix-down to baseband (57kHz)
+3. Decimate ÷10 → 24kHz
+4. LPF 2.4kHz (biquad Butterworth)
+5. SymbolSync (integrate-and-dump, ~10 samples/symbol at 2375 baud)
+6. BiphaseDecoder (differential Manchester, 128-symbol clock polarity window)
+7. DeltaDecoder (differential → absolute)
+8. BlockSync (26-bit shift register, CRC syndrome check with IEC 62106 parity matrix, 5 block offsets A/B/C/C'/D)
+9. GroupParser (types 0A/0B → PS name, 2A/2B → RadioText, 4A → Clock Time, AF decoding)
+
+**Output data:**
+```typescript
+interface RdsData {
+  pi?: number;       // Programme Identification (hex)
+  ps?: string;       // Programme Service name (8 chars)
+  rt?: string;       // RadioText (64 chars)
+  pty?: number;      // Programme Type (0-31)
+  ptyName?: string;  // PTY label
+  tp?: boolean;      // Traffic Programme
+  ta?: boolean;      // Traffic Announcement
+  ms?: boolean;      // Music/Speech
+  ct?: string;       // Clock Time
+  af?: number[];     // Alternative Frequencies (MHz)
+  synced: boolean;   // Block sync acquired
+}
+```
+
+**Integration:** `FmDemodulator` creates `RdsDecoder` when wideband. `processWfmStereo()` feeds each composite sample to `rdsDecoder.pushSample()`. `SdrEngine` wires RDS callback to store signals. UI overlay in `WaterfallDisplay.tsx` shows RDS logo + PS name + RadioText + PTY/PI.
+
+**CPU overhead:** <0.5% (57kHz BPF + NCO + ÷10 decimate + symbol sync + bit processing).
 
 ---
 
@@ -1134,11 +1283,12 @@ location / {
 | Server CPU | ~5–15% | 1 dongle, 2048 FFT, 2.4 MSPS (single core) |
 | IQ extraction | 6.7× real-time | Per client, 2.4 MSPS → 240k (WFM) |
 | Client FM demod | 38× real-time | 240kHz IQ → 48kHz audio |
-| Client JS bundle | ~101 KB (~30 KB gzip) | Full application |
+| Client JS bundle | ~213 KB (~60 KB gzip) | Full application (includes fflate + opus-decoder WASM) |
 | Client CSS bundle | ~26 KB (~5.7 KB gzip) | Tailwind v4 |
-| WS bandwidth per client (ADPCM) | ~125–300 KB/s | 2048 FFT ADPCM @ 30fps + IQ ADPCM sub-band |
-| WS bandwidth per client (raw) | ~500–1200 KB/s | 2048 FFT Float32 @ 30fps + raw IQ sub-band |
-| Audio latency | ~100–200 ms | AudioWorklet jitter buffer |
+| WS bandwidth (deflate FFT + ADPCM IQ) | ~55–270 KB/s | Deflate FFT ~20 KB/s + ADPCM IQ 48–240 KB/s |
+| WS bandwidth (deflate FFT + Opus) | ~22–28 KB/s | Deflate FFT ~20 KB/s + Opus 2–8 KB/s |
+| WS bandwidth (raw) | ~500–1200 KB/s | 2048 FFT Float32 @ 30fps + raw IQ sub-band |
+| Audio latency | ~150–250 ms | AudioWorklet adaptive jitter buffer |
 
 ### Bottlenecks
 
@@ -1159,9 +1309,7 @@ location / {
 - **User sessions** — optional authentication for persistent settings
 - **Multi-server** — aggregate multiple no-sdr instances behind a gateway
 - **Worker threads** — offload FFT and IQ extraction from the main event loop
-- **RDS decoding** — FM broadcast metadata (station name, song title, traffic info)
 - **Spectral NR rework** — current Wiener filter has robotic artifacts; consider RNNoise (WASM), multi-band expander
-- **Opus audio codec** — server-side demod + Opus VBR for ultra-low-bandwidth clients
 
 ### Potential Decoder Additions
 
@@ -1173,6 +1321,5 @@ location / {
 
 ### Protocol Extensions
 
-- Opus-compressed audio transport (server-side demod for low-bandwidth clients)
 - Bi-directional audio (TX support for licensed operators)
 - Waterfall history (seek-back in time)
