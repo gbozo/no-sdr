@@ -28,6 +28,7 @@ import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
 import { AudioEngine } from './audio.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
+import type { RdsData } from './demodulators.js';
 import { NoiseReductionEngine } from './noise-reduction.js';
 import { store } from '../store/index.js';
 
@@ -82,6 +83,28 @@ export class SdrEngine {
   constructor() {
     this.audio = new AudioEngine();
     this.demodulator = getDemodulator(store.mode());
+    this.attachRdsCallback();
+  }
+
+  /** Attach RDS callback to current demodulator if it supports RDS */
+  private attachRdsCallback(): void {
+    if (this.demodulator.setRdsCallback) {
+      this.demodulator.setRdsCallback((data: RdsData) => {
+        console.log('[RDS]', JSON.stringify(data));
+        store.setRdsPs(data.ps);
+        store.setRdsRt(data.rt);
+        store.setRdsPty(data.ptyName);
+        store.setRdsPi(data.pi !== null ? data.pi.toString(16).toUpperCase().padStart(4, '0') : '');
+        store.setRdsSynced(data.synced);
+      });
+    } else {
+      // Clear RDS data when not in WFM mode
+      store.setRdsPs('');
+      store.setRdsRt('');
+      store.setRdsPty('');
+      store.setRdsPi('');
+      store.setRdsSynced(false);
+    }
   }
 
   /**
@@ -539,6 +562,7 @@ export class SdrEngine {
           this.demodulator = getDemodulator(m);
           this.demodulator.reset();
           this.demodulator.setBandwidth(store.bandwidth());
+          this.attachRdsCallback();
           if (meta.iqSampleRate) {
             this.demodulator.setInputSampleRate(meta.iqSampleRate);
           }
@@ -569,6 +593,7 @@ export class SdrEngine {
           this.demodulator = getDemodulator(m);
           this.demodulator.reset();
           this.demodulator.setBandwidth(store.bandwidth());
+          this.attachRdsCallback();
           if (meta.iqSampleRate) {
             this.demodulator.setInputSampleRate(meta.iqSampleRate);
           }
@@ -648,6 +673,7 @@ export class SdrEngine {
     this.demodulator = getDemodulator(m);
     this.demodulator.reset();
     this.demodulator.setBandwidth(store.bandwidth());
+    this.attachRdsCallback();
     // Flush stale audio data
     this.audio.resetBuffer();
     // Reset noise reduction state for new mode

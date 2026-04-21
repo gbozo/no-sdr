@@ -2,7 +2,7 @@
 // node-sdr — Frequency Display Component
 // ============================================================
 
-import { Component, createMemo, For } from 'solid-js';
+import { Component, createMemo, For, Show } from 'solid-js';
 import { store } from '../store/index.js';
 import { formatFrequencyDotted } from '@node-sdr/shared';
 
@@ -34,8 +34,16 @@ const FrequencyDisplay: Component = () => {
       <div class="sdr-scanlines" />
       <div class="sdr-dot-grid" />
       <div class="p-3">
-        <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">
-          VFO Frequency
+        <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1 flex items-center">
+          <span>VFO Frequency</span>
+          <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
+            <span
+              class="ml-auto text-[8px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded
+                     text-green border border-green/40 bg-green-dim shadow-[0_0_6px_rgba(56,193,128,0.3)]"
+            >
+              STEREO
+            </span>
+          </Show>
         </div>
         <div class="font-display text-4xl tracking-wider leading-none"
              style={{ color: 'var(--sdr-freq-color)' }}>

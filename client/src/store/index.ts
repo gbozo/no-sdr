@@ -90,6 +90,13 @@ function createStore() {
   const [iqWireBytes, setIqWireBytes] = createSignal(0);     // IQ wire bytes/sec (compressed)
   const [iqRawBytes, setIqRawBytes] = createSignal(0);       // IQ equivalent raw bytes/sec
 
+  // ---- RDS Data (WFM only) ----
+  const [rdsPs, setRdsPs] = createSignal('');                 // Programme Service name (8 chars)
+  const [rdsRt, setRdsRt] = createSignal('');                 // RadioText (up to 64 chars)
+  const [rdsPty, setRdsPty] = createSignal('');               // Programme Type name
+  const [rdsPi, setRdsPi] = createSignal('');                 // PI code (hex string)
+  const [rdsSynced, setRdsSynced] = createSignal(false);      // RDS sync acquired
+
   return {
     // Connection
     connected, setConnected,
@@ -162,6 +169,13 @@ function createStore() {
     fftRawBytes, setFftRawBytes,
     iqWireBytes, setIqWireBytes,
     iqRawBytes, setIqRawBytes,
+
+    // RDS Data
+    rdsPs, setRdsPs,
+    rdsRt, setRdsRt,
+    rdsPty, setRdsPty,
+    rdsPi, setRdsPi,
+    rdsSynced, setRdsSynced,
   };
 }
 

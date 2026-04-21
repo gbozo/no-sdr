@@ -2,7 +2,7 @@
 // node-sdr — Waterfall + Spectrum Component
 // ============================================================
 
-import { Component, onMount, onCleanup } from 'solid-js';
+import { Component, onMount, onCleanup, Show } from 'solid-js';
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 
@@ -60,6 +60,8 @@ const WaterfallDisplay: Component = () => {
           onClick={handleClick}
         />
         <div class="sdr-scanlines" />
+        {/* RDS overlay (bottom-left of waterfall, WFM only) */}
+        <RdsOverlay />
       </div>
     </div>
   );
@@ -85,6 +87,53 @@ const FrequencyScale: Component = () => {
         <span>{formatFreq(store.centerFrequency() + store.sampleRate() / 2)}</span>
       </div>
     </div>
+  );
+};
+
+// RDS data overlay — shown in WFM mode when RDS data is available
+const RdsOverlay: Component = () => {
+  const isWfm = () => store.mode() === 'wfm';
+  const hasData = () => store.rdsPs() || store.rdsRt();
+  const synced = () => store.rdsSynced();
+
+  return (
+    <Show when={isWfm()}>
+      <div class="absolute bottom-2 left-2 pointer-events-none z-10
+                  bg-black/40 border border-white/10 rounded px-2 py-1.5
+                  max-w-[340px] flex items-start gap-2">
+        {/* RDS logo — greyed out when not synced, bright when active */}
+        <div class={`text-[11px] font-bold font-mono leading-none mt-px select-none shrink-0
+                     ${synced() ? 'text-white opacity-90' : 'text-text-muted opacity-40'}`}
+             style={{ "letter-spacing": "0.5px" }}>
+          RDS
+        </div>
+        {/* Data area */}
+        <Show when={hasData() || synced()}>
+          <div class="min-w-0">
+            <Show when={store.rdsPs()}>
+              <div class="text-[13px] font-mono font-bold text-white tracking-wider leading-tight">
+                {store.rdsPs()}
+              </div>
+            </Show>
+            <Show when={store.rdsRt()}>
+              <div class="text-[9px] font-mono text-white/80 leading-tight mt-0.5 truncate">
+                {store.rdsRt()}
+              </div>
+            </Show>
+            <Show when={store.rdsPty() || store.rdsPi() || synced()}>
+              <div class="text-[7px] font-mono text-white/60 mt-0.5 flex gap-2">
+                <Show when={store.rdsPty()}>
+                  <span>{store.rdsPty()}</span>
+                </Show>
+                <Show when={store.rdsPi()}>
+                  <span class="opacity-70">PI:{store.rdsPi()}</span>
+                </Show>
+              </div>
+            </Show>
+          </div>
+        </Show>
+      </div>
+    </Show>
   );
 };
 

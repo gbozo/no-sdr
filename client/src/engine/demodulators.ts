@@ -11,6 +11,8 @@
 // ============================================================
 
 import type { DemodMode } from '@node-sdr/shared';
+import { RdsDecoder } from './rds-decoder.js';
+import type { RdsData } from './rds-decoder.js';
 
 // ---- Stereo Output ----
 
@@ -44,7 +46,13 @@ export interface Demodulator {
   setInputSampleRate(rate: number): void;
   /** Set the filter bandwidth in Hz */
   setBandwidth(hz: number): void;
+  /** Register RDS data callback (WFM only) */
+  setRdsCallback?(cb: (data: RdsData) => void): void;
+  /** Get current RDS data snapshot (WFM only) */
+  getRdsData?(): RdsData | null;
 }
+
+export type { RdsData } from './rds-decoder.js';
 
 // ---- Low-Pass FIR Filter ----
 
@@ -505,6 +513,10 @@ class FmDemodulator implements Demodulator {
   private stereoEnabled = true;                     // user can disable stereo
   private _stereoDetected = false;
 
+  // RDS decoder (WFM only)
+  private rdsDecoder: RdsDecoder | null = null;
+  private onRdsCallback?: (data: RdsData) => void;
+
   constructor(wideband: boolean) {
     this.wideband = wideband;
     this.mode = wideband ? 'wfm' : 'nfm';
@@ -542,6 +554,8 @@ class FmDemodulator implements Demodulator {
     // Initialize stereo components for WFM
     if (wideband) {
       this.initStereo();
+      // Initialize RDS decoder (taps composite at 240 kHz)
+      this.rdsDecoder = new RdsDecoder(this.inputSampleRate);
     }
   }
 
@@ -657,6 +671,9 @@ class FmDemodulator implements Demodulator {
       this.prevI = i;
       this.prevQ = q;
 
+      // Feed composite to RDS decoder (before any filtering)
+      this.rdsDecoder?.pushSample(composite);
+
       // --- Stereo decoding ---
 
       // 1. PLL tracks 19 kHz pilot (includes internal BPF for detection),
@@ -745,6 +762,20 @@ class FmDemodulator implements Demodulator {
     this.lrFilter?.reset();
     this.lprFilter?.reset();
     this._stereoDetected = false;
+    this.rdsDecoder?.reset();
+  }
+
+  /** Register a callback for RDS data updates (WFM only) */
+  setRdsCallback(cb: (data: RdsData) => void): void {
+    this.onRdsCallback = cb;
+    if (this.rdsDecoder) {
+      this.rdsDecoder.setCallback(cb);
+    }
+  }
+
+  /** Get current RDS data snapshot */
+  getRdsData(): RdsData | null {
+    return this.rdsDecoder?.getData() ?? null;
   }
 
   setInputSampleRate(rate: number): void {
