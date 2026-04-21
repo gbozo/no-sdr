@@ -55,6 +55,13 @@ const RTL_TCP_CMD_SET_GAIN_BY_INDEX   = 0x0D; // index into gain table
 const RTL_TCP_CMD_SET_BIAS_TEE        = 0x0E; // 0=off, 1=on
 const RTL_TCP_HEADER_SIZE             = 12;   // "RTL0" magic + tuner type (4) + gain count (4)
 
+// ---- rtl_tcp-compatible protocol variants ----
+// All use 5-byte command structure (cmd + 4 bytes param BE)
+// Header sizes vary: RTL uses "RTL0" (12B), RSP uses "RSP0" (12B), others use custom/variable
+const AIRSPY_TCP_HEADER_SIZE    = 0; // airspy_tcp: no standard header
+const HFP_TCP_HEADER_SIZE     = 0; // hfp_tcp: no standard header
+const RSP_TCP_HEADER_SIZE     = 12; // rsp_tcp: "RSP0" (4B) + device_type (4B) + serial (4B)
+
 export class DongleManager extends EventEmitter {
   private dongles = new Map<string, DongleState>();
   private readonly maxRestarts = 5;
@@ -142,6 +149,15 @@ export class DongleManager extends EventEmitter {
         break;
       case 'rtl_tcp':
         this.connectRtlTcp(dongleId, state, profile as DongleProfile);
+        break;
+      case 'airspy_tcp':
+        this.connectAirspyTcp(dongleId, state, profile as DongleProfile);
+        break;
+      case 'hfp_tcp':
+        this.connectHfpTcp(dongleId, state, profile as DongleProfile);
+        break;
+      case 'rsp_tcp':
+        this.connectRspTcp(dongleId, state, profile as DongleProfile);
         break;
       case 'local':
       default:
@@ -378,6 +394,326 @@ export class DongleManager extends EventEmitter {
     socket.connect(port, host);
   }
 
+  // ----------------------------------------------------------------
+  // Source: airspy_tcp (TCP client to airspy_tcp server)
+  // ----------------------------------------------------------------
+
+  /**
+   * Connect to a remote airspy_tcp server (AirSpy Mini/R2).
+   *
+   * Protocol: rtl_tcp compatible (5-byte commands).
+   * No standard header — header size = 0.
+   * Supported sample rates: 2.5 MS/s, 6 MS/s.
+   *
+   * Servers:
+   *   - TLeconte/airspy_tcp: github.com/TLeconte/airspy_tcp
+   *   - F4FHH version
+   */
+  private connectAirspyTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+    const source = state.config.source ?? { type: 'airspy_tcp' as const };
+    const host = source.host ?? '127.0.0.1';
+    const port = source.port ?? 1234;
+
+    logger.info({ dongleId, host, port }, 'Connecting to airspy_tcp server');
+
+    const socket = new Socket();
+    state.socket = socket;
+    state.rtlTcpHeaderReceived = true; // No header to wait for
+
+    socket.on('connect', () => {
+      logger.info({ dongleId, host, port }, 'Connected to airspy_tcp server');
+      state.running = true;
+
+      // Send initial configuration
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+
+      // Gain control (simplified — maps to linearity/sensitivity mode)
+      if (profile.gain !== null && profile.gain !== undefined) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain));
+      } else {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+      }
+
+      // AirSpy-specific gain stages
+      if (state.config.vgaGain !== undefined) {
+        this.rtlTcpSendCommand(socket, 0x06, state.config.vgaGain); // VGA/IF gain
+      }
+      if (state.config.mixerGain !== undefined) {
+        this.rtlTcpSendCommand(socket, 0x07, state.config.mixerGain); // Mixer gain
+      }
+      if (state.config.lnaGain !== undefined) {
+        this.rtlTcpSendCommand(socket, 0x08, state.config.lnaGain); // LNA gain
+      }
+      if (state.config.linearityMode !== undefined) {
+        this.rtlTcpSendCommand(socket, 0x09, state.config.linearityMode ? 1 : 0); // Linearity vs sensitivity
+      }
+
+      // Bias-T
+      if (state.config.biasT) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+        logger.info({ dongleId }, 'Bias-T enabled');
+      }
+
+      this.emit('dongle-started', dongleId, profile);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      this.emit('iq-data', dongleId, chunk);
+    });
+
+    socket.on('error', (err) => {
+      logger.error({ dongleId, host, port, error: err.message }, 'airspy_tcp connection error');
+      state.lastError = err.message;
+      state.running = false;
+      state.socket = null;
+      this.emit('dongle-error', dongleId, err);
+      this.scheduleRestart(dongleId, state, profile, 'airspy_tcp');
+    });
+
+    socket.on('close', () => {
+      logger.info({ dongleId }, 'airspy_tcp connection closed');
+      const wasRunning = state.running;
+      state.running = false;
+      state.socket = null;
+
+      if (wasRunning) {
+        this.scheduleRestart(dongleId, state, profile, 'airspy_tcp');
+      } else {
+        this.emit('dongle-stopped', dongleId);
+      }
+    });
+
+    socket.connect(port, host);
+  }
+
+  // ----------------------------------------------------------------
+  // Source: hfp_tcp (TCP client to hfp_tcp server)
+  // ----------------------------------------------------------------
+
+  /**
+   * Connect to a remote hfp_tcp server (AirSpy HF+).
+   *
+   * Protocol: rtl_tcp compatible (5-byte commands).
+   * No standard header — header size = 0.
+   * Supported sample rates: 96k, 192k, 384k, 768k, 1536k.
+   * Frequency range: 0.5kHz–31MHz (HF) + 60–260MHz (VHF).
+   *
+   * Server: hotpaw2/hfp_tcp
+   */
+  private connectHfpTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+    const source = state.config.source ?? { type: 'hfp_tcp' as const };
+    const host = source.host ?? '127.0.0.1';
+    const port = source.port ?? 1234;
+
+    logger.info({ dongleId, host, port }, 'Connecting to hfp_tcp server');
+
+    const socket = new Socket();
+    state.socket = socket;
+    state.rtlTcpHeaderReceived = true; // No header to wait for
+
+    socket.on('connect', () => {
+      logger.info({ dongleId, host, port }, 'Connected to hfp_tcp server');
+      state.running = true;
+
+      // Send initial configuration
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+
+      // Gain control (AirSpy HF+ uses RF gain reduction, not individual stages)
+      if (profile.gain !== null && profile.gain !== undefined) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain));
+      } else {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+      }
+
+      // HF LNA (HF mode: enable for 0–31MHz)
+      if (state.config.hfLna !== undefined) {
+        this.rtlTcpSendCommand(socket, 0x06, state.config.hfLna ? 1 : 0);
+      }
+
+      // HF AGC mode
+      if (state.config.hfAgc !== undefined) {
+        this.rtlTcpSendCommand(socket, 0x07, state.config.hfAgc ? 1 : 0);
+      }
+
+      this.emit('dongle-started', dongleId, profile);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      this.emit('iq-data', dongleId, chunk);
+    });
+
+    socket.on('error', (err) => {
+      logger.error({ dongleId, host, port, error: err.message }, 'hfp_tcp connection error');
+      state.lastError = err.message;
+      state.running = false;
+      state.socket = null;
+      this.emit('dongle-error', dongleId, err);
+      this.scheduleRestart(dongleId, state, profile, 'hfp_tcp');
+    });
+
+    socket.on('close', () => {
+      logger.info({ dongleId }, 'hfp_tcp connection closed');
+      const wasRunning = state.running;
+      state.running = false;
+      state.socket = null;
+
+      if (wasRunning) {
+        this.scheduleRestart(dongleId, state, profile, 'hfp_tcp');
+      } else {
+        this.emit('dongle-stopped', dongleId);
+      }
+    });
+
+    socket.connect(port, host);
+  }
+
+  // ----------------------------------------------------------------
+  // Source: rsp_tcp (TCP client to rsp_tcp server)
+  // ----------------------------------------------------------------
+
+  /**
+   * Connect to a remote rsp_tcp server (SDRplay RSP1/2/duo/dx).
+   *
+   * Protocol: rtl_tcp compatible with RSP-specific extended commands.
+   * Header: "RSP0" (4B) + device_type (4B) + serial (4B).
+   * Supported sample rates: 2/4/6/8/10 MS/s.
+   *
+   * Servers:
+   *   - SDRplay/RSPTCPServer: github.com/SDRplay/RSPTCPServer (supports all RSPs)
+   *   - f4fhh/rsp_tcp: github.com/f4fhh/rsp_tcp (RSP1A/RSP2)
+   *
+   * Extended commands (0x80-0x84):
+   *   0x80: Antenna port select (0/1/2)
+   *   0x81: Notch filter on/off
+   *   0x82: Refclk output on/off
+   *   0x83: RF gain reduction (dB)
+   *   0x84: LNA state (0-3)
+   */
+  private connectRspTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+    const source = state.config.source ?? { type: 'rsp_tcp' as const };
+    const host = source.host ?? '127.0.0.1';
+    const port = source.port ?? 1234;
+
+    logger.info({ dongleId, host, port }, 'Connecting to rsp_tcp server');
+
+    const socket = new Socket();
+    state.socket = socket;
+    state.rtlTcpHeaderReceived = false;
+
+    let headerBuf = Buffer.alloc(0);
+
+    socket.on('connect', () => {
+      logger.info({ dongleId, host, port }, 'Connected to rsp_tcp server');
+      state.running = true;
+
+      // Send initial configuration
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+
+      // SDRplay uses gain reduction (20-59 dB, higher = less gain)
+      if (state.config.sdrplayGain !== undefined) {
+        this.rspSendExtended(socket, 0x83, state.config.sdrplayGain);
+      } else if (profile.gain !== null && profile.gain !== undefined) {
+        // Map generic gain to SDRplay gain reduction (20-59)
+        const sdrGain = Math.min(59, Math.max(20, Math.round(profile.gain)));
+        this.rspSendExtended(socket, 0x83, sdrGain);
+      }
+
+      // LNA state
+      if (state.config.sdrplayLna !== undefined) {
+        this.rspSendExtended(socket, 0x84, state.config.sdrplayLna);
+      }
+
+      // AGC
+      if (state.config.sdrplayAgc === false) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 0);
+      } else {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+      }
+
+      // Antenna port (SDRplay RSP2/RSPduo)
+      if (source.antennaPort !== undefined) {
+        this.rspSendExtended(socket, 0x80, source.antennaPort);
+        logger.info({ dongleId, port: source.antennaPort }, 'Antenna port set');
+      }
+
+      // Notch filter
+      if (source.notchFilter) {
+        this.rspSendExtended(socket, 0x81, 1);
+        logger.info({ dongleId }, 'Notch filter enabled');
+      }
+
+      // Refclk output
+      if (source.refclk) {
+        this.rspSendExtended(socket, 0x82, 1);
+        logger.info({ dongleId }, 'Refclk output enabled');
+      }
+
+      // Bias-T
+      if (state.config.biasT) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+        logger.info({ dongleId }, 'Bias-T enabled');
+      }
+
+      this.emit('dongle-started', dongleId, profile);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      if (!state.rtlTcpHeaderReceived) {
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        if (headerBuf.length >= RSP_TCP_HEADER_SIZE) {
+          const magic = headerBuf.subarray(0, 4).toString('ascii');
+          const deviceType = headerBuf.readUInt32BE(4);
+          const serial = headerBuf.readUInt32BE(8);
+          logger.info(
+            { dongleId, magic, deviceType, serial },
+            'rsp_tcp header received',
+          );
+          state.rtlTcpHeaderReceived = true;
+          const remaining = headerBuf.subarray(RSP_TCP_HEADER_SIZE);
+          if (remaining.length > 0) {
+            this.emit('iq-data', dongleId, remaining);
+          }
+          headerBuf = Buffer.alloc(0);
+        }
+      } else {
+        this.emit('iq-data', dongleId, chunk);
+      }
+    });
+
+    socket.on('error', (err) => {
+      logger.error({ dongleId, host, port, error: err.message }, 'rsp_tcp connection error');
+      state.lastError = err.message;
+      state.running = false;
+      state.socket = null;
+      this.emit('dongle-error', dongleId, err);
+      this.scheduleRestart(dongleId, state, profile, 'rsp_tcp');
+    });
+
+    socket.on('close', () => {
+      logger.info({ dongleId }, 'rsp_tcp connection closed');
+      const wasRunning = state.running;
+      state.running = false;
+      state.socket = null;
+
+      if (wasRunning) {
+        this.scheduleRestart(dongleId, state, profile, 'rsp_tcp');
+      } else {
+        this.emit('dongle-stopped', dongleId);
+      }
+    });
+
+    socket.connect(port, host);
+  }
+
   /**
    * Send a 5-byte rtl_tcp command packet
    */
@@ -385,6 +721,16 @@ export class DongleManager extends EventEmitter {
     const buf = Buffer.alloc(5);
     buf.writeUInt8(cmd, 0);
     buf.writeUInt32BE(param >>> 0, 1); // unsigned 32-bit
+    socket.write(buf);
+  }
+
+  /**
+   * Send a 5-byte RSP extended command (0x80-0x84).
+   */
+  private rspSendExtended(socket: Socket, cmd: number, param: number): void {
+    const buf = Buffer.alloc(5);
+    buf.writeUInt8(cmd, 0);
+    buf.writeUInt32BE(param >>> 0, 1);
     socket.write(buf);
   }
 
@@ -486,6 +832,15 @@ export class DongleManager extends EventEmitter {
         switch (sourceType) {
           case 'rtl_tcp':
             this.connectRtlTcp(dongleId, state, profile);
+            break;
+          case 'airspy_tcp':
+            this.connectAirspyTcp(dongleId, state, profile);
+            break;
+          case 'hfp_tcp':
+            this.connectHfpTcp(dongleId, state, profile);
+            break;
+          case 'rsp_tcp':
+            this.connectRspTcp(dongleId, state, profile);
             break;
           case 'demo':
             this.startSimulator(dongleId, state, profile);

@@ -35,9 +35,6 @@ const ControlPanel: Component = () => {
 
       {/* Dongle Selector */}
       <DongleSelector />
-
-      {/* Admin Panel */}
-      <AdminPanel />
     </div>
   );
 };

@@ -44,6 +44,7 @@
 
 ## Completed (Recent)
 
+- [x] **Multi-SDR network-TCP sources** — Added `airspy_tcp` (AirSpy Mini/R2), `hfp_tcp` (AirSpy HF+), and `rsp_tcp` (SDRplay RSP1/2/duo/dx) via rtl_tcp-compatible protocols. Extended DongleManager with device-specific gain controls and RSP extended commands (antenna port, notch filter, refclk, RF gain, LNA state). See `docs/hardware-integration.md` for CLI-based sources and extended features roadmap.
 - [x] **C-QUAM AM stereo demodulator** — full Motorola C-QUAM decode with PLL carrier lock, cosGamma correction, 25Hz Goertzel pilot detection, per-channel notch filter + AGC
 - [x] **Noise reduction engine** — spectral subtraction (Wiener filter, 512-pt FFT, overlap-add) + noise blanker (EMA amplitude tracking, hang timer). NR has artifacts; NB works well.
 - [x] **WFM stereo blend** — SNR-proportional continuous blend factor replacing hard on/off switch. Weak stations fade gracefully to mono.

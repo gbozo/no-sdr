@@ -156,6 +156,87 @@ app.get('/api/admin/status', adminAuth, (c) => {
   });
 });
 
+// ---- Admin: Dongle Management ----
+
+// Get all dongles with full config (for admin UI)
+app.get('/api/admin/dongles', adminAuth, (c) => {
+  return c.json(dongleManager.getConfig().dongles);
+});
+
+// Get full config for a specific dongle
+app.get('/api/admin/dongles/:id', adminAuth, (c) => {
+  const dongleId = c.req.param('id');
+  const dongle = dongleManager.getConfig().dongles.find(d => d.id === dongleId);
+  if (!dongle) return c.json({ error: 'Dongle not found' }, 404);
+  return c.json(dongle);
+});
+
+// Create a new dongle
+app.post('/api/admin/dongles', adminAuth, async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body || !body.id || !body.name) {
+    return c.json({ error: 'Required fields: id, name' }, 400);
+  }
+
+  try {
+    const config = dongleManager.getConfig();
+    if (config.dongles.some(d => d.id === body.id)) {
+      return c.json({ error: 'Dongle ID already exists' }, 400);
+    }
+    config.dongles.push({
+      id: body.id,
+      deviceIndex: body.deviceIndex ?? 0,
+      name: body.name,
+      serial: body.serial,
+      ppmCorrection: body.ppmCorrection ?? 0,
+      source: body.source ?? { type: 'local' },
+      profiles: body.profiles ?? [],
+      autoStart: body.autoStart ?? true,
+      ...body,
+    });
+    saveConfig(config);
+    return c.json({ ok: true, dongles: config.dongles }, 201);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Update an existing dongle
+app.put('/api/admin/dongles/:id', adminAuth, async (c) => {
+  const dongleId = c.req.param('id');
+  const body = await c.req.json().catch(() => null);
+  if (!body) {
+    return c.json({ error: 'Request body required' }, 400);
+  }
+
+  try {
+    const config = dongleManager.getConfig();
+    const idx = config.dongles.findIndex(d => d.id === dongleId);
+    if (idx === -1) return c.json({ error: 'Dongle not found' }, 404);
+    config.dongles[idx] = { ...config.dongles[idx], ...body, id: dongleId };
+    saveConfig(config);
+    return c.json({ ok: true, dongle: config.dongles[idx] });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Delete a dongle
+app.delete('/api/admin/dongles/:id', adminAuth, async (c) => {
+  const dongleId = c.req.param('id');
+
+  try {
+    const config = dongleManager.getConfig();
+    const idx = config.dongles.findIndex(d => d.id === dongleId);
+    if (idx === -1) return c.json({ error: 'Dongle not found' }, 404);
+    config.dongles.splice(idx, 1);
+    saveConfig(config);
+    return c.json({ ok: true, message: `Dongle ${dongleId} deleted` });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
 // ---- Admin: Profile CRUD ----
 
 // Create a new profile for a dongle

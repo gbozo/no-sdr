@@ -44,11 +44,18 @@ const DongleProfileSchema = z.object({
 });
 
 const SourceConfigSchema = z.object({
-  type: z.enum(['local', 'rtl_tcp', 'demo']).default('local'),
+  type: z.enum([
+    'local', 'rtl_tcp', 'demo',
+    'airspy_tcp', 'hfp_tcp', 'rsp_tcp',
+  ]).default('local'),
   host: z.string().optional(),
   port: z.number().int().positive().optional(),
   binary: z.string().optional(),
   extraArgs: z.array(z.string()).optional(),
+  // SDRplay-specific options
+  antennaPort: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+  notchFilter: z.boolean().optional(),
+  refclk: z.boolean().optional(),
 }).default({ type: 'local' });
 
 const DongleConfigSchema = z.object({
@@ -61,7 +68,7 @@ const DongleConfigSchema = z.object({
   profiles: z.array(DongleProfileSchema).min(1),
   autoStart: z.boolean().default(true),
 
-  // ---- Hardware options ----
+  // ---- Hardware options (RTL-SDR) ----
   /** Direct sampling mode: 0=off, 1=I-ADC, 2=Q-ADC (HF reception) */
   directSampling: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0).optional(),
   /** Bias-T power on antenna connector */
@@ -74,6 +81,32 @@ const DongleConfigSchema = z.object({
   ifGain: z.array(z.tuple([z.number().int().min(1).max(6), z.number().int()])).optional(),
   /** Tuner bandwidth in Hz (R820T/R828D only) */
   tunerBandwidth: z.number().int().positive().optional(),
+
+  // ---- Hardware options (AirSpy Mini/R2) ----
+  /** AirSpy: VGA/IF gain (0-15, default varies by mode) */
+  vgaGain: z.number().int().min(0).max(15).optional(),
+  /** AirSpy: Mixer gain (0-15) */
+  mixerGain: z.number().int().min(0).max(15).optional(),
+  /** AirSpy: LNA gain (0-14) */
+  lnaGain: z.number().int().min(0).max(14).optional(),
+  /** AirSpy: Use linearity mode (vs sensitivity mode) */
+  linearityMode: z.boolean().default(false).optional(),
+
+  // ---- Hardware options (AirSpy HF+) ----
+  /** AirSpy HF+: Enable HF LNA */
+  hfLna: z.boolean().default(false).optional(),
+  /** AirSpy HF+: Use HF AGC (vs manual) */
+  hfAgc: z.boolean().default(true).optional(),
+
+  // ---- Hardware options (SDRplay) ----
+  /** SDRplay: RF gain reduction in dB (20-59, higher = less gain) */
+  sdrplayGain: z.number().int().min(20).max(59).optional(),
+  /** SDRplay: LNA state (0-3) */
+  sdrplayLna: z.number().int().min(0).max(3).optional(),
+  /** SDRplay: Enable iq_balance AGC */
+  sdrplayAgc: z.boolean().default(true).optional(),
+  /** SDRplay: Min sample rate for AGC (Hz) */
+  sdrplayMinSampleRate: z.number().int().positive().optional(),
 });
 
 const ServerConfigSchema = z.object({

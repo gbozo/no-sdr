@@ -8,93 +8,27 @@
 # Source types:
 #   local   - spawn rtl_sdr as child process (default)
 #   rtl_tcp - connect to remote rtl_tcp server via TCP
-#   demo    - use built-in signal simulator (no hardware)
-#
-# Profiles can be managed at runtime via the admin REST API:
-#   POST   /api/admin/dongles/:id/profiles      (create)
-#   PUT    /api/admin/dongles/:id/profiles/:pid  (update)
-#   DELETE /api/admin/dongles/:id/profiles/:pid  (delete)
-#   POST   /api/admin/save-config                (persist to disk)
+#   demo    - use built-in signal simulator
 # ============================================================
 
 server:
-  host: "0.0.0.0"
+  host: 0.0.0.0
   port: 3000
-  adminPassword: "admin"
-  # demoMode: true   # uncomment to force ALL dongles into demo mode
-
+  adminPassword: admin
+  demoMode: false
 dongles:
-  # ─── Local USB dongle (disabled — no hardware on this machine) ──
-  # - id: dongle-0
-  #   deviceIndex: 0
-  #   name: "RTL-SDR #0"
-  #   ppmCorrection: 0
-  #   source:
-  #     type: local
-  #   autoStart: true
-  #
-  #   # Hardware options (all optional):
-  #   # directSampling: 0     # 0=off (default), 1=I-ADC, 2=Q-ADC (HF reception)
-  #   # biasT: false          # Enable bias-T power on antenna connector
-  #   # digitalAgc: false     # RTL2832U digital AGC
-  #   # offsetTuning: false   # Zero-IF shift (useful for E4000 tuner)
-  #   # ifGain:               # Tuner IF gain stages [stage, tenthsOfDb]
-  #   #   - [1, 60]           # Stage 1 = 6.0 dB
-  #   #   - [2, 90]           # Stage 2 = 9.0 dB
-  #   # tunerBandwidth: 0     # Tuner bandwidth in Hz (R820T/R828D only)
-  #
-  #   profiles:
-  #     - id: fm-broadcast
-  #       name: "FM Broadcast"
-  #       centerFrequency: 100000000
-  #       sampleRate: 2400000
-  #       fftSize: 2048
-  #       defaultMode: wfm
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 200000
-  #       gain: null
-  #       description: "FM broadcast band — 87.5 to 108 MHz"
-  #       decoders: []
-
-  #     - id: aviation
-  #       name: "Aviation VHF"
-  #       centerFrequency: 125000000
-  #       sampleRate: 2400000
-  #       fftSize: 2048
-  #       defaultMode: am
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 8330
-  #       gain: 40
-  #       description: "Aviation communications — 118 to 137 MHz"
-  #       decoders: []
-
-  #     - id: aviation
-  #       name: "Aviation VHF"
-  #       centerFrequency: 125000000
-  #       sampleRate: 2400000
-  #       fftSize: 2048
-  #       defaultMode: am
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 8330
-  #       gain: 40
-  #       description: "Aviation communications — 118 to 137 MHz"
-  #       decoders: []
-
-  # ─── Remote rtl_tcp dongle ──────────────────────────────
   - id: dongle-remote
     deviceIndex: 0
-    name: "Remote RTL-SDR (rtl_tcp)"
+    name: Remote RTL-SDR (rtl_tcp)
     ppmCorrection: 0
     source:
       type: rtl_tcp
-      host: "192.168.1.3"
+      host: 192.168.1.3
       port: 1234
-    autoStart: true
-    digitalAgc: true     # RTL2832U digital AGC
     profiles:
       - id: fm-broadcast
-        name: "FM Broadcast"
-        centerFrequency: 100000000    # 100 MHz
+        name: FM Broadcast
+        centerFrequency: 100000000
         sampleRate: 2400000
         fftSize: 4096
         fftFps: 8
@@ -102,138 +36,89 @@ dongles:
         defaultTuneOffset: 0
         defaultBandwidth: 200000
         gain: 29
-        description: "FM broadcast band — 87.5 to 108 MHz"
+        description: FM broadcast band — 87.5 to 108 MHz
         decoders: []
-
+        dongleId: dongle-remote
       - id: aviation
-        name: "Aviation VHF"
+        name: Aviation VHF
         centerFrequency: 125000000
         sampleRate: 2400000
         fftSize: 8192
+        fftFps: 30
         defaultMode: am
         defaultTuneOffset: 0
         defaultBandwidth: 8330
         gain: 40
-        description: "Aviation communications — 118 to 137 MHz"
+        description: Aviation communications — 118 to 137 MHz
         decoders: []
-
+        dongleId: dongle-remote
       - id: two-meter
-        name: "2m Amateur"
+        name: 2m Amateur
         centerFrequency: 146000000
         sampleRate: 2400000
         fftSize: 8192
+        fftFps: 30
         defaultMode: nfm
         defaultTuneOffset: 0
         defaultBandwidth: 12500
         gain: 40
-        description: "Amateur 2m band — 144 to 148 MHz"
+        description: Amateur 2m band — 144 to 148 MHz
         decoders: []
-
+        dongleId: dongle-remote
       - id: mw-broadcast
-        name: "MW Broadcast"
-        centerFrequency: 1000000      # 1000 kHz — center of MW band
-        sampleRate: 2400000           # covers ~530–2400 kHz
+        name: MW Broadcast
+        centerFrequency: 1000000
+        sampleRate: 2400000
         fftSize: 4096
         fftFps: 8
         defaultMode: am
-        defaultTuneOffset: 485000     # tune to 1485 kHz (Broadcast Italia C-QUAM)
+        defaultTuneOffset: 485000
         defaultBandwidth: 10000
         gain: 49.6
-        description: "MW broadcast band — 530 to 1700 kHz (direct sampling required)"
+        description: MW broadcast band — 530 to 1700 kHz (direct sampling required)
         decoders: []
-        # NOTE: MW reception requires direct sampling mode on the dongle.
-        # Set directSampling: 2 at the dongle level, or use a separate
-        # dongle config dedicated to HF/MW.
-
-  # ─── Docker sidecar rtl_tcp ─────────────────────────────
-  # Run rtl_tcp in a separate container with USB passthrough:
-  #
-  # docker-compose.yml:
-  #   rtl_tcp:
-  #     image: kosdk/rtl_tcp
-  #     privileged: true
-  #     devices: ["/dev/bus/usb:/dev/bus/usb"]
-  #     command: rtl_tcp -a 0.0.0.0
-  #
-  # - id: dongle-docker
-  #   deviceIndex: 0
-  #   name: "Docker RTL-SDR"
-  #   ppmCorrection: 0
-  #   source:
-  #     type: rtl_tcp
-  #     host: "rtl_tcp"        # Docker Compose service name
-  #     port: 1234
-  #   autoStart: true
-  #   profiles:
-  #     - id: fm
-  #       name: "FM Broadcast"
-  #       centerFrequency: 100000000
-  #       sampleRate: 2400000
-  #       fftSize: 2048
-  #       defaultMode: wfm
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 200000
-  #       gain: null
-  #       description: "FM broadcast via Docker rtl_tcp"
-  #       decoders: []
-
-  # ─── HF reception with direct sampling ────────────────────
-  # For HF (0–28 MHz), bypass the tuner and sample directly.
-  #
-  # - id: dongle-hf
-  #   deviceIndex: 0
-  #   name: "RTL-SDR HF Direct"
-  #   ppmCorrection: 0
-  #   directSampling: 2       # Q-ADC input (most common for HF)
-  #   biasT: true             # Power upconverter or active antenna
-  #   source:
-  #     type: local
-  #   autoStart: false
-  #   profiles:
-  #     - id: hf-80m
-  #       name: "80m Amateur"
-  #       centerFrequency: 3700000     # 3.7 MHz
-  #       sampleRate: 2400000
-  #       fftSize: 4096
-  #       defaultMode: lsb
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 2400
-  #       gain: 40
-  #       description: "80m amateur band — 3.5 to 4.0 MHz"
-  #       decoders: []
-  #
-  #     - id: hf-20m
-  #       name: "20m Amateur"
-  #       centerFrequency: 14200000    # 14.2 MHz
-  #       sampleRate: 2400000
-  #       fftSize: 4096
-  #       defaultMode: usb
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 2400
-  #       gain: 40
-  #       description: "20m amateur band — 14.0 to 14.35 MHz"
-  #       decoders: []
-
-  # ─── Demo / Simulator ───────────────────────────────────
-  # Simulated dongle for UI development (no hardware needed).
-  # Or use: NODE_SDR_DEMO=1 npm run dev
-  #
-  # - id: dongle-demo
-  #   deviceIndex: 0
-  #   name: "Simulated SDR"
-  #   ppmCorrection: 0
-  #   source:
-  #     type: demo
-  #   autoStart: true
-  #   profiles:
-  #     - id: fm-demo
-  #       name: "Simulated FM"
-  #       centerFrequency: 100000000
-  #       sampleRate: 2400000
-  #       fftSize: 2048
-  #       defaultMode: wfm
-  #       defaultTuneOffset: 0
-  #       defaultBandwidth: 200000
-  #       gain: null
-  #       description: "Simulated FM broadcast signals"
-  #       decoders: []
+        dongleId: dongle-remote
+    autoStart: true
+    digitalAgc: true
+  - id: dongle-1776773609495
+    deviceIndex: 0
+    name: New Dongle 1
+    ppmCorrection: 0
+    source:
+      type: local
+      port: 1234
+    profiles:
+      - id: default
+        name: Default Profile
+        centerFrequency: 100000000
+        sampleRate: 2400000
+        fftSize: 2048
+        fftFps: 30
+        defaultMode: wfm
+        defaultTuneOffset: 0
+        defaultBandwidth: 200000
+        gain: null
+        description: ''
+        decoders: []
+    autoStart: true
+    biasT: false
+  - id: dongle-1776774191637
+    deviceIndex: 0
+    name: New Dongle
+    ppmCorrection: 0
+    source:
+      type: local
+    profiles:
+      - id: default
+        name: Default Profile
+        centerFrequency: 100000000
+        sampleRate: 2400000
+        fftSize: 2048
+        fftFps: 30
+        defaultMode: wfm
+        defaultTuneOffset: 0
+        defaultBandwidth: 200000
+        gain: null
+        description: ''
+        decoders: []
+    autoStart: true

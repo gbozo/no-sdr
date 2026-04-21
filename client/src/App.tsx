@@ -8,6 +8,7 @@ import { engine } from './engine/sdr-engine.js';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
 import FrequencyDisplay from './components/FrequencyDisplay.js';
 import ControlPanel from './components/ControlPanel.js';
+import AdminModal from './components/AdminModal.js';
 
 const App: Component = () => {
   const [audioStarted, setAudioStarted] = createSignal(false);
@@ -63,6 +64,17 @@ const App: Component = () => {
           <ThemeButton theme="crt" label="CRT" />
           <ThemeButton theme="vfd" label="VFD" />
         </div>
+
+        {/* Admin Button */}
+        <button
+          class="ml-4 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
+                 border border-border rounded-sm
+                 text-text-dim hover:text-amber hover:border-amber
+                 transition-colors"
+          onClick={() => store.setAdminModalOpen(true)}
+        >
+          Admin
+        </button>
       </header>
 
       {/* Audio Start Prompt (one-time) */}
@@ -133,6 +145,9 @@ const App: Component = () => {
           </Show>
         </div>
       </footer>
+
+      {/* Admin Modal */}
+      <AdminModal />
     </div>
   );
 };

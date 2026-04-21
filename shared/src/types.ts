@@ -5,19 +5,31 @@
 // ---- Connection Source ----
 
 /** How to connect to the SDR hardware */
-export type SourceType = 'local' | 'rtl_tcp' | 'demo';
+export type SourceType =
+  | 'local'       // spawn rtl_sdr as child process
+  | 'rtl_tcp'     // TCP client to remote rtl_tcp server
+  | 'demo'        // built-in signal simulator
+  | 'airspy_tcp'  // TCP client to airspy_tcp server (AirSpy Mini/R2)
+  | 'hfp_tcp'     // TCP client to hfp_tcp server (AirSpy HF+)
+  | 'rsp_tcp';    // TCP client to rsp_tcp server (SDRplay RSP1/2)
 
 export interface SourceConfig {
-  /** Connection type: local (spawn rtl_sdr), rtl_tcp (remote TCP), demo (simulator) */
+  /** Connection type */
   type: SourceType;
-  /** For rtl_tcp: hostname or IP address of the rtl_tcp server */
+  /** For TCP sources: hostname or IP address of the SDR server */
   host?: string;
-  /** For rtl_tcp: TCP port (default 1234) */
+  /** For TCP sources: TCP port (default 1234) */
   port?: number;
   /** For local: path to rtl_sdr binary (default: "rtl_sdr" from PATH) */
   binary?: string;
   /** For local: additional CLI arguments to rtl_sdr */
   extraArgs?: string[];
+  /** For rsp_tcp: antenna port selection (0=Port A, 1=Port B, 2=Port C) */
+  antennaPort?: 0 | 1 | 2;
+  /** For rsp_tcp: enable broadcast notch filter */
+  notchFilter?: boolean;
+  /** For rsp_tcp: enable reference clock output */
+  refclk?: boolean;
 }
 
 // ---- Dongle & Hardware ----
@@ -38,6 +50,10 @@ export interface DongleInfo {
   running: boolean;
   /** Number of connected clients */
   clientCount: number;
+  /** Device model (for TCP sources, populated after connect) */
+  deviceModel?: string;
+  /** Sample rate (for TCP sources) */
+  sampleRate?: number;
 }
 
 export interface DongleProfile {

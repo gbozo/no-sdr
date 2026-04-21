@@ -74,6 +74,8 @@ function createStore() {
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [decoderPanelOpen, setDecoderPanelOpen] = createSignal(false);
   const [isAdmin, setIsAdmin] = createSignal(false);
+  const [adminModalOpen, setAdminModalOpen] = createSignal(false);
+  const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
   const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
 
   // ---- Codec Preferences ----
@@ -154,6 +156,8 @@ function createStore() {
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,
+    adminModalOpen, setAdminModalOpen,
+    adminSection, setAdminSection,
     meterStyle, setMeterStyle,
 
     // Codec Preferences
