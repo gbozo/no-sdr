@@ -96,8 +96,8 @@ dongles:
         name: "FM Broadcast"
         centerFrequency: 100000000    # 100 MHz
         sampleRate: 2400000
-        fftSize: 8192
-        fftFps: 12
+        fftSize: 4096
+        fftFps: 8
         defaultMode: wfm
         defaultTuneOffset: 0
         defaultBandwidth: 200000
@@ -133,8 +133,8 @@ dongles:
         name: "MW Broadcast"
         centerFrequency: 1000000      # 1000 kHz — center of MW band
         sampleRate: 2400000           # covers ~530–2400 kHz
-        fftSize: 8192
-        fftFps: 12
+        fftSize: 4096
+        fftFps: 8
         defaultMode: am
         defaultTuneOffset: 485000     # tune to 1485 kHz (Broadcast Italia C-QUAM)
         defaultBandwidth: 10000

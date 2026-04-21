@@ -75,6 +75,8 @@ Think of it as your own private, open [WebSDR](http://websdr.org) that you can r
 | **Opus HQ** | ~16 KB/s | VBR 128kbps mono / 192kbps stereo |
 
 Opus codecs use server-side demodulation with full stereo FM and C-QUAM support. Clients independently select their preferred codec — no restart needed.
+A typical HF / AM Profile with sampling rate of 2.4 MBPS , fft size of 4096 buckets with 8 frames per second and deflate compression 8-10 KB/s, with opus mono audio compression ~4 KB/s.
+So a total of around 12-13 KB/s per client of bandwidht required with full audio and waterfall, spectrum.
 
 </td>
 </tr>
