@@ -15,6 +15,10 @@ export class WaterfallRenderer {
   private w = 0;
   private h = 0;
 
+  // Zoom viewport — fractions of full bandwidth [0, 1]
+  private zoomStart = 0;
+  private zoomEnd   = 1;
+
   // Reusable ImageData for one row to avoid GC pressure
   private rowImageData: ImageData | null = null;
 
@@ -66,22 +70,23 @@ export class WaterfallRenderer {
 
     if (range === 0) return;
 
-    // Precompute bin-to-pixel mapping scale
-    const binsPerPixel = bins / w;
+    // Zoom-aware bin mapping
+    const viewStart  = this.zoomStart * bins;
+    const viewEnd    = this.zoomEnd   * bins;
+    const viewBins   = viewEnd - viewStart;
+    const binsPerPx  = viewBins / w;
 
     for (let x = 0; x < w; x++) {
       let db: number;
-      if (binsPerPixel <= 1) {
-        // More pixels than bins — interpolate
-        const binIdx = (x / (w - 1)) * (bins - 1);
-        const lo = Math.floor(binIdx);
+      const binF = viewStart + (x / (w - 1)) * (viewBins - 1);
+      if (binsPerPx <= 1) {
+        const lo = Math.floor(binF);
         const hi = Math.min(lo + 1, bins - 1);
-        const frac = binIdx - lo;
+        const frac = binF - lo;
         db = fftData[lo] + frac * (fftData[hi] - fftData[lo]);
       } else {
-        // More bins than pixels — peak-hold (max) across mapped bins
-        const binStart = Math.floor(x * binsPerPixel);
-        const binEnd = Math.min(Math.floor((x + 1) * binsPerPixel), bins);
+        const binStart = Math.max(0, Math.floor(binF));
+        const binEnd   = Math.min(bins, Math.floor(binF + binsPerPx));
         db = fftData[binStart];
         for (let b = binStart + 1; b < binEnd; b++) {
           if (fftData[b] > db) db = fftData[b];
@@ -116,6 +121,22 @@ export class WaterfallRenderer {
   setRange(minDb: number, maxDb: number): void {
     this.minDb = minDb;
     this.maxDb = maxDb;
+  }
+
+  setZoom(start: number, end: number): void {
+    this.zoomStart = Math.max(0, Math.min(start, end - 0.01));
+    this.zoomEnd   = Math.min(1, Math.max(end, start + 0.01));
+    this.rowImageData = null;
+    // Caller is responsible for calling prefillFromBuffer() after setZoom
+    // to avoid a blank waterfall — clear as fallback only
+    this.clear();
+  }
+
+  resetZoom(): void {
+    this.zoomStart = 0;
+    this.zoomEnd   = 1;
+    this.rowImageData = null;
+    this.clear();
   }
 
   /**
@@ -168,6 +189,66 @@ export class WaterfallRenderer {
   clear(): void {
     this.ctx.fillStyle = '#000';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  /**
+   * Prefill the waterfall from client-side Float32 frame buffer.
+   * frames: Float32Array[], oldest first, each frame is dB magnitudes.
+   * Applies current zoom viewport and client min/max dB range.
+   * Used on zoom change / reset so the waterfall doesn't go blank.
+   */
+  prefillFromBuffer(frames: Float32Array[]): void {
+    if (frames.length === 0 || this.w < 1 || this.h < 1) return;
+
+    const w = this.w;
+    const h = this.h;
+    const range = this.maxDb - this.minDb;
+    if (range === 0) return;
+
+    const rowCount  = Math.min(frames.length, h);
+    const startIdx  = frames.length - rowCount;
+
+    // Zoom-aware bin mapping
+    const binCount  = frames[0].length;
+    const viewStart = this.zoomStart * binCount;
+    const viewEnd   = this.zoomEnd   * binCount;
+    const viewBins  = viewEnd - viewStart;
+    const binsPerPx = viewBins / w;
+
+    const imgData = this.ctx.createImageData(w, rowCount);
+    const pixels  = imgData.data;
+
+    for (let row = 0; row < rowCount; row++) {
+      const frame     = frames[startIdx + (rowCount - 1 - row)]; // newest at top
+      const rowOffset = row * w * 4;
+
+      for (let x = 0; x < w; x++) {
+        const binF = viewStart + (x / (w - 1)) * (viewBins - 1);
+        let db: number;
+        if (binsPerPx <= 1) {
+          const lo = Math.floor(binF);
+          const hi = Math.min(lo + 1, binCount - 1);
+          db = frame[lo] + (binF - lo) * (frame[hi] - frame[lo]);
+        } else {
+          const bs = Math.max(0, Math.floor(binF));
+          const be = Math.min(binCount, Math.floor(binF + binsPerPx));
+          db = frame[bs];
+          for (let b = bs + 1; b < be; b++) if (frame[b] > db) db = frame[b];
+        }
+
+        const normalized = (db - this.minDb) / range;
+        const palIdx = Math.max(0, Math.min(255, Math.round(normalized * 255)));
+        const color  = this.palette[palIdx];
+        const offset = rowOffset + x * 4;
+        pixels[offset]     = color[0];
+        pixels[offset + 1] = color[1];
+        pixels[offset + 2] = color[2];
+        pixels[offset + 3] = 255;
+      }
+    }
+
+    this.ctx.putImageData(imgData, 0, 0);
+    this.lastDrawTime = performance.now() - this.minFrameInterval;
   }
 
   /**

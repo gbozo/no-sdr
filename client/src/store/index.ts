@@ -77,6 +77,15 @@ function createStore() {
   const [adminModalOpen, setAdminModalOpen] = createSignal(false);
   const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
   const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
+  const [spectrumPeakHold, setSpectrumPeakHold] = createSignal(false);
+  const [spectrumSignalFill, setSpectrumSignalFill] = createSignal(false);
+  const [spectrumPaused, setSpectrumPaused] = createSignal(false);
+  const [spectrumAveraging, setSpectrumAveraging] = createSignal<'fast' | 'med' | 'slow'>('fast');
+  const [spectrumNoiseFloor, setSpectrumNoiseFloor] = createSignal(false);
+  // Zoom viewport [start, end] as fractions of full bandwidth 0..1
+  const [spectrumZoom, setSpectrumZoom] = createSignal<[number, number]>([0, 1]);
+  // Signal markers: array of absolute Hz frequencies
+  const [signalMarkers, setSignalMarkers] = createSignal<number[]>([]);
 
   // ---- Codec Preferences ----
   const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate');
@@ -159,6 +168,13 @@ function createStore() {
     adminModalOpen, setAdminModalOpen,
     adminSection, setAdminSection,
     meterStyle, setMeterStyle,
+    spectrumPeakHold, setSpectrumPeakHold,
+    spectrumSignalFill, setSpectrumSignalFill,
+    spectrumPaused, setSpectrumPaused,
+    spectrumAveraging, setSpectrumAveraging,
+    spectrumNoiseFloor, setSpectrumNoiseFloor,
+    spectrumZoom, setSpectrumZoom,
+    signalMarkers, setSignalMarkers,
 
     // Codec Preferences
     fftCodec, setFftCodec,

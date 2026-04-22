@@ -32,6 +32,7 @@ import { OpusDecoder } from 'opus-decoder';
 import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
 import { AudioEngine } from './audio.js';
+import { FftFrameBuffer } from './fft-frame-buffer.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
 import type { RdsData } from './demodulators.js';
 import { NoiseReductionEngine } from './noise-reduction.js';
@@ -47,6 +48,10 @@ export class SdrEngine {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
+
+  // Client-side FFT frame buffer — keeps last 1024 decoded Float32 frames.
+  // Used for waterfall prefill on zoom/reset and future seek-back feature.
+  private fftBuffer = new FftFrameBuffer(1024, 0);
 
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
@@ -289,14 +294,7 @@ export class SdrEngine {
         // Compute signal level at tuned frequency for S-meter
         this.updateSignalLevel(fftData);
 
-        this.waterfall?.drawRow(fftData);
-        this.spectrum?.draw(fftData);
-        // Draw tuning indicator on spectrum
-        this.spectrum?.drawTuningIndicator(
-          store.tuneOffset(),
-          store.bandwidth(),
-          store.sampleRate(),
-        );
+        this.renderFftFrame(fftData);
         break;
       }
 
@@ -325,13 +323,7 @@ export class SdrEngine {
         // Compute signal level at tuned frequency for S-meter
         this.updateSignalLevel(fftData);
 
-        this.waterfall?.drawRow(fftData);
-        this.spectrum?.draw(fftData);
-        this.spectrum?.drawTuningIndicator(
-          store.tuneOffset(),
-          store.bandwidth(),
-          store.sampleRate(),
-        );
+        this.renderFftFrame(fftData);
         break;
       }
 
@@ -347,13 +339,7 @@ export class SdrEngine {
         }
         this.updateSignalLevel(fftData);
 
-        this.waterfall?.drawRow(fftData);
-        this.spectrum?.draw(fftData);
-        this.spectrum?.drawTuningIndicator(
-          store.tuneOffset(),
-          store.bandwidth(),
-          store.sampleRate(),
-        );
+        this.renderFftFrame(fftData);
         break;
       }
 
@@ -388,13 +374,7 @@ export class SdrEngine {
           }
           this.updateSignalLevel(deflFftData);
 
-          this.waterfall?.drawRow(deflFftData);
-          this.spectrum?.draw(deflFftData);
-          this.spectrum?.drawTuningIndicator(
-            store.tuneOffset(),
-            store.bandwidth(),
-            store.sampleRate(),
-          );
+          this.renderFftFrame(deflFftData);
         } catch (e) {
           console.error('[FFT_DEFLATE] decode error:', e);
         }
@@ -481,13 +461,27 @@ export class SdrEngine {
           const binCount   = v.getUint16(2, true);
           const minDb      = v.getInt16(4, true);
           const maxDb      = v.getInt16(6, true);
-          if (frameCount > 0 && binCount > 0 && this.waterfall) {
-            // Slice into per-frame Uint8Array views
+          if (frameCount > 0 && binCount > 0) {
+            const serverRange = maxDb - minDb;
+            // Slice Uint8 views and dequantize into Float32 for the client buffer
             const frames: Uint8Array[] = new Array(frameCount);
             for (let i = 0; i < frameCount; i++) {
               frames[i] = new Uint8Array(payload, 8 + i * binCount, binCount);
             }
-            this.waterfall.prefillHistory(frames, binCount, minDb, maxDb);
+            // Prefill waterfall display
+            if (this.waterfall) {
+              this.waterfall.prefillHistory(frames, binCount, minDb, maxDb);
+            }
+            // Populate client FFT buffer with dequantized Float32 frames
+            // so zoom/reset can immediately use local data without a server round-trip
+            this.fftBuffer.reset(); // replace any stale frames from before connect
+            for (const u8frame of frames) {
+              const f32 = new Float32Array(binCount);
+              for (let b = 0; b < binCount; b++) {
+                f32[b] = minDb + (u8frame[b] / 255) * serverRange;
+              }
+              this.fftBuffer.push(f32);
+            }
           }
         } catch (e) {
           console.error('[FFT_HISTORY] decode error:', e);
@@ -509,6 +503,22 @@ export class SdrEngine {
         break;
       }
     }
+  }
+
+  /**
+   * Render one decoded FFT frame: push to client buffer, draw waterfall row,
+   * draw spectrum, draw tuning indicator. Single call site for all four codecs.
+   */
+  private renderFftFrame(fftData: Float32Array): void {
+    // Feed client-side frame buffer (used for zoom/reset prefill)
+    this.fftBuffer.push(fftData);
+    this.waterfall?.drawRow(fftData);
+    this.spectrum?.draw(fftData);
+    this.spectrum?.drawTuningIndicator(
+      store.tuneOffset(),
+      store.bandwidth(),
+      store.sampleRate(),
+    );
   }
 
   /**
@@ -838,8 +848,9 @@ export class SdrEngine {
             this.demodulator.setInputSampleRate(meta.iqSampleRate);
           }
         }
-        // Flush audio and reset waterfall
+        // Flush audio and reset waterfall + client FFT buffer
         this.audio.resetBuffer();
+        this.fftBuffer.reset();
         this.waterfall?.clear();
         // Update resampler for new mode's output rate
         this.updateResampleRatio();
@@ -1098,6 +1109,81 @@ export class SdrEngine {
     store.setWaterfallMax(maxDb);
     this.waterfall?.setRange(minDb, maxDb);
     this.spectrum?.setRange(minDb, maxDb);
+  }
+
+  setSpectrumPeakHold(enabled: boolean): void {
+    store.setSpectrumPeakHold(enabled);
+    this.spectrum?.setPeakHold(enabled);
+  }
+
+  setSpectrumSignalFill(enabled: boolean): void {
+    store.setSpectrumSignalFill(enabled);
+    this.spectrum?.setSignalFill(enabled);
+  }
+
+  setSpectrumPaused(enabled: boolean): void {
+    store.setSpectrumPaused(enabled);
+    this.spectrum?.setPause(enabled);
+  }
+
+  setSpectrumAveraging(speed: 'fast' | 'med' | 'slow'): void {
+    store.setSpectrumAveraging(speed);
+    const alpha = speed === 'slow' ? 0.7 : speed === 'med' ? 0.4 : 0;
+    this.spectrum?.setSmoothing(alpha);
+  }
+
+  /** Get the dB value at a canvas X pixel on the spectrum — used by tooltip. */
+  getSpectrumDbAtPixel(canvasX: number): number | null {
+    const pd = this.spectrum?.lastPixelDb;
+    if (!pd) return null;
+    const idx = Math.max(0, Math.min(pd.length - 1, Math.round(canvasX)));
+    return pd[idx];
+  }
+
+  setSpectrumNoiseFloor(enabled: boolean): void {
+    store.setSpectrumNoiseFloor(enabled);
+    this.spectrum?.setNoiseFloor(enabled);
+  }
+
+  /**
+   * Set zoom viewport from two X fractions [0,1] of the full bandwidth.
+   * Both spectrum and waterfall renderers are updated.
+   */
+  setSpectrumZoom(start: number, end: number): void {
+    store.setSpectrumZoom([start, end]);
+    this.spectrum?.setZoom(start, end);
+    this.waterfall?.setZoom(start, end);
+    // Prefill waterfall from client buffer so it doesn't go blank
+    if (this.waterfall && this.fftBuffer.count > 0) {
+      this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
+    }
+  }
+
+  resetSpectrumZoom(): void {
+    store.setSpectrumZoom([0, 1]);
+    this.spectrum?.resetZoom();
+    this.waterfall?.resetZoom();
+    // Prefill waterfall from client buffer on zoom exit
+    if (this.waterfall && this.fftBuffer.count > 0) {
+      this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
+    }
+  }
+
+  /** Add a signal marker at an absolute frequency (Hz). */
+  addSignalMarker(hz: number): void {
+    const existing = store.signalMarkers();
+    if (!existing.includes(hz)) {
+      store.setSignalMarkers([...existing, hz]);
+    }
+  }
+
+  /** Remove a signal marker at an absolute frequency (Hz). */
+  removeSignalMarker(hz: number): void {
+    store.setSignalMarkers(store.signalMarkers().filter(f => f !== hz));
+  }
+
+  clearSignalMarkers(): void {
+    store.setSignalMarkers([]);
   }
 
   // ---- Audio ----

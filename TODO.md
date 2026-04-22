@@ -19,6 +19,9 @@
 - [ ] **Responsive mobile UI** — tablet and phone layouts
 - [ ] **Frequency bookmarks** — save and recall frequency/mode/bandwidth presets
 - [ ] **Waterfall history** — seek-back in time (ring buffer of FFT frames)
+- [x] **Spectrum noise floor line** — per-pixel running minimum drawn as a dim dashed line. Toggle button on spectrum toolbar.
+- [x] **Signal markers on waterfall** — amber tick marks on the frequency scale at registered Hz frequencies. `engine.addSignalMarker(hz)` / `removeSignalMarker` / `clearSignalMarkers`. Zoom-aware.
+- [x] **Spectrum frequency-axis zoom** — click-drag on spectrum to zoom; double-click or ×zoom button to reset. Both spectrum and waterfall remap X axis. Zoom-aware click-to-tune and tooltip.
 
 ### Infrastructure
 - [ ] **IQ recording** — save raw IQ to SigMF format for offline analysis and playback
