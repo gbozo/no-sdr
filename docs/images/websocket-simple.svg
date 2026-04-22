@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="180" viewBox="0 0 600 180">
+  <rect width="100%" height="100%" fill="#fff"/>
+  <g font-family="Arial" font-size="14" fill="#111">
+    <rect x="50" y="40" width="120" height="40" fill="#e3f2fd" stroke="#333"/>
+    <text x="62" y="66">Client</text>
+    <rect x="230" y="40" width="120" height="40" fill="#e8f5e9" stroke="#333"/>
+    <text x="250" y="66">Server</text>
+    <rect x="410" y="40" width="120" height="40" fill="#fff3e0" stroke="#333"/>
+    <text x="430" y="66">Backend</text>
+  </g>
+  <g font-family="Arial" font-size="12" fill="#333">
+    <text x="60" y="120">ws connect</text>
+    <text x="240" y="120">MSG_META</text>
+    <text x="430" y="120">MSG_FFT_DEFLATE</text>
+  </g>
+  <defs>
+    <marker id="arrow2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 z" fill="#333" />
+    </marker>
+  </defs>
+  <line x1="170" y1="60" x2="230" y2="60" stroke="#333" marker-end="url(#arrow2)"/>
+  <line x1="350" y1="60" x2="410" y2="60" stroke="#333" marker-end="url(#arrow2)"/>
+</svg>

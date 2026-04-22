@@ -19,7 +19,8 @@ Version 0.8.0 — April 2026
 - [13. Deployment](#13-deployment)
 - [14. Security](#14-security)
 - [15. Performance](#15-performance)
-- [16. Future Work](#16-future-work)
+- [16. Visuals](#16-visuals)
+- [17. Future Work](#17-future-work)
 
 ---
 
@@ -48,6 +49,18 @@ no-sdr is a multi-user WebSDR (Software Defined Radio) application that bridges 
 ## 2. Architecture
 
 ### 2.1 Component Diagram
+![Architecture Diagram](docs/images/architecture-diagram-simple.svg)
+
+## 2.1 Visuals: Architecture Diagram
+```mermaid
+graph TD;
+  HW[Hardware Layer] --> Server[Server Process (Node.js)];
+  Server --> DongleMgr[DongleManager];
+  DongleMgr --> Fft[FFtProcessor];
+  DongleMgr --> Iq[IqExtractor];
+  Server --> WS[WebSocketManager];
+  Client[Client (Browser)] --> WS;
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -105,6 +118,7 @@ no-sdr is a multi-user WebSDR (Software Defined Radio) application that bridges 
 ```
 
 ### 2.2 Data Flow
+![Data Flow Diagram](docs/images/data-flow-simple.svg)
 
 **Shared path (all clients on a dongle):**
 ```
@@ -136,6 +150,7 @@ Build order: `shared` → `client` → `server`
 ## 3. WebSocket Protocol
 
 ### 3.1 Connection
+![WebSocket Protocol Diagram](docs/images/websocket-simple.svg)
 
 Endpoint: `ws://<host>:<port>/ws`
 
@@ -1323,3 +1338,13 @@ location / {
 
 - Bi-directional audio (TX support for licensed operators)
 - Waterfall history (seek-back in time)
+## 16. Visuals
+
+The visuals for this SPEC are maintained in docs/spec-visuals.md. This section provides quick pointers to the diagrams and the visuals hub.
+
+- Architecture: see docs/spec-visuals.md "16.1 Architecture Diagram"
+- Data Flow: see docs/spec-visuals.md "16.2 Data Flow"
+- WebSocket Protocol: see docs/spec-visuals.md "16.3 WebSocket Protocol (Overview)"
+- REST Endpoints: see docs/spec-visuals.md "16.4 REST Endpoints Diagram"
+
+## 17. Future Work

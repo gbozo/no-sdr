@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="320" viewBox="0 0 900 320">
+  <rect width="900" height="320" fill="#ffffff"/>
+  <!-- Hardware Layer -->
+  <g>
+    <rect x="40" y="60" width="180" height="60" fill="#eef2ff" stroke="#4b5563"/>
+    <text x="60" y="95" font-family="Arial" font-size="12" fill="#111">Hardware Layer</text>
+  </g>
+  <!-- Server Process -->
+  <g>
+    <rect x="260" y="60" width="200" height="60" fill="#e8f0fe" stroke="#4b5563"/>
+    <text x="290" y="95" font-family="Arial" font-size="12" fill="#111">Server Process</text>
+  </g>
+  <!-- DongleManager -->
+  <g>
+    <rect x="490" y="60" width="180" height="60" fill="#e0f7fa" stroke="#4b5563"/>
+    <text x="520" y="95" font-family="Arial" font-size="12" fill="#111">DongleManager</text>
+  </g>
+  <!-- FFT/IQ Extractor -->
+  <g>
+    <rect x="710" y="60" width="160" height="60" fill="#e6f7e9" stroke="#4b5563"/>
+    <text x="720" y="95" font-family="Arial" font-size="12" fill="#111">FFT / IQ Extractor</text>
+  </g>
+  <!-- Client -->
+  <g>
+    <rect x="370" y="170" width="260" height="60" fill="#fff2cc" stroke="#4b5563"/>
+    <text x="400" y="205" font-family="Arial" font-size="12" fill="#111">Client</text>
+  </g>
+  <!-- Arrows (soft) -->
+  <path d="M120 90 H 240" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M360 90 H 400" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M600 90 H 660" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M610 120 V 170" stroke="#6b7280" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L10,3.5 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+</svg>
