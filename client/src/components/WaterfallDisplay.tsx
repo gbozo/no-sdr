@@ -196,9 +196,17 @@ const WaterfallDisplay: Component = () => {
 
   // ---- Waterfall mouse handlers ----
 
-  const handleWaterfallClick = (e: MouseEvent) => {
+  const handleWaterfallClick = async (e: MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
+
+    // Snap back to live if currently seeking
+    if (seekOffset() > 0) setSeekOffset(0);
+
+    // Start audio if not yet initialised (waterfall click = intent to listen)
+    if (!engine.isAudioInitialized) {
+      await engine.initAudio();
+    }
   };
 
   const handleWaterfallMouseMove = (e: MouseEvent) => {

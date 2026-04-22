@@ -8,6 +8,7 @@
 ## Planned Features
 
 ### Audio & DSP
+- [ ] **Audio time-shift / seek-back** — buffer demodulated Float32 audio frames in a client-side ring buffer (alongside the existing FftFrameBuffer). On waterfall scrub, push buffered audio chunks to the AudioWorklet at the corresponding time position. Works for both IQ codec path (tap after `processIqData` demod output) and Opus path (tap after `opusDecoder.decodeFrame`). ~30s buffer at 48kHz stereo ≈ 10MB. Sync is FFT-frame-granular (33ms) not sample-perfect. See discussion in session for full design.
 - [ ] **RDS decoding** — FM broadcast metadata (station name, song title, traffic info) from 57kHz subcarrier
 - [ ] **Hang-timer AGC for SSB** — dual-averager AGC with hang timer (Moe Wheatley N0V design) for better SSB voice quality
 - [ ] **FM-IF spectral NR** — peak-bin FFT on IQ before FM demodulation (SDR++ approach) for WFM hiss reduction at source

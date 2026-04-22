@@ -1179,6 +1179,9 @@ export class SdrEngine {
 
   get fftBufferCount(): number { return this.fftBuffer.count; }
 
+  /** Whether audio has been initialised (user has clicked to enable). */
+  get isAudioInitialized(): boolean { return this.audio.isInitialized; }
+
   /**
    * Seek the waterfall to `offset` frames back from live (0 = live).
    * Redraws the waterfall from the client buffer window.
