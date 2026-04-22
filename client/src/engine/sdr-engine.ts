@@ -11,6 +11,7 @@ import {
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
   MSG_FFT_DEFLATE,
+  MSG_FFT_HISTORY,
   MSG_IQ,
   MSG_IQ_ADPCM,
   MSG_AUDIO,
@@ -471,6 +472,29 @@ export class SdrEngine {
         break;
       }
 
+      case MSG_FFT_HISTORY: {
+        // Waterfall prefill burst from server history buffer.
+        // Wire: [Uint16 frameCount][Uint16 binCount][Int16 minDb][Int16 maxDb][Uint8 frames...]
+        try {
+          const v = new DataView(payload);
+          const frameCount = v.getUint16(0, true);
+          const binCount   = v.getUint16(2, true);
+          const minDb      = v.getInt16(4, true);
+          const maxDb      = v.getInt16(6, true);
+          if (frameCount > 0 && binCount > 0 && this.waterfall) {
+            // Slice into per-frame Uint8Array views
+            const frames: Uint8Array[] = new Array(frameCount);
+            for (let i = 0; i < frameCount; i++) {
+              frames[i] = new Uint8Array(payload, 8 + i * binCount, binCount);
+            }
+            this.waterfall.prefillHistory(frames, binCount, minDb, maxDb);
+          }
+        } catch (e) {
+          console.error('[FFT_HISTORY] decode error:', e);
+        }
+        break;
+      }
+
       case MSG_DECODER: {
         const decoder = new TextDecoder();
         const json = decoder.decode(payload);
@@ -786,6 +810,9 @@ export class SdrEngine {
           this.audio.resume();
           this.send({ cmd: 'audio_enabled', enabled: true });
         }
+
+        // Request waterfall history to prefill the display immediately
+        this.send({ cmd: 'request_history' });
         break;
       }
 

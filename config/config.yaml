@@ -48,7 +48,7 @@ dongles:
         defaultMode: am
         defaultTuneOffset: 0
         defaultBandwidth: 8330
-        gain: 40
+        gain: 49
         description: Aviation communications — 118 to 137 MHz
         decoders: []
         dongleId: dongle-remote

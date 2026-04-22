@@ -24,6 +24,7 @@ import {
   packFftDeflateMessage,
   packIqAdpcmMessage,
   packAudioOpusMessage,
+  packFftHistoryMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
@@ -38,6 +39,7 @@ import {
 import { DongleManager } from './dongle-manager.js';
 import { DecoderManager, type DecoderMessage } from './decoder-manager.js';
 import { FftProcessor } from './fft-processor.js';
+import { FftHistoryBuffer, FFT_HISTORY_MIN_DB, FFT_HISTORY_MAX_DB } from './fft-history.js';
 import { IqExtractor, getOutputSampleRate } from './iq-extractor.js';
 import { OpusAudioPipeline } from './opus-audio.js';
 import { logger } from './logger.js';
@@ -75,7 +77,11 @@ interface ConnectedClient {
 export class WebSocketManager {
   private clients = new Map<string, ConnectedClient>();
   private fftProcessors = new Map<string, FftProcessor>(); // dongleId -> processor
+  private fftHistories  = new Map<string, FftHistoryBuffer>(); // dongleId -> history
   private clientIdCounter = 0;
+
+  /** Number of FFT frames to keep per dongle — enough to fill a 1080p waterfall. */
+  private static readonly HISTORY_CAPACITY = 1024;
 
   constructor(
     private dongleManager: DongleManager,
@@ -100,10 +106,18 @@ export class WebSocketManager {
         averaging: 0.3,
         targetFps: profile.fftFps,
       }));
+      // Create or reset history buffer for this dongle
+      const existing = this.fftHistories.get(dongleId);
+      if (existing) {
+        existing.resize(profile.fftSize);
+      } else {
+        this.fftHistories.set(dongleId, new FftHistoryBuffer(WebSocketManager.HISTORY_CAPACITY, profile.fftSize));
+      }
     });
 
     this.dongleManager.on('dongle-stopped', (dongleId: string) => {
       this.fftProcessors.delete(dongleId);
+      this.fftHistories.get(dongleId)?.reset();
       this.broadcastToDongle(dongleId, packMetaMessage({
         type: 'dongle_status',
         dongleId,
@@ -125,6 +139,13 @@ export class WebSocketManager {
           averaging: 0.3,
           targetFps: profile.fftFps,
         }));
+      }
+      // Reset history for the new profile (different fftSize possible)
+      const history = this.fftHistories.get(dongleId);
+      if (history) {
+        history.resize(profile.fftSize);
+      } else {
+        this.fftHistories.set(dongleId, new FftHistoryBuffer(WebSocketManager.HISTORY_CAPACITY, profile.fftSize));
       }
 
       // Notify all clients on this dongle
@@ -196,6 +217,8 @@ export class WebSocketManager {
     for (const fftData of fftFrames) {
       this.fftCount++;
 
+      // Store in history buffer for waterfall prefill on client connect
+      this.fftHistories.get(dongleId)?.push(fftData);
       // Pre-encode formats lazily (only if at least one client needs them)
       let uint8Msg: ArrayBuffer | null = null;
       let adpcmMsg: ArrayBuffer | null = null;
@@ -490,6 +513,10 @@ export class WebSocketManager {
         this.handleAdminStartDongle(client, cmd.dongleId);
         break;
 
+      case 'request_history':
+        this.handleRequestHistory(client);
+        break;
+
       default:
         this.sendMeta(client.ws, { type: 'error', message: `Unknown command: ${(cmd as any).cmd}` });
     }
@@ -611,6 +638,33 @@ export class WebSocketManager {
     if (client.session.dongleId) {
       this.dongleManager.updateClientCount(client.session.dongleId, -1);
       client.session.dongleId = '';
+    }
+  }
+
+  /**
+   * Send waterfall history to a client as a single MSG_FFT_HISTORY burst.
+   * Replies immediately with whatever frames are currently in the buffer.
+   * No-ops silently if the client isn't subscribed or there's no history yet.
+   */
+  private handleRequestHistory(client: ConnectedClient): void {
+    const dongleId = client.session.dongleId;
+    if (!dongleId) return;
+
+    const history = this.fftHistories.get(dongleId);
+    if (!history || history.count === 0) return;
+
+    const frames = history.getFrames();
+    try {
+      const msg = packFftHistoryMessage(
+        frames,
+        history.binCount,
+        FFT_HISTORY_MIN_DB,
+        FFT_HISTORY_MAX_DB,
+      );
+      client.ws.send(msg);
+      logger.debug({ clientId: client.id, dongleId, frames: frames.length }, 'Sent waterfall history');
+    } catch {
+      // Client may have disconnected
     }
   }
 

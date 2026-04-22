@@ -43,6 +43,15 @@ export const MSG_IQ_ADPCM = 0x09;
 export const MSG_FFT_DEFLATE = 0x0B;
 export const MSG_AUDIO_OPUS = 0x0C;
 
+/**
+ * Waterfall history burst — Uint8-quantized FFT frames for waterfall prefill.
+ * Sent once per client on request_history command.
+ * Wire: [0x0D][Uint16 frameCount LE][Uint16 binCount LE][Int16 minDb LE][Int16 maxDb LE]
+ *        [Uint8 frame0bin0][Uint8 frame0bin1]...[Uint8 frameN-1binM-1]
+ * Frames are ordered oldest-first so the client draws them top-to-bottom.
+ */
+export const MSG_FFT_HISTORY = 0x0D;
+
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT data */
@@ -69,6 +78,7 @@ export type ClientCommand =
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
   | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
   | { cmd: 'stereo_enabled'; enabled: boolean }
+  | { cmd: 'request_history' }
   // Admin commands
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
@@ -233,6 +243,36 @@ export function packAudioOpusMessage(opusPacket: Uint8Array, sampleCount: number
   view.setUint16(1, sampleCount, true);
   view.setUint8(3, channels);
   new Uint8Array(buf, 4).set(opusPacket);
+  return buf;
+}
+
+/**
+ * Pack a waterfall history burst into a single binary message.
+ * frames: Uint8Array[] — each frame is binCount Uint8 quantized dB values (0-255).
+ * Frames must be ordered oldest-first.
+ *
+ * Wire: [0x0D][Uint16 frameCount LE][Uint16 binCount LE][Int16 minDb LE][Int16 maxDb LE]
+ *       [Uint8 frame0bin0 ... frame0binN][Uint8 frame1bin0 ... frameN-1binN]
+ */
+export function packFftHistoryMessage(
+  frames: Uint8Array[],
+  binCount: number,
+  minDb: number,
+  maxDb: number,
+): ArrayBuffer {
+  const frameCount = frames.length;
+  // 1 type + 2 frameCount + 2 binCount + 2 minDb + 2 maxDb = 9 bytes header
+  const buf = new ArrayBuffer(9 + frameCount * binCount);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_HISTORY);
+  view.setUint16(1, frameCount, true);
+  view.setUint16(3, binCount, true);
+  view.setInt16(5, Math.round(minDb), true);
+  view.setInt16(7, Math.round(maxDb), true);
+  const payload = new Uint8Array(buf, 9);
+  for (let i = 0; i < frameCount; i++) {
+    payload.set(frames[i], i * binCount);
+  }
   return buf;
 }
 

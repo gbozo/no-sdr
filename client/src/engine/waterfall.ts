@@ -171,6 +171,85 @@ export class WaterfallRenderer {
   }
 
   /**
+   * Prefill the waterfall from history frames received from the server.
+   * frames: Uint8-quantized rows (0-255), oldest first, each binCount values.
+   * minDb/maxDb: the quantization range used server-side (FFT_HISTORY_MIN/MAX_DB).
+   *
+   * Draws all frames in a single ImageData batch — no scroll, no throttle.
+   * The most recent frame ends up at the top (row 0), oldest at the bottom.
+   */
+  prefillHistory(
+    frames: Uint8Array[],
+    binCount: number,
+    serverMinDb: number,
+    serverMaxDb: number,
+  ): void {
+    if (frames.length === 0 || this.w < 1 || this.h < 1) return;
+
+    const w = this.w;
+    const h = this.h;
+    const serverRange = serverMaxDb - serverMinDb;
+    if (serverRange === 0) return;
+
+    // Client display range (may differ from server quantization range)
+    const clientRange = this.maxDb - this.minDb;
+    if (clientRange === 0) return;
+
+    // Number of rows to draw — cap at canvas height
+    const rowCount = Math.min(frames.length, h);
+    // frames is oldest-first; we want newest at top (row 0)
+    const startIdx = frames.length - rowCount;
+
+    // Build one ImageData covering all rows at once
+    const imgData = this.ctx.createImageData(w, rowCount);
+    const pixels = imgData.data;
+
+    const binsPerPixel = binCount / w;
+
+    for (let row = 0; row < rowCount; row++) {
+      // Invert so row 0 = most recent frame
+      const frameIdx = startIdx + (rowCount - 1 - row);
+      const frame = frames[frameIdx];
+      const rowOffset = row * w * 4;
+
+      for (let x = 0; x < w; x++) {
+        // Map pixel x to bin(s) — same peak-hold logic as drawRow
+        let u8: number;
+        if (binsPerPixel <= 1) {
+          const binIdx = (x / (w - 1)) * (binCount - 1);
+          const lo = Math.floor(binIdx);
+          const hi = Math.min(lo + 1, binCount - 1);
+          const frac = binIdx - lo;
+          u8 = Math.round(frame[lo] + frac * (frame[hi] - frame[lo]));
+        } else {
+          const binStart = Math.floor(x * binsPerPixel);
+          const binEnd = Math.min(Math.floor((x + 1) * binsPerPixel), binCount);
+          u8 = frame[binStart];
+          for (let b = binStart + 1; b < binEnd; b++) {
+            if (frame[b] > u8) u8 = frame[b];
+          }
+        }
+
+        // Dequantize server Uint8 → dB, then renormalize to client display range
+        const db = serverMinDb + (u8 / 255) * serverRange;
+        const normalized = (db - this.minDb) / clientRange;
+        const palIdx = Math.max(0, Math.min(255, Math.round(normalized * 255)));
+        const color = this.palette[palIdx];
+        const offset = rowOffset + x * 4;
+        pixels[offset]     = color[0];
+        pixels[offset + 1] = color[1];
+        pixels[offset + 2] = color[2];
+        pixels[offset + 3] = 255;
+      }
+    }
+
+    // Draw history block at top; live frames will scroll it down naturally
+    this.ctx.putImageData(imgData, 0, 0);
+    // Ensure next live frame isn't skipped by the throttle
+    this.lastDrawTime = performance.now() - this.minFrameInterval;
+  }
+
+  /**
    * Map a click X position to a frequency offset from center
    */
   pixelToFreqOffset(pixelX: number, sampleRate: number): number {

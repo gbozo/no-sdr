@@ -2,7 +2,7 @@
 // node-sdr — Waterfall + Spectrum Component
 // ============================================================
 
-import { Component, onMount, onCleanup, Show } from 'solid-js';
+import { Component, onMount, onCleanup, Show, createSignal } from 'solid-js';
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 
@@ -10,6 +10,11 @@ const WaterfallDisplay: Component = () => {
   let waterfallRef!: HTMLCanvasElement;
   let spectrumRef!: HTMLCanvasElement;
   let containerRef!: HTMLDivElement;
+
+  // Frequency tooltip state
+  const [hoverFreq, setHoverFreq] = createSignal<string | null>(null);
+  const [cursorX, setCursorX]     = createSignal(0);
+  const [cursorY, setCursorY]     = createSignal(0);
 
   onMount(() => {
     // Attach canvases to the engine
@@ -29,23 +34,60 @@ const WaterfallDisplay: Component = () => {
     onCleanup(() => observer.disconnect());
   });
 
+  const freqFromMouseX = (e: MouseEvent): string => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width;
+    const hz = store.centerFrequency() + (relX - 0.5) * store.sampleRate();
+    const mhz = hz / 1e6;
+    if (mhz >= 1000) return `${(mhz / 1000).toFixed(4)} GHz`;
+    if (mhz >= 1)    return `${mhz.toFixed(4)} MHz`;
+    return `${(hz / 1000).toFixed(2)} kHz`;
+  };
+
+  const handleMouseMove = (e: MouseEvent) => {
+    setCursorX(e.clientX);
+    setCursorY(e.clientY);
+    setHoverFreq(freqFromMouseX(e));
+  };
+
+  const handleMouseLeave = () => setHoverFreq(null);
+
   // Click-to-tune on waterfall and spectrum
   const handleClick = (e: MouseEvent) => {
-    const rect = waterfallRef.getBoundingClientRect();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const relativeX = (e.clientX - rect.left) / rect.width;
-    // Map 0..1 to -sampleRate/2 .. +sampleRate/2
     const offset = (relativeX - 0.5) * store.sampleRate();
     engine.tune(Math.round(offset));
   };
 
   return (
     <div ref={containerRef!} class="flex flex-col flex-1 min-h-0 relative">
+
+      {/* Frequency tooltip — follows cursor, rendered in fixed viewport coords */}
+      <Show when={hoverFreq() !== null}>
+        <div
+          class="fixed z-50 pointer-events-none
+                 px-2 py-0.5 rounded
+                 bg-black/80 border border-white/10
+                 text-[10px] font-mono text-white/90
+                 whitespace-nowrap"
+          style={{
+            left: `${cursorX() + 14}px`,
+            top:  `${cursorY() - 10}px`,
+          }}
+        >
+          {hoverFreq()}
+        </div>
+      </Show>
+
       {/* Spectrum (top) */}
       <div class="relative h-[180px] min-h-[120px] border-b border-border">
         <canvas
           ref={spectrumRef!}
           class="absolute inset-0 w-full h-full cursor-crosshair"
           onClick={handleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
         />
         {/* Frequency scale overlay */}
         <FrequencyScale />
@@ -58,6 +100,8 @@ const WaterfallDisplay: Component = () => {
           class="absolute inset-0 w-full h-full cursor-crosshair"
           style={{ "image-rendering": "crisp-edges" }}
           onClick={handleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
         />
         <div class="sdr-scanlines" />
         {/* RDS overlay (bottom-left of waterfall, WFM only) */}
