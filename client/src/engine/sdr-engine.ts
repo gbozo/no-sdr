@@ -701,7 +701,16 @@ export class SdrEngine {
         store.setClientId(meta.clientId);
         break;
 
-      case 'subscribed':
+      case 'subscribed': {
+        // Capture client-side state before the server profile defaults overwrite it.
+        // Only meaningful on reconnects — guard with wasSubscribed so first-time
+        // connections never restore stale store defaults (mode='nfm', offset=0, etc.)
+        const wasSubscribed  = !!store.activeDongleId();
+        const prevTuneOffset = wasSubscribed ? store.tuneOffset()  : 0;
+        const prevMode       = wasSubscribed ? store.mode()        : null;
+        const prevBandwidth  = wasSubscribed ? store.bandwidth()   : 0;
+        const audioWasActive = this.audio.isInitialized;
+
         store.setActiveDongleId(meta.dongleId);
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
@@ -740,7 +749,45 @@ export class SdrEngine {
         if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
           this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
         }
+
+        // Restore client tuning state from before the reconnect.
+        // Only re-send if the value differs from the server's profile default so we
+        // don't spam the server on a first-time connection where prevMode/offset are
+        // already at their zero/default values.
+        if (prevMode && prevMode !== meta.mode) {
+          store.setMode(prevMode as DemodMode);
+          const modeInfo = DEMOD_MODES[prevMode as DemodMode];
+          this.demodulator = getDemodulator(prevMode as DemodMode);
+          this.demodulator.reset();
+          const bw = prevBandwidth || modeInfo?.defaultBandwidth || store.bandwidth();
+          store.setBandwidth(bw);
+          this.demodulator.setBandwidth(bw);
+          this.attachRdsCallback();
+          if (meta.iqSampleRate) this.demodulator.setInputSampleRate(meta.iqSampleRate);
+          this.send({ cmd: 'mode', mode: prevMode });
+          this.send({ cmd: 'bandwidth', hz: bw });
+          this.updateResampleRatio();
+        } else if (prevBandwidth && prevBandwidth !== store.bandwidth()) {
+          store.setBandwidth(prevBandwidth);
+          this.demodulator.setBandwidth(prevBandwidth);
+          this.send({ cmd: 'bandwidth', hz: prevBandwidth });
+        }
+
+        if (prevTuneOffset !== 0) {
+          store.setTuneOffset(prevTuneOffset);
+          this.send({ cmd: 'tune', offset: prevTuneOffset });
+          this.squelchBypassUntil = performance.now() + 500;
+        }
+
+        // Re-enable audio if it was active before disconnect.
+        // Also resume the AudioContext — it may be suspended after a page reload
+        // or HMR cycle even though the AudioEngine instance was already initialised.
+        if (audioWasActive) {
+          this.audio.resume();
+          this.send({ cmd: 'audio_enabled', enabled: true });
+        }
         break;
+      }
 
       case 'profile_changed':
         store.setCenterFrequency(meta.centerFreq);
@@ -1003,7 +1050,6 @@ export class SdrEngine {
       await this.opusDecoder.ready;
       this.opusDecoderReady = true;
       this.opusDecoderChannels = isStereo ? 2 : 1;
-      console.log(`[SDR] Opus decoder initialized (${this.opusDecoderChannels}ch)`);
     } catch (e) {
       console.error('[SDR] Failed to init Opus decoder:', e);
       this.opusDecoder = null;

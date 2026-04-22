@@ -12,6 +12,8 @@ import AdminModal from './components/AdminModal.js';
 
 const App: Component = () => {
   const [audioStarted, setAudioStarted] = createSignal(false);
+  const [installPrompt, setInstallPrompt] = createSignal<any>(null);
+  const [installed, setInstalled] = createSignal(false);
 
   // Expose engine globally for frequency display component
   (globalThis as any).__sdrEngine = engine;
@@ -23,8 +25,27 @@ const App: Component = () => {
     // Apply UI theme
     document.documentElement.setAttribute('data-theme', store.uiTheme());
 
+    // Capture PWA install prompt — do not call preventDefault() so Chrome
+    // doesn't log the "Banner not shown" DevTools message. Modern Chrome (105+)
+    // no longer auto-shows the mini-infobar so deferring is not required.
+    const onBeforeInstall = (e: Event) => {
+      setInstallPrompt(e);
+    };
+    const onAppInstalled = () => {
+      setInstallPrompt(null);
+      setInstalled(true);
+    };
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('appinstalled', onAppInstalled);
+    // Already installed if running in standalone mode
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setInstalled(true);
+    }
+
     onCleanup(() => {
       engine.destroy();
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('appinstalled', onAppInstalled);
     });
   });
 
@@ -34,6 +55,15 @@ const App: Component = () => {
       await engine.initAudio();
       setAudioStarted(true);
     }
+  };
+
+  const handleInstall = async () => {
+    const prompt = installPrompt();
+    if (!prompt) return;
+    prompt.prompt();
+    const { outcome } = await prompt.userChoice;
+    if (outcome === 'accepted') setInstalled(true);
+    setInstallPrompt(null);
   };
 
   return (
@@ -48,6 +78,35 @@ const App: Component = () => {
           <h1 class="font-mono text-xs font-bold tracking-[0.15em] text-text-primary uppercase">
             node-sdr
           </h1>
+
+          {/* PWA Install Icon */}
+          <div class="relative group">
+            <button
+              disabled={installed() || !installPrompt()}
+              onClick={handleInstall}
+              class={`w-4 h-4 rounded-full flex items-center justify-center transition-colors
+                ${installed() || !installPrompt()
+                  ? 'text-text-dim cursor-default'
+                  : 'text-status-online hover:brightness-125 cursor-pointer'}`}
+              aria-label="Install app"
+            >
+              {/* Circle with down-arrow — standard install icon */}
+              <svg viewBox="0 0 16 16" fill="none" class="w-3.5 h-3.5">
+                <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M8 4.5v4M5.5 7l2.5 2.5L10.5 7" stroke="currentColor" stroke-width="1.5"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            {/* Tooltip — only when installable */}
+            <Show when={!installed() && !!installPrompt()}>
+              <div class="absolute left-1/2 -translate-x-1/2 top-6 z-50
+                          px-2 py-1 rounded text-[9px] font-mono whitespace-nowrap
+                          bg-sdr-elevated border border-border text-text-secondary
+                          opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                Install app
+              </div>
+            </Show>
+          </div>
 
           {/* Connection indicator */}
           <div class="flex items-center gap-1.5">

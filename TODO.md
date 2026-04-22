@@ -3,6 +3,7 @@
 ## Active / In Progress
 
 - [ ] **Spectral noise reduction quality** — current FFT-based Wiener filter produces robotic artifacts on music/tones. Investigate alternatives: RNNoise (WASM), multi-band expander, time-domain NR, or hybrid approach. Noise blanker works well; spectral NR needs rework.
+- [ ] **Audio not re-enabled after WebSocket reconnect** — on reconnect the tune offset and mode are correctly restored, but audio playback does not resume. `audio_enabled` is re-sent and `AudioContext.resume()` is called, but audio stays silent. Needs deeper investigation into AudioWorklet state, jitter buffer, and AudioContext lifecycle across reconnects. See `client/src/engine/sdr-engine.ts` `subscribed` handler and `client/src/engine/audio.ts`.
 
 ## Planned Features
 

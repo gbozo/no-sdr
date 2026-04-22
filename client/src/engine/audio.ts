@@ -431,6 +431,10 @@ export class AudioEngine {
     }
   }
 
+  get isInitialized(): boolean {
+    return this.initialized;
+  }
+
   /**
    * Clean up
    */

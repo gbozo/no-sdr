@@ -7,7 +7,7 @@
     "jsxImportSource": "solid-js",
     "noEmit": true,
     "rootDir": "src",
-    "types": []
+    "types": ["vite/client", "vite-plugin-pwa/client"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "references": [
