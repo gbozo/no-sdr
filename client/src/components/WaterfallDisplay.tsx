@@ -17,10 +17,13 @@ const WaterfallDisplay: Component = () => {
   const [cursorX,   setCursorX]   = createSignal(0);
   const [cursorY,   setCursorY]   = createSignal(0);
 
-  // Zoom drag state
-  const [dragStart, setDragStart] = createSignal<number | null>(null);
-  const [dragEnd,   setDragEnd]   = createSignal<number | null>(null);
+  // Zoom drag state (range select mode)
+  const [dragStart,  setDragStart]  = createSignal<number | null>(null);
+  const [dragEnd,    setDragEnd]    = createSignal<number | null>(null);
   const [isDragging, setIsDragging] = createSignal(false);
+
+  // Pan drag state (middle-click or Shift+left-click)
+  const [panAnchor, setPanAnchor] = createSignal<number | null>(null); // viewport fraction at drag start
 
   onMount(() => {
     engine.attachCanvases(waterfallRef, spectrumRef);
@@ -30,44 +33,60 @@ const WaterfallDisplay: Component = () => {
     onCleanup(() => observer.disconnect());
   });
 
-  // Convert canvas-relative X fraction to absolute Hz, zoom-aware
+  // ---- Frequency helpers ----
+
   const xFracToHz = (relX: number): number => {
     const [zs, ze] = store.spectrumZoom();
-    const bandFrac = zs + relX * (ze - zs);
-    return store.centerFrequency() + (bandFrac - 0.5) * store.sampleRate();
+    return store.centerFrequency() + (zs + relX * (ze - zs) - 0.5) * store.sampleRate();
   };
 
   const freqFromEvent = (e: MouseEvent): string => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const hz = xFracToHz((e.clientX - rect.left) / rect.width);
-    const mhz = hz / 1e6;
+    const hz   = xFracToHz((e.clientX - rect.left) / rect.width);
+    const mhz  = hz / 1e6;
     if (mhz >= 1000) return `${(mhz / 1000).toFixed(4)} GHz`;
     if (mhz >= 1)    return `${mhz.toFixed(4)} MHz`;
     return `${(hz / 1000).toFixed(2)} kHz`;
   };
 
   const dbFromEvent = (e: MouseEvent): string | null => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const rect   = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const dpr    = window.devicePixelRatio || 1;
     const canvasX = Math.round((e.clientX - rect.left) * dpr);
     const db = engine.getSpectrumDbAtPixel(canvasX);
     return db !== null ? `${db.toFixed(1)} dB` : null;
   };
 
-  // ---- Drag-to-zoom handlers (spectrum only) ----
-
-  const spectrumRelX = (e: MouseEvent): number => {
-    const rect = spectrumRef.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  // ---- Pan helper ----
+  // Shift the zoom viewport by `delta` (fraction of full band), clamped to [0,1]
+  const pan = (delta: number) => {
+    const [zs, ze] = store.spectrumZoom();
+    const span = ze - zs;
+    let ns = zs + delta, ne = ze + delta;
+    if (ns < 0) { ns = 0; ne = span; }
+    if (ne > 1) { ne = 1; ns = 1 - span; }
+    engine.setSpectrumZoom(ns, ne);
   };
 
+  // ---- Spectrum mouse handlers ----
+
+  const spectrumRelX = (e: MouseEvent): number =>
+    Math.max(0, Math.min(1, (e.clientX - spectrumRef.getBoundingClientRect().left) / spectrumRef.getBoundingClientRect().width));
+
   const handleSpectrumMouseDown = (e: MouseEvent) => {
-    if (e.button !== 0) return;
     e.preventDefault();
     const rx = spectrumRelX(e);
-    setDragStart(rx);
-    setDragEnd(rx);
-    setIsDragging(true);
+    // Middle-click or Shift+left-click → pan
+    if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+      setPanAnchor(rx);
+      return;
+    }
+    // Left-click + range select → zoom drag
+    if (e.button === 0 && store.spectrumRangeSelect()) {
+      setDragStart(rx);
+      setDragEnd(rx);
+      setIsDragging(true);
+    }
   };
 
   const handleSpectrumMouseMove = (e: MouseEvent) => {
@@ -77,39 +96,81 @@ const WaterfallDisplay: Component = () => {
     setHoverDb(dbFromEvent(e));
     if (isDragging()) {
       setDragEnd(spectrumRelX(e));
+    } else if (panAnchor() !== null) {
+      const rx = spectrumRelX(e);
+      const [zs, ze] = store.spectrumZoom();
+      const span = ze - zs;
+      // Pan by the fraction moved (in viewport space → band space)
+      pan((panAnchor()! - rx) * span);
+      setPanAnchor(rx); // update anchor so pan is incremental
     }
   };
 
   const handleSpectrumMouseUp = (e: MouseEvent) => {
-    if (!isDragging()) return;
-    setIsDragging(false);
-    const ds = dragStart()!;
-    const de = spectrumRelX(e);
-    const lo = Math.min(ds, de);
-    const hi = Math.max(ds, de);
-    // Only zoom if drag covers >1% of viewport — otherwise treat as click
-    if (hi - lo > 0.01) {
-      const [zs, ze] = store.spectrumZoom();
-      const span = ze - zs;
-      engine.setSpectrumZoom(zs + lo * span, zs + hi * span);
-    } else {
-      // Treat as click-to-tune
-      const rect = spectrumRef.getBoundingClientRect();
-      const relX = (e.clientX - rect.left) / rect.width;
-      const hz = xFracToHz(relX);
-      engine.tune(Math.round(hz - store.centerFrequency()));
+    // End pan
+    if (panAnchor() !== null) {
+      setPanAnchor(null);
+      return;
     }
-    setDragStart(null);
-    setDragEnd(null);
+    if (isDragging()) {
+      // Range-select drag → zoom
+      setIsDragging(false);
+      const ds = dragStart()!;
+      const de = spectrumRelX(e);
+      const lo = Math.min(ds, de);
+      const hi = Math.max(ds, de);
+      if (hi - lo > 0.01) {
+        const [zs, ze] = store.spectrumZoom();
+        const span = ze - zs;
+        engine.setSpectrumZoom(zs + lo * span, zs + hi * span);
+      }
+      setDragStart(null);
+      setDragEnd(null);
+    } else if (e.button === 0 && !e.shiftKey) {
+      // Plain click-to-tune
+      const rect = spectrumRef.getBoundingClientRect();
+      engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
+    }
   };
 
-  const handleSpectrumDblClick = () => {
-    engine.resetSpectrumZoom();
+  // Mouse wheel on spectrum — zoom (vertical) or pan (Shift+wheel or horizontal)
+  const handleSpectrumWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    const [zs, ze] = store.spectrumZoom();
+    const span = ze - zs;
+    const rawDelta = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+    const rawDeltaX = e.deltaMode === 1 ? e.deltaX * 40 : e.deltaX;
+
+    // Horizontal scroll or Shift+wheel → pan
+    if (e.shiftKey || Math.abs(rawDeltaX) > Math.abs(rawDelta)) {
+      const panDelta = (e.shiftKey ? rawDelta : rawDeltaX) * 0.001 * span;
+      pan(panDelta);
+      return;
+    }
+
+    // Vertical scroll → zoom centred on cursor
+    const rect   = spectrumRef.getBoundingClientRect();
+    const pivot  = (e.clientX - rect.left) / rect.width;
+    const zoom   = Math.pow(1.002, rawDelta);
+    const newSpan = Math.min(1, Math.max(0.005, span * zoom));
+    const pivotFrac = zs + pivot * span;
+    let newStart = pivotFrac - pivot * newSpan;
+    let newEnd   = newStart + newSpan;
+    if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+    if (newEnd   > 1) { newStart -= (newEnd - 1); newEnd = 1; }
+    newStart = Math.max(0, newStart);
+    newEnd   = Math.min(1, newEnd);
+    if (newEnd - newStart < 0.005) return;
+    if (newEnd - newStart > 0.999) engine.resetSpectrumZoom();
+    else engine.setSpectrumZoom(newStart, newEnd);
   };
+
+  const handleSpectrumDblClick = () => engine.resetSpectrumZoom();
 
   const handleMouseLeave = () => {
     setHoverFreq(null);
     setHoverDb(null);
+    setPanAnchor(null);
     if (isDragging()) {
       setIsDragging(false);
       setDragStart(null);
@@ -117,11 +178,11 @@ const WaterfallDisplay: Component = () => {
     }
   };
 
+  // ---- Waterfall mouse handlers ----
+
   const handleWaterfallClick = (e: MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const relX = (e.clientX - rect.left) / rect.width;
-    const hz = xFracToHz(relX);
-    engine.tune(Math.round(hz - store.centerFrequency()));
+    engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
   };
 
   const handleWaterfallMouseMove = (e: MouseEvent) => {
@@ -131,7 +192,24 @@ const WaterfallDisplay: Component = () => {
     setHoverDb(null);
   };
 
-  // Shared button style
+  // Waterfall wheel — horizontal scroll pans, vertical scroll zooms spectrum
+  const handleWaterfallWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    const [zs, ze] = store.spectrumZoom();
+    const span = ze - zs;
+    const rawDelta  = e.deltaMode === 1 ? e.deltaY  * 40 : e.deltaY;
+    const rawDeltaX = e.deltaMode === 1 ? e.deltaX  * 40 : e.deltaX;
+    // Horizontal trackpad swipe → pan
+    if (Math.abs(rawDeltaX) > Math.abs(rawDelta)) {
+      pan(rawDeltaX * 0.001 * span);
+    } else {
+      // Vertical → pan (waterfall has no frequency axis to zoom against)
+      pan(rawDelta * 0.001 * span);
+    }
+  };
+
+  // ---- Toolbar helpers ----
+
   const btnClass = (active: boolean) =>
     `absolute z-10 w-6 h-6 flex items-center justify-center rounded-sm border transition-colors
      ${active
@@ -140,16 +218,21 @@ const WaterfallDisplay: Component = () => {
 
   const AVG_STEPS: Array<'fast' | 'med' | 'slow'> = ['fast', 'med', 'slow'];
   const nextAvg = () => {
-    const cur = store.spectrumAveraging();
-    engine.setSpectrumAveraging(AVG_STEPS[(AVG_STEPS.indexOf(cur) + 1) % 3]);
+    engine.setSpectrumAveraging(AVG_STEPS[(AVG_STEPS.indexOf(store.spectrumAveraging()) + 1) % 3]);
   };
 
-  // Drag overlay rect in CSS percent of spectrum width
   const dragRect = () => {
     const ds = dragStart(), de = dragEnd();
     if (ds === null || de === null || !isDragging()) return null;
     const lo = Math.min(ds, de), hi = Math.max(ds, de);
     return { left: `${lo * 100}%`, width: `${(hi - lo) * 100}%` };
+  };
+
+  // Cursor: pan overrides everything when panning; range-select mode uses cell cursor
+  const spectrumCursor = () => {
+    if (panAnchor() !== null) return 'cursor-grabbing';
+    if (store.spectrumRangeSelect()) return isDragging() ? 'cursor-col-resize' : 'cursor-cell';
+    return 'cursor-crosshair';
   };
 
   return (
@@ -177,15 +260,16 @@ const WaterfallDisplay: Component = () => {
       <div class="relative h-[180px] min-h-[120px] border-b border-border">
         <canvas
           ref={spectrumRef!}
-          class={`absolute inset-0 w-full h-full ${isDragging() ? 'cursor-col-resize' : 'cursor-crosshair'}`}
+          class={`absolute inset-0 w-full h-full ${spectrumCursor()}`}
           onMouseDown={handleSpectrumMouseDown}
           onMouseMove={handleSpectrumMouseMove}
           onMouseUp={handleSpectrumMouseUp}
           onMouseLeave={handleMouseLeave}
           onDblClick={handleSpectrumDblClick}
+          onWheel={handleSpectrumWheel}
         />
 
-        {/* Zoom drag selection overlay */}
+        {/* Range-select drag overlay */}
         <Show when={dragRect() !== null}>
           <div
             class="absolute top-0 bottom-0 pointer-events-none z-20
@@ -194,7 +278,7 @@ const WaterfallDisplay: Component = () => {
           />
         </Show>
 
-        {/* Zoom reset indicator */}
+        {/* Zoom reset badge */}
         <Show when={store.spectrumZoom()[0] > 0 || store.spectrumZoom()[1] < 1}>
           <button
             class="absolute top-1.5 right-2 z-10 px-1.5 h-5
@@ -207,6 +291,8 @@ const WaterfallDisplay: Component = () => {
             ×zoom
           </button>
         </Show>
+
+        {/* ── Toolbar buttons ───────────────────────────────────── */}
 
         {/* Peak hold */}
         <button class={btnClass(store.spectrumPeakHold())}
@@ -260,14 +346,31 @@ const WaterfallDisplay: Component = () => {
           style={{ top: '6px', left: '140px' }} title="Noise floor"
           onClick={() => engine.setSpectrumNoiseFloor(!store.spectrumNoiseFloor())}>
           <svg viewBox="0 0 14 10" fill="none" class="w-3.5 h-2.5">
-            {/* Noisy line near bottom */}
             <polyline points="0,7 2,8 4,6.5 6,7.5 8,6 10,7 12,6.5 14,7"
               stroke="currentColor" stroke-width="1.2"
               stroke-linecap="round" stroke-linejoin="round"/>
-            {/* Dashed floor line */}
             <line x1="0" y1="9" x2="14" y2="9"
               stroke="currentColor" stroke-width="1"
               stroke-dasharray="2 1.5" opacity="0.6"/>
+          </svg>
+        </button>
+
+        {/* Range select — drag to zoom */}
+        <button class={btnClass(store.spectrumRangeSelect())}
+          style={{ top: '6px', left: '172px' }}
+          title={store.spectrumRangeSelect() ? 'Range select: on — drag to zoom' : 'Range select: off'}
+          onClick={() => store.setSpectrumRangeSelect(!store.spectrumRangeSelect())}>
+          {/* Icon: bracket-style selection region with arrows pointing inward */}
+          <svg viewBox="0 0 14 12" fill="none" class="w-3.5 h-3">
+            <rect x="3" y="1" width="8" height="10" rx="0.5"
+              stroke="currentColor" stroke-width="1.1"
+              stroke-dasharray="2 1" fill="currentColor" fill-opacity="0.1"/>
+            <line x1="3"  y1="6" x2="0"  y2="6" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+            <line x1="11" y1="6" x2="14" y2="6" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+            <polyline points="1.5,4.5 0,6 1.5,7.5" stroke="currentColor" stroke-width="1.1"
+              stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <polyline points="12.5,4.5 14,6 12.5,7.5" stroke="currentColor" stroke-width="1.1"
+              stroke-linecap="round" stroke-linejoin="round" fill="none"/>
           </svg>
         </button>
 
@@ -278,11 +381,12 @@ const WaterfallDisplay: Component = () => {
       <div class="relative flex-1 min-h-0">
         <canvas
           ref={waterfallRef!}
-          class="absolute inset-0 w-full h-full cursor-crosshair"
+          class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
           style={{ "image-rendering": "crisp-edges" }}
           onClick={handleWaterfallClick}
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}
+          onWheel={handleWaterfallWheel}
         />
         <div class="sdr-scanlines" />
         <RdsOverlay />

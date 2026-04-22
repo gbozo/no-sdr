@@ -84,6 +84,7 @@ function createStore() {
   const [spectrumNoiseFloor, setSpectrumNoiseFloor] = createSignal(false);
   // Zoom viewport [start, end] as fractions of full bandwidth 0..1
   const [spectrumZoom, setSpectrumZoom] = createSignal<[number, number]>([0, 1]);
+  const [spectrumRangeSelect, setSpectrumRangeSelect] = createSignal(false);
   // Signal markers: array of absolute Hz frequencies
   const [signalMarkers, setSignalMarkers] = createSignal<number[]>([]);
 
@@ -174,6 +175,7 @@ function createStore() {
     spectrumAveraging, setSpectrumAveraging,
     spectrumNoiseFloor, setSpectrumNoiseFloor,
     spectrumZoom, setSpectrumZoom,
+    spectrumRangeSelect, setSpectrumRangeSelect,
     signalMarkers, setSignalMarkers,
 
     // Codec Preferences
