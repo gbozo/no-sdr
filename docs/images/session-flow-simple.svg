@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260">
+  <rect width="100%" height="100%" fill="#fff"/>
+  <g font-family="Arial" font-size="14" fill="#111">
+    <rect x="40" y="60" width="180" height="60" rx="8" fill="#e8f0fe"/>
+    <text x="60" y="100">Client</text>
+    <rect x="260" y="60" width="180" height="60" rx="8" fill="#e6f7ea"/>
+    <text x="300" y="100">Server</text>
+    <rect x="480" y="60" width="180" height="60" rx="8" fill="#fff0f0"/>
+    <text x="520" y="100">Session Flow</text>
+  </g>
+  <g stroke="#999" fill="none">
+    <line x1="120" y1="90" x2="260" y2="90"/>
+    <line x1="440" y1="90" x2="480" y2="90"/>
+  </g>
+</svg>
