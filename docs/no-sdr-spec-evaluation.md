@@ -1,1 +1,52 @@
-The no-sdr specification outlines a modular, web-first approach to SDR that focuses on offloading heavy DSP from the browser to specialized "Worker" nodes while maintaining a lightweight, cross-platform interface.Based on the SPEC.md, here are several interesting potential additions and architectural pivots that could enhance the project:1. Unified "Telemetry-First" Compression APIAs noted in your benchmarks, generic compression fails for IQ data. The spec could benefit from a standardized Signal-Aware Compression Layer that switches algorithms based on the MIME-type or Metadata of the stream:Visual Mode: For waterfalls/FFT, use the Byte-Reordered Deflate or 4-bit Log-Quantization you explored.Audio Mode: Use Rice Coding (similar to FLAC) for demodulated audio streams to keep latency under 20ms.Raw Mode: Use Bit-Grooming (clearing noise-only LSBs) before sending data to a heavy analyzer.2. "Headless" Flow-Graph EngineThe current spec implies a client-server relationship, but it could be expanded to include a Headless Execution Mode.The Idea: Allow the user to define a signal chain in the Web UI, but then "deploy" that JSON-defined flow graph to run permanently on a Raspberry Pi or server without a browser being open.Interesting Addition: A no-sdr-cli that can ingest the project's .json configuration and run the DSP blocks in a native Node.js or Go environment.3. Progressive Signal Enhancement (LoD)Much like Google Maps loads tiles at different resolutions, no-sdr could implement Level of Detail (LoD) for RF.Implementation: The server sends a very low-bandwidth, decimated "overview" of the 20MHz wide spectrum. As the user zooms in on a specific frequency in the UI, the Worker node dynamically shifts its DSP resources to provide high-resolution IQ data for only that narrow window.Benefit: This solves the bottleneck of trying to pipe massive raw sample rates over the internet.4. Zero-Copy WebWorker IntegrationTo keep the browser UI responsive during heavy FFT processing, the spec could define a SharedArrayBuffer protocol between the Main Thread and WebWorkers.New Addition: A "Local Worker" block. If the user has a powerful PC, the DSP can happen in a browser-side WebWorker using WASM/SIMD. If the user is on a phone, the spec automatically negotiates a "Remote Worker" over WebSockets.5. Multi-Node "Coherent" StreamsThe spec currently focuses on a single source. An advanced addition would be Distributed Coherence.The Idea: Support a "Virtual Front-end" that combines IQ streams from two different physical no-sdr servers (e.g., two RTL-SDRs in different houses).Use Case: Simple direction finding (AoA) or noise cancellation by subtracting a "noise reference" node from a "signal" node.6. "RF-Sensing" Metadata LayerInstead of just sending IQ samples, the Worker nodes could append Inferred Metadata using the JSON-RPC channel:Additions: * auto_label: Worker detects a signal pattern (e.g., "ADS-B detected") and sends a tag.health_metrics: SNR, DC-offset, and Sample-Drop indicators sent as a sidecar to the data stream.Summary of New Modules to Consider:Module NamePurposeImpactno-sdr-codecCustom IQ-optimized compression library.Reduces bandwidth by ~60%.no-sdr-deployConverts UI flow-graphs into standalone server tasks.Enables 24/7 monitoring.no-sdr-proxyA middle-man server that caches RF data for multiple web clients.Saves radio hardware wear & tear.no-sdr-wasmSIMD-optimized DSP blocks for local browser processing.Reduces server CPU load.By focusing on these "Node-to-Client" efficiencies, no-sdr can differentiate itself from traditional heavy-install SDR software by becoming the "Google Docs" of the RF world—accessible anywhere, collaborative, and highly optimized for the network.
+# No-SDR Spec Evaluation
+
+The no-sdr specification outlines a modular, web-first approach to SDR that focuses on offloading heavy DSP from the browser to specialized "Worker" nodes while maintaining a lightweight, cross-platform interface.
+
+## Table of Contents
+- [Architectural Pivots](#architectural-pivots)
+- [Visual Aids](#visual-aids)
+- [Glossary](#glossary)
+- [Contribute Visuals](#contribute-visuals)
+
+## Architectural Pivots
+- Unified Telemetry-First Compression API: Standardize a signal-aware compression layer to switch algorithms based on stream type (visual/FFT, audio, raw).
+- Headless Flow-Graph Engine: Support a headless execution mode where a JSON-defined DSP flow graph can run on a server or Raspberry Pi without an active browser.
+- Progressive Signal Enhancement (LoD): Implement Level of Detail to deliver low-bandwidth overviews and progressively high-resolution IQ data for zoomed-in frequency regions.
+- Zero-Copy WebWorker Integration: Minimize data copies between UI and workers using transferable objects and shared buffers where possible.
+
+## Visual Aids
+### Inline Mermaid Diagrams
+```mermaid
+flowchart LR
+  Source[/Source/] --> Worker[/Worker/]
+  Worker --> DSP[/DSP Engine/]
+  DSP --> Receiver[/Receiver/]
+```
+```mermaid
+graph TD
+  UI[UI] --> WebWorker
+  WebWorker --> Server[Server Backend]
+  Server --> UI
+```
+Notes: Inline diagrams for quick reference. Replace with SVGs if you prefer image assets.
+
+### External Visuals (SVGs)
+- See No-SDR Visuals: docs/no-sdr-visuals.md
+- See FFT Visuals: docs/fft-visuals.md
+
+## Glossary
+- SDR: Software Defined Radio.
+- IQ: In-phase and Quadrature components representing a complex sample.
+- LPC: Linear Predictive Coding, a lossless predictive coding technique for signals.
+- LoD: Level of Detail, a progressive fidelity strategy for spectrum data.
+- WebWorker: A browser background thread used to offload heavy DSP work from the main UI thread.
+- Flow Graph: A JSON-defined chain of DSP blocks that can be deployed to run standalone.
+
+## Contribute Visuals
+- Choose a diagram type (Mermaid inline or SVG image).
+- Place assets under docs/images or docs/visuals.
+- Update this document to reference the visuals and include Mermaid blocks as needed.
+- Open a PR with the visuals, including a short description of the diagram’s purpose.
+
+## Cross-References
+- Related visuals: No-SDR Visuals (docs/no-sdr-visuals.md) and FFT Visuals (docs/fft-visuals.md).

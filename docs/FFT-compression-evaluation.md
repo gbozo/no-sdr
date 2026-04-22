@@ -1,54 +1,70 @@
-The fft benchmark provides a performance comparison of various general-purpose and specialized compression algorithms applied to IQ (In-phase and Quadrature) samples.
+# FFT Compression Evaluation
 
-In Software Defined Radio (SDR), IQ samples are typically raw, high-bit-depth streams of complex numbers. The benchmark highlights a common struggle: standard lossless compressors (like ZLib or LZ4) often perform poorly on raw RF data because the "noise-like" nature of high-frequency samples lacks the repetitive byte patterns these algorithms look for.
+The FFT benchmark provides a performance comparison of various general-purpose and specialized compression algorithms applied to IQ (In-phase and Quadrature) samples.
 
-Evaluation of the Benchmark
-Current Focus: The benchmark primarily tests Lossless and Generic algorithms.
+## Table of Contents
+- [Overview](#overview)
+- [Benchmark Findings](#benchmark-findings)
+- [Proposed Additions](#proposed-additions)
+- [Visual Aids](#visual-aids)
+- [Glossary](#glossary)
+- [Recommendation](#recommendation)
 
-Pros: It establishes a clear baseline for CPU overhead vs. compression ratio. It shows that while LZ4 is extremely fast, it barely compresses IQ data (often < 1.1:1), while Zstd or LZMA provide better ratios at a significant latency cost.
+## Overview
+- In SDR, IQ samples are raw, high-bit-depth streams of complex numbers. Standard lossless compressors (e.g., ZLib, LZ4) often underperform on RF data due to noise-like characteristics.
 
-Cons: It lacks context-aware or "Physics-aware" compression. General-purpose algorithms treat the IQ stream as a random byte array, ignoring the mathematical correlation between the I and Q components or the temporal correlation of the underlying waveform.
+## Benchmark Findings
+- Current Focus: Tests lossless and generic algorithms.
+- Pros: Establishes CPU overhead vs. compression ratio baseline. Fast compressors like LZ4 offer minimal compression; more advanced like Zstd/LZMA trade latency for better ratios.
+- Cons: Lacks context-aware or physics-aware compression; ignores correlations between I and Q and temporal waveform structure.
 
-Proposed New Approaches
-To move beyond generic compression, the following approaches should be integrated into the benchmark to achieve higher efficiency or lower latency.
+## Proposed Additions
+### 1. Domain-Specific Lossless: Linear Predictive Coding (LPC)
+- Description: Exploit signal physics; store residuals (actual - predicted).
+- Why: Residuals have smaller dynamic range, enabling better entropy coding.
 
-1. Domain-Specific Lossless: Linear Predictive Coding (LPC)
-Instead of looking for byte repetitions, use the physics of the signal. Since RF signals are often continuous waveforms, the next sample is highly predictable based on the previous ones.
+### 2. Quantization & Bit-Reduction (Near-Lossless)
+- Bit-Grooming: Mask LSBs that are noise to increase run-lengths for compressors.
+- A-Law / μ-Law: Use logarithmic quantization to preserve small signals while reducing bit depth.
 
-Method: Store only the residual (the difference between the actual sample and the prediction).
+### 3. Frequency-Domain Compression (Lossy but Effective)
+- FFT and discard bins below a dB threshold to store only spectral peaks, enabling high compression for sparse spectrums.
 
-Why: Residuals usually have a much smaller dynamic range (more zeros/small numbers), which general-purpose entropy coders can then compress much more effectively.
+### 4. Complex-Value Aware Transform (Wavelets)
+- Use a DWT designed for complex numbers to capture transients and carriers more effectively.
 
-2. Quantization & Bit-Reduction (Near-Lossless)
-Most SDRs sample at 12, 14, or 16 bits, but the effective number of bits (ENOB) is often lower due to noise.
+### 5. Machine Learning Autoencoders
+- Train encoders/decoders for specific protocols to learn latent representations and improve compression.
 
-Bit-Grooming: Mask the least significant bits (LSBs) that contain only noise. This increases the "run-length" of zeros in the data, making LZ4 or Zstd exponentially more effective.
+- ## Visual Aids
+- Inline Mermaid diagrams are provided below for quick reference.
+```mermaid
+graph TD
+  TimeDomain(Time Domain) --> FrequencyDomain(Frequency Domain)
+  FrequencyDomain --> Peaks(Threshold/Peaks)
+```
 
-A-Law / μ-Law Companding: Use logarithmic quantization (similar to digital telephony) to maintain high precision for small signals while reducing the bit-depth of large peaks.
+## Contribute Visuals
+- Choose a diagram type (Mermaid inline or SVG image).
+- Place assets under docs/images or docs/visuals.
+- Update this document to reference the visuals and include Mermaid blocks as needed.
+- Open a PR with the visuals, including a short description of the diagram’s purpose.
+```mermaid
+flowchart LR
+  A[Time Domain] --> B[Frequency Domain]
+  B --> C[Threshold]
+  C --> D[Peaks]
+```
 
-3. Frequency-Domain Compression (Lossy but Effective)
-IQ data in the time domain is often sparse in the frequency domain.
+## Glossary
+- IQ: In-phase and Quadrature components.
+- FFT: Fast Fourier Transform.
+- LPC: Linear Predictive Coding.
+- Bit-Grooming: Removing noisy LSBs to improve compression.
+- EVM: Error Vector Magnitude.
+- SNR: Signal-to-Noise Ratio.
 
-Method: Apply a Fast Fourier Transform (FFT) and discard the "noise floor" bins below a certain dB threshold.
+## Recommendation
+- Extend the no-sdr benchmark with a Signal Quality Metrics section. Measure EVM or SNR degradation alongside compression ratio to assess signal integrity after compression.
 
-Result: You only store the spectral "peaks" (the actual signals). This can lead to 10x–100x compression ratios for sparse spectrums.
-
-4. Complex-Value Aware Transform (Wavelets)
-Standard compressors don't know that I and Q are two parts of one vector.
-
-Approach: Use a Discrete Wavelet Transform (DWT) designed for complex numbers. Wavelets are excellent at capturing both transient "bursts" and steady-state carriers, which are the two most common types of RF traffic.
-
-5. Machine Learning Based Autoencoders
-For specific protocols (e.g., constant monitoring of ADS-B or LoRa), a neural network can be trained to learn the "latent space" of that specific signal.
-
-Method: An encoder compresses the IQ block into a small vector, and a decoder reconstructs it.
-
-Why: This is currently the "frontier" for ultra-high compression where the goal is to reconstruct the information rather than the exact voltage samples.
-
-Summary Table of Proposed Additions
-Approach	Type	Target Use-Case	Expected Ratio
-FLAC (modified)	Lossless	General Wideband	1.5x - 2.0x
-Bit-Grooming	Near-Lossless	High-Noise environments	2x - 4x
-FFT-Thresholding	Lossy	Spectrum Monitoring	10x+
-Complex-LPC	Lossless	Low-latency streaming	1.2x - 1.8x
-Recommendation: I suggest extending the no-sdr benchmark by adding a "Signal Quality Metrics" section. Since the best compression is often lossy, you should measure EVM (Error Vector Magnitude) or SNR Degradation alongside the compression ratio to see how much the signal "hurts" after being squeezed.
+(End of file)
