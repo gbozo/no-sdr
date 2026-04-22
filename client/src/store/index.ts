@@ -17,6 +17,15 @@ import type {
   DongleProfile,
 } from '@node-sdr/shared';
 
+// ---- Bookmark type ----
+export interface Bookmark {
+  id: string;
+  label: string;
+  hz: number;
+  mode: DemodMode;
+  bandwidth: number;
+}
+
 function createStore() {
   // ---- Connection State ----
   const [connected, setConnected] = createSignal(false);
@@ -87,6 +96,21 @@ function createStore() {
   const [spectrumRangeSelect, setSpectrumRangeSelect] = createSignal(false);
   // Signal markers: array of absolute Hz frequencies
   const [signalMarkers, setSignalMarkers] = createSignal<number[]>([]);
+
+  // ---- Frequency Bookmarks (localStorage-persisted) ----
+  const BOOKMARK_KEY = 'node-sdr:bookmarks';
+  const loadBookmarks = (): Bookmark[] => {
+    try { return JSON.parse(localStorage.getItem(BOOKMARK_KEY) ?? '[]'); } catch { return []; }
+  };
+  const [bookmarks, setBookmarksRaw] = createSignal<Bookmark[]>(loadBookmarks());
+  const setBookmarks = (bm: Bookmark[]) => {
+    setBookmarksRaw(bm);
+    localStorage.setItem(BOOKMARK_KEY, JSON.stringify(bm));
+    // Keep signal markers in sync with bookmark frequencies
+    setSignalMarkers(bm.map(b => b.hz));
+  };
+  // Init markers from stored bookmarks on load
+  setSignalMarkers(loadBookmarks().map(b => b.hz));
 
   // ---- Codec Preferences ----
   const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate');
@@ -177,6 +201,7 @@ function createStore() {
     spectrumZoom, setSpectrumZoom,
     spectrumRangeSelect, setSpectrumRangeSelect,
     signalMarkers, setSignalMarkers,
+    bookmarks, setBookmarks,
 
     // Codec Preferences
     fftCodec, setFftCodec,

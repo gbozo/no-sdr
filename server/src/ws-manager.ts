@@ -55,6 +55,7 @@ const IQ_CHUNK_DURATION_S = 0.020; // 20ms — matches Opus frame size
 
 interface ConnectedClient {
   id: string;
+  ip: string;
   ws: WSContext;
   session: ClientSession;
   isAdmin: boolean;
@@ -79,6 +80,10 @@ export class WebSocketManager {
   private fftProcessors = new Map<string, FftProcessor>(); // dongleId -> processor
   private fftHistories  = new Map<string, FftHistoryBuffer>(); // dongleId -> history
   private clientIdCounter = 0;
+
+  /** Per-IP connection counts for rate limiting */
+  private ipConnections = new Map<string, number>();
+  private static readonly MAX_CONNECTIONS_PER_IP = 10;
 
   /** Number of FFT frames to keep per dongle — enough to fill a 1080p waterfall. */
   private static readonly HISTORY_CAPACITY = 1024;
@@ -348,11 +353,22 @@ export class WebSocketManager {
   /**
    * Handle a new WebSocket connection
    */
-  handleConnection(ws: WSContext): string {
+  handleConnection(ws: WSContext, ip = 'unknown'): string {
+    // Rate limit: reject if this IP already has too many connections
+    const currentCount = this.ipConnections.get(ip) ?? 0;
+    if (currentCount >= WebSocketManager.MAX_CONNECTIONS_PER_IP) {
+      logger.warn({ ip, currentCount }, 'Rate limit: rejecting connection');
+      this.sendMeta(ws, { type: 'error', message: 'Too many connections from your IP', code: 'RATE_LIMITED' });
+      try { (ws.raw as any)?.close(1008, 'Rate limited'); } catch { /* ignore */ }
+      return '';
+    }
+    this.ipConnections.set(ip, currentCount + 1);
+
     const clientId = `client-${++this.clientIdCounter}`;
 
     const client: ConnectedClient = {
       id: clientId,
+      ip,
       ws,
       session: {
         id: clientId,
@@ -398,6 +414,10 @@ export class WebSocketManager {
       if (client.session.dongleId) {
         this.dongleManager.updateClientCount(client.session.dongleId, -1);
       }
+      // Decrement per-IP connection count
+      const ipCount = (this.ipConnections.get(client.ip) ?? 1) - 1;
+      if (ipCount <= 0) this.ipConnections.delete(client.ip);
+      else this.ipConnections.set(client.ip, ipCount);
       // Clean up WASM resources
       client.opusPipeline?.destroy();
       this.clients.delete(clientId);

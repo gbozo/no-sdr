@@ -4,6 +4,7 @@
 
 import { Component, For, Show, createSignal, createResource, onMount, onCleanup, createEffect } from 'solid-js';
 import { store } from '../store/index.js';
+import type { Bookmark } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 import { DEMOD_MODES } from '@node-sdr/shared';
 import type { CodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '@node-sdr/shared';
@@ -29,6 +30,9 @@ const ControlPanel: Component = () => {
 
       {/* Codec Settings */}
       <CodecSettings />
+
+      {/* Frequency Bookmarks */}
+      <Bookmarks />
 
       {/* Connection Status */}
       <ConnectionStatus />
@@ -1074,6 +1078,123 @@ const CodecSettings: Component = () => {
             </span>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+// ---- Frequency Bookmarks ----
+const Bookmarks: Component = () => {
+  const [label, setLabel] = createSignal('');
+  const [editId, setEditId] = createSignal<string | null>(null);
+  const [editLabel, setEditLabel] = createSignal('');
+
+  const formatHz = (hz: number) => {
+    const mhz = hz / 1e6;
+    return mhz >= 1 ? `${mhz.toFixed(4)} MHz` : `${(hz / 1e3).toFixed(2)} kHz`;
+  };
+
+  const handleAdd = () => {
+    engine.addBookmark(label());
+    setLabel('');
+  };
+
+  const handleRecall = (bm: Bookmark) => {
+    engine.recallBookmark(bm);
+  };
+
+  const handleDelete = (id: string) => {
+    engine.deleteBookmark(id);
+  };
+
+  const startEdit = (bm: Bookmark) => {
+    setEditId(bm.id);
+    setEditLabel(bm.label);
+  };
+
+  const commitEdit = (id: string) => {
+    const updated = store.bookmarks().map(b =>
+      b.id === id ? { ...b, label: editLabel().trim() || b.label } : b,
+    );
+    store.setBookmarks(updated);
+    setEditId(null);
+  };
+
+  return (
+    <div class="sdr-panel">
+      <div class="sdr-panel-header">Bookmarks</div>
+      <div class="p-2 space-y-1.5">
+        {/* Add current frequency */}
+        <div class="flex gap-1">
+          <input
+            class="flex-1 bg-sdr-base border border-border rounded-sm
+                   px-2 py-0.5 text-[9px] font-mono text-text-primary
+                   placeholder:text-text-muted focus:outline-none focus:border-[var(--sdr-accent)]"
+            placeholder="Label (optional)"
+            value={label()}
+            onInput={e => setLabel(e.currentTarget.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAdd()}
+          />
+          <button
+            class="sdr-btn sdr-btn-primary text-[8px] px-2 shrink-0"
+            onClick={handleAdd}
+            title="Bookmark current frequency"
+          >
+            + Add
+          </button>
+        </div>
+
+        {/* Bookmark list */}
+        <Show when={store.bookmarks().length === 0}>
+          <div class="text-[8px] font-mono text-text-muted text-center py-1">
+            No bookmarks
+          </div>
+        </Show>
+        <For each={store.bookmarks()}>
+          {(bm) => (
+            <div class="flex items-center gap-1 group">
+              <Show
+                when={editId() === bm.id}
+                fallback={
+                  <button
+                    class="flex-1 text-left px-1.5 py-0.5 rounded-sm
+                           text-[9px] font-mono text-text-primary
+                           hover:bg-sdr-elevated transition-colors truncate"
+                    title={`${formatHz(bm.hz)} · ${bm.mode.toUpperCase()}`}
+                    onClick={() => handleRecall(bm)}
+                    onDblClick={() => startEdit(bm)}
+                  >
+                    <span class="text-[var(--sdr-accent)] mr-1">▶</span>
+                    <span class="text-text-secondary mr-1.5">{bm.label}</span>
+                    <span class="text-text-muted text-[8px]">{formatHz(bm.hz)}</span>
+                  </button>
+                }
+              >
+                <input
+                  class="flex-1 bg-sdr-base border border-[var(--sdr-accent)] rounded-sm
+                         px-1.5 py-0.5 text-[9px] font-mono text-text-primary
+                         focus:outline-none"
+                  value={editLabel()}
+                  onInput={e => setEditLabel(e.currentTarget.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') commitEdit(bm.id);
+                    if (e.key === 'Escape') setEditId(null);
+                  }}
+                  onBlur={() => commitEdit(bm.id)}
+                  ref={el => setTimeout(() => el?.focus(), 0)}
+                />
+              </Show>
+              <button
+                class="opacity-0 group-hover:opacity-100 transition-opacity
+                       text-text-muted hover:text-status-error text-[9px] px-0.5 shrink-0"
+                title="Delete bookmark"
+                onClick={() => handleDelete(bm.id)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </For>
       </div>
     </div>
   );

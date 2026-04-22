@@ -2,7 +2,7 @@
 // node-sdr — Waterfall + Spectrum Component
 // ============================================================
 
-import { Component, onMount, onCleanup, Show, createSignal, For } from 'solid-js';
+import { Component, onMount, onCleanup, Show, createSignal, For, createEffect } from 'solid-js';
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 
@@ -23,14 +23,30 @@ const WaterfallDisplay: Component = () => {
   const [isDragging, setIsDragging] = createSignal(false);
 
   // Pan drag state (middle-click or Shift+left-click)
-  const [panAnchor, setPanAnchor] = createSignal<number | null>(null); // viewport fraction at drag start
+  const [panAnchor, setPanAnchor] = createSignal<number | null>(null);
+
+  // Seek-back scrub
+  const [seekOffset, setSeekOffset] = createSignal(0);
+  const [bufferCount, setBufferCount] = createSignal(0); // viewport fraction at drag start
 
   onMount(() => {
     engine.attachCanvases(waterfallRef, spectrumRef);
     const observer = new ResizeObserver(() => engine.handleResize());
     observer.observe(containerRef);
     requestAnimationFrame(() => engine.handleResize());
-    onCleanup(() => observer.disconnect());
+
+    // Poll buffer count so the scrub range max stays current
+    const bufferPoll = setInterval(() => setBufferCount(engine.fftBufferCount), 500);
+
+    onCleanup(() => {
+      observer.disconnect();
+      clearInterval(bufferPoll);
+    });
+  });
+
+  // Apply seek when offset changes
+  createEffect(() => {
+    engine.seekTo(seekOffset());
   });
 
   // ---- Frequency helpers ----
@@ -391,6 +407,35 @@ const WaterfallDisplay: Component = () => {
         <div class="sdr-scanlines" />
         <RdsOverlay />
       </div>
+
+      {/* Seek-back scrub bar */}
+      <Show when={bufferCount() > 0}>
+        <div class="shrink-0 h-5 flex items-center gap-2 px-2
+                    bg-sdr-surface border-t border-border">
+          <span class={`text-[8px] font-mono shrink-0 w-7 text-right
+                        ${seekOffset() > 0 ? 'text-amber' : 'text-text-muted'}`}>
+            {seekOffset() > 0 ? `-${seekOffset()}` : 'LIVE'}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={bufferCount()}
+            step={1}
+            value={seekOffset()}
+            class="flex-1 h-1 accent-[var(--sdr-accent)] cursor-pointer"
+            onInput={e => setSeekOffset(parseInt(e.currentTarget.value))}
+          />
+          <Show when={seekOffset() > 0}>
+            <button
+              class="text-[8px] font-mono text-text-muted hover:text-[var(--sdr-accent)]
+                     transition-colors shrink-0"
+              onClick={() => setSeekOffset(0)}
+            >
+              ↩ live
+            </button>
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 };

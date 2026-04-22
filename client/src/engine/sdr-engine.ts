@@ -37,6 +37,7 @@ import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } 
 import type { RdsData } from './demodulators.js';
 import { NoiseReductionEngine } from './noise-reduction.js';
 import { store } from '../store/index.js';
+import type { Bookmark } from '../store/index.js';
 
 export class SdrEngine {
   private ws: WebSocket | null = null;
@@ -52,6 +53,9 @@ export class SdrEngine {
   // Client-side FFT frame buffer — keeps last 1024 decoded Float32 frames.
   // Used for waterfall prefill on zoom/reset and future seek-back feature.
   private fftBuffer = new FftFrameBuffer(1024, 0);
+
+  // Seek-back: when > 0, waterfall is frozen N frames in the past
+  private seekOffset = 0;
 
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
@@ -510,9 +514,11 @@ export class SdrEngine {
    * draw spectrum, draw tuning indicator. Single call site for all four codecs.
    */
   private renderFftFrame(fftData: Float32Array): void {
-    // Feed client-side frame buffer (used for zoom/reset prefill)
     this.fftBuffer.push(fftData);
-    this.waterfall?.drawRow(fftData);
+    // When seeking, skip waterfall live update — frozen view is managed by seekTo()
+    if (this.seekOffset === 0) {
+      this.waterfall?.drawRow(fftData);
+    }
     this.spectrum?.draw(fftData);
     this.spectrum?.drawTuningIndicator(
       store.tuneOffset(),
@@ -1169,6 +1175,30 @@ export class SdrEngine {
     }
   }
 
+  // ---- Seek-back ----
+
+  get fftBufferCount(): number { return this.fftBuffer.count; }
+
+  /**
+   * Seek the waterfall to `offset` frames back from live (0 = live).
+   * Redraws the waterfall from the client buffer window.
+   */
+  seekTo(offset: number): void {
+    const count = this.fftBuffer.count;
+    this.seekOffset = Math.max(0, Math.min(offset, count));
+    if (!this.waterfall) return;
+    if (this.seekOffset === 0) {
+      // Back to live — refill from full buffer then let live frames take over
+      this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
+      return;
+    }
+    // Show the window of frames ending `seekOffset` frames ago
+    const frames = this.fftBuffer.getFrames();
+    const end    = frames.length - this.seekOffset;
+    if (end <= 0) return;
+    this.waterfall.prefillFromBuffer(frames.slice(0, end));
+  }
+
   /** Add a signal marker at an absolute frequency (Hz). */
   addSignalMarker(hz: number): void {
     const existing = store.signalMarkers();
@@ -1184,6 +1214,32 @@ export class SdrEngine {
 
   clearSignalMarkers(): void {
     store.setSignalMarkers([]);
+  }
+
+  // ---- Bookmarks ----
+
+  /** Save the current tune/mode/bandwidth as a named bookmark. */
+  addBookmark(label: string): void {
+    const bm: Bookmark = {
+      id: `bm-${Date.now()}`,
+      label: label.trim() || `${(store.tunedFrequency() / 1e6).toFixed(4)} MHz`,
+      hz: store.tunedFrequency(),
+      mode: store.mode(),
+      bandwidth: store.bandwidth(),
+    };
+    store.setBookmarks([...store.bookmarks(), bm]);
+  }
+
+  /** Recall a bookmark: tune, set mode and bandwidth. */
+  recallBookmark(bm: Bookmark): void {
+    // Set mode first (may change IQ rate)
+    if (bm.mode !== store.mode()) this.setMode(bm.mode);
+    if (bm.bandwidth !== store.bandwidth()) this.setBandwidth(bm.bandwidth);
+    this.tune(bm.hz - store.centerFrequency());
+  }
+
+  deleteBookmark(id: string): void {
+    store.setBookmarks(store.bookmarks().filter(b => b.id !== id));
   }
 
   // ---- Audio ----

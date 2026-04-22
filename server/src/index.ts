@@ -331,15 +331,21 @@ app.get('/api/decoders/check', async (c) => {
 // ---- WebSocket Endpoint ----
 app.get(
   '/ws',
-  upgradeWebSocket(() => {
+  upgradeWebSocket((c) => {
     let clientId: string;
+    // Extract client IP — check X-Forwarded-For for reverse-proxy deployments
+    const ip = c.req.header('x-forwarded-for')?.split(',')[0].trim()
+      ?? c.req.header('x-real-ip')
+      ?? (c.req.raw as any)?.socket?.remoteAddress
+      ?? 'unknown';
 
     return {
       onOpen(_event, ws) {
-        clientId = wsManager.handleConnection(ws);
+        clientId = wsManager.handleConnection(ws, ip);
       },
 
       onMessage(event, _ws) {
+        if (!clientId) return; // connection was rate-limited
         if (typeof event.data === 'string') {
           wsManager.handleMessage(clientId, event.data);
         } else if (event.data instanceof ArrayBuffer) {

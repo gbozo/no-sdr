@@ -17,8 +17,8 @@
 ### Display & UI
 - [ ] **WebGL waterfall** — GPU-accelerated rendering for large FFT sizes and smooth zoom
 - [ ] **Responsive mobile UI** — tablet and phone layouts
-- [ ] **Frequency bookmarks** — save and recall frequency/mode/bandwidth presets
-- [ ] **Waterfall history** — seek-back in time (ring buffer of FFT frames)
+- [x] **Frequency bookmarks** — save and recall frequency/mode/bandwidth presets. Persisted in localStorage. Sidebar panel with add/recall/delete/rename. Auto-populates signal markers on waterfall frequency scale.
+- [x] **Waterfall history** — seek-back scrub bar below waterfall. Uses client-side FftFrameBuffer (1024 frames). Scrub left to view past, click ↩ live to resume. Spectrum stays live during seek.
 - [x] **Spectrum noise floor line** — per-pixel running minimum drawn as a dim dashed line. Toggle button on spectrum toolbar.
 - [x] **Signal markers on waterfall** — amber tick marks on the frequency scale at registered Hz frequencies. `engine.addSignalMarker(hz)` / `removeSignalMarker` / `clearSignalMarkers`. Zoom-aware.
 - [x] **Spectrum frequency-axis zoom** — click-drag on spectrum to zoom; double-click or ×zoom button to reset. Both spectrum and waterfall remap X axis. Zoom-aware click-to-tune and tooltip.
@@ -28,7 +28,7 @@
 - [ ] **User sessions** — optional authentication for persistent settings
 - [ ] **Multi-server aggregation** — combine multiple no-sdr instances behind a gateway
 - [ ] **Worker threads** — offload FFT and IQ extraction from the main event loop
-- [ ] **Rate limiting** — connection flooding protection
+- [x] **Rate limiting** — max 10 WebSocket connections per IP. X-Forwarded-For aware for reverse-proxy deployments.
 
 ### Decoders
 - [ ] **DMR/D-Star/YSF** — via digiham WASM port
