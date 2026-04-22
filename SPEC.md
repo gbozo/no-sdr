@@ -52,15 +52,7 @@ no-sdr is a multi-user WebSDR (Software Defined Radio) application that bridges 
 ![Architecture Diagram](docs/images/architecture-diagram-simple.svg)
 
 ## 2.1 Visuals: Architecture Diagram
-```mermaid
-graph TD;
-  HW[Hardware Layer] --> Server[Server Process (Node.js)];
-  Server --> DongleMgr[DongleManager];
-  DongleMgr --> Fft[FFtProcessor];
-  DongleMgr --> Iq[IqExtractor];
-  Server --> WS[WebSocketManager];
-  Client[Client (Browser)] --> WS;
-```
+<!-- Mermaid diagram removed for rich rendering fidelity; see SVGs in docs/images -->
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -267,6 +259,7 @@ Client                              Server
 ---
 
 ## 4. REST API
+![REST Flow Diagram](docs/images/rest-flow-simple.svg)
 
 ### 4.1 Public Endpoints
 
