@@ -620,14 +620,14 @@ export class SdrEngine {
 
   /**
    * Compute signal level at the tuned frequency from FFT data.
-   * Averages the dB values in the bins covering the current bandwidth.
+   * Uses a time-based EMA so the meter responds smoothly regardless
+   * of fftFps (which is configurable and may be as low as 16fps).
+   * Attack is fast (~60ms) so real signal peaks are caught quickly.
+   * Decay is slightly slower (~120ms) for a natural needle fall-off.
    */
-  private signalLevelFrameCount = 0;
+  private smoothedSignalLevel = -120;
+  private lastSignalTime = 0;
   private updateSignalLevel(fftData: Float32Array): void {
-    this.signalLevelFrameCount++;
-    // Update every 2 frames (~15 times/sec at 30fps)
-    if (this.signalLevelFrameCount % 2 !== 0) return;
-
     const sampleRate = store.sampleRate();
     if (sampleRate <= 0 || fftData.length === 0) return;
 
@@ -635,8 +635,6 @@ export class SdrEngine {
     const bandwidth = store.bandwidth();
     const bins = fftData.length;
 
-    // Map tuneOffset to bin index (0 = left edge, bins-1 = right edge)
-    // tuneOffset is relative to center: -sampleRate/2 to +sampleRate/2
     const centerBin = Math.round(((tuneOffset / sampleRate) + 0.5) * (bins - 1));
     const halfBwBins = Math.round((bandwidth / sampleRate) * bins / 2);
 
@@ -645,16 +643,26 @@ export class SdrEngine {
 
     if (startBin >= endBin) return;
 
-    // Find peak signal level in the bandwidth (peak is more useful than average for S-meter)
     let peak = -Infinity;
     for (let i = startBin; i <= endBin; i++) {
       const v = fftData[i];
       if (isFinite(v) && v > peak) peak = v;
     }
 
-    if (isFinite(peak)) {
-      store.setSignalLevel(peak);
-    }
+    if (!isFinite(peak)) return;
+
+    // Time-based EMA: compute alpha from actual elapsed time so the time
+    // constant is independent of fftFps. Attack τ=60ms, decay τ=120ms.
+    const now = performance.now();
+    const dt = this.lastSignalTime > 0 ? Math.min(now - this.lastSignalTime, 200) : 0;
+    this.lastSignalTime = now;
+
+    const rising = peak > this.smoothedSignalLevel;
+    const tau = rising ? 60 : 120; // ms
+    const alpha = dt > 0 ? 1 - Math.exp(-dt / tau) : 1;
+    this.smoothedSignalLevel += alpha * (peak - this.smoothedSignalLevel);
+
+    store.setSignalLevel(this.smoothedSignalLevel);
   }
 
   /**
@@ -955,6 +963,9 @@ export class SdrEngine {
     store.setTuneOffset(offsetHz);
     // Reset demodulator to clear stale filter state at the new frequency
     this.demodulator.reset();
+    // Reset signal level EMA so the meter doesn't chase a stale value
+    this.smoothedSignalLevel = -120;
+    this.lastSignalTime = 0;
     // On the IQ codec path the client holds demodulated samples that go stale
     // when the server shifts the extracted sub-band — flush the ring buffer.
     // On the Opus path the server re-tunes seamlessly; flushing causes a

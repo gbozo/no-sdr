@@ -597,10 +597,16 @@ const WaterfallSettings: Component = () => {
 
 // ---- S-Meter ----
 const SMeter: Component = () => {
-  // Peak hold: tracks the highest level and decays slowly
+  // Peak hold: tracks the highest level and decays slowly (ghost needle)
   let peakPct = 0;
   let peakDecayTimer: ReturnType<typeof setInterval> | undefined;
   const [peakHold, setPeakHold] = createSignal(0);
+
+  // 5-second max marker: highest level in a rolling 5s window
+  // Signal so the bar meter's reactive JSX updates when it changes.
+  const [maxPct5s, setMaxPct5s] = createSignal(0);
+  let maxPct5sRaw = 0; // raw variable for the needle rAF loop
+  let maxExpiry = 0; // performance.now() timestamp when the max expires
 
   // Canvas ref for needle meter
   let canvasRef: HTMLCanvasElement | undefined;
@@ -609,9 +615,9 @@ const SMeter: Component = () => {
   // Start peak decay timer on mount
   onMount(() => {
     peakDecayTimer = setInterval(() => {
-      // Decay peak by 0.5% per tick (50ms interval ≈ 10 seconds from full to zero)
+      // Decay peak by 0.2% per tick (50ms interval ≈ 25 seconds from full to zero)
       if (peakPct > 0) {
-        peakPct = Math.max(0, peakPct - 0.5);
+        peakPct = Math.max(0, peakPct - 0.2);
         setPeakHold(peakPct);
       }
     }, 50);
@@ -624,16 +630,29 @@ const SMeter: Component = () => {
 
   const pct = () => {
     const level = store.signalLevel();
-    const min = store.waterfallMin();
-    const max = store.waterfallMax();
-    const range = max - min;
-    if (range === 0) return 0;
-    const p = Math.max(0, Math.min(100, ((level - min) / range) * 100));
+    // Fixed scale: -120 dB = 0% (S0/noise floor), -13 dB = 100% (S9+60dB).
+    const MIN_DB = -120;
+    const MAX_DB = -13;
+    const range = MAX_DB - MIN_DB;
+    const p = Math.max(0, Math.min(100, ((level - MIN_DB) / range) * 100));
 
-    // Update peak if current exceeds it
+    // Update ghost-needle peak hold
     if (p > peakPct) {
       peakPct = p;
       setPeakHold(p);
+    }
+
+    // Update 5-second max marker: reset window whenever a new high is seen
+    const now = performance.now();
+    if (p >= maxPct5sRaw) {
+      maxPct5sRaw = p;
+      setMaxPct5s(p);
+      maxExpiry = now + 5000;
+    } else if (now > maxExpiry) {
+      // Window expired — drop to current value and start a fresh 5s window
+      maxPct5sRaw = p;
+      setMaxPct5s(p);
+      maxExpiry = now + 5000;
     }
 
     return p;
@@ -647,7 +666,8 @@ const SMeter: Component = () => {
     return 'bg-green';
   };
 
-  // Needle meter: smoothed angle for fluid movement
+  // Needle meter: light per-frame lerp to interpolate smoothly between
+  // EMA steps from the engine (which arrive at fftFps, not rAF rate).
   let smoothedPct = 0;
 
   // Draw classic analog S-meter (Kenwood/Yaesu style)
@@ -693,9 +713,11 @@ const SMeter: Component = () => {
     const endAngle = Math.PI * 0.17;
     const sweep = (2 * Math.PI - startAngle + endAngle);
 
-    // Smooth the needle
+    // Lerp needle toward current value each rAF frame.
+    // The engine EMA already handles the bulk of smoothing; this just
+    // interpolates between fftFps steps so the needle moves continuously.
     const targetPct = pct();
-    smoothedPct += (targetPct - smoothedPct) * 0.15;
+    smoothedPct += (targetPct - smoothedPct) * 0.3;
 
     const pctToAngle = (p: number) => startAngle + (p / 100) * sweep;
 
@@ -848,15 +870,33 @@ const SMeter: Component = () => {
     ctx.fillText('dB', cx + (innerR - 6) * Math.cos(dbLabelAngle), cy + (innerR - 6) * Math.sin(dbLabelAngle));
 
     // ── Peak hold ghost needle ──
-    const peakAngle = pctToAngle(peakHold());
+    // Read peakPct directly (raw variable) — peakHold() signal is for the
+    // bar meter's reactive JSX; inside rAF we must not use reactive reads.
+    const peakAngle = pctToAngle(peakPct);
     const peakLen = radius - 2;
     ctx.beginPath();
     ctx.moveTo(cx + 3 * Math.cos(peakAngle + Math.PI / 2), cy + 3 * Math.sin(peakAngle + Math.PI / 2));
     ctx.lineTo(cx + peakLen * Math.cos(peakAngle), cy + peakLen * Math.sin(peakAngle));
     ctx.lineTo(cx + 3 * Math.cos(peakAngle - Math.PI / 2), cy + 3 * Math.sin(peakAngle - Math.PI / 2));
     ctx.closePath();
-    ctx.fillStyle = 'rgba(180, 30, 30, 0.10)';
+    ctx.fillStyle = 'rgba(180, 30, 30, 0.45)';
     ctx.fill();
+
+    // ── 5-second max marker: bold black tick on the outer arc ──
+    if (maxPct5sRaw > 0) {
+      const maxAngle = pctToAngle(maxPct5sRaw);
+      const cosM = Math.cos(maxAngle);
+      const sinM = Math.sin(maxAngle);
+      // Thick black radial line straddling the outer arc
+      ctx.beginPath();
+      ctx.moveTo(cx + (outerR + 5) * cosM, cy + (outerR + 5) * sinM);
+      ctx.lineTo(cx + (outerR - 9) * cosM, cy + (outerR - 9) * sinM);
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
 
     // ── Main needle (red, classic tapered shape) ──
     const needleAngle = pctToAngle(smoothedPct);
@@ -953,30 +993,44 @@ const SMeter: Component = () => {
         <Show when={store.meterStyle() === 'bar'}>
           <div class="flex justify-between text-[9px] text-text-dim font-mono mb-1">
             <span>S-Meter</span>
-            <span class="text-text-secondary">{store.signalLevel().toFixed(0)} dB</span>
+            <span class="text-text-secondary">{store.signalLevel().toFixed(0)} dBm</span>
           </div>
-          <div class="h-2.5 bg-sdr-base rounded-sm border border-border overflow-hidden relative">
-            {/* Segment dividers */}
-            <div class="absolute inset-0 flex">
-              <For each={Array(9).fill(0)}>
-                {() => <div class="flex-1 border-r border-border/30" />}
-              </For>
-            </div>
-            {/* Current level bar */}
+          {/* Bar track */}
+          <div class="h-3 bg-sdr-base rounded-sm border border-border overflow-hidden relative">
+            {/* Colour zone backgrounds: green S1-S9, amber S9-+20, red +20 onwards */}
+            <div class="absolute inset-y-0 left-0 bg-green/10"        style={{ width: '57.1%' }} />
+            <div class="absolute inset-y-0 bg-amber/10"               style={{ left: '57.1%', width: '14.3%' }} />
+            <div class="absolute inset-y-0 bg-neon-red/10"            style={{ left: '71.4%', right: '0' }} />
+            {/* S-unit dividers at fixed positions */}
+            <For each={[7.1,14.3,21.4,28.6,35.7,42.9,50.0,57.1,66.7,71.4,78.6,85.7,92.9]}>
+              {(p) => <div class="absolute inset-y-0 w-px bg-border/40" style={{ left: `${p}%` }} />}
+            </For>
+            {/* Current level bar — no CSS transition, engine EMA handles smoothing */}
             <div
-              class={`h-full rounded-sm transition-[width] duration-100 ease-linear
-                      ${barColor()} shadow-[0_0_8px_currentColor]`}
+              class={`absolute inset-y-0 left-0 rounded-sm shadow-[0_0_6px_currentColor] ${barColor()}`}
               style={{ width: `${pct()}%` }}
             />
-            {/* Peak hold indicator */}
+            {/* 5-second max marker — white vertical line */}
             <div
-              class="absolute top-0 bottom-0 w-[2px] bg-text-secondary opacity-80 transition-[left] duration-75 ease-linear"
+              class="absolute inset-y-0 w-0.5 bg-white rounded-full"
+              style={{ left: `${maxPct5s()}%` }}
+            />
+            {/* Peak hold indicator — white line, slow decay */}
+            <div
+              class="absolute inset-y-0 w-px bg-text-secondary opacity-80"
               style={{ left: `${peakHold()}%` }}
             />
           </div>
-          <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
-            <span>S1</span><span>3</span><span>5</span><span>7</span><span>9</span>
-            <span>+20</span><span>+40</span><span>+60</span>
+          {/* Scale labels aligned to fixed dB positions */}
+          <div class="relative text-[7px] text-text-muted font-mono mt-0.5 h-3">
+            <span class="absolute -translate-x-1/2" style={{ left:  '0%' }}>S1</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '14.3%' }}>3</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '28.6%' }}>5</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '42.9%' }}>7</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '57.1%' }}>9</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '66.7%' }}>+10</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '78.6%' }}>+30</span>
+            <span class="absolute -translate-x-1/2" style={{ left: '100%', transform: 'translateX(-100%)' }}>+60</span>
           </div>
         </Show>
         <Show when={store.meterStyle() === 'needle'}>
