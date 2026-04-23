@@ -546,9 +546,11 @@ class FmDemodulator implements Demodulator {
     this.dcBlockerR = new DcBlocker();
 
     // Decimation for WFM: 240kHz → 48kHz = factor 5
+    // 63-tap AA filter gives a much sharper transition band than the default
+    // 31-tap, preventing high-frequency aliasing into the audio band.
     if (wideband) {
-      this.decimator = new Decimator(Math.floor(this.inputSampleRate / this.outputSampleRate));
-      this.decimatorR = new Decimator(Math.floor(this.inputSampleRate / this.outputSampleRate));
+      this.decimator  = new Decimator(Math.floor(this.inputSampleRate / this.outputSampleRate), 63);
+      this.decimatorR = new Decimator(Math.floor(this.inputSampleRate / this.outputSampleRate), 63);
     }
 
     // Initialize stereo components for WFM
@@ -563,11 +565,11 @@ class FmDemodulator implements Demodulator {
     // PLL to lock onto 19 kHz pilot (includes internal BPF for SNR-based detection)
     this.pilotPll = new PilotPll(this.inputSampleRate);
 
-    // L+R low-pass: 15 kHz cutoff (stereo audio bandwidth)
-    this.lprFilter = new FirFilter(51, 15000 / this.inputSampleRate);
+    // L+R low-pass: 15 kHz cutoff — 101 taps for sharp transition band
+    this.lprFilter = new FirFilter(101, 15000 / this.inputSampleRate);
 
-    // L-R low-pass: 15 kHz cutoff (after 38 kHz demod)
-    this.lrFilter = new FirFilter(51, 15000 / this.inputSampleRate);
+    // L-R low-pass: 15 kHz cutoff — 101 taps for sharp transition band
+    this.lrFilter  = new FirFilter(101, 15000 / this.inputSampleRate);
   }
 
   process(iq: Int16Array): Float32Array {
@@ -637,8 +639,8 @@ class FmDemodulator implements Demodulator {
           output.push(this.dcBlocker.process(decimated));
         }
       } else {
-        // NFM: no decimation needed (input is already at audio rate)
-        phase = this.deemphL.process(phase);
+        // NFM: no decimation needed (input is already at audio rate).
+        // De-emphasis already applied above (line 630) — do NOT apply again.
         output.push(this.dcBlocker.process(phase));
       }
     }
