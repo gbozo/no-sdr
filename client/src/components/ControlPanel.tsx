@@ -717,6 +717,7 @@ const SMeter: Component = () => {
   let scaleCache: HTMLCanvasElement | undefined;
   let cacheW = 0;
   let cacheH = 0;
+  let cacheTheme = '';
 
   // Hoisted per-frame state (avoid repeated lookups inside rAF)
   let ctx2d: CanvasRenderingContext2D | null = null;
@@ -729,12 +730,36 @@ const SMeter: Component = () => {
     const ctx = off.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // ── Amber backlit face ──
+    // ── Theme-aware backlit face ──
+    const theme = document.documentElement.dataset.theme ?? 'default';
+
+    // Per-theme gradient stops: [center, mid, outer, edge]
+    // VFD  → warm amber/orange backlight
+    // CRT  → cool phosphor green backlight
+    // LCD  → neutral warm-white / blue-grey backlight
+    const stops: [string, string, string, string] = theme === 'vfd'
+      ? ['#ffe060', '#ffb020', '#e07000', '#b04400']
+      : theme === 'crt'
+      ? ['#c8ffcc', '#50e870', '#18a840', '#0a5c20']
+      : ['#e8eef8', '#c0cede', '#8090aa', '#3a4a5e']; // default LCD
+
+    const vigDark = theme === 'vfd'
+      ? 'rgba(60,10,0,0.40)'
+      : theme === 'crt'
+      ? 'rgba(0,30,5,0.40)'
+      : 'rgba(10,18,30,0.45)';
+
+    const bezelColor = theme === 'vfd'
+      ? 'rgba(80,25,0,0.7)'
+      : theme === 'crt'
+      ? 'rgba(0,50,10,0.7)'
+      : 'rgba(20,35,55,0.7)';
+
     const bgGrad = ctx.createRadialGradient(w * 0.5, h * 0.15, 0, w * 0.5, h * 0.6, w * 0.72);
-    bgGrad.addColorStop(0,   '#ffe060');
-    bgGrad.addColorStop(0.35,'#ffb020');
-    bgGrad.addColorStop(0.75,'#e07000');
-    bgGrad.addColorStop(1,   '#b04400');
+    bgGrad.addColorStop(0,    stops[0]);
+    bgGrad.addColorStop(0.35, stops[1]);
+    bgGrad.addColorStop(0.75, stops[2]);
+    bgGrad.addColorStop(1,    stops[3]);
     ctx.fillStyle = bgGrad;
     ctx.beginPath();
     ctx.roundRect(0, 0, w, h, 4);
@@ -742,15 +767,15 @@ const SMeter: Component = () => {
 
     // Vignette
     const vig = ctx.createRadialGradient(w*.5, h*.3, h*.05, w*.5, h*.5, w*.65);
-    vig.addColorStop(0, 'rgba(255,180,0,0.0)');
-    vig.addColorStop(1, 'rgba(60,10,0,0.40)');
+    vig.addColorStop(0, 'rgba(255,255,255,0.0)');
+    vig.addColorStop(1, vigDark);
     ctx.fillStyle = vig;
     ctx.beginPath();
     ctx.roundRect(0, 0, w, h, 4);
     ctx.fill();
 
     // Bezel
-    ctx.strokeStyle = 'rgba(80,25,0,0.7)';
+    ctx.strokeStyle = bezelColor;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.roundRect(0.75, 0.75, w-1.5, h-1.5, 4);
@@ -767,6 +792,22 @@ const SMeter: Component = () => {
     // DPR scale only — NO content scale transform here.
     // The content scale (2×/1.4×) is applied at blit time in drawNeedleMeter.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Theme-aware ink colours for ticks and labels
+    const theme = document.documentElement.dataset.theme ?? 'default';
+    const inkDark   = theme === 'crt' ? '#0a3010'                 : theme === 'vfd' ? '#2a1a08'                 : '#1a2540';
+    const inkOver   = theme === 'crt' ? '#0a5010'                 : theme === 'vfd' ? '#9a1010'                 : '#1a3a7a';
+    const inkDimA   = theme === 'crt' ? 'rgba(10,48,16,0.45)'     : theme === 'vfd' ? 'rgba(60,45,30,0.45)'     : 'rgba(26,45,80,0.45)';
+    const inkOverA  = theme === 'crt' ? 'rgba(10,80,16,0.50)'     : theme === 'vfd' ? 'rgba(160,30,30,0.50)'    : 'rgba(26,60,160,0.50)';
+    const arcGreen  = theme === 'crt' ? 'rgba(0,120,30,0.20)'     : theme === 'vfd' ? 'rgba(40,100,60,0.15)'    : 'rgba(20,60,140,0.18)';
+    const arcRed    = theme === 'crt' ? 'rgba(0,100,20,0.15)'     : theme === 'vfd' ? 'rgba(180,30,30,0.15)'    : 'rgba(60,100,200,0.18)';
+    const powerInk  = theme === 'crt' ? 'rgba(0,60,15,0.65)'      : theme === 'vfd' ? 'rgba(60,40,10,0.65)'     : 'rgba(20,50,110,0.65)';
+    const powerFill = theme === 'crt' ? 'rgba(0,50,10,0.70)'      : theme === 'vfd' ? 'rgba(50,30,5,0.70)'      : 'rgba(20,45,100,0.70)';
+    const labelInk  = theme === 'crt' ? 'rgba(0,60,15,0.80)'      : theme === 'vfd' ? 'rgba(40,25,5,0.80)'      : 'rgba(20,50,110,0.80)';
+    const sigLvlInk = theme === 'crt' ? 'rgba(0,50,10,0.55)'      : theme === 'vfd' ? 'rgba(50,30,5,0.55)'      : 'rgba(20,45,100,0.55)';
+    const powerArcA = theme === 'crt' ? 'rgba(0,50,10,0.18)'      : theme === 'vfd' ? 'rgba(60,40,10,0.18)'     : 'rgba(20,40,90,0.18)';
+    const powerDimA = theme === 'crt' ? 'rgba(0,50,10,0.30)'      : theme === 'vfd' ? 'rgba(60,40,10,0.30)'     : 'rgba(20,40,90,0.30)';
+    const powerMidA = theme === 'crt' ? 'rgba(0,50,10,0.45)'      : theme === 'vfd' ? 'rgba(60,40,10,0.45)'     : 'rgba(20,40,90,0.45)';
     const cx = w / 2;
     const cy = h + h * 0.60;
     const radius = Math.min(w * 0.55, h * 1.1);
@@ -793,7 +834,7 @@ const SMeter: Component = () => {
     ctx.font         = `900 ${labelFont}px "Arial", sans-serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle    = 'rgba(40, 25, 5, 0.80)';
+    ctx.fillStyle    = labelInk;
     ctx.fillText('SIGNAL LEVEL',
       cx + labelR * Math.cos(midAngle),
       cy + labelR * Math.sin(midAngle) - 6);
@@ -801,18 +842,19 @@ const SMeter: Component = () => {
     // ── Coloured arc bands (single path each) ──
     ctx.beginPath();
     ctx.arc(cx, cy, outerR - 1, pctToAngle(0), pctToAngle(s9Pct), false);
-    ctx.strokeStyle = 'rgba(40, 100, 60, 0.15)';
+    ctx.strokeStyle = arcGreen;
     ctx.lineWidth = 8;
     ctx.stroke();
 
     ctx.beginPath();
     ctx.arc(cx, cy, outerR - 1, pctToAngle(s9Pct), pctToAngle(100), false);
-    ctx.strokeStyle = 'rgba(180, 30, 30, 0.15)';
+    ctx.strokeStyle = arcRed;
     ctx.lineWidth = 8;
     ctx.stroke();
 
     // ── Minor ticks — batched into two paths (green zone / red zone) ──
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = `${inkDark.replace('#', 'rgba(').replace(/^rgba\(([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})\)$/, (_, r, g, b) => `rgba(${parseInt(r,16)},${parseInt(g,16)},${parseInt(b,16)},0.45)`)}`;
+    // minor ticks green zone
     ctx.beginPath();
     for (const mp of minorPcts) {
       if (mp > s9Pct) continue;
@@ -821,7 +863,8 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + (outerR + 1) * cos, cy + (outerR + 1) * sin);
       ctx.lineTo(cx + (outerR - 4) * cos, cy + (outerR - 4) * sin);
     }
-    ctx.strokeStyle = 'rgba(60,45,30,0.45)';
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = inkDimA;
     ctx.stroke();
 
     ctx.beginPath();
@@ -832,7 +875,7 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + (outerR + 1) * cos, cy + (outerR + 1) * sin);
       ctx.lineTo(cx + (outerR - 4) * cos, cy + (outerR - 4) * sin);
     }
-    ctx.strokeStyle = 'rgba(160,30,30,0.5)';
+    ctx.strokeStyle = inkOverA;
     ctx.stroke();
 
     // ── Major ticks — batched into two paths ──
@@ -846,7 +889,7 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
       ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
     }
-    ctx.strokeStyle = '#2a1a08';
+    ctx.strokeStyle = inkDark;
     ctx.stroke();
 
     // S9 tick slightly thicker — drawn separately
@@ -856,7 +899,7 @@ const SMeter: Component = () => {
       ctx.beginPath();
       ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
       ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
-      ctx.strokeStyle = '#2a1a08';
+      ctx.strokeStyle = inkDark;
       ctx.lineWidth = 1.8;
       ctx.stroke();
     }
@@ -871,7 +914,7 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
       ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
     }
-    ctx.strokeStyle = '#a01818';
+    ctx.strokeStyle = inkOver;
     ctx.stroke();
 
     // ── Major tick labels ──
@@ -885,7 +928,7 @@ const SMeter: Component = () => {
       const isOver = p > s9Pct;
       const isWide = label.length > 2;
       const lr     = outerR - 14;
-      ctx.fillStyle = isOver ? '#9a1010' : '#2a1a08';
+      ctx.fillStyle = isOver ? inkOver : inkDark;
       ctx.font      = `bold ${isOver ? smallTickFont : tickFont}px "Arial", sans-serif`;
       ctx.fillText(label, cx + lr * cos, cy + lr * sin + (isWide ? -2 : 0));
     }
@@ -897,7 +940,7 @@ const SMeter: Component = () => {
     // Arc guide
     ctx.beginPath();
     ctx.arc(cx, cy, powerR, pctToAngle(0), pctToAngle(100), false);
-    ctx.strokeStyle = 'rgba(60, 40, 10, 0.18)';
+    ctx.strokeStyle = powerArcA;
     ctx.lineWidth   = 0.5;
     ctx.stroke();
 
@@ -911,7 +954,7 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + powerR * cos,       cy + powerR * sin);
       ctx.lineTo(cx + (powerR - 3) * cos, cy + (powerR - 3) * sin);
     }
-    ctx.strokeStyle = 'rgba(60, 40, 10, 0.30)';
+    ctx.strokeStyle = powerDimA;
     ctx.stroke();
 
     // Medium ticks — single batched path
@@ -923,7 +966,7 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + powerR * cos,       cy + powerR * sin);
       ctx.lineTo(cx + (powerR - 5) * cos, cy + (powerR - 5) * sin);
     }
-    ctx.strokeStyle = 'rgba(60, 40, 10, 0.45)';
+    ctx.strokeStyle = powerMidA;
     ctx.stroke();
 
     // Major ticks + labels
@@ -937,11 +980,11 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + (powerR + 1) * cos,  cy + (powerR + 1) * sin);
       ctx.lineTo(cx + (powerR - 7) * cos,  cy + (powerR - 7) * sin);
     }
-    ctx.strokeStyle = 'rgba(60, 40, 10, 0.65)';
+    ctx.strokeStyle = powerInk;
     ctx.stroke();
 
     ctx.font      = `bold ${powerFont}px "Arial", sans-serif`;
-    ctx.fillStyle = 'rgba(50, 30, 5, 0.70)';
+    ctx.fillStyle = powerFill;
     for (const v of [0, 50, 100]) {
       const a = pctToAngle(v);
       const cos = Math.cos(a); const sin = Math.sin(a);
@@ -951,7 +994,7 @@ const SMeter: Component = () => {
     // POWER label
     const powerLabelR = powerR - 22;
     ctx.font      = `bold ${powerFont}px "Arial", sans-serif`;
-    ctx.fillStyle = 'rgba(50, 30, 5, 0.55)';
+    ctx.fillStyle = sigLvlInk;
     ctx.fillText('POWER',
       cx + powerLabelR * Math.cos(midAngle),
       cy + powerLabelR * Math.sin(midAngle));
@@ -989,11 +1032,12 @@ const SMeter: Component = () => {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Rebuild caches if missing or stale
-    if (!bgCache || !scaleCache || cacheW !== w || cacheH !== h) {
+    // Rebuild caches if missing, stale, or theme changed
+    const currentTheme = document.documentElement.dataset.theme ?? 'default';
+    if (!bgCache || !scaleCache || cacheW !== w || cacheH !== h || cacheTheme !== currentTheme) {
       bgCache    = buildBgCache(w, h, dpr);
       scaleCache = buildStaticCache(w, h, dpr);
-      cacheW = w; cacheH = h;
+      cacheW = w; cacheH = h; cacheTheme = currentTheme;
     }
 
     // 1. Blit background at natural size (no transform)
