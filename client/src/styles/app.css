@@ -146,6 +146,22 @@
     color: var(--color-text-secondary);
   }
 
+  .sdr-panel-header.collapsible {
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s;
+  }
+
+  .sdr-panel-header.collapsible:hover {
+    background: var(--color-sdr-hover);
+    border-radius: 5px 5px 0 0;
+  }
+
+  .sdr-panel-header.collapsed {
+    border-bottom-color: transparent;
+    border-radius: 5px;
+  }
+
   .sdr-panel-header::before {
     content: '';
     position: absolute;

@@ -46,11 +46,24 @@ const ControlPanel: Component = () => {
 // ---- Mode Selector ----
 const ModeSelector: Component = () => {
   const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw'];
+  const [open, setOpen] = createSignal(true);
 
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Demodulation</div>
-      <div class="p-2">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>Demodulation</span>
+        <Show when={!open()}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {DEMOD_MODES[store.mode()]?.shortName ?? ''}
+          </span>
+        </Show>
+        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </div>
+      <Show when={open()}>
+        <div class="p-2">
         <div class="flex flex-wrap gap-2">
           <For each={modes}>
             {(mode) => (
@@ -114,18 +127,29 @@ const ModeSelector: Component = () => {
           />
         </div>
       </div>
+      </Show>
     </div>
   );
 };
 
 // ---- Audio Controls ----
 const AudioControls: Component = () => {
+  const [open, setOpen] = createSignal(true);
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
         <span>Audio</span>
+        <Show when={!open()}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {Math.round(store.volume() * 100)}% {store.muted() ? '· muted' : ''}{store.stereoDetected() ? ' · stereo' : ''}
+          </span>
+        </Show>
         {/* Stereo indicator — visible for WFM, AM (auto-detected), and AM Stereo */}
-        <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
+        <Show when={open() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
           <span
             class={`ml-auto text-[9px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded border transition-all duration-500 ${
               store.stereoDetected()
@@ -144,8 +168,10 @@ const AudioControls: Component = () => {
             STEREO
           </span>
         </Show>
+        <span class={`${open() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo') ? '' : 'ml-auto'} text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
-      <div class="p-3 space-y-3">
+      <Show when={open()}>
+        <div class="p-3 space-y-3">
         {/* Volume */}
         <div>
           <div class="flex justify-between items-center mb-1">
@@ -319,6 +345,7 @@ const AudioControls: Component = () => {
         </div>
 
       </div>
+      </Show>
     </div>
   );
 };
@@ -359,10 +386,24 @@ const EqBand: Component<{
 
 // ---- Noise Reduction ----
 const NoiseReduction: Component = () => {
+  const [open, setOpen] = createSignal(true);
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Noise Reduction</div>
-      <div class="p-3 space-y-3">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>Noise Reduction</span>
+        <Show when={!open()}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {[store.nrEnabled() ? 'NR' : '', store.nbEnabled() ? 'NB' : ''].filter(Boolean).join(' · ') || 'off'}
+          </span>
+        </Show>
+        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </div>
+      <Show when={open()}>
+        <div class="p-3 space-y-3">
         {/* Spectral NR */}
         <div>
           <div class="flex justify-between items-center mb-1">
@@ -370,11 +411,7 @@ const NoiseReduction: Component = () => {
               Spectral NR
             </label>
             <button
-              class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
-                      transition-all duration-150
-                      ${store.nrEnabled()
-                        ? 'bg-cyan text-text-inverse shadow-glow-cyan'
-                        : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+              class={`mil-btn ${store.nrEnabled() ? 'active' : ''}`}
               onClick={() => engine.setNrEnabled(!store.nrEnabled())}
               title="Spectral noise reduction — reduces background noise using Wiener filter"
             >
@@ -414,11 +451,7 @@ const NoiseReduction: Component = () => {
               Noise Blanker
             </label>
             <button
-              class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
-                      transition-all duration-150
-                      ${store.nbEnabled()
-                        ? 'bg-cyan text-text-inverse shadow-glow-cyan'
-                        : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+              class={`mil-btn ${store.nbEnabled() ? 'active' : ''}`}
               onClick={() => engine.setNbEnabled(!store.nbEnabled())}
               title="Noise blanker — removes impulse noise (clicks, pops)"
             >
@@ -451,6 +484,7 @@ const NoiseReduction: Component = () => {
           </Show>
         </div>
       </div>
+      </Show>
     </div>
   );
 };
@@ -470,20 +504,34 @@ const WaterfallSettings: Component = () => {
     }
   };
 
+  const [open, setOpen] = createSignal(true);
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Waterfall</div>
-      <div class="p-3 space-y-3">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>Waterfall</span>
+        <Show when={!open()}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {store.waterfallTheme()} · {store.waterfallAutoRange() ? 'auto' : `${store.waterfallMin()}/${store.waterfallMax()} dB`}
+          </span>
+        </Show>
+        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </div>
+      <Show when={open()}>
+        <div class="p-3 space-y-3">
         {/* Color Theme */}
         <div>
           <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1 block">
             Color Theme
           </label>
-          <div class="flex flex-wrap gap-1">
+          <div class="flex flex-wrap gap-2">
             <For each={themes}>
               {(theme) => (
                 <button
-                  class={`sdr-mode-btn text-[8px] ${store.waterfallTheme() === theme ? 'active' : ''}`}
+                  class={`mil-btn ${store.waterfallTheme() === theme ? 'active' : ''}`}
                   onClick={() => engine.setWaterfallTheme(theme)}
                 >
                   {theme}
@@ -499,11 +547,7 @@ const WaterfallSettings: Component = () => {
             Auto Scale
           </label>
           <button
-            class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
-                    transition-all duration-150
-                    ${store.waterfallAutoRange()
-                      ? 'bg-cyan text-text-inverse shadow-glow-cyan'
-                      : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
+            class={`mil-btn ${store.waterfallAutoRange() ? 'active' : ''}`}
             onClick={handleAutoRange}
           >
             {store.waterfallAutoRange() ? 'Auto' : 'Manual'}
@@ -582,6 +626,7 @@ const WaterfallSettings: Component = () => {
           </div>
         </div>
       </div>
+      </Show>
     </div>
   );
 };
@@ -1071,23 +1116,35 @@ const SMeter: Component = () => {
     }
   });
 
+  const [open, setOpen] = createSignal(true);
+
   const toggleStyle = () => {
     store.setMeterStyle(store.meterStyle() === 'bar' ? 'needle' : 'bar');
   };
 
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={(e) => { if ((e.target as HTMLElement).closest('button')) return; setOpen(o => !o); }}
+      >
         <span>Signal</span>
+        <Show when={!open()}>
+          <span class="text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {store.signalLevel().toFixed(0)} dBm
+          </span>
+        </Show>
         <button
           class="ml-auto text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors uppercase tracking-wider"
-          onClick={toggleStyle}
+          onClick={(e) => { e.stopPropagation(); toggleStyle(); }}
           title={`Switch to ${store.meterStyle() === 'bar' ? 'needle' : 'bar'} meter`}
         >
           {store.meterStyle() === 'bar' ? 'Needle' : 'Bar'}
         </button>
+        <span class={`text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
-      <div class="p-3">
+      <Show when={open()}>
+        <div class="p-3">
         <Show when={store.meterStyle() === 'bar'}>
           <div class="flex justify-between text-[9px] text-text-dim font-mono mb-1">
             <span>S-Meter</span>
@@ -1147,6 +1204,7 @@ const SMeter: Component = () => {
           />
         </Show>
       </div>
+      </Show>
     </div>
   );
 };
@@ -1157,7 +1215,7 @@ const CodecSettings: Component = () => {
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
     { value: 'deflate', label: 'Deflate' },
-    { value: 'deflate-floor', label: 'Deflate+Floor' },
+    { value: 'deflate-floor', label: 'DeflateFl' },
   ];
 
   const iqCodecs: { value: CodecType; label: string }[] = [
@@ -1203,10 +1261,26 @@ const CodecSettings: Component = () => {
     return `(-${pct}%)`;
   };
 
+  const [open, setOpen] = createSignal(true);
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Compression</div>
-      <div class="p-2 space-y-2">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>Compression</span>
+        <Show when={!open()}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {formatRate(store.fftWireBytes() + store.iqWireBytes())}
+            {' '}
+            {savingsText(store.fftRawBytes() + store.iqRawBytes(), store.fftWireBytes() + store.iqWireBytes())}
+          </span>
+        </Show>
+        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </div>
+      <Show when={open()}>
+        <div class="p-2 space-y-2">
         {/* FFT Codec */}
         <div>
           <div class="flex justify-between items-center mb-1">
@@ -1219,11 +1293,11 @@ const CodecSettings: Component = () => {
               <span class="text-neon">{formatRate(store.fftWireBytes())}</span>
             </span>
           </div>
-          <div class="flex gap-1">
+          <div class="flex gap-2">
             <For each={fftCodecs}>
               {(c) => (
                 <button
-                  class={`sdr-mode-btn flex-1 !text-[8px] !py-0.5 !px-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
+                  class={`mil-btn flex-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
                   onClick={() => engine.setFftCodec(c.value)}
                 >
                   {c.label}
@@ -1244,11 +1318,11 @@ const CodecSettings: Component = () => {
               <span class="text-neon">{formatRate(store.iqWireBytes())}</span>
             </span>
           </div>
-          <div class="flex gap-1">
+          <div class="flex gap-2">
             <For each={iqCodecs}>
               {(c) => (
                 <button
-                  class={`sdr-mode-btn flex-1 !text-[8px] !py-0.5 !px-1 ${store.iqCodec() === c.value ? 'active' : ''}`}
+                  class={`mil-btn flex-1 ${store.iqCodec() === c.value ? 'active' : ''}`}
                   onClick={() => engine.setIqCodec(c.value)}
                 >
                   {c.label}
@@ -1278,6 +1352,7 @@ const CodecSettings: Component = () => {
           </div>
         </div>
       </div>
+      </Show>
     </div>
   );
 };
@@ -1319,10 +1394,24 @@ const Bookmarks: Component = () => {
     setEditId(null);
   };
 
+  const [open, setOpen] = createSignal(true);
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Bookmarks</div>
-      <div class="p-2 space-y-1.5">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>Bookmarks</span>
+        <Show when={!open()}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+            {store.bookmarks().length} saved
+          </span>
+        </Show>
+        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </div>
+      <Show when={open()}>
+        <div class="p-2 space-y-1.5">
         {/* Add current frequency */}
         <div class="flex gap-1">
           <input
@@ -1398,16 +1487,31 @@ const Bookmarks: Component = () => {
           )}
         </For>
       </div>
+      </Show>
     </div>
   );
 };
 
 // ---- Connection Status ----
 const ConnectionStatus: Component = () => {
+  const [open, setOpen] = createSignal(true);
+
   return (
     <div class="sdr-panel">
-      <div class="sdr-panel-header">Status</div>
-      <div class="p-3 space-y-1 text-[9px] font-mono">
+      <div
+        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>Status</span>
+        <Show when={!open()}>
+          <span class={`ml-auto text-[9px] font-mono normal-case tracking-normal font-normal ${store.connected() ? 'text-status-online' : 'text-status-error'}`}>
+            {store.connected() ? 'Connected' : 'Disconnected'}
+          </span>
+        </Show>
+        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+      </div>
+      <Show when={open()}>
+        <div class="p-3 space-y-1 text-[9px] font-mono">
         <div class="flex justify-between">
           <span class="text-text-secondary">Connection</span>
           <span class={store.connected() ? 'text-status-online' : 'text-status-error'}>
@@ -1427,6 +1531,7 @@ const ConnectionStatus: Component = () => {
           <span class="text-text-dim">{store.fftSize()}</span>
         </div>
       </div>
+      </Show>
     </div>
   );
 };
