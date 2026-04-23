@@ -34,16 +34,8 @@ const FrequencyDisplay: Component = () => {
       <div class="sdr-scanlines" />
       <div class="sdr-dot-grid" />
       <div class="p-3">
-        <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1 flex items-center">
+        <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">
           <span>VFO Frequency</span>
-          <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
-            <span
-              class="ml-auto text-[8px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded
-                     text-green border border-green/40 bg-green-dim shadow-[0_0_6px_rgba(56,193,128,0.3)]"
-            >
-              STEREO
-            </span>
-          </Show>
         </div>
         <div class="font-display text-4xl tracking-wider leading-none"
              style={{ color: 'var(--sdr-freq-color)' }}>
@@ -64,7 +56,18 @@ const FrequencyDisplay: Component = () => {
               </>
             )}
           </For>
-          <span class="text-sm text-text-secondary ml-2 font-mono">Hz</span>
+          <span class="relative inline-block text-sm text-text-secondary ml-2 font-mono">
+            Hz
+            <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
+              <span
+                class="absolute bottom-full left-0 mb-0.5 text-[6px] font-mono font-bold tracking-wider
+                       px-1 py-px rounded whitespace-nowrap
+                       text-green border border-green/40 bg-green-dim shadow-[0_0_4px_rgba(56,193,128,0.3)]"
+              >
+                STEREO
+              </span>
+            </Show>
+          </span>
         </div>
         <div class="mt-1 text-[9px] font-mono text-text-dim">
           Center: {formatFrequencyDotted(store.centerFrequency())} Hz

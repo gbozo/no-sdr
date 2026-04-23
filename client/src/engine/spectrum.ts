@@ -38,12 +38,15 @@ export class SpectrumRenderer {
   /** Per-pixel dB values from the most recent draw — used by tooltip. */
   get lastPixelDb(): Float32Array | null { return this._lastPixelDb; }
 
-  // Noise floor estimation — per-pixel running minimum with slow rise
+  // Noise floor estimation using a rolling minimum window per bin.
+  // Tracks the true minimum dB seen in the last ~5 seconds (150 frames at 30fps).
+  // Because we take the minimum, signal peaks never raise the floor estimate —
+  // the floor only reflects the quietest moments at each frequency.
   private noiseFloorEnabled = false;
-  private noiseFloorDb: Float32Array | null = null;
-  // Per-pixel floor tracks toward new minimum quickly, rises very slowly
-  private readonly noiseFloorFall = 0.15;   // alpha toward lower value (fast snap down)
-  private readonly noiseFloorRise = 0.002;  // alpha toward higher value (very slow rise)
+  private noiseFloorWindow: Float32Array[] | null = null; // circular buffer of frames
+  private noiseFloorWindowPos = 0;
+  private noiseFloorBins: Float32Array | null = null;     // current per-bin minimum
+  private readonly NOISE_FLOOR_WINDOW = 150;              // frames (~5s at 30fps)
 
   // Zoom viewport — fractions of full bandwidth [0, 1]
   private zoomStart = 0;
@@ -247,31 +250,70 @@ export class SpectrumRenderer {
       ctx.globalAlpha = 1;
     }
 
-    // Noise floor — per-pixel running minimum drawn as a dim dashed line
+    // Noise floor — rolling minimum over last ~5s, drawn as a dim dashed line.
+    // Uses a circular buffer of frames; the floor per bin is the minimum across
+    // all frames in the window. Signal peaks never push the floor up — they
+    // simply become the minimum only if the bin is genuinely quiet at that level.
     if (this.noiseFloorEnabled) {
-      if (!this.noiseFloorDb || this.noiseFloorDb.length !== w) {
-        this.noiseFloorDb = new Float32Array(pixelDb); // init to current data
-      } else {
-        for (let x = 0; x < w; x++) {
-          const cur = pixelDb[x];
-          const floor = this.noiseFloorDb[x];
-          if (cur < floor) {
-            // Snap down quickly
-            this.noiseFloorDb[x] = floor + this.noiseFloorFall * (cur - floor);
-          } else {
-            // Rise very slowly — noise floor should only creep up
-            this.noiseFloorDb[x] = floor + this.noiseFloorRise * (cur - floor);
+      // Init or resize window buffer when bin count changes
+      if (!this.noiseFloorWindow || this.noiseFloorWindow[0].length !== bins) {
+        this.noiseFloorWindow = Array.from(
+          { length: this.NOISE_FLOOR_WINDOW },
+          () => new Float32Array(bins).fill(0),
+        );
+        this.noiseFloorWindowPos = 0;
+        this.noiseFloorBins = new Float32Array(bins).fill(0);
+        // Seed all slots with current data so the floor is meaningful immediately
+        for (const slot of this.noiseFloorWindow) slot.set(data);
+      }
+
+      // Write current frame into the circular buffer
+      this.noiseFloorWindow[this.noiseFloorWindowPos].set(data);
+      this.noiseFloorWindowPos = (this.noiseFloorWindowPos + 1) % this.NOISE_FLOOR_WINDOW;
+
+      // Recompute per-bin minimum across the whole window.
+      // Only recompute every 3 frames to keep CPU cost low (~10fps update rate).
+      if (this.noiseFloorWindowPos % 3 === 0) {
+        const floor = this.noiseFloorBins!;
+        const win = this.noiseFloorWindow;
+        const wLen = win.length;
+        for (let b = 0; b < bins; b++) {
+          let mn = win[0][b];
+          for (let f = 1; f < wLen; f++) {
+            if (win[f][b] < mn) mn = win[f][b];
           }
+          floor[b] = mn;
         }
       }
+
+      // Map per-bin floor to per-pixel using same zoom-aware mapping as pixelDb
+      const floor = this.noiseFloorBins!;
       ctx.beginPath();
       for (let x = 0; x < w; x++) {
-        const normalized = (this.noiseFloorDb[x] - this.minDb) / range;
+        const binF = viewStart + (x / (w - 1)) * (viewBins - 1);
+        const binsPerPx = viewBins / w;
+        let floorDb: number;
+        if (binsPerPx <= 1) {
+          const lo = Math.floor(binF);
+          const hi = Math.min(lo + 1, bins - 1);
+          floorDb = floor[lo] + (binF - lo) * (floor[hi] - floor[lo]);
+        } else {
+          const bs = Math.max(0, Math.floor(binF));
+          const be = Math.min(bins, Math.floor(binF + binsPerPx));
+          floorDb = floor[bs];
+          for (let b = bs + 1; b < be; b++) {
+            if (floor[b] < floorDb) floorDb = floor[b];
+          }
+        }
+        const normalized = (floorDb - this.minDb) / range;
         const y = h - Math.max(0, Math.min(1, normalized)) * h;
         if (x === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
+      ctx.setLineDash([4, 3]);
       ctx.strokeStyle = '#a855f7';
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 1;
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
@@ -345,7 +387,11 @@ export class SpectrumRenderer {
 
   setNoiseFloor(enabled: boolean): void {
     this.noiseFloorEnabled = enabled;
-    if (!enabled) this.noiseFloorDb = null;
+    if (!enabled) {
+      this.noiseFloorWindow = null;
+      this.noiseFloorBins = null;
+      this.noiseFloorWindowPos = 0;
+    }
   }
 
   /**
@@ -355,15 +401,14 @@ export class SpectrumRenderer {
   setZoom(start: number, end: number): void {
     this.zoomStart = Math.max(0, Math.min(start, end - 0.01));
     this.zoomEnd   = Math.min(1, Math.max(end, start + 0.01));
-    // Clear noise floor and peak buffers — they are pixel-indexed and now stale
-    this.noiseFloorDb = null;
+    // Clear peak buffer — pixel-indexed and now stale after zoom change.
+    // Noise floor is bin-indexed so it survives zoom changes without reset.
     this.peakDb = null;
   }
 
   resetZoom(): void {
     this.zoomStart = 0;
     this.zoomEnd   = 1;
-    this.noiseFloorDb = null;
     this.peakDb = null;
   }
 

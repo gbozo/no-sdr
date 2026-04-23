@@ -26,6 +26,23 @@ export interface Bookmark {
   bandwidth: number;
 }
 
+// ---- localStorage persistence helper ----
+const NS = 'node-sdr:';
+
+function persist<T>(key: string, defaultValue: T): [() => T, (v: T) => void] {
+  let stored: T = defaultValue;
+  try {
+    const raw = localStorage.getItem(NS + key);
+    if (raw !== null) stored = JSON.parse(raw) as T;
+  } catch { /* ignore parse errors, use default */ }
+  const [get, setRaw] = createSignal<T>(stored);
+  const set = (v: T) => {
+    setRaw(() => v);
+    try { localStorage.setItem(NS + key, JSON.stringify(v)); } catch { /* quota exceeded etc */ }
+  };
+  return [get, set];
+}
+
 function createStore() {
   // ---- Connection State ----
   const [connected, setConnected] = createSignal(false);
@@ -49,34 +66,34 @@ function createStore() {
   const tunedFrequency = () => centerFrequency() + tuneOffset();
 
   // ---- Audio ----
-  const [volume, setVolume] = createSignal(0.8);
+  const [volume, setVolume] = persist<number>('audio.volume', 0.8);
   const [muted, setMuted] = createSignal(false);
-  const [squelch, setSquelch] = createSignal<number | null>(null);
+  const [squelch, setSquelch] = persist<number | null>('audio.squelch', null);
   const [signalLevel, setSignalLevel] = createSignal(-120); // dB
   const [stereoDetected, setStereoDetected] = createSignal(false);
-  const [stereoEnabled, setStereoEnabled] = createSignal(true); // user toggle: allow stereo decoding
-  const [stereoThreshold, setStereoThreshold] = createSignal(-60); // dB — minimum signal level to attempt stereo
-  const [balance, setBalance] = createSignal(0); // -1 (left) to +1 (right), 0 = center
-  const [eqLow, setEqLow] = createSignal(0);        // dB gain, -12 to +12 — 80 Hz lowshelf
-  const [eqLowMid, setEqLowMid] = createSignal(0); // dB gain, -12 to +12 — 500 Hz peaking
-  const [eqMid, setEqMid] = createSignal(0);        // dB gain, -12 to +12 — 1.5 kHz peaking
-  const [eqHighMid, setEqHighMid] = createSignal(0);// dB gain, -12 to +12 — 4 kHz peaking
-  const [eqHigh, setEqHigh] = createSignal(0);      // dB gain, -12 to +12 — 12 kHz highshelf
-  const [loudness, setLoudness] = createSignal(false); // loudness enhancement on/off
+  const [stereoEnabled, setStereoEnabled] = persist<boolean>('audio.stereoEnabled', true);
+  const [stereoThreshold, setStereoThreshold] = persist<number>('audio.stereoThreshold', -60);
+  const [balance, setBalance] = persist<number>('audio.balance', 0);
+  const [eqLow, setEqLow] = persist<number>('audio.eqLow', 0);
+  const [eqLowMid, setEqLowMid] = persist<number>('audio.eqLowMid', 0);
+  const [eqMid, setEqMid] = persist<number>('audio.eqMid', 0);
+  const [eqHighMid, setEqHighMid] = persist<number>('audio.eqHighMid', 0);
+  const [eqHigh, setEqHigh] = persist<number>('audio.eqHigh', 0);
+  const [loudness, setLoudness] = persist<boolean>('audio.loudness', false);
 
   // ---- Noise Reduction ----
-  const [nrEnabled, setNrEnabled] = createSignal(false);        // spectral NR on/off
-  const [nrStrength, setNrStrength] = createSignal(0.5);        // 0-1 aggressiveness
-  const [nbEnabled, setNbEnabled] = createSignal(false);        // noise blanker on/off
-  const [nbLevel, setNbLevel] = createSignal(0.5);              // 0-1 blanker sensitivity
+  const [nrEnabled, setNrEnabled] = persist<boolean>('audio.nrEnabled', false);
+  const [nrStrength, setNrStrength] = persist<number>('audio.nrStrength', 0.5);
+  const [nbEnabled, setNbEnabled] = persist<boolean>('audio.nbEnabled', false);
+  const [nbLevel, setNbLevel] = persist<number>('audio.nbLevel', 0.5);
 
   // ---- Display ----
-  const [waterfallTheme, setWaterfallTheme] = createSignal<WaterfallColorTheme>('turbo');
-  const [uiTheme, setUITheme] = createSignal<UITheme>('default');
+  const [waterfallTheme, setWaterfallTheme] = persist<WaterfallColorTheme>('waterfallTheme', 'turbo');
+  const [uiTheme, setUITheme] = persist<UITheme>('uiTheme', 'default');
   const [waterfallMin, setWaterfallMin] = createSignal(-60);
   const [waterfallMax, setWaterfallMax] = createSignal(-10);
   const [waterfallAutoRange, setWaterfallAutoRange] = createSignal(true);
-  const [waterfallGamma, setWaterfallGamma] = createSignal(1.0); // power curve: <1 darker midtones, >1 brighter
+  const [waterfallGamma, setWaterfallGamma] = persist<number>('waterfallGamma', 1.0);
   const [waterfallSpeed, setWaterfallSpeed] = createSignal(30); // fps
   const [fftSize, setFftSize] = createSignal(2048);
 
@@ -89,12 +106,12 @@ function createStore() {
   const [isAdmin, setIsAdmin] = createSignal(false);
   const [adminModalOpen, setAdminModalOpen] = createSignal(false);
   const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
-  const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('needle');
-  const [spectrumPeakHold, setSpectrumPeakHold] = createSignal(false);
-  const [spectrumSignalFill, setSpectrumSignalFill] = createSignal(false);
+  const [meterStyle, setMeterStyle] = persist<'bar' | 'needle'>('meterStyle', 'needle');
+  const [spectrumPeakHold, setSpectrumPeakHold] = persist<boolean>('spectrumPeakHold', false);
+  const [spectrumSignalFill, setSpectrumSignalFill] = persist<boolean>('spectrumSignalFill', false);
   const [spectrumPaused, setSpectrumPaused] = createSignal(false);
-  const [spectrumAveraging, setSpectrumAveraging] = createSignal<'fast' | 'med' | 'slow'>('fast');
-  const [spectrumNoiseFloor, setSpectrumNoiseFloor] = createSignal(false);
+  const [spectrumAveraging, setSpectrumAveraging] = persist<'fast' | 'med' | 'slow'>('spectrumAveraging', 'fast');
+  const [spectrumNoiseFloor, setSpectrumNoiseFloor] = persist<boolean>('spectrumNoiseFloor', false);
   // Zoom viewport [start, end] as fractions of full bandwidth 0..1
   const [spectrumZoom, setSpectrumZoom] = createSignal<[number, number]>([0, 1]);
   const [spectrumRangeSelect, setSpectrumRangeSelect] = createSignal(false);
@@ -102,19 +119,15 @@ function createStore() {
   const [signalMarkers, setSignalMarkers] = createSignal<number[]>([]);
 
   // ---- Frequency Bookmarks (localStorage-persisted) ----
-  const BOOKMARK_KEY = 'node-sdr:bookmarks';
-  const loadBookmarks = (): Bookmark[] => {
-    try { return JSON.parse(localStorage.getItem(BOOKMARK_KEY) ?? '[]'); } catch { return []; }
-  };
-  const [bookmarks, setBookmarksRaw] = createSignal<Bookmark[]>(loadBookmarks());
+  const [bookmarksRaw, setBookmarksRaw] = persist<Bookmark[]>('bookmarks', []);
   const setBookmarks = (bm: Bookmark[]) => {
     setBookmarksRaw(bm);
-    localStorage.setItem(BOOKMARK_KEY, JSON.stringify(bm));
     // Keep signal markers in sync with bookmark frequencies
     setSignalMarkers(bm.map(b => b.hz));
   };
+  const bookmarks = bookmarksRaw;
   // Init markers from stored bookmarks on load
-  setSignalMarkers(loadBookmarks().map(b => b.hz));
+  setSignalMarkers(bookmarksRaw().map(b => b.hz));
 
   // ---- Codec Preferences ----
   const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate-floor');

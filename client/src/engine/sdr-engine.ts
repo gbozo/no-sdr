@@ -834,7 +834,11 @@ export class SdrEngine {
         if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
           this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
         }
-        // Re-send stereo preference for Opus path
+        // Always sync stereo preference for Opus path immediately after codec is set.
+        // The server creates a fresh OpusAudioPipeline with stereo enabled by default,
+        // so we must send stereo_enabled even when the value is false — otherwise the
+        // server encodes stereo while the client expects mono, causing a channel-count
+        // mismatch that triggers async Opus decoder re-init and drops audio until resolved.
         if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
           this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
         }
@@ -873,6 +877,16 @@ export class SdrEngine {
         // or HMR cycle even though the AudioEngine instance was already initialised.
         if (audioWasActive) {
           this.audio.resume();
+          // Pre-init the Opus decoder with the correct channel count so no
+          // async re-init is triggered when the first packet arrives.
+          // On the Opus path the server honours stereo_enabled before sending
+          // audio, but we prime the decoder here to eliminate any race window.
+          if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
+            const expectedChannels = store.stereoEnabled() ? 2 : 1;
+            if (!this.opusDecoderReady || this.opusDecoderChannels !== expectedChannels) {
+              this.initOpusDecoder(expectedChannels);
+            }
+          }
           this.send({ cmd: 'audio_enabled', enabled: true });
         }
 
@@ -1318,6 +1332,7 @@ export class SdrEngine {
 
   async initAudio(): Promise<void> {
     await this.audio.init();
+    // Apply all persisted audio settings to the Web Audio graph
     this.audio.setVolume(store.volume());
     this.audio.setBalance(store.balance());
     this.audio.setEqLow(store.eqLow());
@@ -1326,6 +1341,23 @@ export class SdrEngine {
     this.audio.setEqHighMid(store.eqHighMid());
     this.audio.setEqHigh(store.eqHigh());
     this.audio.setLoudness(store.loudness());
+    this.nr.setNrEnabled(store.nrEnabled());
+    this.nr.setNrStrength(store.nrStrength());
+    this.nr.setNbEnabled(store.nbEnabled());
+    this.nr.setNbLevel(store.nbLevel());
+
+    // For Opus codec path: initialise the WASM decoder with the correct
+    // channel count before sending audio_enabled. On a fresh page load
+    // setIqCodec() is never called (codec comes from persisted store), so
+    // the decoder is null. We must await it here so the first packets are
+    // not silently dropped while the decoder is still initialising.
+    if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
+      const expectedChannels = store.stereoEnabled() ? 2 : 1;
+      if (!this.opusDecoderReady || this.opusDecoderChannels !== expectedChannels) {
+        await this.initOpusDecoder(expectedChannels);
+      }
+    }
+
     // Tell server to start sending IQ data now that audio is enabled
     this.send({ cmd: 'audio_enabled', enabled: true });
   }

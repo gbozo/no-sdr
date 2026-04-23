@@ -31,6 +31,16 @@ const WaterfallDisplay: Component = () => {
 
   onMount(() => {
     engine.attachCanvases(waterfallRef, spectrumRef);
+
+    // Apply persisted spectrum/display settings to the renderers immediately
+    // after canvases are attached — without this the engine uses its own defaults
+    // until the user clicks a button, ignoring whatever was saved in localStorage.
+    engine.setWaterfallTheme(store.waterfallTheme());
+    engine.setWaterfallGamma(store.waterfallGamma());
+    engine.setSpectrumPeakHold(store.spectrumPeakHold());
+    engine.setSpectrumSignalFill(store.spectrumSignalFill());
+    engine.setSpectrumNoiseFloor(store.spectrumNoiseFloor());
+    engine.setSpectrumAveraging(store.spectrumAveraging());
     const observer = new ResizeObserver(() => engine.handleResize());
     observer.observe(containerRef);
     requestAnimationFrame(() => engine.handleResize());
