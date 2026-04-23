@@ -159,11 +159,12 @@ class DeemphasisFilter {
 
   /**
    * @param tau - time constant in seconds (75µs for US, 50µs for EU)
-   * @param sampleRate - audio sample rate
+   * @param sampleRate - sample rate at which the filter operates
    */
   constructor(tau: number, sampleRate: number) {
-    // alpha = 1 / (1 + 2π * tau * fs)
-    this.alpha = 1 / (1 + 2 * Math.PI * tau * sampleRate);
+    // α = dt / (τ + dt)  — matches server-side Deemph formula
+    const dt = 1 / sampleRate;
+    this.alpha = dt / (tau + dt);
   }
 
   process(x: number): number {
@@ -172,7 +173,8 @@ class DeemphasisFilter {
   }
 
   setParams(tau: number, sampleRate: number): void {
-    this.alpha = 1 / (1 + 2 * Math.PI * tau * sampleRate);
+    const dt = 1 / sampleRate;
+    this.alpha = dt / (tau + dt);
   }
 
   reset(): void {
