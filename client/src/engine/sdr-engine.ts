@@ -19,6 +19,7 @@ import {
   MSG_META,
   MSG_DECODER,
   MSG_SIGNAL_LEVEL,
+  MSG_RDS,
   DEMOD_MODES,
   ImaAdpcmDecoder,
   decodeFftAdpcm,
@@ -506,6 +507,27 @@ export class SdrEngine {
         store.setSignalLevel(level);
         break;
       }
+
+      case MSG_RDS: {
+        // Server-side RDS data from Opus codec path (WFM mode).
+        // Bypasses the client-side demodulator — directly update store.
+        try {
+          const text = new TextDecoder().decode(payload);
+          const rds = JSON.parse(text);
+          if (rds.ps !== undefined) store.setRdsPs(rds.ps);
+          if (rds.rt !== undefined) store.setRdsRt(rds.rt);
+          if (rds.ptyName !== undefined) store.setRdsPty(rds.ptyName);
+          if (rds.pi !== null && rds.pi !== undefined) {
+            store.setRdsPi(rds.pi.toString(16).toUpperCase().padStart(4, '0'));
+          } else if (rds.pi === null) {
+            store.setRdsPi('');
+          }
+          if (rds.synced !== undefined) store.setRdsSynced(rds.synced);
+        } catch (e) {
+          console.error('[RDS] decode error:', e);
+        }
+        break;
+      }
     }
   }
 
@@ -933,6 +955,14 @@ export class SdrEngine {
     this.demodulator.reset();
     this.demodulator.setBandwidth(store.bandwidth());
     this.attachRdsCallback();
+    // For Opus codec path, clear RDS when leaving WFM (server won't send MSG_RDS for other modes)
+    if ((store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') && m !== 'wfm') {
+      store.setRdsPs('');
+      store.setRdsRt('');
+      store.setRdsPty('');
+      store.setRdsPi('');
+      store.setRdsSynced(false);
+    }
     // Flush stale audio data
     this.audio.resetBuffer();
     // Reset noise reduction state for new mode

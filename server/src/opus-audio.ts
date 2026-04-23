@@ -8,6 +8,7 @@
 import { createRequire } from 'node:module';
 import type { DemodMode } from '@node-sdr/shared';
 import { logger } from './logger.js';
+import { RdsDecoder, type RdsData } from './rds-decoder.js';
 
 const require = createRequire(import.meta.url);
 
@@ -168,9 +169,10 @@ class SimpleAgc {
 //  Demod output types
 // ========================================================================
 
-interface MonoResult { left: Float32Array; right?: undefined; stereo: false }
-interface StereoResult { left: Float32Array; right: Float32Array; stereo: boolean }
-type DemodResult = MonoResult | StereoResult;
+interface MonoResult { left: Float32Array; right?: undefined; stereo: false; rdsData?: undefined }
+interface StereoResult { left: Float32Array; right: Float32Array; stereo: boolean; rdsData?: undefined }
+interface WfmStereoResult { left: Float32Array; right: Float32Array; stereo: boolean; rdsData: RdsData | null }
+type DemodResult = MonoResult | StereoResult | WfmStereoResult;
 
 type ServerDemod = {
   process(iq: Int16Array): DemodResult;
@@ -339,6 +341,11 @@ class FmStereoDemod implements ServerDemod {
   private dcL = new DcBlock();
   private dcR = new DcBlock();
 
+  // RDS decoder — taps composite at 240kHz
+  private rdsDecoder: RdsDecoder;
+  /** Latest decoded RDS data, or null if no group has been parsed yet */
+  private latestRdsData: RdsData | null = null;
+
   constructor(inputRate: number) {
     const deviation = 75_000;
     this.gain = inputRate / (2 * Math.PI * deviation);
@@ -360,16 +367,26 @@ class FmStereoDemod implements ServerDemod {
 
     this.deemphL = new Deemph(75e-6, inputRate);
     this.deemphR = new Deemph(75e-6, inputRate);
+
+    // RDS decoder at the same input rate (240kHz)
+    this.rdsDecoder = new RdsDecoder(inputRate);
+    this.rdsDecoder.setCallback((data) => {
+      this.latestRdsData = { ...data };
+    });
   }
 
-  process(iq: Int16Array): DemodResult {
+  process(iq: Int16Array): WfmStereoResult {
     const pairs = iq.length >> 1;
     const maxOut = Math.ceil(pairs / this.decimFactor);
     const leftOut = new Float32Array(maxOut);
     const rightOut = new Float32Array(maxOut);
     let outIdxL = 0;
-    let outIdxR = 0;
     const scale = 1 / 32768;
+
+    // Snapshot and clear pending RDS data so each process() call returns
+    // only the groups decoded from this chunk of IQ.
+    const rdsDataToReturn = this.latestRdsData;
+    this.latestRdsData = null;
 
     for (let k = 0; k < pairs; k++) {
       const curI = iq[k * 2] * scale;
@@ -381,6 +398,9 @@ class FmStereoDemod implements ServerDemod {
       const composite = Math.atan2(cross, dot) * this.gain;
       this.prevI = curI;
       this.prevQ = curQ;
+
+      // Feed composite to RDS decoder (before any filtering)
+      this.rdsDecoder.pushSample(composite);
 
       // PLL tracks 19kHz pilot
       const pilotRef = Math.sin(this.pllPhase);
@@ -423,7 +443,7 @@ class FmStereoDemod implements ServerDemod {
       left = this.deemphL.process(left);
       right = this.deemphR.process(right);
 
-      // Decimate (shared counter is fine — L and R always in lockstep)
+      // Decimate
       this.decimCounterL++;
       if (this.decimCounterL >= this.decimFactor) {
         this.decimCounterL = 0;
@@ -438,14 +458,12 @@ class FmStereoDemod implements ServerDemod {
     const isStereo = this.blendFactor > 0.01;
     const n = outIdxL;
 
-    if (isStereo) {
-      return {
-        left: leftOut.subarray(0, n),
-        right: rightOut.subarray(0, n),
-        stereo: true,
-      };
-    }
-    return { left: leftOut.subarray(0, n), stereo: false as const };
+    return {
+      left: leftOut.subarray(0, n),
+      right: rightOut.subarray(0, n),
+      stereo: isStereo,
+      rdsData: rdsDataToReturn,
+    };
   }
 
   reset(): void {
@@ -459,6 +477,8 @@ class FmStereoDemod implements ServerDemod {
     this.deemphL.reset(); this.deemphR.reset();
     this.dcL.reset(); this.dcR.reset();
     this.pilotBpf.reset();
+    this.rdsDecoder.reset();
+    this.latestRdsData = null;
   }
 }
 
@@ -708,13 +728,18 @@ export class OpusAudioPipeline {
 
   /**
    * Process IQ sub-band data → zero or more Opus packets.
+   * When mode is WFM and the demod has decoded RDS groups, the last parsed
+   * RDS snapshot is included in every returned packet for that call.
    */
-  process(iqSubBand: Int16Array): Array<{ packet: Uint8Array; samples: number; stereo: boolean }> {
+  process(iqSubBand: Int16Array): Array<{ packet: Uint8Array; samples: number; stereo: boolean; rdsData: RdsData | null }> {
     if (!this.encoder) return [];
 
     const result = this.demod.process(iqSubBand);
     const leftAudio = result.left;
     if (leftAudio.length === 0) return [];
+
+    // Extract RDS data from WFM demod result (null for all other modes)
+    const rdsData: RdsData | null = (result as any).rdsData ?? null;
 
     const isStereo = !this._forceMono && result.stereo && result.right !== undefined;
     const rightAudio = isStereo ? result.right! : undefined;
@@ -736,7 +761,7 @@ export class OpusAudioPipeline {
       : undefined;
 
     // Accumulate and encode
-    const packets: Array<{ packet: Uint8Array; samples: number; stereo: boolean }> = [];
+    const packets: Array<{ packet: Uint8Array; samples: number; stereo: boolean; rdsData: RdsData | null }> = [];
     const samplesPerFrame = OPUS_FRAME_SAMPLES * this.channels;
     let offset = 0;
 
@@ -765,6 +790,8 @@ export class OpusAudioPipeline {
             packet: new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.byteLength),
             samples: OPUS_FRAME_SAMPLES,
             stereo: isStereo,
+            // Only include RDS data on the first packet of the batch (avoid redundant sends)
+            rdsData: packets.length === 0 ? rdsData : null,
           });
         } catch (err) {
           logger.error({ err }, 'Opus encode failed');

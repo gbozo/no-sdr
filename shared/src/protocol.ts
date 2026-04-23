@@ -44,6 +44,14 @@ export const MSG_FFT_DEFLATE = 0x0B;
 export const MSG_AUDIO_OPUS = 0x0C;
 
 /**
+ * RDS (Radio Data System) data packet — JSON-encoded RDS fields, per-user.
+ * Only sent when the client is using an Opus codec (opus/opus-hq) in WFM mode.
+ * Wire: [0x0A] [UTF-8 JSON bytes]
+ * JSON shape: { ps, rt, pty, ptyName, pi, tp, ta, ms, ct, af, synced }
+ */
+export const MSG_RDS = 0x0A;
+
+/**
  * Waterfall history burst — Uint8-quantized FFT frames for waterfall prefill.
  * Sent once per client on request_history command.
  * Wire: [0x0D][Uint16 frameCount LE][Uint16 binCount LE][Int16 minDb LE][Int16 maxDb LE]
@@ -274,6 +282,18 @@ export function packFftHistoryMessage(
     payload.set(frames[i], i * binCount);
   }
   return buf;
+}
+
+/**
+ * Pack an RDS data object as a JSON binary message.
+ * Wire: [0x0A] [UTF-8 JSON bytes]
+ * Only sent on the Opus codec path when mode is WFM.
+ */
+export function packRdsMessage(rdsData: object): ArrayBuffer {
+  const json = JSON.stringify(rdsData);
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(json);
+  return packBinaryMessage(MSG_RDS, bytes.buffer as ArrayBuffer);
 }
 
 

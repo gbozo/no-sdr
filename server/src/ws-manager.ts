@@ -25,6 +25,7 @@ import {
   packIqAdpcmMessage,
   packAudioOpusMessage,
   packFftHistoryMessage,
+  packRdsMessage,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
@@ -378,8 +379,12 @@ export class WebSocketManager {
             if ((client.iqCodec === 'opus' || client.iqCodec === 'opus-hq') && client.opusPipeline) {
               // Opus: server-side demod + Opus encode (has its own frame accumulation)
               const packets = client.opusPipeline.process(subBand);
-              for (const { packet, samples, stereo } of packets) {
+              for (const { packet, samples, stereo, rdsData } of packets) {
                 client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
+                // Send RDS data when available (WFM mode only, first packet per IQ chunk)
+                if (rdsData !== null) {
+                  client.ws.send(packRdsMessage(rdsData));
+                }
               }
             } else {
               // IQ path (none/adpcm): accumulate into fixed-size chunks
