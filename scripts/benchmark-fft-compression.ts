@@ -6,6 +6,10 @@
  * 1. Current: Uint8 quantization only (MSG_FFT_COMPRESSED baseline)
  * 2. ADPCM: Int16 dB×100 → IMA-ADPCM (current MSG_FFT_ADPCM)
  * 3. Delta+Deflate per-frame: Uint8 → delta → deflateRawSync (current MSG_FFT_DEFLATE)
+ * 3b. Delta+Deflate with noise floor cutoff: clamp all bins below a noise-floor threshold
+ *     to the floor Uint8 value before delta → deflateRawSync. Long runs of 0x00 in the
+ *     delta stream give deflate more to work with on noise-dominated spectra.
+ *     Tested at -90 dB, -80 dB, and -70 dB floor levels.
  * 4. Streaming deflate on Uint8: persistent deflate stream across frames (Z_SYNC_FLUSH)
  * 5. Delta+streaming deflate on Uint8: delta + persistent stream
  * 6. Deflate on raw Float32: Float32 → deflateRawSync per frame (no quantization loss)
@@ -105,6 +109,34 @@ bench('3. Delta+Deflate/frame (Uint8)', () => uint8Frames.map(f => {
   for (let i = 1; i < f.length; i++) delta[i] = (f[i] - f[i - 1]) & 0xFF;
   return zlib.deflateRawSync(delta, { level: 6 }).length;
 }));
+
+// 3b. Delta+Deflate with noise-floor cutoff (production codec variant)
+// Clamp all bins below a noise floor to the floor's Uint8 value, then delta+deflate.
+// Bins at or above the floor are untouched — no signal information is lost above the cutoff.
+// The flat region below the floor becomes a run of 0x00 deltas that deflate compresses trivially.
+// Floor levels tested: -90 dB, -80 dB, -70 dB (absolute dBFS, same scale as minDb/maxDb).
+const NOISE_FLOORS_DB = [-90, -80, -70];
+
+function noiseFloorCutoffUint8(frame: Uint8Array, floorDb: number): Uint8Array {
+  // Convert floorDb to the Uint8 scale used in the capture (minDb → 0, maxDb → 255).
+  const range = maxDb - minDb; // e.g. 0 - (-130) = 130
+  const floorIdx = Math.max(0, Math.min(255, Math.round((floorDb - minDb) * 255 / range)));
+  const out = new Uint8Array(frame.length);
+  for (let i = 0; i < frame.length; i++) {
+    out[i] = frame[i] < floorIdx ? floorIdx : frame[i];
+  }
+  return out;
+}
+
+for (const floorDb of NOISE_FLOORS_DB) {
+  bench(`3b. Delta+Deflate/frame (Uint8, floor ${floorDb} dB)`, () => uint8Frames.map(f => {
+    const clamped = noiseFloorCutoffUint8(f, floorDb);
+    const delta = Buffer.allocUnsafe(clamped.length);
+    delta[0] = clamped[0];
+    for (let i = 1; i < clamped.length; i++) delta[i] = (clamped[i] - clamped[i - 1]) & 0xFF;
+    return zlib.deflateRawSync(delta, { level: 6 }).length;
+  }));
+}
 
 // 4. Deflate per-frame on Uint8 (no delta)
 bench('4. Deflate/frame (Uint8, no delta)', () => uint8Frames.map(f => {

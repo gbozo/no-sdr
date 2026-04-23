@@ -55,7 +55,7 @@ export const MSG_FFT_HISTORY = 0x0D;
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT data */
-export type FftCodecType = 'none' | 'adpcm' | 'deflate';
+export type FftCodecType = 'none' | 'adpcm' | 'deflate' | 'deflate-floor';
 
 /** Available codecs for IQ/audio data */
 export type IqCodecType = 'none' | 'adpcm' | 'opus' | 'opus-hq';

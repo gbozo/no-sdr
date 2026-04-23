@@ -959,6 +959,7 @@ const CodecSettings: Component = () => {
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
     { value: 'deflate', label: 'Deflate' },
+    { value: 'deflate-floor', label: 'Deflate+Floor' },
   ];
 
   const iqCodecs: { value: CodecType; label: string }[] = [
@@ -1024,7 +1025,7 @@ const CodecSettings: Component = () => {
             <For each={fftCodecs}>
               {(c) => (
                 <button
-                  class={`sdr-mode-btn flex-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
+                  class={`sdr-mode-btn flex-1 !text-[8px] !py-0.5 !px-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
                   onClick={() => engine.setFftCodec(c.value)}
                 >
                   {c.label}
@@ -1049,7 +1050,7 @@ const CodecSettings: Component = () => {
             <For each={iqCodecs}>
               {(c) => (
                 <button
-                  class={`sdr-mode-btn flex-1 ${store.iqCodec() === c.value ? 'active' : ''}`}
+                  class={`sdr-mode-btn flex-1 !text-[8px] !py-0.5 !px-1 ${store.iqCodec() === c.value ? 'active' : ''}`}
                   onClick={() => engine.setIqCodec(c.value)}
                 >
                   {c.label}

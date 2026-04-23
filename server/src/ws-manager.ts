@@ -79,6 +79,24 @@ export class WebSocketManager {
   private clients = new Map<string, ConnectedClient>();
   private fftProcessors = new Map<string, FftProcessor>(); // dongleId -> processor
   private fftHistories  = new Map<string, FftHistoryBuffer>(); // dongleId -> history
+  /**
+   * Per-dongle EMA of the per-frame minimum bin dB value, used by the
+   * 'deflate-floor' codec to adaptively clamp the below-noise region.
+   * Smoothing factor alpha=0.05 gives a ~20-frame (~0.7s at 30fps) time constant
+   * — fast enough to track slow band changes, slow enough to ignore transients.
+   * Initialised to FFT_MIN_DB so the first real frame immediately pulls it up.
+   */
+  private fftNoiseFloorEma = new Map<string, number>(); // dongleId -> smoothed floor dB
+  private static readonly NOISE_FLOOR_EMA_ALPHA = 0.05;
+  /**
+   * Percentile of the Uint8-quantised bin distribution used as the per-frame
+   * noise floor sample fed into the EMA.  5 = 5th percentile.
+   * Using a low percentile (rather than the absolute minimum) makes the estimate
+   * robust against isolated quiet bins or spectral troughs that would otherwise
+   * drag the floor estimate far below the true noise level, eliminating the need
+   * for a fixed margin on top.
+   */
+  private static readonly NOISE_FLOOR_PERCENTILE = 5;
   private clientIdCounter = 0;
 
   /** Per-IP connection counts for rate limiting */
@@ -123,6 +141,7 @@ export class WebSocketManager {
     this.dongleManager.on('dongle-stopped', (dongleId: string) => {
       this.fftProcessors.delete(dongleId);
       this.fftHistories.get(dongleId)?.reset();
+      this.fftNoiseFloorEma.delete(dongleId);
       this.broadcastToDongle(dongleId, packMetaMessage({
         type: 'dongle_status',
         dongleId,
@@ -152,6 +171,8 @@ export class WebSocketManager {
       } else {
         this.fftHistories.set(dongleId, new FftHistoryBuffer(WebSocketManager.HISTORY_CAPACITY, profile.fftSize));
       }
+      // Reset adaptive noise floor EMA so the new band's floor is learned fresh
+      this.fftNoiseFloorEma.delete(dongleId);
 
       // Notify all clients on this dongle
       this.broadcastToDongle(dongleId, packMetaMessage({
@@ -228,6 +249,7 @@ export class WebSocketManager {
       let uint8Msg: ArrayBuffer | null = null;
       let adpcmMsg: ArrayBuffer | null = null;
       let deflateMsg: ArrayBuffer | null = null;
+      let deflateFloorMsg: ArrayBuffer | null = null;
       // Shared Uint8 quantized FFT (used by both 'none' and 'deflate' codecs)
       let uint8Data: Uint8Array | null = null;
 
@@ -271,6 +293,53 @@ export class WebSocketManager {
               );
             }
             client.ws.send(deflateMsg);
+          } else if (client.fftCodec === 'deflate-floor') {
+            if (!deflateFloorMsg) {
+              // Adaptive noise-floor delta+deflate.
+              // 1. Find the minimum bin dB in this frame (proxy for noise floor).
+              // 2. Advance a per-dongle EMA with alpha=0.05 (~20-frame time constant).
+              // 3. Clamp all bins below the smoothed floor to the floor value before
+              //    quantisation → delta → deflate.  The flat clamped region becomes a
+              //    long run of 0x00 deltas that deflate trivially compresses away.
+              //    Bins at or above the floor are untouched — no signal detail is lost.
+              if (!uint8Data) {
+                uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+              }
+              // Build a 256-bucket histogram of the quantised bin values in one pass,
+              // then walk it to find the Nth percentile.  This is O(binCount + 256) and
+              // far more robust than frameMin: isolated quiet bins or spectral troughs
+              // cannot drag the estimate below the true noise level.
+              const hist = new Uint32Array(256);
+              for (let i = 0; i < uint8Data.length; i++) hist[uint8Data[i]]++;
+              const target = Math.ceil(uint8Data.length * WebSocketManager.NOISE_FLOOR_PERCENTILE / 100);
+              let cumulative = 0;
+              let percentileIdx = 0;
+              for (let b = 0; b < 256; b++) {
+                cumulative += hist[b];
+                if (cumulative >= target) { percentileIdx = b; break; }
+              }
+              // Advance EMA with the percentile Uint8 index (no dB conversion needed —
+              // we stay in Uint8 space for the EMA and the clamp).
+              const prevEmaIdx = this.fftNoiseFloorEma.get(dongleId) ?? percentileIdx;
+              const emaIdx = prevEmaIdx + WebSocketManager.NOISE_FLOOR_EMA_ALPHA * (percentileIdx - prevEmaIdx);
+              this.fftNoiseFloorEma.set(dongleId, emaIdx);
+              const floorIdx = Math.max(0, Math.min(255, Math.round(emaIdx)));
+              const clamped = new Uint8Array(uint8Data.length);
+              for (let i = 0; i < uint8Data.length; i++) {
+                clamped[i] = uint8Data[i] < floorIdx ? floorIdx : uint8Data[i];
+              }
+              const deltaFloor = Buffer.allocUnsafe(clamped.length);
+              deltaFloor[0] = clamped[0];
+              for (let i = 1; i < clamped.length; i++) {
+                deltaFloor[i] = (clamped[i] - clamped[i - 1]) & 0xFF;
+              }
+              const deflatedFloor = deflateRawSync(deltaFloor, { level: 6 });
+              deflateFloorMsg = packFftDeflateMessage(
+                new Uint8Array(deflatedFloor.buffer, deflatedFloor.byteOffset, deflatedFloor.byteLength),
+                FFT_MIN_DB, FFT_MAX_DB, uint8Data.length,
+              );
+            }
+            client.ws.send(deflateFloorMsg);
           } else {
             if (!uint8Msg) {
               if (!uint8Data) {
