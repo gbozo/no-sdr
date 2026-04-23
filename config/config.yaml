@@ -30,7 +30,7 @@ dongles:
         name: FM Broadcast
         centerFrequency: 100000000
         sampleRate: 2400000
-        fftSize: 65536
+        fftSize: 8192
         fftFps: 16
         defaultMode: wfm
         defaultTuneOffset: 0

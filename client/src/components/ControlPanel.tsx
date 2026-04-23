@@ -1133,7 +1133,15 @@ const SMeter: Component = () => {
         </Show>
         <Show when={store.meterStyle() === 'needle'}>
           <canvas
-            ref={canvasRef}
+            ref={(el) => {
+              canvasRef = el;
+              // Reset cached context and offscreen caches whenever the canvas
+              // element is (re)mounted — happens when toggling bar ↔ needle.
+              ctx2d = null;
+              bgCache = undefined;
+              scaleCache = undefined;
+              cacheW = 0; cacheH = 0;
+            }}
             class="w-full rounded-sm"
             style={{ height: '110px' }}
           />
