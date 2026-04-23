@@ -11,7 +11,6 @@ import ControlPanel from './components/ControlPanel.js';
 import AdminModal from './components/AdminModal.js';
 
 const App: Component = () => {
-  const [audioStarted, setAudioStarted] = createSignal(false);
   const [installPrompt, setInstallPrompt] = createSignal<any>(null);
   const [installed, setInstalled] = createSignal(false);
 
@@ -51,9 +50,9 @@ const App: Component = () => {
 
   // Start audio on first user interaction
   const handleStartAudio = async () => {
-    if (!audioStarted()) {
+    if (!store.audioStarted()) {
       await engine.initAudio();
-      setAudioStarted(true);
+      store.setAudioStarted(true);
     }
   };
 
@@ -137,7 +136,7 @@ const App: Component = () => {
       </header>
 
       {/* Audio Start Prompt (one-time) */}
-      <Show when={!audioStarted()}>
+      <Show when={!store.audioStarted()}>
         <div
           class="bg-sdr-elevated border-b border-border px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-sdr-hover transition-colors"
           onClick={handleStartAudio}

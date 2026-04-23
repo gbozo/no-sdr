@@ -122,7 +122,7 @@ const WaterfallDisplay: Component = () => {
     }
   };
 
-  const handleSpectrumMouseUp = (e: MouseEvent) => {
+  const handleSpectrumMouseUp = async (e: MouseEvent) => {
     // End pan
     if (panAnchor() !== null) {
       setPanAnchor(null);
@@ -146,6 +146,12 @@ const WaterfallDisplay: Component = () => {
       // Plain click-to-tune
       const rect = spectrumRef.getBoundingClientRect();
       engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
+
+      // Spectrum click = intent to listen — start audio if not yet running
+      if (!engine.isAudioInitialized) {
+        await engine.initAudio();
+        store.setAudioStarted(true);
+      }
     }
   };
 
@@ -203,9 +209,10 @@ const WaterfallDisplay: Component = () => {
     // Snap back to live if currently seeking
     if (seekOffset() > 0) setSeekOffset(0);
 
-    // Start audio if not yet initialised (waterfall click = intent to listen)
+    // Start audio if not yet initialised (waterfall/spectrum click = intent to listen)
     if (!engine.isAudioInitialized) {
       await engine.initAudio();
+      store.setAudioStarted(true);
     }
   };
 

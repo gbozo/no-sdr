@@ -80,6 +80,9 @@ function createStore() {
   const [waterfallSpeed, setWaterfallSpeed] = createSignal(30); // fps
   const [fftSize, setFftSize] = createSignal(2048);
 
+  // ---- Audio Start State ----
+  const [audioStarted, setAudioStarted] = createSignal(false);
+
   // ---- UI State ----
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [decoderPanelOpen, setDecoderPanelOpen] = createSignal(false);
@@ -189,6 +192,7 @@ function createStore() {
     fftSize, setFftSize,
 
     // UI State
+    audioStarted, setAudioStarted,
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,
