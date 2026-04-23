@@ -290,6 +290,8 @@ const ThemeButton: Component<{ theme: string; label: string }> = (props) => {
       onClick={() => {
         store.setUITheme(props.theme as any);
         document.documentElement.setAttribute('data-theme', props.theme);
+        // CSS variable is now updated — sync spectrum renderer immediately
+        engine.setSpectrumAccentColor();
       }}
     >
       {props.label}

@@ -1239,6 +1239,17 @@ export class SdrEngine {
   }
 
   /**
+   * Update spectrum accent color after a UI theme change.
+   * Call immediately after setting data-theme on the root element so the
+   * renderer picks up the new CSS variable value.
+   */
+  setSpectrumAccentColor(): void {
+    const color = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sdr-freq-color').trim();
+    if (color) this.spectrum?.setAccentColor(color);
+  }
+
+  /**
    * Set zoom viewport from two X fractions [0,1] of the full bandwidth.
    * Both spectrum and waterfall renderers are updated.
    */
