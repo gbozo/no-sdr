@@ -939,18 +939,9 @@ export class SdrEngine {
 
   tune(offsetHz: number): void {
     store.setTuneOffset(offsetHz);
-    // Reset demodulator state to avoid stale filter conditions at the new frequency
+    // Reset demodulator and audio buffer to avoid stale filter state
     this.demodulator.reset();
-    // Only flush the audio ring buffer on the IQ codec path — the buffer holds
-    // client-demodulated samples that become stale when the server shifts the
-    // extracted sub-band to a new frequency.
-    // On the Opus path the server re-tunes and re-encodes seamlessly; flushing
-    // the buffer here causes an audible 150ms silence gap while the jitter
-    // buffer re-fills, with no benefit.
-    const isIqPath = store.iqCodec() === 'none' || store.iqCodec() === 'adpcm';
-    if (isIqPath) {
-      this.audio.resetBuffer();
-    }
+    this.audio.resetBuffer();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'tune', offset: offsetHz });
@@ -1059,14 +1050,10 @@ export class SdrEngine {
     if (!enabled && store.stereoDetected()) {
       store.setStereoDetected(false);
     }
-    // Reset demodulator state to clear stale filter conditions from the old path.
-    // Only flush the audio buffer on the IQ path — on Opus the server handles the
-    // mono/stereo switch gracefully and flushing causes an unnecessary gap.
+    // Reset demodulator state and flush audio buffer to avoid stale filter
+    // data from the previous mono/stereo path causing silence or artifacts
     this.demodulator.reset();
-    const isIqPath = store.iqCodec() === 'none' || store.iqCodec() === 'adpcm';
-    if (isIqPath) {
-      this.audio.resetBuffer();
-    }
+    this.audio.resetBuffer();
   }
 
   setStereoThreshold(dB: number): void {
