@@ -364,7 +364,7 @@ class PilotPll {
 
   // Detection hold timer — prevents rapid on/off cycling
   private holdCounter = 0;
-  private readonly holdSamples: number; // ~200ms worth of samples
+  private holdSamples: number; // ~200ms worth of samples
 
   // Bandpass filter for pilot extraction (used for detection only)
   private bpf: BiquadFilter;
@@ -1057,8 +1057,10 @@ class CQuamDemodulator implements Demodulator {
   private gS2 = 0;
   private gBlockSize = 0;
   private gSampleCount = 0;
-  private pilotMag = 0;
-  private lockLevel = 0;
+  private _pilotMag = 0;
+  private _lockLevel = 0;
+  get pilotMag(): number  { return this._pilotMag; }
+  get lockLevel(): number { return this._lockLevel; }
 
   // Notch filter state (biquad, per-channel)
   private nb0 = 0; private nb1 = 0; private nb2 = 0;
@@ -1187,7 +1189,7 @@ class CQuamDemodulator implements Demodulator {
       // Evaluate pilot magnitude periodically
       if (gSampleCount >= gBlockSize) {
         const power = gS1 * gS1 + gS2 * gS2 - gS1 * gS2 * gCoeff;
-        this.pilotMag = 0.9 * this.pilotMag + 0.1 * (Math.sqrt(Math.max(0, power)) / gSampleCount);
+        this._pilotMag = 0.9 * this._pilotMag + 0.1 * (Math.sqrt(Math.max(0, power)) / gSampleCount);
         gS1 = 0;
         gS2 = 0;
         gSampleCount = 0;
@@ -1225,10 +1227,10 @@ class CQuamDemodulator implements Demodulator {
     this.w2L = w2L;
     this.w1R = w1R;
     this.w2R = w2R;
-    this.lockLevel = lockLevel;
+    this._lockLevel = lockLevel;
 
     // Stereo detection: PLL locked + 25 Hz pilot present
-    const isStereo = lockLevel > 0.8 && this.pilotMag > 0.001;
+    const isStereo = lockLevel > 0.8 && this._pilotMag > 0.001;
 
     return { left, right, stereo: isStereo };
   }
@@ -1241,8 +1243,8 @@ class CQuamDemodulator implements Demodulator {
     this.gS1 = 0;
     this.gS2 = 0;
     this.gSampleCount = 0;
-    this.pilotMag = 0;
-    this.lockLevel = 0;
+    this._pilotMag = 0;
+    this._lockLevel = 0;
     this.w1L = 0;
     this.w2L = 0;
     this.w1R = 0;
