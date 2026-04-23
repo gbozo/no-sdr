@@ -123,6 +123,19 @@ const App: Component = () => {
           <ThemeButton theme="vfd" label="VFD" />
         </div>
 
+        {/* Enable Audio button — shown until first interaction */}
+        <Show when={!store.audioStarted()}>
+          <button
+            class="ml-4 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
+                   rounded-sm border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
+                   hover:bg-[var(--sdr-accent)] hover:text-text-inverse
+                   transition-colors animate-pulse-glow"
+            onClick={handleStartAudio}
+          >
+            Enable Audio
+          </button>
+        </Show>
+
         {/* Admin Button */}
         <button
           class="ml-4 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
@@ -134,19 +147,6 @@ const App: Component = () => {
           Admin
         </button>
       </header>
-
-      {/* Audio Start Prompt (one-time) */}
-      <Show when={!store.audioStarted()}>
-        <div
-          class="bg-sdr-elevated border-b border-border px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-sdr-hover transition-colors"
-          onClick={handleStartAudio}
-        >
-          <span class="text-[10px] font-mono text-text-secondary">
-            Click anywhere to enable audio playback
-          </span>
-          <span class="sdr-btn sdr-btn-primary text-[9px]">Enable Audio</span>
-        </div>
-      </Show>
 
       {/* Main Content */}
       <div class="flex-1 flex min-h-0">
