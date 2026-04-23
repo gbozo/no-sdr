@@ -688,21 +688,31 @@ const SMeter: Component = () => {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // ── Warm backlit face background ──
-    const bgGrad = ctx.createRadialGradient(w / 2, h * 0.35, 0, w / 2, h * 0.35, w * 0.7);
-    bgGrad.addColorStop(0, '#faf6e8');      // warm white center
-    bgGrad.addColorStop(0.5, '#f5edd4');    // yellowish warmth
-    bgGrad.addColorStop(1, '#e8dfc0');      // darker edges — aged paper
+    // ── Amber backlit face ──
+    const bgGrad = ctx.createRadialGradient(w * 0.5, h * 0.15, 0, w * 0.5, h * 0.6, w * 0.72);
+    bgGrad.addColorStop(0,   '#ffe060');
+    bgGrad.addColorStop(0.35,'#ffb020');
+    bgGrad.addColorStop(0.75,'#e07000');
+    bgGrad.addColorStop(1,   '#b04400');
     ctx.fillStyle = bgGrad;
     ctx.beginPath();
-    ctx.roundRect(0, 0, w, h, 3);
+    ctx.roundRect(0, 0, w, h, 4);
     ctx.fill();
 
-    // Subtle inner shadow / bezel
-    ctx.strokeStyle = 'rgba(160, 140, 100, 0.3)';
-    ctx.lineWidth = 1;
+    // Vignette
+    const vig = ctx.createRadialGradient(w*.5, h*.3, h*.05, w*.5, h*.5, w*.65);
+    vig.addColorStop(0, 'rgba(255,180,0,0.0)');
+    vig.addColorStop(1, 'rgba(60,10,0,0.40)');
+    ctx.fillStyle = vig;
     ctx.beginPath();
-    ctx.roundRect(0.5, 0.5, w - 1, h - 1, 3);
+    ctx.roundRect(0, 0, w, h, 4);
+    ctx.fill();
+
+    // Bezel
+    ctx.strokeStyle = 'rgba(80,25,0,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(0.75, 0.75, w-1.5, h-1.5, 4);
     ctx.stroke();
 
     // ── Geometry ──
@@ -910,22 +920,26 @@ const SMeter: Component = () => {
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 2;
 
-    // Tapered needle body
+    // Tapered needle body with blunt tip
+    const tipHalfW = 1.2; // flat tip half-width
+    const perp = needleAngle + Math.PI / 2;
+    const tipX = cx + needleLen * Math.cos(needleAngle);
+    const tipY = cy + needleLen * Math.sin(needleAngle);
     ctx.beginPath();
-    // Tail (thick end behind pivot)
+    // Tail left corner
     ctx.moveTo(
-      cx - needleTailLen * Math.cos(needleAngle) + 2.5 * Math.cos(needleAngle + Math.PI / 2),
-      cy - needleTailLen * Math.sin(needleAngle) + 2.5 * Math.sin(needleAngle + Math.PI / 2)
+      cx - needleTailLen * Math.cos(needleAngle) + 2.5 * Math.cos(perp),
+      cy - needleTailLen * Math.sin(needleAngle) + 2.5 * Math.sin(perp)
     );
+    // Tail right corner
     ctx.lineTo(
-      cx - needleTailLen * Math.cos(needleAngle) - 2.5 * Math.cos(needleAngle + Math.PI / 2),
-      cy - needleTailLen * Math.sin(needleAngle) - 2.5 * Math.sin(needleAngle + Math.PI / 2)
+      cx - needleTailLen * Math.cos(needleAngle) - 2.5 * Math.cos(perp),
+      cy - needleTailLen * Math.sin(needleAngle) - 2.5 * Math.sin(perp)
     );
-    // Tip (sharp point)
-    ctx.lineTo(
-      cx + needleLen * Math.cos(needleAngle),
-      cy + needleLen * Math.sin(needleAngle)
-    );
+    // Tip right (blunt end)
+    ctx.lineTo(tipX - tipHalfW * Math.cos(perp), tipY - tipHalfW * Math.sin(perp));
+    // Tip left (blunt end)
+    ctx.lineTo(tipX + tipHalfW * Math.cos(perp), tipY + tipHalfW * Math.sin(perp));
     ctx.closePath();
     ctx.fillStyle = '#cc2222';
     ctx.fill();
@@ -933,7 +947,7 @@ const SMeter: Component = () => {
     // Thin center line for realism
     ctx.beginPath();
     ctx.moveTo(cx - needleTailLen * Math.cos(needleAngle), cy - needleTailLen * Math.sin(needleAngle));
-    ctx.lineTo(cx + needleLen * Math.cos(needleAngle), cy + needleLen * Math.sin(needleAngle));
+    ctx.lineTo(tipX, tipY);
     ctx.strokeStyle = '#a01818';
     ctx.lineWidth = 0.5;
     ctx.stroke();
