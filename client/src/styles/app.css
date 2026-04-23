@@ -295,6 +295,8 @@
 
   /* Vertical range slider (for EQ bands) */
   .sdr-range-vertical {
+    -webkit-appearance: none;
+    appearance: none;
     writing-mode: vertical-lr;
     direction: rtl;
     background: transparent;
