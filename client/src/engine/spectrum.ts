@@ -63,12 +63,15 @@ export class SpectrumRenderer {
     this.ctx = canvas.getContext('2d', { alpha: true })!;
     this.minDb = minDb;
     this.maxDb = maxDb;
-    this.accentColor = getComputedStyle(document.documentElement)
-      .getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
-    this.fillColor = 'rgba(74, 163, 255, 0.12)';
-    this.signalFillColor = 'rgba(74, 163, 255, 0.25)';
+    this.accentColor = '#4aa3ff';
+    this.fillColor = 'rgba(74,163,255,0.12)';
+    this.signalFillColor = 'rgba(74,163,255,0.25)';
     this.gridColor = 'rgba(38, 50, 70, 0.5)';
     this.resize();
+    // Apply the actual current theme color (may differ from default if page loaded with a saved theme)
+    const themeColor = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sdr-freq-color').trim();
+    if (themeColor) this.setAccentColor(themeColor);
   }
 
   /**
@@ -425,8 +428,21 @@ export class SpectrumRenderer {
    */
   setAccentColor(color: string): void {
     this.accentColor = color;
-    this.fillColor = color.replace(')', ', 0.12)').replace('rgb', 'rgba');
-    this.signalFillColor = color.replace(')', ', 0.25)').replace('rgb', 'rgba');
+    // Parse hex (#rrggbb or #rgb) or rgb(...) into r,g,b components
+    // so we can build correct rgba fill strings regardless of format.
+    let r = 74, g = 163, b = 255; // fallback cyan
+    const hex6 = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    const hex3 = color.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+    const rgbM = color.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+    if (hex6) {
+      r = parseInt(hex6[1], 16); g = parseInt(hex6[2], 16); b = parseInt(hex6[3], 16);
+    } else if (hex3) {
+      r = parseInt(hex3[1] + hex3[1], 16); g = parseInt(hex3[2] + hex3[2], 16); b = parseInt(hex3[3] + hex3[3], 16);
+    } else if (rgbM) {
+      r = parseInt(rgbM[1]); g = parseInt(rgbM[2]); b = parseInt(rgbM[3]);
+    }
+    this.fillColor       = `rgba(${r},${g},${b},0.12)`;
+    this.signalFillColor = `rgba(${r},${g},${b},0.25)`;
   }
 
   /**
