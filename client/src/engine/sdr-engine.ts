@@ -431,7 +431,12 @@ export class SdrEngine {
             this.initOpusDecoder(channels); // fire-and-forget
           }
 
-          if (this.opusDecoder && this.opusDecoderReady) {
+          // Squelch gate — same logic as processIqData()
+          const squelchLevel = store.squelch();
+          const inGracePeriod = performance.now() < this.squelchBypassUntil;
+          const squelchOpen = squelchLevel === null || inGracePeriod || store.signalLevel() >= squelchLevel;
+
+          if (this.opusDecoder && this.opusDecoderReady && squelchOpen) {
             const { channelData } = this.opusDecoder.decodeFrame(opusPacket);
             this.bwIqRawBytes += opusSamples * channels * 2;
 
@@ -982,8 +987,7 @@ export class SdrEngine {
 
   setSquelch(db: number | null): void {
     store.setSquelch(db);
-    // Squelch is enforced client-side in the MSG_IQ handler —
-    // no server command needed since audio demodulation is local.
+    // Squelch is enforced client-side in both the MSG_IQ and MSG_AUDIO_OPUS handlers.
   }
 
   setVolume(level: number): void {

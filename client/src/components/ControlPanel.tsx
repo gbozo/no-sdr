@@ -102,12 +102,12 @@ const ModeSelector: Component = () => {
           <input
             type="range"
             aria-label="Squelch threshold"
-            min={-150}
+            min={-80}
             max={0}
-            value={store.squelch() ?? -150}
+            value={store.squelch() ?? -80}
             onInput={(e) => {
               const val = parseInt(e.currentTarget.value);
-              engine.setSquelch(val <= -150 ? null : val);
+              engine.setSquelch(val <= -80 ? null : val);
             }}
             class="sdr-range"
           />
