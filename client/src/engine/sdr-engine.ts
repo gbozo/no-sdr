@@ -55,6 +55,20 @@ export class SdrEngine {
   // Used for waterfall prefill on zoom/reset and future seek-back feature.
   private fftBuffer = new FftFrameBuffer(1024, 0);
 
+  // Pending waterfall prefill: rAF handle for deferred zoom/pan redraws.
+  // Multiple zoom wheel events within one frame collapse into a single redraw.
+  private pendingWaterfallPrefill: number | null = null;
+
+  private scheduleWaterfallPrefill(): void {
+    if (this.pendingWaterfallPrefill !== null) return; // already scheduled
+    this.pendingWaterfallPrefill = requestAnimationFrame(() => {
+      this.pendingWaterfallPrefill = null;
+      if (this.waterfall && this.fftBuffer.count > 0) {
+        this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
+      }
+    });
+  }
+
   // Seek-back: when > 0, waterfall is frozen N frames in the past
   private seekOffset = 0;
 
@@ -939,9 +953,15 @@ export class SdrEngine {
 
   tune(offsetHz: number): void {
     store.setTuneOffset(offsetHz);
-    // Reset demodulator and audio buffer to avoid stale filter state
+    // Reset demodulator to clear stale filter state at the new frequency
     this.demodulator.reset();
-    this.audio.resetBuffer();
+    // On the IQ codec path the client holds demodulated samples that go stale
+    // when the server shifts the extracted sub-band — flush the ring buffer.
+    // On the Opus path the server re-tunes seamlessly; flushing causes a
+    // needless 150ms silence while the jitter buffer re-fills.
+    if (store.iqCodec() === 'none' || store.iqCodec() === 'adpcm') {
+      this.audio.resetBuffer();
+    }
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'tune', offset: offsetHz });
@@ -1050,10 +1070,13 @@ export class SdrEngine {
     if (!enabled && store.stereoDetected()) {
       store.setStereoDetected(false);
     }
-    // Reset demodulator state and flush audio buffer to avoid stale filter
-    // data from the previous mono/stereo path causing silence or artifacts
+    // Reset demodulator state to clear stale filter conditions from the old path.
+    // Only flush audio on the IQ path — on Opus the server handles the
+    // mono/stereo switch without a buffer discontinuity.
     this.demodulator.reset();
-    this.audio.resetBuffer();
+    if (store.iqCodec() === 'none' || store.iqCodec() === 'adpcm') {
+      this.audio.resetBuffer();
+    }
   }
 
   setStereoThreshold(dB: number): void {
@@ -1198,20 +1221,16 @@ export class SdrEngine {
     store.setSpectrumZoom([start, end]);
     this.spectrum?.setZoom(start, end);
     this.waterfall?.setZoom(start, end);
-    // Prefill waterfall from client buffer so it doesn't go blank
-    if (this.waterfall && this.fftBuffer.count > 0) {
-      this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
-    }
+    // Defer waterfall prefill to next rAF — multiple wheel events within one
+    // frame collapse into a single redraw instead of blocking on every tick.
+    this.scheduleWaterfallPrefill();
   }
 
   resetSpectrumZoom(): void {
     store.setSpectrumZoom([0, 1]);
     this.spectrum?.resetZoom();
     this.waterfall?.resetZoom();
-    // Prefill waterfall from client buffer on zoom exit
-    if (this.waterfall && this.fftBuffer.count > 0) {
-      this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
-    }
+    this.scheduleWaterfallPrefill();
   }
 
   // ---- Seek-back ----
