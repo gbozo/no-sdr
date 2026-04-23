@@ -117,7 +117,7 @@ function createStore() {
   setSignalMarkers(loadBookmarks().map(b => b.hz));
 
   // ---- Codec Preferences ----
-  const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate');
+  const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate-floor');
   const [iqCodec, setIqCodec] = createSignal<IqCodecType>('opus');
 
   // ---- Bandwidth / Throughput Metrics ----
