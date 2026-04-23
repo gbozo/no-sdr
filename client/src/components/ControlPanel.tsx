@@ -552,6 +552,33 @@ const WaterfallSettings: Component = () => {
           Range: {store.waterfallMin()} to {store.waterfallMax()} dB
           ({store.waterfallMax() - store.waterfallMin()} dB span)
         </div>
+
+        {/* Gamma / contrast */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Contrast
+            </label>
+            <span class="text-[9px] font-mono text-text-dim">
+              {store.waterfallGamma().toFixed(2)}
+              {store.waterfallGamma() > 1 ? ' (dark)' : store.waterfallGamma() < 1 ? ' (bright)' : ' (linear)'}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={30}
+            max={300}
+            step={1}
+            value={Math.round(store.waterfallGamma() * 100)}
+            onInput={(e) => engine.setWaterfallGamma(parseInt(e.currentTarget.value) / 100)}
+            class="sdr-range"
+          />
+          <div class="flex justify-between text-[7px] font-mono text-text-dim mt-0.5">
+            <span>0.30 bright</span>
+            <span>1.00</span>
+            <span>dark 3.00</span>
+          </div>
+        </div>
       </div>
     </div>
   );

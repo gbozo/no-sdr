@@ -1117,6 +1117,11 @@ export class SdrEngine {
     this.spectrum?.setRange(minDb, maxDb);
   }
 
+  setWaterfallGamma(gamma: number): void {
+    store.setWaterfallGamma(gamma);
+    this.waterfall?.setGamma(gamma);
+  }
+
   setSpectrumPeakHold(enabled: boolean): void {
     store.setSpectrumPeakHold(enabled);
     this.spectrum?.setPeakHold(enabled);

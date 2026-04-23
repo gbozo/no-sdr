@@ -76,6 +76,7 @@ function createStore() {
   const [waterfallMin, setWaterfallMin] = createSignal(-60);
   const [waterfallMax, setWaterfallMax] = createSignal(-10);
   const [waterfallAutoRange, setWaterfallAutoRange] = createSignal(true);
+  const [waterfallGamma, setWaterfallGamma] = createSignal(1.0); // power curve: <1 darker midtones, >1 brighter
   const [waterfallSpeed, setWaterfallSpeed] = createSignal(30); // fps
   const [fftSize, setFftSize] = createSignal(2048);
 
@@ -183,6 +184,7 @@ function createStore() {
     waterfallMin, setWaterfallMin,
     waterfallMax, setWaterfallMax,
     waterfallAutoRange, setWaterfallAutoRange,
+    waterfallGamma, setWaterfallGamma,
     waterfallSpeed, setWaterfallSpeed,
     fftSize, setFftSize,
 

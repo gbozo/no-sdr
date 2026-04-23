@@ -12,6 +12,11 @@ export class WaterfallRenderer {
   private palette: Palette;
   private minDb: number;
   private maxDb: number;
+  /** Power-curve gamma applied to the 0–1 normalized bin value before palette lookup.
+   *  gamma > 1 → pushes midtones darker, makes strong signals pop.
+   *  gamma < 1 → brightens midtones, lifts weak signals.
+   *  gamma = 1 → linear (default). */
+  private gamma = 1.0;
   private w = 0;
   private h = 0;
 
@@ -95,7 +100,7 @@ export class WaterfallRenderer {
 
       // Normalize to 0-255 palette index
       const normalized = (db - this.minDb) / range;
-      const palIdx = Math.max(0, Math.min(255, Math.round(normalized * 255)));
+      const palIdx = Math.max(0, Math.min(255, Math.round(Math.pow(Math.max(0, normalized), this.gamma) * 255)));
       const color = this.palette[palIdx];
 
       const offset = x * 4;
@@ -121,6 +126,13 @@ export class WaterfallRenderer {
   setRange(minDb: number, maxDb: number): void {
     this.minDb = minDb;
     this.maxDb = maxDb;
+  }
+
+  /**
+   * Update gamma power curve (0.3–3.0 practical range, 1.0 = linear)
+   */
+  setGamma(gamma: number): void {
+    this.gamma = Math.max(0.1, gamma);
   }
 
   setZoom(start: number, end: number): void {
@@ -237,7 +249,7 @@ export class WaterfallRenderer {
         }
 
         const normalized = (db - this.minDb) / range;
-        const palIdx = Math.max(0, Math.min(255, Math.round(normalized * 255)));
+        const palIdx = Math.max(0, Math.min(255, Math.round(Math.pow(Math.max(0, normalized), this.gamma) * 255)));
         const color  = this.palette[palIdx];
         const offset = rowOffset + x * 4;
         pixels[offset]     = color[0];
@@ -314,7 +326,7 @@ export class WaterfallRenderer {
         // Dequantize server Uint8 → dB, then renormalize to client display range
         const db = serverMinDb + (u8 / 255) * serverRange;
         const normalized = (db - this.minDb) / clientRange;
-        const palIdx = Math.max(0, Math.min(255, Math.round(normalized * 255)));
+        const palIdx = Math.max(0, Math.min(255, Math.round(Math.pow(Math.max(0, normalized), this.gamma) * 255)));
         const color = this.palette[palIdx];
         const offset = rowOffset + x * 4;
         pixels[offset]     = color[0];
