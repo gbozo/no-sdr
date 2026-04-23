@@ -426,6 +426,7 @@ const WaterfallDisplay: Component = () => {
           </span>
           <input
             type="range"
+            aria-label="Waterfall playback position"
             min={0}
             max={bufferCount()}
             step={1}

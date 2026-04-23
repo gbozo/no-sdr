@@ -79,6 +79,7 @@ const ModeSelector: Component = () => {
           </div>
           <input
             type="range"
+            aria-label="Filter bandwidth"
             min={DEMOD_MODES[store.mode()]?.bandwidthRange[0] ?? 100}
             max={DEMOD_MODES[store.mode()]?.bandwidthRange[1] ?? 200000}
             step={100}
@@ -100,6 +101,7 @@ const ModeSelector: Component = () => {
           </div>
           <input
             type="range"
+            aria-label="Squelch threshold"
             min={-150}
             max={0}
             value={store.squelch() ?? -150}
@@ -155,6 +157,7 @@ const AudioControls: Component = () => {
           </div>
           <input
             type="range"
+            aria-label="Volume"
             min={0}
             max={100}
             value={Math.round(store.volume() * 100)}
@@ -176,6 +179,7 @@ const AudioControls: Component = () => {
           <div class="relative">
             <input
               type="range"
+              aria-label="Balance left-right"
               min={-100}
               max={100}
               value={Math.round(store.balance() * 100)}
@@ -243,6 +247,7 @@ const AudioControls: Component = () => {
                 </div>
                 <input
                   type="range"
+                  aria-label="Stereo blend threshold"
                   min={-80}
                   max={0}
                   value={store.stereoThreshold()}
@@ -340,6 +345,7 @@ const EqBand: Component<{
       <div class="h-20 flex items-center justify-center relative">
         <input
           type="range"
+          aria-label={`EQ ${props.label} band`}
           min={-12}
           max={12}
           step={1}
@@ -396,6 +402,7 @@ const NoiseReduction: Component = () => {
               </div>
               <input
                 type="range"
+                aria-label="Noise reduction strength"
                 min={0}
                 max={100}
                 value={Math.round(store.nrStrength() * 100)}
@@ -439,6 +446,7 @@ const NoiseReduction: Component = () => {
               </div>
               <input
                 type="range"
+                aria-label="Noise blanker threshold"
                 min={0}
                 max={100}
                 value={Math.round(store.nbLevel() * 100)}
@@ -521,6 +529,7 @@ const WaterfallSettings: Component = () => {
           </div>
           <input
             type="range"
+            aria-label="Waterfall minimum level"
             min={-100}
             max={0}
             value={store.waterfallMin()}
@@ -539,6 +548,7 @@ const WaterfallSettings: Component = () => {
           </div>
           <input
             type="range"
+            aria-label="Waterfall maximum level"
             min={-60}
             max={20}
             value={store.waterfallMax()}
@@ -566,6 +576,7 @@ const WaterfallSettings: Component = () => {
           </div>
           <input
             type="range"
+            aria-label="Waterfall contrast gamma"
             min={30}
             max={300}
             step={1}
@@ -1155,6 +1166,9 @@ const Bookmarks: Component = () => {
         {/* Add current frequency */}
         <div class="flex gap-1">
           <input
+            id="bookmark-label"
+            name="bookmark-label"
+            aria-label="Bookmark label"
             class="flex-1 bg-sdr-base border border-border rounded-sm
                    px-2 py-0.5 text-[9px] font-mono text-text-primary
                    placeholder:text-text-muted focus:outline-none focus:border-[var(--sdr-accent)]"

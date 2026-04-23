@@ -299,6 +299,7 @@ const AdminModal: Component = () => {
               <div class="space-y-2">
                 <input
                   type="password"
+                  aria-label="Admin password"
                   placeholder="Admin password"
                   value={password()}
                   onInput={(e) => setPassword(e.currentTarget.value)}
@@ -536,6 +537,7 @@ const DonglesTab: Component<{
                     <label class="text-[9px] font-mono text-text-dim block">Name</label>
                     <input
                       type="text"
+                      aria-label="Dongle name"
                       value={formData().name || ''}
                       onInput={(e) => setFormData({...formData(), name: e.currentTarget.value})}
                       class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
@@ -545,6 +547,7 @@ const DonglesTab: Component<{
                   <div>
                     <label class="text-[9px] font-mono text-text-dim block">Source Type</label>
                     <select
+                      aria-label="Source type"
                       value={formData().sourceType || 'local'}
                       onChange={(e) => setFormData({...formData(), sourceType: e.currentTarget.value})}
                       class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
@@ -563,6 +566,7 @@ const DonglesTab: Component<{
                       <label class="text-[9px] font-mono text-text-dim block">Host</label>
                       <input
                         type="text"
+                        aria-label="Host address"
                         value={formData().host || ''}
                         onInput={(e) => setFormData({...formData(), host: e.currentTarget.value})}
                         placeholder="192.168.1.100"
@@ -573,6 +577,7 @@ const DonglesTab: Component<{
                       <label class="text-[9px] font-mono text-text-dim block">Port</label>
                       <input
                         type="number"
+                        aria-label="Port number"
                         value={formData().port || 1234}
                         onInput={(e) => setFormData({...formData(), port: parseInt(e.currentTarget.value) || 1234})}
                         class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
@@ -584,6 +589,7 @@ const DonglesTab: Component<{
                     <label class="text-[9px] font-mono text-text-dim block">PPM Correction</label>
                     <input
                       type="number"
+                      aria-label="PPM correction"
                       step="0.1"
                       value={formData().ppmCorrection || 0}
                       onInput={(e) => setFormData({...formData(), ppmCorrection: parseFloat(e.currentTarget.value) || 0})}
@@ -741,6 +747,7 @@ const ProfilesTab: Component<{
                     <div class="space-y-1">
                       <input
                         type="text"
+                        aria-label="Profile name"
                         value={formData().name || ''}
                         onInput={(e) => setFormData({...formData(), name: e.currentTarget.value})}
                         class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
@@ -748,6 +755,7 @@ const ProfilesTab: Component<{
                       />
                       <input
                         type="number"
+                        aria-label="Center frequency in Hz"
                         value={formData().centerFrequency || 0}
                         onInput={(e) => setFormData({...formData(), centerFrequency: parseInt(e.currentTarget.value) || 0})}
                         class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
@@ -755,12 +763,14 @@ const ProfilesTab: Component<{
                       />
                       <input
                         type="number"
+                        aria-label="Sample rate"
                         value={formData().sampleRate || 0}
                         onInput={(e) => setFormData({...formData(), sampleRate: parseInt(e.currentTarget.value) || 0})}
                         class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
                         placeholder="Sample rate"
                       />
                       <select
+                        aria-label="Default demodulation mode"
                         value={formData().defaultMode || 'wfm'}
                         onChange={(e) => setFormData({...formData(), defaultMode: e.currentTarget.value})}
                         class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
