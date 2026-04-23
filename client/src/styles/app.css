@@ -334,6 +334,90 @@
     color: var(--color-text-inverse);
     box-shadow: var(--sdr-glow);
   }
+
+  /* ── Military-grade mode button ── */
+  .mil-btn {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 10px 6px;
+    min-width: 44px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #8a9ab0;
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.08s, box-shadow 0.08s, color 0.12s;
+
+    /* Matte dark housing */
+    background: linear-gradient(175deg, #1a2030 0%, #0e131c 60%, #090d14 100%);
+    border-radius: 4px;
+
+    /* Outer bevel — chamfered plate look */
+    border-top:    1px solid #2a3548;
+    border-left:   1px solid #232e3f;
+    border-right:  1px solid #0a0d12;
+    border-bottom: 1px solid #070a10;
+
+    /* Recessed inset shadow */
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.04),
+      inset 0 -1px 0 rgba(0,0,0,0.5),
+      0 2px 4px rgba(0,0,0,0.6),
+      0 1px 0 rgba(255,255,255,0.03);
+  }
+
+  /* Backlit indicator LED — sits at the top of the button */
+  .mil-btn::before {
+    content: '';
+    display: block;
+    width: 18px;
+    height: 4px;
+    border-radius: 2px;
+    background: #1a2535;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
+    transition: background 0.15s, box-shadow 0.15s;
+    flex-shrink: 0;
+  }
+
+  .mil-btn:hover {
+    color: #c0cfe4;
+    background: linear-gradient(175deg, #1e2638 0%, #111822 60%, #0b0f18 100%);
+  }
+
+  /* Pressed / tactile push */
+  .mil-btn:active {
+    transform: translateY(1px);
+    box-shadow:
+      inset 0 2px 4px rgba(0,0,0,0.7),
+      0 1px 1px rgba(0,0,0,0.4);
+  }
+
+  /* Active state — LED lit green, label bright */
+  .mil-btn.active {
+    color: #e0eeff;
+    background: linear-gradient(175deg, #152030 0%, #0c1620 60%, #080d16 100%);
+    border-top-color:  #1e3a50;
+    border-left-color: #182e44;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      inset 0 -1px 0 rgba(0,0,0,0.6),
+      0 2px 4px rgba(0,0,0,0.7),
+      0 0 8px rgba(74,163,255,0.08);
+  }
+
+  .mil-btn.active::before {
+    background: var(--sdr-accent);
+    box-shadow:
+      0 0 6px var(--sdr-accent),
+      0 0 12px rgba(74,163,255,0.5),
+      inset 0 1px 1px rgba(255,255,255,0.3);
+  }
 }
 
 /* ---- Global Styles ---- */

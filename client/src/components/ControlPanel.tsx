@@ -51,12 +51,13 @@ const ModeSelector: Component = () => {
     <div class="sdr-panel">
       <div class="sdr-panel-header">Demodulation</div>
       <div class="p-2">
-        <div class="flex flex-wrap gap-1">
+        <div class="flex flex-wrap gap-2">
           <For each={modes}>
             {(mode) => (
               <button
-                class={`sdr-mode-btn ${store.mode() === mode ? 'active' : ''}`}
+                class={`mil-btn ${store.mode() === mode ? 'active' : ''}`}
                 onClick={() => engine.setMode(mode)}
+                title={DEMOD_MODES[mode].description}
               >
                 {DEMOD_MODES[mode].shortName}
               </button>
@@ -194,46 +195,36 @@ const AudioControls: Component = () => {
           </div>
         </div>
 
-        {/* Mute + Loudness row */}
-        <div class="flex gap-1.5">
+        {/* Mute + Loudness + Stereo row */}
+        <div class="flex gap-2">
           <button
-            class={`sdr-btn flex-1 ${store.muted() ? 'sdr-btn-primary' : 'sdr-btn-ghost'}`}
+            class={`mil-btn flex-1 ${store.muted() ? 'active' : ''}`}
             onClick={() => engine.setMuted(!store.muted())}
+            title={store.muted() ? 'Click to unmute' : 'Click to mute'}
           >
             {store.muted() ? 'Unmute' : 'Mute'}
           </button>
           <button
-            class={`sdr-btn flex-1 ${
-              store.loudness()
-                ? 'bg-amber text-text-inverse shadow-glow-amber font-bold'
-                : 'sdr-btn-ghost'
-            }`}
+            class={`mil-btn flex-1 ${store.loudness() ? 'active' : ''}`}
             onClick={() => engine.setLoudness(!store.loudness())}
             title="Loudness: compresses dynamic range and boosts quiet signals"
           >
             Loudness
           </button>
+          <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
+            <button
+              class={`mil-btn flex-1 ${store.stereoEnabled() ? 'active' : ''}`}
+              onClick={() => engine.setStereoEnabled(!store.stereoEnabled())}
+              title={store.stereoEnabled() ? 'Stereo decoding enabled — click to force mono' : 'Stereo decoding disabled — click to enable'}
+            >
+              Stereo
+            </button>
+          </Show>
         </div>
 
         {/* Stereo Settings (WFM, AM, AM Stereo) */}
         <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
           <div class="space-y-2">
-            <div class="flex justify-between items-center">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-                Stereo
-              </label>
-              <button
-                class={`px-3 py-1 rounded-sm text-[9px] font-mono font-semibold uppercase tracking-wider
-                        transition-all duration-150
-                        ${store.stereoEnabled()
-                          ? 'bg-cyan text-text-inverse shadow-glow-cyan'
-                          : 'bg-sdr-base border border-border text-text-secondary hover:text-text-primary hover:bg-sdr-hover'}`}
-                onClick={() => engine.setStereoEnabled(!store.stereoEnabled())}
-                title={store.stereoEnabled() ? 'Stereo decoding enabled — click to force mono' : 'Stereo decoding disabled — click to enable'}
-              >
-                {store.stereoEnabled() ? 'On' : 'Off'}
-              </button>
-            </div>
             {/* Stereo threshold — only for IQ path (not Opus — server handles detection) */}
             <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus' && store.iqCodec() !== 'opus-hq'}>
               <div>
@@ -625,7 +616,8 @@ const SMeter: Component = () => {
 
   onCleanup(() => {
     if (peakDecayTimer) clearInterval(peakDecayTimer);
-    if (rafId) cancelAnimationFrame(rafId);
+    if (intervalId)     clearInterval(intervalId);
+    if (rafId)          cancelAnimationFrame(rafId);
   });
 
   const pct = () => {
@@ -666,26 +658,30 @@ const SMeter: Component = () => {
     return 'bg-green';
   };
 
-  // Needle meter: light per-frame lerp to interpolate smoothly between
-  // EMA steps from the engine (which arrive at fftFps, not rAF rate).
+  // Needle lerp state — smoothed toward targetPct each paint call.
   let smoothedPct = 0;
 
   // Draw classic analog S-meter (Kenwood/Yaesu style)
-  const drawNeedleMeter = () => {
-    const canvas = canvasRef;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  // ── Two cached layers ──
+  // bgCache    — background (gradient, vignette, bezel) at natural canvas size.
+  //              Blitted unscaled every frame.
+  // scaleCache — meter content (arcs, ticks, labels) at natural canvas size,
+  //              drawn WITHOUT any scale transform so it can be blitted through
+  //              the 2×/1.4× scale in the per-frame draw without double-scaling.
+  let bgCache: HTMLCanvasElement | undefined;
+  let scaleCache: HTMLCanvasElement | undefined;
+  let cacheW = 0;
+  let cacheH = 0;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+  // Hoisted per-frame state (avoid repeated lookups inside rAF)
+  let ctx2d: CanvasRenderingContext2D | null = null;
+  let lastDpr = 0;
 
-    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-    }
+  const buildBgCache = (w: number, h: number, dpr: number) => {
+    const off = document.createElement('canvas');
+    off.width  = Math.round(w * dpr);
+    off.height = Math.round(h * dpr);
+    const ctx = off.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // ── Amber backlit face ──
@@ -715,216 +711,288 @@ const SMeter: Component = () => {
     ctx.roundRect(0.75, 0.75, w-1.5, h-1.5, 4);
     ctx.stroke();
 
-    // ── Scale the drawing context for arc/needle/labels only ──
-    // Background was already drawn at natural size; now scale up so the
-    // meter content fills more of the face without stretching the bezel.
-    ctx.save();
-    ctx.translate(w / 2, h / 2 + h * 0.10);
-    ctx.scale(2, 1.4);
-    ctx.translate(-w / 2, -(h / 2 + h * 0.10));
+    return off;
+  };
 
-    // ── Geometry ──
-    // Pivot is pushed 30% of h below the canvas bottom so the pivot cap
-    // and needle tail are clipped out of view.
+  const buildStaticCache = (w: number, h: number, dpr: number) => {
+    const off = document.createElement('canvas');
+    off.width  = Math.round(w * dpr);
+    off.height = Math.round(h * dpr);
+    const ctx = off.getContext('2d')!;
+    // DPR scale only — NO content scale transform here.
+    // The content scale (2×/1.4×) is applied at blit time in drawNeedleMeter.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cx = w / 2;
     const cy = h + h * 0.60;
     const radius = Math.min(w * 0.55, h * 1.1);
-
-    // 45° sweep centred on straight-up (-π/2)
-    const sweepRad   = Math.PI / 4;   // 45 degrees total
+    const sweepRad   = Math.PI / 4;
     const startAngle = -Math.PI / 2 - sweepRad / 2;
     const sweep      = sweepRad;
-
-    // Lerp needle toward current value each rAF frame.
-    // The engine EMA already handles the bulk of smoothing; this just
-    // interpolates between fftFps steps so the needle moves continuously.
-    const targetPct = pct();
-    smoothedPct += (targetPct - smoothedPct) * 0.3;
-
     const pctToAngle = (p: number) => startAngle + (p / 100) * sweep;
 
-    // ── Scale: 9 major labels, 1 minor tick between each pair ──
-    // Labels evenly spaced across 0–100 pct (8 gaps → 9 positions)
     const scaleLabels = ['S', '1', '3', '5', '7', '9', '+20', '+40', '+60'];
     const majorPcts   = scaleLabels.map((_, i) => (i / (scaleLabels.length - 1)) * 100);
-
-    // One minor tick halfway between each pair of major ticks
     const minorPcts: number[] = [];
     for (let i = 0; i < scaleLabels.length - 1; i++) {
       minorPcts.push((majorPcts[i] + majorPcts[i + 1]) / 2);
     }
-
-    const outerR       = radius + 5;
-    const tickFont     = Math.max(7, w * 0.030);
+    const outerR        = radius + 5;
+    const tickFont      = Math.max(7, w * 0.030);
     const smallTickFont = Math.max(6, w * 0.024);
+    const s9Pct         = majorPcts[5];
+    const midAngle      = pctToAngle(50);
 
-    // S9 boundary pct for colour split
-    const s9Pct = majorPcts[5]; // index 5 = '9'
-
-    // ── "SIGNAL LEVEL" label at arc top ──
-    const midAngle   = pctToAngle(50);                         // straight up
-    const labelR     = outerR + 10;
-    const labelX     = cx + labelR * Math.cos(midAngle);
-    const labelY     = cy + labelR * Math.sin(midAngle) - 6;
-    const labelFont  = Math.max(7, w * 0.028);
+    // ── "SIGNAL LEVEL" label ──
+    const labelR = outerR + 10;
+    const labelFont = Math.max(7, w * 0.028);
     ctx.font         = `900 ${labelFont}px "Arial", sans-serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle    = 'rgba(40, 25, 5, 0.80)';
-    ctx.fillText('SIGNAL LEVEL', labelX, labelY);
+    ctx.fillText('SIGNAL LEVEL',
+      cx + labelR * Math.cos(midAngle),
+      cy + labelR * Math.sin(midAngle) - 6);
 
-    // ── Coloured arc bands ──
-    // Green: S to S9
+    // ── Coloured arc bands (single path each) ──
     ctx.beginPath();
     ctx.arc(cx, cy, outerR - 1, pctToAngle(0), pctToAngle(s9Pct), false);
     ctx.strokeStyle = 'rgba(40, 100, 60, 0.15)';
     ctx.lineWidth = 8;
     ctx.stroke();
 
-    // Red: S9 → +60
     ctx.beginPath();
     ctx.arc(cx, cy, outerR - 1, pctToAngle(s9Pct), pctToAngle(100), false);
     ctx.strokeStyle = 'rgba(180, 30, 30, 0.15)';
     ctx.lineWidth = 8;
     ctx.stroke();
 
-    // ── Minor ticks ──
+    // ── Minor ticks — batched into two paths (green zone / red zone) ──
     ctx.lineWidth = 0.8;
+    ctx.beginPath();
     for (const mp of minorPcts) {
-      const a   = pctToAngle(mp);
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
-      ctx.beginPath();
+      if (mp > s9Pct) continue;
+      const a = pctToAngle(mp);
+      const cos = Math.cos(a); const sin = Math.sin(a);
       ctx.moveTo(cx + (outerR + 1) * cos, cy + (outerR + 1) * sin);
       ctx.lineTo(cx + (outerR - 4) * cos, cy + (outerR - 4) * sin);
-      ctx.strokeStyle = mp > s9Pct ? 'rgba(160,30,30,0.5)' : 'rgba(60,45,30,0.45)';
+    }
+    ctx.strokeStyle = 'rgba(60,45,30,0.45)';
+    ctx.stroke();
+
+    ctx.beginPath();
+    for (const mp of minorPcts) {
+      if (mp <= s9Pct) continue;
+      const a = pctToAngle(mp);
+      const cos = Math.cos(a); const sin = Math.sin(a);
+      ctx.moveTo(cx + (outerR + 1) * cos, cy + (outerR + 1) * sin);
+      ctx.lineTo(cx + (outerR - 4) * cos, cy + (outerR - 4) * sin);
+    }
+    ctx.strokeStyle = 'rgba(160,30,30,0.5)';
+    ctx.stroke();
+
+    // ── Major ticks — batched into two paths ──
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < scaleLabels.length; i++) {
+      const p = majorPcts[i];
+      if (p > s9Pct) continue;
+      const a = pctToAngle(p);
+      const cos = Math.cos(a); const sin = Math.sin(a);
+      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
+      ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
+    }
+    ctx.strokeStyle = '#2a1a08';
+    ctx.stroke();
+
+    // S9 tick slightly thicker — drawn separately
+    {
+      const a = pctToAngle(s9Pct);
+      const cos = Math.cos(a); const sin = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
+      ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
+      ctx.strokeStyle = '#2a1a08';
+      ctx.lineWidth = 1.8;
       ctx.stroke();
     }
 
-    // ── Major ticks and labels ──
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < scaleLabels.length; i++) {
+      const p = majorPcts[i];
+      if (p <= s9Pct) continue;
+      const a = pctToAngle(p);
+      const cos = Math.cos(a); const sin = Math.sin(a);
+      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
+      ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
+    }
+    ctx.strokeStyle = '#a01818';
+    ctx.stroke();
+
+    // ── Major tick labels ──
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-
     for (let i = 0; i < scaleLabels.length; i++) {
       const p     = majorPcts[i];
       const label = scaleLabels[i];
       const a     = pctToAngle(p);
-      const cos   = Math.cos(a);
-      const sin   = Math.sin(a);
-      const isOver  = p > s9Pct;
-      const isS9    = i === 5;
-      const isWide  = label.length > 2;
-
-      // Major tick
-      ctx.beginPath();
-      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
-      ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
-      ctx.strokeStyle = isOver ? '#a01818' : '#2a1a08';
-      ctx.lineWidth   = isS9 ? 1.8 : 1.2;
-      ctx.stroke();
-
-      // Label — placed inward from the tick (below it, toward pivot)
-      const lr      = outerR - 14;
-      const lx      = cx + lr * cos;
-      const ly      = cy + lr * sin + (isWide ? -2 : 0);
+      const cos   = Math.cos(a); const sin = Math.sin(a);
+      const isOver = p > s9Pct;
+      const isWide = label.length > 2;
+      const lr     = outerR - 14;
       ctx.fillStyle = isOver ? '#9a1010' : '#2a1a08';
       ctx.font      = `bold ${isOver ? smallTickFont : tickFont}px "Arial", sans-serif`;
-      ctx.fillText(label, lx, ly);
+      ctx.fillText(label, cx + lr * cos, cy + lr * sin + (isWide ? -2 : 0));
     }
 
-    // ── Power scale (inner arc) ──
-    const powerR      = outerR - 22;   // sits inside the main scale
-    const powerFont   = Math.max(5, w * 0.021);
+    // ── Power scale ──
+    const powerR    = outerR - 22;
+    const powerFont = Math.max(5, w * 0.021);
 
-    // Thin arc guide
+    // Arc guide
     ctx.beginPath();
     ctx.arc(cx, cy, powerR, pctToAngle(0), pctToAngle(100), false);
     ctx.strokeStyle = 'rgba(60, 40, 10, 0.18)';
     ctx.lineWidth   = 0.5;
     ctx.stroke();
 
-    // Power value → arc pct is linear (0→0, 50→50, 100→100)
-    const powerToPct = (v: number) => v;
-
-    // Small ticks every 5, no label (skip multiples of 10 which get medium ticks)
+    // Small ticks (every 5, skip 10-multiples) — single batched path
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
     for (let v = 5; v < 100; v += 5) {
       if (v % 10 === 0) continue;
-      const a   = pctToAngle(powerToPct(v));
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
-      ctx.beginPath();
+      const a = pctToAngle(v);
+      const cos = Math.cos(a); const sin = Math.sin(a);
       ctx.moveTo(cx + powerR * cos,       cy + powerR * sin);
       ctx.lineTo(cx + (powerR - 3) * cos, cy + (powerR - 3) * sin);
-      ctx.strokeStyle = 'rgba(60, 40, 10, 0.30)';
-      ctx.lineWidth   = 0.5;
-      ctx.stroke();
     }
+    ctx.strokeStyle = 'rgba(60, 40, 10, 0.30)';
+    ctx.stroke();
 
-    // Medium ticks at 10,20,30,40,60,70,80,90 — no label
+    // Medium ticks — single batched path
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
     for (const v of [10, 20, 30, 40, 60, 70, 80, 90]) {
-      const a   = pctToAngle(powerToPct(v));
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
-      ctx.beginPath();
+      const a = pctToAngle(v);
+      const cos = Math.cos(a); const sin = Math.sin(a);
       ctx.moveTo(cx + powerR * cos,       cy + powerR * sin);
       ctx.lineTo(cx + (powerR - 5) * cos, cy + (powerR - 5) * sin);
-      ctx.strokeStyle = 'rgba(60, 40, 10, 0.45)';
-      ctx.lineWidth   = 0.8;
-      ctx.stroke();
     }
+    ctx.strokeStyle = 'rgba(60, 40, 10, 0.45)';
+    ctx.stroke();
 
-    // Major ticks + labels at 0, 50, 100
+    // Major ticks + labels
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
+    ctx.lineWidth    = 1.2;
+    ctx.beginPath();
     for (const v of [0, 50, 100]) {
-      const a   = pctToAngle(powerToPct(v));
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
-
-      // Major tick
-      ctx.beginPath();
+      const a = pctToAngle(v);
+      const cos = Math.cos(a); const sin = Math.sin(a);
       ctx.moveTo(cx + (powerR + 1) * cos,  cy + (powerR + 1) * sin);
       ctx.lineTo(cx + (powerR - 7) * cos,  cy + (powerR - 7) * sin);
-      ctx.strokeStyle = 'rgba(60, 40, 10, 0.65)';
-      ctx.lineWidth   = 1.2;
-      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(60, 40, 10, 0.65)';
+    ctx.stroke();
 
-      // Label inward from tick
-      const plr = powerR - 13;
-      ctx.font      = `bold ${powerFont}px "Arial", sans-serif`;
-      ctx.fillStyle = 'rgba(50, 30, 5, 0.70)';
-      ctx.fillText(String(v), cx + plr * cos, cy + plr * sin);
+    ctx.font      = `bold ${powerFont}px "Arial", sans-serif`;
+    ctx.fillStyle = 'rgba(50, 30, 5, 0.70)';
+    for (const v of [0, 50, 100]) {
+      const a = pctToAngle(v);
+      const cos = Math.cos(a); const sin = Math.sin(a);
+      ctx.fillText(String(v), cx + (powerR - 13) * cos, cy + (powerR - 13) * sin);
     }
 
-    // "Power" label centred below the power arc
+    // POWER label
     const powerLabelR = powerR - 22;
-    const powerLabelX = cx + powerLabelR * Math.cos(midAngle);
-    const powerLabelY = cy + powerLabelR * Math.sin(midAngle);
-    ctx.font         = `bold ${powerFont}px "Arial", sans-serif`;
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle    = 'rgba(50, 30, 5, 0.55)';
-    ctx.fillText('POWER', powerLabelX, powerLabelY);
+    ctx.font      = `bold ${powerFont}px "Arial", sans-serif`;
+    ctx.fillStyle = 'rgba(50, 30, 5, 0.55)';
+    ctx.fillText('POWER',
+      cx + powerLabelR * Math.cos(midAngle),
+      cy + powerLabelR * Math.sin(midAngle));
+
+    // no content scale in cache — scale is applied at blit time
+    return off;
+  };
+
+  const drawNeedleMeter = () => {
+    const canvas = canvasRef;
+    if (!canvas) return;
+
+    // Cache the 2D context — getContext is cheap but avoid every frame
+    if (!ctx2d) ctx2d = canvas.getContext('2d');
+    const ctx = ctx2d;
+    if (!ctx) return;
+
+    const dpr  = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const w    = rect.width;
+    const h    = rect.height;
+
+    // Resize backing store only when dimensions actually change
+    const needResize = canvas.width  !== Math.round(w * dpr)
+                    || canvas.height !== Math.round(h * dpr)
+                    || dpr !== lastDpr;
+    if (needResize) {
+      canvas.width  = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      lastDpr = dpr;
+      // Invalidate caches
+      bgCache = undefined;
+      scaleCache = undefined;
+      cacheW = 0; cacheH = 0;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Rebuild caches if missing or stale
+    if (!bgCache || !scaleCache || cacheW !== w || cacheH !== h) {
+      bgCache    = buildBgCache(w, h, dpr);
+      scaleCache = buildStaticCache(w, h, dpr);
+      cacheW = w; cacheH = h;
+    }
+
+    // 1. Blit background at natural size (no transform)
+    ctx.drawImage(bgCache, 0, 0, w, h);
+
+    // 2. Apply content scale, blit meter content, draw dynamic elements
+    ctx.save();
+    ctx.translate(w / 2, h / 2 + h * 0.10);
+    ctx.scale(2, 1.4);
+    ctx.translate(-w / 2, -(h / 2 + h * 0.10));
+
+    // Blit scale cache through the content transform
+    ctx.drawImage(scaleCache, 0, 0, w, h);
+
+    // ── Geometry (matches buildStaticCache exactly) ──
+    const cx = w / 2;
+    const cy = h + h * 0.60;
+    const radius = Math.min(w * 0.55, h * 1.1);
+    const sweepRad   = Math.PI / 4;
+    const startAngle = -Math.PI / 2 - sweepRad / 2;
+    const sweep      = sweepRad;
+    const pctToAngle = (p: number) => startAngle + (p / 100) * sweep;
+    const outerR     = radius + 5;
+
+    // Lerp needle
+    const targetPct = pct();
+    smoothedPct += (targetPct - smoothedPct) * 0.3;
 
     // ── Peak hold ghost needle ──
-    // Read peakPct directly (raw variable) — peakHold() signal is for the
-    // bar meter's reactive JSX; inside rAF we must not use reactive reads.
     const peakAngle = pctToAngle(peakPct);
-    const peakLen = radius - 2;
+    const peakLen   = radius - 2;
     ctx.beginPath();
     ctx.moveTo(cx + 7 * Math.cos(peakAngle + Math.PI / 2), cy + 7 * Math.sin(peakAngle + Math.PI / 2));
     ctx.lineTo(cx + peakLen * Math.cos(peakAngle), cy + peakLen * Math.sin(peakAngle));
     ctx.lineTo(cx + 7 * Math.cos(peakAngle - Math.PI / 2), cy + 7 * Math.sin(peakAngle - Math.PI / 2));
     ctx.closePath();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
     ctx.fill();
 
-    // ── 5-second max marker: bold black tick on the outer arc ──
+    // ── 5-second max marker ──
     if (maxPct5sRaw > 0) {
       const maxAngle = pctToAngle(maxPct5sRaw);
       const cosM = Math.cos(maxAngle);
       const sinM = Math.sin(maxAngle);
-      // Thick black radial line straddling the outer arc
       ctx.beginPath();
       ctx.moveTo(cx + (outerR + 5) * cosM, cy + (outerR + 5) * sinM);
       ctx.lineTo(cx + (outerR - 9) * cosM, cy + (outerR - 9) * sinM);
@@ -935,75 +1003,71 @@ const SMeter: Component = () => {
       ctx.lineCap = 'butt';
     }
 
-    // ── Main needle (red, classic tapered shape) ──
-    const needleAngle = pctToAngle(smoothedPct);
-    const needleLen = outerR + 4;
+    // ── Main needle ──
+    const needleAngle  = pctToAngle(smoothedPct);
+    const needleLen    = outerR + 4;
     const needleTailLen = 10;
 
-    // Needle shadow
     ctx.save();
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
-    ctx.shadowBlur = 3;
+    ctx.shadowColor   = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur    = 3;
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 2;
 
-    // Tapered needle body with blunt tip
-    const tipHalfW = 0.6; // flat tip half-width
+    const tipHalfW = 0.6;
     const perp = needleAngle + Math.PI / 2;
     const tipX = cx + needleLen * Math.cos(needleAngle);
     const tipY = cy + needleLen * Math.sin(needleAngle);
     ctx.beginPath();
-    // Tail left corner
     ctx.moveTo(
       cx - needleTailLen * Math.cos(needleAngle) + 1.25 * Math.cos(perp),
       cy - needleTailLen * Math.sin(needleAngle) + 1.25 * Math.sin(perp)
     );
-    // Tail right corner
     ctx.lineTo(
       cx - needleTailLen * Math.cos(needleAngle) - 1.25 * Math.cos(perp),
       cy - needleTailLen * Math.sin(needleAngle) - 1.25 * Math.sin(perp)
     );
-    // Tip right (blunt end)
     ctx.lineTo(tipX - tipHalfW * Math.cos(perp), tipY - tipHalfW * Math.sin(perp));
-    // Tip left (blunt end)
     ctx.lineTo(tipX + tipHalfW * Math.cos(perp), tipY + tipHalfW * Math.sin(perp));
     ctx.closePath();
     ctx.fillStyle = '#cc2222';
     ctx.fill();
 
-    // Thin center line for realism
     ctx.beginPath();
     ctx.moveTo(cx - needleTailLen * Math.cos(needleAngle), cy - needleTailLen * Math.sin(needleAngle));
     ctx.lineTo(tipX, tipY);
     ctx.strokeStyle = '#a01818';
-    ctx.lineWidth = 0.5;
+    ctx.lineWidth   = 0.5;
     ctx.stroke();
-    ctx.restore();
+    ctx.restore(); // needle shadow
 
-    // ── dB readout below the scales ──
+    // ── dB readout ──
     const readoutSize = Math.max(8, w * 0.032);
-    ctx.font = `${readoutSize}px "Arial", sans-serif`;
+    ctx.font      = `${readoutSize}px "Arial", sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(60, 50, 35, 0.5)';
     ctx.fillText(`${store.signalLevel().toFixed(0)} dBm`, cx, cy - radius * 0.32);
 
-    // Restore scale transform applied after background
-    ctx.restore();
+    ctx.restore(); // content scale transform
 
-    // Schedule next frame
+    // Reschedule at 25fps
     rafId = requestAnimationFrame(drawNeedleMeter);
   };
 
-  // Start/stop animation when meter style changes
+  // 25fps interval — fires drawNeedleMeter at ~40ms cadence
+  let intervalId: ReturnType<typeof setInterval> | undefined;
+
   createEffect(() => {
     if (store.meterStyle() === 'needle') {
-      // Kick off render loop next frame (canvas should be in DOM by then)
-      rafId = requestAnimationFrame(drawNeedleMeter);
-    } else {
-      if (rafId) {
-        cancelAnimationFrame(rafId);
-        rafId = undefined;
+      if (!intervalId) {
+        intervalId = setInterval(() => {
+          if (rafId) cancelAnimationFrame(rafId);
+          rafId = requestAnimationFrame(drawNeedleMeter);
+        }, 1000 / 25);
       }
+    } else {
+      if (intervalId) { clearInterval(intervalId); intervalId = undefined; }
+      if (rafId)      { cancelAnimationFrame(rafId); rafId = undefined; }
     }
   });
 
