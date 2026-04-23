@@ -716,12 +716,16 @@ const SMeter: Component = () => {
     ctx.stroke();
 
     // ── Geometry ──
+    // Pivot is pushed 30% of h below the canvas bottom so the pivot cap
+    // and needle tail are clipped out of view.
     const cx = w / 2;
-    const cy = h - 10;
-    const radius = Math.min(w * 0.40, h - 28);
-    const startAngle = Math.PI * 0.83;
-    const endAngle = Math.PI * 0.17;
-    const sweep = (2 * Math.PI - startAngle + endAngle);
+    const cy = h + h * 0.60;
+    const radius = Math.min(w * 0.55, h * 1.1);
+
+    // 45° sweep centred on straight-up (-π/2)
+    const sweepRad   = Math.PI / 4;   // 45 degrees total
+    const startAngle = -Math.PI / 2 - sweepRad / 2;
+    const sweep      = sweepRad;
 
     // Lerp needle toward current value each rAF frame.
     // The engine EMA already handles the bulk of smoothing; this just
@@ -731,153 +735,82 @@ const SMeter: Component = () => {
 
     const pctToAngle = (p: number) => startAngle + (p / 100) * sweep;
 
-    // ── Scale definitions ──
-    // Top scale: S-units (S1–S9, then +10 to +60 dB over S9)
-    const sScale = [
-      { label: '1',   pct: 0 },
-      { label: '2',   pct: 7.1 },
-      { label: '3',   pct: 14.3 },
-      { label: '4',   pct: 21.4 },
-      { label: '5',   pct: 28.6 },
-      { label: '6',   pct: 35.7 },
-      { label: '7',   pct: 42.9 },
-      { label: '8',   pct: 50.0 },
-      { label: '9',   pct: 57.1 },
-      { label: '+10', pct: 66.7 },
-      { label: '+20', pct: 71.4 },
-      { label: '+30', pct: 78.6 },
-      { label: '+40', pct: 85.7 },
-      { label: '+50', pct: 92.9 },
-      { label: '+60', pct: 100 },
-    ];
+    // ── Scale: 9 major labels, 1 minor tick between each pair ──
+    // Labels evenly spaced across 0–100 pct (8 gaps → 9 positions)
+    const scaleLabels = ['S', '1', '3', '5', '7', '9', '+20', '+40', '+60'];
+    const majorPcts   = scaleLabels.map((_, i) => (i / (scaleLabels.length - 1)) * 100);
 
-    // Bottom scale: dB (rough mapping)
-    const dbScale = [
-      { label: '-54', pct: 0 },
-      { label: '-42', pct: 14.3 },
-      { label: '-30', pct: 28.6 },
-      { label: '-18', pct: 42.9 },
-      { label: '-6',  pct: 57.1 },
-      { label: '0',   pct: 66.7 },
-      { label: '+10', pct: 71.4 },
-      { label: '+20', pct: 78.6 },
-      { label: '+30', pct: 85.7 },
-      { label: '+40', pct: 92.9 },
-      { label: '+50', pct: 100 },
-    ];
-
-    // Minor ticks between major S-units (every ~3.57%)
-    const minorTicks: number[] = [];
-    for (let p = 0; p <= 100; p += 3.57) {
-      minorTicks.push(p);
+    // One minor tick halfway between each pair of major ticks
+    const minorPcts: number[] = [];
+    for (let i = 0; i < scaleLabels.length - 1; i++) {
+      minorPcts.push((majorPcts[i] + majorPcts[i + 1]) / 2);
     }
 
-    // ── "S" label ──
-    const sLabelSize = Math.max(11, w * 0.045);
-    ctx.font = `bold italic ${sLabelSize}px serif`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#2a2520';
-    const sLabelAngle = pctToAngle(-6);
-    ctx.fillText('S', cx + (radius + 12) * Math.cos(sLabelAngle), cy + (radius + 12) * Math.sin(sLabelAngle));
+    const outerR       = radius + 5;
+    const tickFont     = Math.max(7, w * 0.030);
+    const smallTickFont = Math.max(6, w * 0.024);
 
-    // ── Top arc: S-unit scale ──
-    const outerR = radius + 5;
-    const tickFont = Math.max(7, w * 0.027);
-    const smallTickFont = Math.max(6, w * 0.022);
+    // S9 boundary pct for colour split
+    const s9Pct = majorPcts[5]; // index 5 = '9'
 
-    // Draw colored arc segments behind the scale
-    // Green zone: S1–S9
+    // ── Coloured arc bands ──
+    // Green: S to S9
     ctx.beginPath();
-    ctx.arc(cx, cy, outerR - 1, pctToAngle(0), pctToAngle(57.1), false);
-    ctx.strokeStyle = 'rgba(40, 100, 60, 0.12)';
+    ctx.arc(cx, cy, outerR - 1, pctToAngle(0), pctToAngle(s9Pct), false);
+    ctx.strokeStyle = 'rgba(40, 100, 60, 0.15)';
     ctx.lineWidth = 8;
     ctx.stroke();
 
-    // Red zone: S9+
+    // Red: S9 → +60
     ctx.beginPath();
-    ctx.arc(cx, cy, outerR - 1, pctToAngle(57.1), pctToAngle(100), false);
-    ctx.strokeStyle = 'rgba(180, 30, 30, 0.12)';
+    ctx.arc(cx, cy, outerR - 1, pctToAngle(s9Pct), pctToAngle(100), false);
+    ctx.strokeStyle = 'rgba(180, 30, 30, 0.15)';
     ctx.lineWidth = 8;
     ctx.stroke();
 
-    // Minor tick marks
-    ctx.strokeStyle = 'rgba(80, 70, 50, 0.25)';
-    ctx.lineWidth = 0.5;
-    for (const mp of minorTicks) {
-      const a = pctToAngle(mp);
+    // ── Minor ticks ──
+    ctx.lineWidth = 0.8;
+    for (const mp of minorPcts) {
+      const a   = pctToAngle(mp);
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       ctx.beginPath();
-      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
-      ctx.lineTo(cx + (outerR - 3) * cos, cy + (outerR - 3) * sin);
+      ctx.moveTo(cx + (outerR + 1) * cos, cy + (outerR + 1) * sin);
+      ctx.lineTo(cx + (outerR - 4) * cos, cy + (outerR - 4) * sin);
+      ctx.strokeStyle = mp > s9Pct ? 'rgba(160,30,30,0.5)' : 'rgba(60,45,30,0.45)';
       ctx.stroke();
     }
 
-    // Major S-unit ticks and labels
-    ctx.font = `bold ${tickFont}px "Arial", sans-serif`;
-    ctx.textAlign = 'center';
+    // ── Major ticks and labels ──
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
 
-    for (const su of sScale) {
-      const a = pctToAngle(su.pct);
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
+    for (let i = 0; i < scaleLabels.length; i++) {
+      const p     = majorPcts[i];
+      const label = scaleLabels[i];
+      const a     = pctToAngle(p);
+      const cos   = Math.cos(a);
+      const sin   = Math.sin(a);
+      const isOver  = p > s9Pct;
+      const isS9    = i === 5;
+      const isWide  = label.length > 2;
 
       // Major tick
       ctx.beginPath();
-      ctx.moveTo(cx + (outerR + 3) * cos, cy + (outerR + 3) * sin);
-      ctx.lineTo(cx + (outerR - 6) * cos, cy + (outerR - 6) * sin);
-      ctx.strokeStyle = su.pct > 57.1 ? '#b01e1e' : '#2a2520';
-      ctx.lineWidth = su.pct === 57.1 ? 1.5 : 1;
+      ctx.moveTo(cx + (outerR + 2) * cos, cy + (outerR + 2) * sin);
+      ctx.lineTo(cx + (outerR - 7) * cos, cy + (outerR - 7) * sin);
+      ctx.strokeStyle = isOver ? '#a01818' : '#2a1a08';
+      ctx.lineWidth   = isS9 ? 1.8 : 1.2;
       ctx.stroke();
 
-      // Label
-      const lr = outerR + (su.label.length > 2 ? 14 : 11);
-      ctx.fillStyle = su.pct > 57.1 ? '#b01e1e' : '#2a2520';
-      ctx.font = su.pct > 57.1
-        ? `bold ${smallTickFont}px "Arial", sans-serif`
-        : `bold ${tickFont}px "Arial", sans-serif`;
-      ctx.fillText(su.label, cx + lr * cos, cy + lr * sin);
+      // Label — placed inward from the tick (below it, toward pivot)
+      const lr      = outerR - 14;
+      const lx      = cx + lr * cos;
+      const ly      = cy + lr * sin + (isWide ? -2 : 0);
+      ctx.fillStyle = isOver ? '#9a1010' : '#2a1a08';
+      ctx.font      = `bold ${isOver ? smallTickFont : tickFont}px "Arial", sans-serif`;
+      ctx.fillText(label, lx, ly);
     }
-
-    // ── Bottom arc: dB scale ──
-    const innerR = radius - 8;
-    ctx.font = `${smallTickFont}px "Arial", sans-serif`;
-
-    // Thin arc for dB scale
-    ctx.beginPath();
-    ctx.arc(cx, cy, innerR, pctToAngle(0), pctToAngle(100), false);
-    ctx.strokeStyle = 'rgba(80, 70, 50, 0.15)';
-    ctx.lineWidth = 0.5;
-    ctx.stroke();
-
-    for (const db of dbScale) {
-      const a = pctToAngle(db.pct);
-      const cos = Math.cos(a);
-      const sin = Math.sin(a);
-
-      // Tick inward
-      ctx.beginPath();
-      ctx.moveTo(cx + innerR * cos, cy + innerR * sin);
-      ctx.lineTo(cx + (innerR - 4) * cos, cy + (innerR - 4) * sin);
-      ctx.strokeStyle = 'rgba(80, 70, 50, 0.4)';
-      ctx.lineWidth = 0.7;
-      ctx.stroke();
-
-      // Label
-      const lr = innerR - 10;
-      ctx.fillStyle = 'rgba(80, 70, 50, 0.6)';
-      ctx.font = `${smallTickFont}px "Arial", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.fillText(db.label, cx + lr * cos, cy + lr * sin);
-    }
-
-    // "dB" label
-    ctx.font = `italic ${smallTickFont}px "Arial", sans-serif`;
-    ctx.fillStyle = 'rgba(80, 70, 50, 0.5)';
-    ctx.textAlign = 'right';
-    const dbLabelAngle = pctToAngle(106);
-    ctx.fillText('dB', cx + (innerR - 6) * Math.cos(dbLabelAngle), cy + (innerR - 6) * Math.sin(dbLabelAngle));
 
     // ── Peak hold ghost needle ──
     // Read peakPct directly (raw variable) — peakHold() signal is for the
@@ -952,16 +885,6 @@ const SMeter: Component = () => {
     ctx.lineWidth = 0.5;
     ctx.stroke();
     ctx.restore();
-
-    // Pivot cap (black circle with highlight)
-    ctx.beginPath();
-    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx - 1, cy - 1, 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.fill();
 
     // ── dB readout below the scales ──
     const readoutSize = Math.max(8, w * 0.032);
