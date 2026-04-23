@@ -715,6 +715,14 @@ const SMeter: Component = () => {
     ctx.roundRect(0.75, 0.75, w-1.5, h-1.5, 4);
     ctx.stroke();
 
+    // ── Scale the drawing context for arc/needle/labels only ──
+    // Background was already drawn at natural size; now scale up so the
+    // meter content fills more of the face without stretching the bezel.
+    ctx.save();
+    ctx.translate(w / 2, h / 2 + h * 0.10);
+    ctx.scale(2, 1.4);
+    ctx.translate(-w / 2, -(h / 2 + h * 0.10));
+
     // ── Geometry ──
     // Pivot is pushed 30% of h below the canvas bottom so the pivot cap
     // and needle tail are clipped out of view.
@@ -904,11 +912,11 @@ const SMeter: Component = () => {
     const peakAngle = pctToAngle(peakPct);
     const peakLen = radius - 2;
     ctx.beginPath();
-    ctx.moveTo(cx + 3 * Math.cos(peakAngle + Math.PI / 2), cy + 3 * Math.sin(peakAngle + Math.PI / 2));
+    ctx.moveTo(cx + 7 * Math.cos(peakAngle + Math.PI / 2), cy + 7 * Math.sin(peakAngle + Math.PI / 2));
     ctx.lineTo(cx + peakLen * Math.cos(peakAngle), cy + peakLen * Math.sin(peakAngle));
-    ctx.lineTo(cx + 3 * Math.cos(peakAngle - Math.PI / 2), cy + 3 * Math.sin(peakAngle - Math.PI / 2));
+    ctx.lineTo(cx + 7 * Math.cos(peakAngle - Math.PI / 2), cy + 7 * Math.sin(peakAngle - Math.PI / 2));
     ctx.closePath();
-    ctx.fillStyle = 'rgba(180, 30, 30, 0.45)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
     ctx.fill();
 
     // ── 5-second max marker: bold black tick on the outer arc ──
@@ -921,7 +929,7 @@ const SMeter: Component = () => {
       ctx.moveTo(cx + (outerR + 5) * cosM, cy + (outerR + 5) * sinM);
       ctx.lineTo(cx + (outerR - 9) * cosM, cy + (outerR - 9) * sinM);
       ctx.strokeStyle = '#111';
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 1.2;
       ctx.lineCap = 'round';
       ctx.stroke();
       ctx.lineCap = 'butt';
@@ -940,20 +948,20 @@ const SMeter: Component = () => {
     ctx.shadowOffsetY = 2;
 
     // Tapered needle body with blunt tip
-    const tipHalfW = 1.2; // flat tip half-width
+    const tipHalfW = 0.6; // flat tip half-width
     const perp = needleAngle + Math.PI / 2;
     const tipX = cx + needleLen * Math.cos(needleAngle);
     const tipY = cy + needleLen * Math.sin(needleAngle);
     ctx.beginPath();
     // Tail left corner
     ctx.moveTo(
-      cx - needleTailLen * Math.cos(needleAngle) + 2.5 * Math.cos(perp),
-      cy - needleTailLen * Math.sin(needleAngle) + 2.5 * Math.sin(perp)
+      cx - needleTailLen * Math.cos(needleAngle) + 1.25 * Math.cos(perp),
+      cy - needleTailLen * Math.sin(needleAngle) + 1.25 * Math.sin(perp)
     );
     // Tail right corner
     ctx.lineTo(
-      cx - needleTailLen * Math.cos(needleAngle) - 2.5 * Math.cos(perp),
-      cy - needleTailLen * Math.sin(needleAngle) - 2.5 * Math.sin(perp)
+      cx - needleTailLen * Math.cos(needleAngle) - 1.25 * Math.cos(perp),
+      cy - needleTailLen * Math.sin(needleAngle) - 1.25 * Math.sin(perp)
     );
     // Tip right (blunt end)
     ctx.lineTo(tipX - tipHalfW * Math.cos(perp), tipY - tipHalfW * Math.sin(perp));
@@ -978,6 +986,9 @@ const SMeter: Component = () => {
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(60, 50, 35, 0.5)';
     ctx.fillText(`${store.signalLevel().toFixed(0)} dBm`, cx, cy - radius * 0.32);
+
+    // Restore scale transform applied after background
+    ctx.restore();
 
     // Schedule next frame
     rafId = requestAnimationFrame(drawNeedleMeter);
