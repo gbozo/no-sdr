@@ -89,7 +89,7 @@ function createStore() {
   const [isAdmin, setIsAdmin] = createSignal(false);
   const [adminModalOpen, setAdminModalOpen] = createSignal(false);
   const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
-  const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('bar');
+  const [meterStyle, setMeterStyle] = createSignal<'bar' | 'needle'>('needle');
   const [spectrumPeakHold, setSpectrumPeakHold] = createSignal(false);
   const [spectrumSignalFill, setSpectrumSignalFill] = createSignal(false);
   const [spectrumPaused, setSpectrumPaused] = createSignal(false);
