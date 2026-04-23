@@ -753,6 +753,18 @@ const SMeter: Component = () => {
     // S9 boundary pct for colour split
     const s9Pct = majorPcts[5]; // index 5 = '9'
 
+    // ── "SIGNAL LEVEL" label at arc top ──
+    const midAngle   = pctToAngle(50);                         // straight up
+    const labelR     = outerR + 10;
+    const labelX     = cx + labelR * Math.cos(midAngle);
+    const labelY     = cy + labelR * Math.sin(midAngle) - 6;
+    const labelFont  = Math.max(7, w * 0.028);
+    ctx.font         = `900 ${labelFont}px "Arial", sans-serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle    = 'rgba(40, 25, 5, 0.80)';
+    ctx.fillText('SIGNAL LEVEL', labelX, labelY);
+
     // ── Coloured arc bands ──
     // Green: S to S9
     ctx.beginPath();
@@ -812,6 +824,80 @@ const SMeter: Component = () => {
       ctx.fillText(label, lx, ly);
     }
 
+    // ── Power scale (inner arc) ──
+    const powerR      = outerR - 22;   // sits inside the main scale
+    const powerFont   = Math.max(5, w * 0.021);
+
+    // Thin arc guide
+    ctx.beginPath();
+    ctx.arc(cx, cy, powerR, pctToAngle(0), pctToAngle(100), false);
+    ctx.strokeStyle = 'rgba(60, 40, 10, 0.18)';
+    ctx.lineWidth   = 0.5;
+    ctx.stroke();
+
+    // Power value → arc pct is linear (0→0, 50→50, 100→100)
+    const powerToPct = (v: number) => v;
+
+    // Small ticks every 5, no label (skip multiples of 10 which get medium ticks)
+    for (let v = 5; v < 100; v += 5) {
+      if (v % 10 === 0) continue;
+      const a   = pctToAngle(powerToPct(v));
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(cx + powerR * cos,       cy + powerR * sin);
+      ctx.lineTo(cx + (powerR - 3) * cos, cy + (powerR - 3) * sin);
+      ctx.strokeStyle = 'rgba(60, 40, 10, 0.30)';
+      ctx.lineWidth   = 0.5;
+      ctx.stroke();
+    }
+
+    // Medium ticks at 10,20,30,40,60,70,80,90 — no label
+    for (const v of [10, 20, 30, 40, 60, 70, 80, 90]) {
+      const a   = pctToAngle(powerToPct(v));
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(cx + powerR * cos,       cy + powerR * sin);
+      ctx.lineTo(cx + (powerR - 5) * cos, cy + (powerR - 5) * sin);
+      ctx.strokeStyle = 'rgba(60, 40, 10, 0.45)';
+      ctx.lineWidth   = 0.8;
+      ctx.stroke();
+    }
+
+    // Major ticks + labels at 0, 50, 100
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    for (const v of [0, 50, 100]) {
+      const a   = pctToAngle(powerToPct(v));
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+
+      // Major tick
+      ctx.beginPath();
+      ctx.moveTo(cx + (powerR + 1) * cos,  cy + (powerR + 1) * sin);
+      ctx.lineTo(cx + (powerR - 7) * cos,  cy + (powerR - 7) * sin);
+      ctx.strokeStyle = 'rgba(60, 40, 10, 0.65)';
+      ctx.lineWidth   = 1.2;
+      ctx.stroke();
+
+      // Label inward from tick
+      const plr = powerR - 13;
+      ctx.font      = `bold ${powerFont}px "Arial", sans-serif`;
+      ctx.fillStyle = 'rgba(50, 30, 5, 0.70)';
+      ctx.fillText(String(v), cx + plr * cos, cy + plr * sin);
+    }
+
+    // "Power" label centred below the power arc
+    const powerLabelR = powerR - 22;
+    const powerLabelX = cx + powerLabelR * Math.cos(midAngle);
+    const powerLabelY = cy + powerLabelR * Math.sin(midAngle);
+    ctx.font         = `bold ${powerFont}px "Arial", sans-serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle    = 'rgba(50, 30, 5, 0.55)';
+    ctx.fillText('POWER', powerLabelX, powerLabelY);
+
     // ── Peak hold ghost needle ──
     // Read peakPct directly (raw variable) — peakHold() signal is for the
     // bar meter's reactive JSX; inside rAF we must not use reactive reads.
@@ -843,7 +929,7 @@ const SMeter: Component = () => {
 
     // ── Main needle (red, classic tapered shape) ──
     const needleAngle = pctToAngle(smoothedPct);
-    const needleLen = radius + 1;
+    const needleLen = outerR + 4;
     const needleTailLen = 10;
 
     // Needle shadow
