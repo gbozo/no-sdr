@@ -51,8 +51,12 @@ const App: Component = () => {
   // Start audio on first user interaction
   const handleStartAudio = async () => {
     if (!store.audioStarted()) {
-      await engine.initAudio();
-      store.setAudioStarted(true);
+      try {
+        await engine.initAudio();
+        store.setAudioStarted(true);
+      } catch (err) {
+        alert((err as Error).message);
+      }
     }
   };
 

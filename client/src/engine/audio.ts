@@ -35,6 +35,15 @@ export class AudioEngine {
   async init(): Promise<void> {
     if (this.initialized) return;
 
+    // AudioWorklet requires a secure context (HTTPS or localhost).
+    // On plain HTTP over the network, audioCtx.audioWorklet is undefined.
+    if (!window.isSecureContext) {
+      throw new Error(
+        'Audio requires a secure context (HTTPS or localhost). ' +
+        'Access the app via HTTPS or set up a reverse proxy with TLS.'
+      );
+    }
+
     this.audioCtx = new AudioContext({
       sampleRate: 48000,
     });

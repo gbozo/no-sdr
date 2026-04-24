@@ -159,8 +159,12 @@ const WaterfallDisplay: Component = () => {
 
       // Spectrum click = intent to listen — start audio if not yet running
       if (!engine.isAudioInitialized) {
-        await engine.initAudio();
-        store.setAudioStarted(true);
+        try {
+          await engine.initAudio();
+          store.setAudioStarted(true);
+        } catch (err) {
+          alert((err as Error).message);
+        }
       }
     }
   };
@@ -221,8 +225,12 @@ const WaterfallDisplay: Component = () => {
 
     // Start audio if not yet initialised (waterfall/spectrum click = intent to listen)
     if (!engine.isAudioInitialized) {
-      await engine.initAudio();
-      store.setAudioStarted(true);
+      try {
+        await engine.initAudio();
+        store.setAudioStarted(true);
+      } catch (err) {
+        alert((err as Error).message);
+      }
     }
   };
 
