@@ -25,3 +25,18 @@ services:
       - LOG_LEVEL=info
     # Required for USB access on Linux
     privileged: true
+    labels:
+      traefik.enable: "true"
+
+      # Router — matches both hostnames, TLS enabled
+      traefik.http.routers.no-sdr.rule: "Host(`no-sdr.internal`) || Host(`no-sdr`)"
+      traefik.http.routers.no-sdr.tls: "true"
+      traefik.http.routers.no-sdr.middlewares: "no-sdr-ws"
+
+      # Service — tell Traefik which port the app listens on
+      traefik.http.services.no-sdr.loadbalancer.server.port: "3000"
+
+      # Middleware — pass WebSocket upgrade headers through to the backend
+      traefik.http.middlewares.no-sdr-ws.headers.customrequestheaders.X-Forwarded-Proto: "https"
+      traefik.http.middlewares.no-sdr-ws.headers.customrequestheaders.Connection: "keep-alive, Upgrade"
+      traefik.http.middlewares.no-sdr-ws.headers.customrequestheaders.Upgrade: "websocket"
