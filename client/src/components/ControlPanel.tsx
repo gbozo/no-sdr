@@ -44,6 +44,124 @@ const ControlPanel: Component = () => {
 };
 
 // ---- Mode Selector ----
+// ---- EQ LED Display ----
+const EqDisplay: Component = () => {
+  let canvasRef: HTMLCanvasElement | undefined;
+
+  // Reactive draw — reruns whenever any EQ band changes
+  createEffect(() => {
+    const bands = [
+      store.eqLow(),
+      store.eqLowMid(),
+      store.eqMid(),
+      store.eqHighMid(),
+      store.eqHigh(),
+    ];
+
+    const canvas = canvasRef;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr  = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width  = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Read theme accent colour for lit LEDs
+    const accent   = getComputedStyle(document.documentElement).getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
+    const accentDim= getComputedStyle(document.documentElement).getPropertyValue('--sdr-accent-dim').trim() || 'rgba(74,163,255,0.16)';
+
+    // ── Background ──
+    ctx.fillStyle = '#060a10';
+    ctx.beginPath();
+    ctx.roundRect(0, 0, w, h, 3);
+    ctx.fill();
+
+    // Subtle inner bezel
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(0.5, 0.5, w - 1, h - 1, 3);
+    ctx.stroke();
+
+    const NUM_BANDS   = 5;
+    const NUM_SEGS    = 12;   // segments per column (±12 dB, 1 per dB effectively 2 per step)
+    const DB_MAX      = 12;
+    const colW        = w / NUM_BANDS;
+    const ledW        = colW * 0.55;
+    const ledH        = (h - 8) / NUM_SEGS - 1.5;  // segment height with gap
+    const ledGap      = 1.5;
+    const midLine     = h / 2;                      // 0 dB line
+
+    for (let b = 0; b < NUM_BANDS; b++) {
+      const db   = bands[b];                        // -12 to +12
+      const cx   = colW * b + colW / 2;
+      const x    = cx - ledW / 2;
+
+      for (let s = 0; s < NUM_SEGS; s++) {
+        // s=0 is top (+12dB), s=NUM_SEGS-1 is bottom (-12dB)
+        // segment dB value this row represents
+        const segDb = DB_MAX - s * (DB_MAX * 2 / (NUM_SEGS - 1));
+        const y = 4 + s * (ledH + ledGap);
+
+        // Determine if this segment should be lit
+        const lit = db >= 0
+          ? segDb >= 0 && segDb <= db        // boost: light from 0 up to db
+          : segDb <= 0 && segDb >= db;       // cut: light from 0 down to db
+
+        // Zero line segment (segDb near 0)
+        const isZero = Math.abs(segDb) < (DB_MAX / (NUM_SEGS - 1));
+
+        if (lit) {
+          // Colour: top segments amber/red, middle green, cut segments dimmer
+          let color: string;
+          if (db > 0) {
+            const ratio = segDb / DB_MAX; // 0 at zero line, 1 at top
+            if (ratio > 0.75) color = '#ff4444';
+            else if (ratio > 0.4) color = '#ffaa00';
+            else color = accent;
+          } else {
+            // Cut — use dimmer accent shade
+            color = accentDim.replace(/[\d.]+\)$/, '0.7)');
+          }
+          ctx.fillStyle = color;
+          // Glow on lit segments
+          ctx.shadowColor  = color;
+          ctx.shadowBlur   = 4;
+        } else {
+          // Unlit — dark slot with faint border
+          ctx.fillStyle   = isZero ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.025)';
+          ctx.shadowBlur  = 0;
+          ctx.shadowColor = 'transparent';
+        }
+
+        ctx.beginPath();
+        ctx.roundRect(x, y, ledW, ledH, 1);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // Centre line tick (0 dB reference)
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(cx - ledW * 0.8, midLine - 0.5, ledW * 1.6, 1);
+    }
+  });
+
+  return (
+    <canvas
+      ref={canvasRef}
+      class="w-full rounded-sm"
+      style={{ height: '52px' }}
+    />
+  );
+};
+
 const ModeSelector: Component = () => {
   const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw'];
   const [open, setOpen] = createSignal(true);
@@ -304,6 +422,10 @@ const AudioControls: Component = () => {
             >
               Reset
             </button>
+          </div>
+          {/* LED EQ display */}
+          <div class="mb-2">
+            <EqDisplay />
           </div>
           <div class="flex gap-1">
             {/* Low */}
