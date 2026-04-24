@@ -10,7 +10,7 @@ FROM node:22-slim AS builder
 WORKDIR /app
 
 # Copy workspace config
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY client/package.json client/
@@ -27,6 +27,9 @@ COPY client/ client/
 # Build everything
 RUN npm run build
 
+# Prune dev dependencies in-place for the runtime stage
+RUN npm prune --omit=dev
+
 # ---- Runtime Stage ----
 FROM node:22-slim AS runtime
 
@@ -41,16 +44,14 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy built artifacts
+# Copy built artifacts and pruned node_modules
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/node_modules/ node_modules/
 COPY --from=builder /app/shared/package.json shared/
 COPY --from=builder /app/shared/dist/ shared/dist/
 COPY --from=builder /app/server/package.json server/
 COPY --from=builder /app/server/dist/ server/dist/
 COPY --from=builder /app/client/dist/ client/dist/
-
-# Install production deps only
-RUN npm ci --omit=dev
 
 # Copy default config
 COPY config/ config/
