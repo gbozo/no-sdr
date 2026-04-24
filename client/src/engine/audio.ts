@@ -23,6 +23,7 @@ export class AudioEngine {
   private eqHighNode: BiquadFilterNode | null = null;
   private compressorNode: DynamicsCompressorNode | null = null;
   private loudnessGainNode: GainNode | null = null; // pre-compressor boost for loudness
+  private analyserNode: AnalyserNode | null = null;
   private initialized = false;
   private _loudnessEnabled = false;
 
@@ -91,7 +92,7 @@ export class AudioEngine {
     this.compressorNode.release.value = 0.25;
 
     // ---- Connect the audio graph ----
-    // panner → eqLow → eqLowMid → eqMid → eqHighMid → eqHigh → loudnessGain → compressor → gain → destination
+    // panner → eqLow → eqLowMid → eqMid → eqHighMid → eqHigh → loudnessGain → compressor → gain → analyser → destination
     this.pannerNode.connect(this.eqLowNode);
     this.eqLowNode.connect(this.eqLowMidNode);
     this.eqLowMidNode.connect(this.eqMidNode);
@@ -100,6 +101,12 @@ export class AudioEngine {
     this.eqHighNode.connect(this.loudnessGainNode);
     this.loudnessGainNode.connect(this.compressorNode);
     this.compressorNode.connect(this.gainNode);
+
+    // Analyser taps the final output for the spectrum display
+    this.analyserNode = this.audioCtx.createAnalyser();
+    this.analyserNode.fftSize = 64;          // 32 bins — we use 16 of them
+    this.analyserNode.smoothingTimeConstant = 0.75;
+    this.gainNode.connect(this.analyserNode);
     this.gainNode.connect(this.audioCtx.destination);
 
     // Register the audio worklet processor with stereo support.
@@ -433,6 +440,10 @@ export class AudioEngine {
 
   get isInitialized(): boolean {
     return this.initialized;
+  }
+
+  getAnalyser(): AnalyserNode | null {
+    return this.analyserNode;
   }
 
   /**

@@ -107,6 +107,7 @@ function createStore() {
   const [adminModalOpen, setAdminModalOpen] = createSignal(false);
   const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
   const [meterStyle, setMeterStyle] = persist<'bar' | 'needle'>('meterStyle', 'needle');
+  const [audioSpectrumVisible, setAudioSpectrumVisible] = persist<boolean>('audioSpectrumVisible', true);
   const [spectrumPeakHold, setSpectrumPeakHold] = persist<boolean>('spectrumPeakHold', false);
   const [spectrumSignalFill, setSpectrumSignalFill] = persist<boolean>('spectrumSignalFill', false);
   const [spectrumPaused, setSpectrumPaused] = createSignal(false);
@@ -212,6 +213,7 @@ function createStore() {
     adminModalOpen, setAdminModalOpen,
     adminSection, setAdminSection,
     meterStyle, setMeterStyle,
+    audioSpectrumVisible, setAudioSpectrumVisible,
     spectrumPeakHold, setSpectrumPeakHold,
     spectrumSignalFill, setSpectrumSignalFill,
     spectrumPaused, setSpectrumPaused,

@@ -44,24 +44,22 @@ const ControlPanel: Component = () => {
 };
 
 // ---- Mode Selector ----
-// ---- EQ LED Display ----
-const EqDisplay: Component = () => {
+// ---- Audio Spectrum Display ----
+const AudioSpectrum: Component<{ audioOpen: () => boolean }> = (props) => {
   let canvasRef: HTMLCanvasElement | undefined;
+  let rafId: number | undefined;
+  let intervalId: ReturnType<typeof setInterval> | undefined;
+  const NUM_BARS = 16;
+  const FLOOR_DB = -80;
+  const PEAK_DB  = -10;
 
-  // Reactive draw — reruns whenever any EQ band changes
-  createEffect(() => {
-    const bands = [
-      store.eqLow(),
-      store.eqLowMid(),
-      store.eqMid(),
-      store.eqHighMid(),
-      store.eqHigh(),
-    ];
-
+  const draw = () => {
     const canvas = canvasRef;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const analyser = engine.getAudioAnalyser();
 
     const dpr  = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -73,92 +71,129 @@ const EqDisplay: Component = () => {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Read theme accent colour for lit LEDs
-    const accent   = getComputedStyle(document.documentElement).getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
-    const accentDim= getComputedStyle(document.documentElement).getPropertyValue('--sdr-accent-dim').trim() || 'rgba(74,163,255,0.16)';
+    // Theme colours
+    const accent = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
 
     // ── Background ──
-    ctx.fillStyle = '#060a10';
+    ctx.fillStyle = '#04080f';
     ctx.beginPath();
     ctx.roundRect(0, 0, w, h, 3);
     ctx.fill();
 
-    // Subtle inner bezel
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    // Bezel
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(0.5, 0.5, w - 1, h - 1, 3);
     ctx.stroke();
 
-    const NUM_BANDS   = 5;
-    const NUM_SEGS    = 12;   // segments per column (±12 dB, 1 per dB effectively 2 per step)
-    const DB_MAX      = 12;
-    const colW        = w / NUM_BANDS;
-    const ledW        = colW * 0.55;
-    const ledH        = (h - 8) / NUM_SEGS - 1.5;  // segment height with gap
-    const ledGap      = 1.5;
-    const midLine     = h / 2;                      // 0 dB line
+    // Horizontal grid lines (every 20% height)
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth   = 0.5;
+    for (let i = 1; i < 5; i++) {
+      const y = Math.round(h * i / 5) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(2, y);
+      ctx.lineTo(w - 2, y);
+      ctx.stroke();
+    }
 
-    for (let b = 0; b < NUM_BANDS; b++) {
-      const db   = bands[b];                        // -12 to +12
-      const cx   = colW * b + colW / 2;
-      const x    = cx - ledW / 2;
+    const NUM_SEGS  = 12;
+    const pad       = 3;
+    const totalW    = w - pad * 2;
+    const barW      = totalW / NUM_BARS;
+    const segGap    = 1;
+    const segH      = (h - pad * 2 - segGap * (NUM_SEGS - 1)) / NUM_SEGS;
 
-      for (let s = 0; s < NUM_SEGS; s++) {
-        // s=0 is top (+12dB), s=NUM_SEGS-1 is bottom (-12dB)
-        // segment dB value this row represents
-        const segDb = DB_MAX - s * (DB_MAX * 2 / (NUM_SEGS - 1));
-        const y = 4 + s * (ledH + ledGap);
+    // Get FFT data — 32 bins from fftSize=64
+    const binCount   = analyser ? analyser.frequencyBinCount : 0;
+    const freqData   = new Uint8Array(binCount);
+    if (analyser) analyser.getByteFrequencyData(freqData);
 
-        // Determine if this segment should be lit
-        const lit = db >= 0
-          ? segDb >= 0 && segDb <= db        // boost: light from 0 up to db
-          : segDb <= 0 && segDb >= db;       // cut: light from 0 down to db
+    // Map 16 bars from the available bins
+    // Bin 0 = DC, bin 1..binCount-1 = 0..24kHz at 48kHz sample rate
+    // Skip DC (bin 0), distribute remaining bins across NUM_BARS
+    for (let bar = 0; bar < NUM_BARS; bar++) {
+      const binStart = 1 + Math.floor(bar * (binCount - 1) / NUM_BARS);
+      const binEnd   = 1 + Math.floor((bar + 1) * (binCount - 1) / NUM_BARS);
 
-        // Zero line segment (segDb near 0)
-        const isZero = Math.abs(segDb) < (DB_MAX / (NUM_SEGS - 1));
+      // Max across mapped bins
+      let val = 0;
+      for (let b = binStart; b <= Math.min(binEnd, binCount - 1); b++) {
+        if (freqData[b] > val) val = freqData[b];
+      }
+
+      // Convert 0-255 (Uint8 dB scale) to 0-1 normalised level
+      const level = val / 255;
+
+      // How many segments to light
+      const litSegs = Math.round(level * NUM_SEGS);
+
+      const x = pad + bar * barW + barW * 0.08;
+      const bw = barW * 0.84;
+
+      for (let seg = 0; seg < NUM_SEGS; seg++) {
+        // seg 0 = top (loudest), seg NUM_SEGS-1 = bottom (quietest)
+        const y = pad + seg * (segH + segGap);
+        const segFromTop = seg;               // 0 = top
+        const lit = segFromTop >= (NUM_SEGS - litSegs);
 
         if (lit) {
-          // Colour: top segments amber/red, middle green, cut segments dimmer
+          const ratio = 1 - seg / (NUM_SEGS - 1); // 1 at top, 0 at bottom
           let color: string;
-          if (db > 0) {
-            const ratio = segDb / DB_MAX; // 0 at zero line, 1 at top
-            if (ratio > 0.75) color = '#ff4444';
-            else if (ratio > 0.4) color = '#ffaa00';
-            else color = accent;
-          } else {
-            // Cut — use dimmer accent shade
-            color = accentDim.replace(/[\d.]+\)$/, '0.7)');
-          }
-          ctx.fillStyle = color;
-          // Glow on lit segments
-          ctx.shadowColor  = color;
-          ctx.shadowBlur   = 4;
+          if (ratio > 0.80)      color = '#ff3344';
+          else if (ratio > 0.60) color = '#ff8800';
+          else if (ratio > 0.35) color = '#ffcc00';
+          else                   color = accent;
+
+          ctx.fillStyle   = color;
+          ctx.shadowColor = color;
+          ctx.shadowBlur  = 3;
         } else {
-          // Unlit — dark slot with faint border
-          ctx.fillStyle   = isZero ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.025)';
+          ctx.fillStyle   = 'rgba(255,255,255,0.04)';
           ctx.shadowBlur  = 0;
           ctx.shadowColor = 'transparent';
         }
 
         ctx.beginPath();
-        ctx.roundRect(x, y, ledW, ledH, 1);
+        ctx.roundRect(x, y, bw, segH, 0.5);
         ctx.fill();
       }
       ctx.shadowBlur = 0;
+    }
+  };
 
-      // Centre line tick (0 dB reference)
-      ctx.fillStyle = 'rgba(255,255,255,0.12)';
-      ctx.fillRect(cx - ledW * 0.8, midLine - 0.5, ledW * 1.6, 1);
+  // Start/stop loop based on visibility and audio panel open state
+  createEffect(() => {
+    const visible = store.audioSpectrumVisible() && props.audioOpen();
+
+    if (visible) {
+      if (!intervalId) {
+        intervalId = setInterval(() => {
+          if (rafId) cancelAnimationFrame(rafId);
+          rafId = requestAnimationFrame(draw);
+        }, 1000 / 25);
+      }
+    } else {
+      if (intervalId) { clearInterval(intervalId); intervalId = undefined; }
+      if (rafId)      { cancelAnimationFrame(rafId); rafId = undefined; }
     }
   });
 
+  onCleanup(() => {
+    if (intervalId) clearInterval(intervalId);
+    if (rafId)      cancelAnimationFrame(rafId);
+  });
+
   return (
-    <canvas
-      ref={canvasRef}
-      class="w-full rounded-sm"
-      style={{ height: '52px' }}
-    />
+    <Show when={store.audioSpectrumVisible()}>
+      <canvas
+        ref={(el) => { canvasRef = el; }}
+        class="w-full rounded-sm"
+        style={{ height: '56px' }}
+      />
+    </Show>
   );
 };
 
@@ -409,24 +444,31 @@ const AudioControls: Component = () => {
             <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
               Equalizer
             </label>
-            <button
-              class="text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors"
-              onClick={() => {
-                engine.setEqLow(0);
-                engine.setEqLowMid(0);
-                engine.setEqMid(0);
-                engine.setEqHighMid(0);
-                engine.setEqHigh(0);
-              }}
-              title="Reset EQ to flat"
-            >
-              Reset
-            </button>
+            <div class="flex items-center gap-2">
+              <button
+                class="text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors"
+                onClick={() => store.setAudioSpectrumVisible(!store.audioSpectrumVisible())}
+                title={store.audioSpectrumVisible() ? 'Hide spectrum' : 'Show spectrum'}
+              >
+                {store.audioSpectrumVisible() ? 'Hide' : 'Spectrum'}
+              </button>
+              <button
+                class="text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors"
+                onClick={() => {
+                  engine.setEqLow(0);
+                  engine.setEqLowMid(0);
+                  engine.setEqMid(0);
+                  engine.setEqHighMid(0);
+                  engine.setEqHigh(0);
+                }}
+                title="Reset EQ to flat"
+              >
+                Reset
+              </button>
+            </div>
           </div>
-          {/* LED EQ display */}
-          <div class="mb-2">
-            <EqDisplay />
-          </div>
+          {/* Audio spectrum analyzer */}
+          <AudioSpectrum audioOpen={open} />
           <div class="flex gap-1">
             {/* Low */}
             <EqBand

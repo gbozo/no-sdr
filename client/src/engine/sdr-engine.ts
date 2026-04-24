@@ -1276,6 +1276,9 @@ export class SdrEngine {
   /** Whether audio has been initialised (user has clicked to enable). */
   get isAudioInitialized(): boolean { return this.audio.isInitialized; }
 
+  /** AnalyserNode for the audio spectrum display. Null until audio is initialised. */
+  getAudioAnalyser(): AnalyserNode | null { return this.audio.getAnalyser(); }
+
   /**
    * Seek the waterfall to `offset` frames back from live (0 = live).
    * Redraws the waterfall from the client buffer window.
