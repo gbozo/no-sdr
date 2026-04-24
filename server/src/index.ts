@@ -371,7 +371,13 @@ app.get(
 // In development, the Vite dev server handles this via proxy
 
 const clientDistPath = path.resolve(__dirname, '../../client/dist');
-app.use('/assets/*', serveStatic({ root: clientDistPath }));
+
+// Serve all static files (JS, CSS, WASM, manifest, sw.js, icons, etc.)
+// serveStatic passes through (404) when the file doesn't exist, so the
+// SPA fallback below only fires for actual navigation routes.
+app.use('/*', serveStatic({ root: clientDistPath }));
+
+// SPA fallback — serve index.html for client-side routes
 app.get('*', serveStatic({ root: clientDistPath, path: 'index.html' }));
 
 // ---- Start Server ----
