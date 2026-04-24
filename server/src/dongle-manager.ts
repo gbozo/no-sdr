@@ -888,22 +888,27 @@ export class DongleManager extends EventEmitter {
     // Kill local rtl_sdr process
     if (state.process) {
       logger.info({ dongleId }, 'Stopping rtl_sdr process');
-      state.process.kill('SIGTERM');
+      const proc = state.process;
+      state.process = null; // clear immediately so re-entrant calls are no-ops
 
-      // Force kill after 3 seconds
+      proc.kill('SIGTERM');
+
+      // Force kill after 3 seconds if still running
       const forceKillTimer = setTimeout(() => {
-        if (state.process && !state.process.killed) {
+        if (!proc.killed) {
           logger.warn({ dongleId }, 'Force killing dongle process');
-          state.process.kill('SIGKILL');
+          proc.kill('SIGKILL');
         }
       }, 3000);
+      forceKillTimer.unref(); // don't keep the event loop alive waiting for this
 
       await new Promise<void>((resolve) => {
-        if (!state.process) {
+        if (proc.exitCode !== null || proc.killed) {
+          clearTimeout(forceKillTimer);
           resolve();
           return;
         }
-        state.process.once('exit', () => {
+        proc.once('exit', () => {
           clearTimeout(forceKillTimer);
           resolve();
         });

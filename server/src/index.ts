@@ -408,7 +408,12 @@ dongleManager.autoStartAll().catch((err) => {
 });
 
 // ---- Graceful Shutdown ----
+let shuttingDown = false;
+
 async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
   logger.info({ signal }, 'Shutting down...');
   await decoderManager.stopAll();
   await dongleManager.stopAll();
