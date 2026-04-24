@@ -11,6 +11,7 @@ import { createNodeWebSocket } from '@hono/node-ws';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { cors } from 'hono/cors';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig, writeDefaultConfig, saveConfig } from './config.js';
@@ -372,12 +373,20 @@ app.get(
 
 const clientDistPath = path.resolve(__dirname, '../../client/dist');
 
-// Serve all static files (JS, CSS, WASM, manifest, sw.js, icons, etc.)
-// serveStatic passes through (404) when the file doesn't exist, so the
-// SPA fallback below only fires for actual navigation routes.
-app.use('/*', serveStatic({ root: clientDistPath }));
+if (!existsSync(clientDistPath)) {
+  logger.error({ clientDistPath }, 'Client dist directory not found — frontend will not be served');
+} else {
+  logger.info({ clientDistPath }, 'Serving static files from client dist');
+}
 
-// SPA fallback — serve index.html for client-side routes
+// Serve all static files (JS, CSS, WASM, manifest, sw.js, icons, etc.)
+// Explicitly exclude /api and /ws so those routes are never intercepted.
+// serveStatic passes through (404) when the file doesn't exist on disk.
+app.use('/assets/*', serveStatic({ root: clientDistPath }));
+app.use('/icons/*', serveStatic({ root: clientDistPath }));
+app.use('/:file{.+\\..+}', serveStatic({ root: clientDistPath }));
+
+// SPA fallback — serve index.html for all remaining non-API, non-WS routes
 app.get('*', serveStatic({ root: clientDistPath, path: 'index.html' }));
 
 // ---- Start Server ----
