@@ -37,19 +37,23 @@ export class FftProcessor {
   private complexOutput: number[];
   private iqBuffer: Float32Array;
 
-  // Accumulator for partial IQ chunks from rtl_sdr
-  private iqAccumulator: Buffer = Buffer.alloc(0);
-  private readonly samplesNeeded: number; // bytes needed for one FFT frame
+  // Pre-allocated magnitude scratch buffer — reused every processOneFrame call
+  private magnitudesBuffer: Float32Array;
+
+  // Ring buffer accumulator — pre-allocated, no Buffer.concat on every chunk
+  private iqRingBuf: Buffer;
+  private iqRingFill = 0;
+  private readonly samplesNeeded: number;
 
   // FFT normalization: 10 * log10(N²) + window coherent gain correction
   private normalizationDb: number;
 
-  // Rate limiting: accumulate FFT frames and emit at target FPS
+  // Rate limiting
   private targetFps: number;
-  private minFrameInterval: number; // ms between emitted frames
+  private minFrameInterval: number;
   private lastEmitTime = 0;
-  private pendingFrame: Float32Array | null = null; // latest averaged frame waiting to be emitted
-  private framesAccumulated = 0; // how many raw frames were averaged into pendingFrame
+  private pendingFrame: Float32Array | null = null;
+  private framesAccumulated = 0;
 
   constructor(private options: FftProcessorOptions) {
     this.fftSize = options.fftSize;
@@ -59,10 +63,14 @@ export class FftProcessor {
     this.complexOutput = this.fft.createComplexArray();
     this.iqBuffer = new Float32Array(this.fftSize * 2);
     this.windowFunc = this.createWindow(options.window ?? 'blackman-harris');
-    this.samplesNeeded = this.fftSize * 2; // 2 bytes per sample (I+Q interleaved uint8)
+    this.samplesNeeded = this.fftSize * 2;
     this.normalizationDb = this.computeNormalization();
     this.targetFps = options.targetFps ?? 30;
     this.minFrameInterval = this.targetFps > 0 ? 1000 / this.targetFps : 0;
+
+    // Pre-allocate magnitude scratch buffer and ring buffer (4 frames of headroom)
+    this.magnitudesBuffer = new Float32Array(this.fftSize);
+    this.iqRingBuf = Buffer.allocUnsafe(this.samplesNeeded * 4);
 
     logger.debug(
       { fftSize: this.fftSize, window: options.window ?? 'blackman-harris', normalizationDb: this.normalizationDb.toFixed(1), targetFps: this.targetFps },
@@ -70,41 +78,36 @@ export class FftProcessor {
     );
   }
 
-  /**
-   * Feed raw IQ data from rtl_sdr. Returns FFT frames as they become available.
-   * rtl_sdr outputs unsigned 8-bit interleaved I/Q: [I0, Q0, I1, Q1, ...]
-   *
-   * When targetFps > 0, internally computes all FFT frames but only emits
-   * at the target rate. Intermediate frames are averaged into a pending buffer
-   * so no spectral information is lost — it's just temporally downsampled.
-   */
   processIqData(rawData: Buffer): Float32Array[] {
-    // Accumulate incoming data
-    this.iqAccumulator = Buffer.concat([this.iqAccumulator, rawData]);
+    // Append into ring buffer — no alloc, no copy of existing data
+    if (this.iqRingFill + rawData.length > this.iqRingBuf.length) {
+      // Ring buffer too small (shouldn't happen with 4× headroom) — grow it
+      const newBuf = Buffer.allocUnsafe((this.iqRingFill + rawData.length) * 2);
+      this.iqRingBuf.copy(newBuf, 0, 0, this.iqRingFill);
+      this.iqRingBuf = newBuf;
+    }
+    rawData.copy(this.iqRingBuf, this.iqRingFill);
+    this.iqRingFill += rawData.length;
 
     const emitted: Float32Array[] = [];
+    const now = Date.now(); // hoist out of loop — constant for this call
 
-    // Process complete FFT frames
-    while (this.iqAccumulator.length >= this.samplesNeeded) {
-      const frame = this.processOneFrame(this.iqAccumulator.subarray(0, this.samplesNeeded));
+    let consumed = 0;
+    while (this.iqRingFill - consumed >= this.samplesNeeded) {
+      const frame = this.processOneFrame(this.iqRingBuf.subarray(consumed, consumed + this.samplesNeeded));
+      consumed += this.samplesNeeded;
 
-      // Advance buffer (no overlap for now; can do /2 for 50%)
-      const advance = this.samplesNeeded;
-      this.iqAccumulator = this.iqAccumulator.subarray(advance);
-
-      // Rate limiting: accumulate into pending frame, emit at target FPS
       if (this.minFrameInterval <= 0) {
-        // No rate limit — emit every frame
         emitted.push(frame);
         continue;
       }
 
-      // Accumulate: running average of all frames within this interval
       if (!this.pendingFrame) {
+        // First frame of interval: copy into pendingFrame (owned buffer)
         this.pendingFrame = new Float32Array(frame);
         this.framesAccumulated = 1;
       } else {
-        // Incremental mean: avg = avg + (new - avg) / count
+        // Incremental mean: avg += (new - avg) / count
         this.framesAccumulated++;
         const n = this.framesAccumulated;
         for (let i = 0; i < frame.length; i++) {
@@ -112,14 +115,20 @@ export class FftProcessor {
         }
       }
 
-      // Check if enough time has passed to emit
-      const now = Date.now();
       if (now - this.lastEmitTime >= this.minFrameInterval) {
         emitted.push(this.pendingFrame);
         this.pendingFrame = null;
         this.framesAccumulated = 0;
         this.lastEmitTime = now;
       }
+    }
+
+    // Compact ring buffer: move remainder to front
+    if (consumed > 0) {
+      if (consumed < this.iqRingFill) {
+        this.iqRingBuf.copyWithin(0, consumed, this.iqRingFill);
+      }
+      this.iqRingFill -= consumed;
     }
 
     return emitted;
@@ -130,31 +139,26 @@ export class FftProcessor {
     for (let i = 0; i < this.fftSize; i++) {
       const iVal = (rawIq[i * 2] - 127.5) / 127.5;
       const qVal = (rawIq[i * 2 + 1] - 127.5) / 127.5;
-      // Apply window function
       const w = this.windowFunc[i];
-      this.complexInput[i * 2] = iVal * w;       // real
-      this.complexInput[i * 2 + 1] = qVal * w;   // imag
+      this.complexInput[i * 2] = iVal * w;
+      this.complexInput[i * 2 + 1] = qVal * w;
     }
 
-    // Perform FFT
     this.fft.transform(this.complexOutput, this.complexInput);
 
-    // Compute magnitude in dB and reorder (DC center)
-    const magnitudes = new Float32Array(this.fftSize);
+    // Compute magnitude in dB into reusable scratch buffer — no allocation
+    const magnitudes = this.magnitudesBuffer;
     const half = this.fftSize / 2;
 
     for (let i = 0; i < this.fftSize; i++) {
-      // FFT output bin index (reorder so DC is in center)
       const srcIdx = (i + half) % this.fftSize;
       const re = this.complexOutput[srcIdx * 2];
       const im = this.complexOutput[srcIdx * 2 + 1];
       const mag = re * re + im * im;
-      // Convert to dB with proper FFT normalization:
-      // dB = 10*log10(|X|²) - 10*log10(N²) - windowCorrectionDb
       magnitudes[i] = 10 * Math.log10(Math.max(mag, 1e-20)) - this.normalizationDb;
     }
 
-    // Apply exponential averaging for smoother display
+    // Apply exponential averaging
     if (this.averaging > 0) {
       if (!this.averagedMagnitudes) {
         this.averagedMagnitudes = new Float32Array(magnitudes);
@@ -164,8 +168,9 @@ export class FftProcessor {
         for (let i = 0; i < this.fftSize; i++) {
           this.averagedMagnitudes[i] = a * this.averagedMagnitudes[i] + b * magnitudes[i];
         }
-        return new Float32Array(this.averagedMagnitudes);
       }
+      // Return averagedMagnitudes directly — caller reads it before the next frame
+      return this.averagedMagnitudes;
     }
 
     return magnitudes;
@@ -234,16 +239,13 @@ export class FftProcessor {
    * Reset internal buffers (call when switching profiles)
    */
   reset(): void {
-    this.iqAccumulator = Buffer.alloc(0);
+    this.iqRingFill = 0;
     this.averagedMagnitudes = null;
     this.pendingFrame = null;
     this.framesAccumulated = 0;
     this.lastEmitTime = 0;
   }
 
-  /**
-   * Update FFT size (requires reinit)
-   */
   resize(newFftSize: number): void {
     this.fftSize = newFftSize;
     this.fft = new FFT(newFftSize);
@@ -254,6 +256,11 @@ export class FftProcessor {
     this.averagedMagnitudes = null;
     this.normalizationDb = this.computeNormalization();
     (this as any).samplesNeeded = newFftSize * 2;
+    this.magnitudesBuffer = new Float32Array(newFftSize);
+    this.iqRingBuf = Buffer.allocUnsafe(newFftSize * 2 * 4);
+    this.iqRingFill = 0;
+    this.pendingFrame = null;
+    this.framesAccumulated = 0;
   }
 }
 

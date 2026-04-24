@@ -162,6 +162,14 @@ export const FFT_ADPCM_PAD = 10;
  *
  * The Int16 samples are dB × 100 (e.g., -80.5 dB → -8050).
  */
+// Module-level scratch buffers for encodeFftAdpcm — avoids 4 allocations per call.
+// Safe: Node.js event loop is single-threaded; these are never used concurrently.
+// Sized to max fftSize (65536) + padding.
+const _fftAdpcmMaxSamples = 65536 + FFT_ADPCM_PAD;
+const _fftAdpcmInt16Scratch = new Int16Array(_fftAdpcmMaxSamples);
+// ADPCM output: ceil((totalSamples)/2) bytes + 4-byte header
+const _fftAdpcmOutScratch = new Uint8Array(4 + Math.ceil(_fftAdpcmMaxSamples / 2));
+
 export function encodeFftAdpcm(
   fftData: Float32Array,
   minDb: number,
@@ -170,10 +178,11 @@ export function encodeFftAdpcm(
   const len = fftData.length;
   const totalSamples = FFT_ADPCM_PAD + len;
 
-  // Convert Float32 dB → Int16 (dB × 100), clamp to Int16 range
-  const int16Buf = new Int16Array(totalSamples);
+  // Use scratch buffers if data fits; fall back to fresh allocation for unusual sizes
+  const int16Buf = totalSamples <= _fftAdpcmMaxSamples
+    ? _fftAdpcmInt16Scratch.subarray(0, totalSamples)
+    : new Int16Array(totalSamples);
 
-  // Warmup: repeat first sample
   const firstVal = Math.max(-32768, Math.min(32767, Math.round(fftData[0] * 100)));
   for (let i = 0; i < FFT_ADPCM_PAD; i++) {
     int16Buf[i] = firstVal;
@@ -182,13 +191,15 @@ export function encodeFftAdpcm(
     int16Buf[FFT_ADPCM_PAD + i] = Math.max(-32768, Math.min(32767, Math.round(fftData[i] * 100)));
   }
 
-  // Encode with a fresh (reset) encoder — stateless per frame
   const encoder = new ImaAdpcmEncoder();
   const adpcm = encoder.encode(int16Buf);
 
-  // Prepend 4-byte header: minDb (Int16 LE) + maxDb (Int16 LE)
-  const result = new Uint8Array(4 + adpcm.length);
-  const headerView = new DataView(result.buffer);
+  // Write into scratch result buffer if it fits
+  const resultLen = 4 + adpcm.length;
+  const result = resultLen <= _fftAdpcmOutScratch.length
+    ? _fftAdpcmOutScratch.subarray(0, resultLen)
+    : new Uint8Array(resultLen);
+  const headerView = new DataView(result.buffer, result.byteOffset, 4);
   headerView.setInt16(0, Math.round(minDb), true);
   headerView.setInt16(2, Math.round(maxDb), true);
   result.set(adpcm, 4);

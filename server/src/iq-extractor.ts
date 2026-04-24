@@ -101,8 +101,10 @@ export class IqExtractor {
   private ncoPhase = 0;
   private ncoFreq: number; // radians per sample
 
-  // NCO lookup table for cos/sin (avoids per-sample Math.cos/sin)
-  private ncoTableSize = 4096;
+  // NCO lookup table — size must be power of 2 for fast bitwise wrap
+  private readonly ncoTableSize = 4096;
+  private readonly ncoTableMask = 4095; // ncoTableSize - 1
+  private readonly ncoTableScale: number; // ncoTableSize / (2π)
   private cosTable: Float64Array;
   private sinTable: Float64Array;
 
@@ -117,18 +119,19 @@ export class IqExtractor {
   // Residual byte from odd-length chunk
   private residualByte: number | null = null;
 
+  // Reusable output buffer — avoids allocating Int16Array on every process() call
+  // Sized to the maximum possible output for a 16 KB input chunk
+  private outputBuffer: Int16Array;
+
   constructor(options: IqExtractorOptions) {
     this.inputSampleRate = options.inputSampleRate;
     this.outputSampleRate = options.outputSampleRate;
     this.tuneOffset = options.tuneOffset;
 
-    // Compute decimation factor
     this.decimationFactor = Math.max(1, Math.round(this.inputSampleRate / this.outputSampleRate));
-
-    // NCO frequency: negative to shift down to baseband
     this.ncoFreq = (-2 * Math.PI * this.tuneOffset) / this.inputSampleRate;
+    this.ncoTableScale = this.ncoTableSize / (2 * Math.PI);
 
-    // Build cos/sin lookup table
     this.cosTable = new Float64Array(this.ncoTableSize);
     this.sinTable = new Float64Array(this.ncoTableSize);
     for (let i = 0; i < this.ncoTableSize; i++) {
@@ -137,9 +140,11 @@ export class IqExtractor {
       this.sinTable[i] = Math.sin(angle);
     }
 
-    // Design anti-aliasing filter: cutoff at 80% of Nyquist of output rate
-    // (slightly below Nyquist to leave transition band room)
     this.initFilter();
+
+    // Pre-allocate output buffer: worst case = 16384 input bytes / decimation * 2 channels
+    const maxInputSamples = 16384;
+    this.outputBuffer = new Int16Array(Math.ceil(maxInputSamples / this.decimationFactor) * 2);
 
     logger.debug({
       inputRate: this.inputSampleRate,
@@ -150,21 +155,10 @@ export class IqExtractor {
   }
 
   private initFilter(): void {
-    const cutoff = this.outputSampleRate * 0.4; // 80% of Nyquist = 40% of output rate
+    const cutoff = this.outputSampleRate * 0.4;
     this.biquadCoeffs = designButterworth4(cutoff, this.inputSampleRate);
     this.biquadStatesI = this.biquadCoeffs.map(() => ({ z1: 0, z2: 0 }));
     this.biquadStatesQ = this.biquadCoeffs.map(() => ({ z1: 0, z2: 0 }));
-  }
-
-  /**
-   * Fast NCO lookup: get cos and sin for current phase.
-   */
-  private ncoLookup(phase: number): [number, number] {
-    // Normalize phase to [0, 2π)
-    let p = phase % (2 * Math.PI);
-    if (p < 0) p += 2 * Math.PI;
-    const idx = Math.round((p / (2 * Math.PI)) * this.ncoTableSize) % this.ncoTableSize;
-    return [this.cosTable[idx], this.sinTable[idx]];
   }
 
   setTuneOffset(offsetHz: number): void {
@@ -176,42 +170,50 @@ export class IqExtractor {
     this.outputSampleRate = rate;
     this.decimationFactor = Math.max(1, Math.round(this.inputSampleRate / this.outputSampleRate));
     this.initFilter();
+    const maxInputSamples = 16384;
+    this.outputBuffer = new Int16Array(Math.ceil(maxInputSamples / this.decimationFactor) * 2);
   }
 
   /**
    * Process a chunk of raw uint8 IQ data.
-   * Returns decimated, frequency-shifted Int16 IQ centered on the tuned frequency.
+   * Returns a subarray view into a reusable internal buffer — valid until the next process() call.
    */
   process(data: Buffer): Int16Array {
     let startOffset = 0;
     let extraI: number | undefined;
 
-    // Handle residual byte from previous chunk
     if (this.residualByte !== null) {
       extraI = this.residualByte;
       this.residualByte = null;
       startOffset = 0;
     }
 
-    // Total available IQ samples
     const availableBytes = (extraI !== undefined ? 1 : 0) + data.length;
     const totalSamples = Math.floor(availableBytes / 2);
 
     if (totalSamples === 0) {
-      // Save residual if we have one odd byte
       if (data.length > 0 && extraI === undefined) {
         this.residualByte = data[0];
       }
-      return new Int16Array(0);
+      return this.outputBuffer.subarray(0, 0);
     }
 
-    // Pre-allocate output
+    // Grow output buffer if needed (handles large input chunks gracefully)
     const maxOutput = Math.ceil(totalSamples / this.decimationFactor);
-    const output = new Int16Array(maxOutput * 2);
+    if (maxOutput * 2 > this.outputBuffer.length) {
+      this.outputBuffer = new Int16Array(maxOutput * 2 * 2); // 2× headroom
+    }
+
+    const output = this.outputBuffer;
     let outIdx = 0;
 
     let phase = this.ncoPhase;
     const freq = this.ncoFreq;
+    // Precomputed scale for fast table lookup — phase already in [0, 2π)
+    const tableScale = this.ncoTableScale;
+    const tableMask = this.ncoTableMask;
+    const cosTable = this.cosTable;
+    const sinTable = this.sinTable;
     let decimCount = this.decimCounter;
 
     const coeffs = this.biquadCoeffs;
@@ -219,19 +221,21 @@ export class IqExtractor {
     const statesQ = this.biquadStatesQ;
 
     let dataIdx = startOffset;
-    let sampleCount = 0;
 
     // Process first sample from residual if needed
     if (extraI !== undefined && data.length > 0) {
       const rawI = (extraI - 127.5) / 127.5;
       const rawQ = (data[dataIdx++] - 127.5) / 127.5;
 
-      const [cosP, sinP] = this.ncoLookup(phase);
+      // Inline NCO lookup — bitwise AND instead of modulo (tableSize is power of 2)
+      const idx = ((phase * tableScale + 0.5) | 0) & tableMask;
+      const cosP = cosTable[idx];
+      const sinP = sinTable[idx];
       let filtI = rawI * cosP - rawQ * sinP;
       let filtQ = rawI * sinP + rawQ * cosP;
       phase += freq;
+      if (phase >= 6.283185307) phase -= 6.283185307;
 
-      // Apply cascaded biquad filter
       for (let s = 0; s < coeffs.length; s++) {
         filtI = biquadProcess(filtI, coeffs[s], statesI[s]);
         filtQ = biquadProcess(filtQ, coeffs[s], statesQ[s]);
@@ -243,45 +247,42 @@ export class IqExtractor {
         output[outIdx++] = Math.max(-32768, Math.min(32767, Math.round(filtI * 32767)));
         output[outIdx++] = Math.max(-32768, Math.min(32767, Math.round(filtQ * 32767)));
       }
-      sampleCount++;
     }
 
-    // Main processing loop
-    const endByte = data.length - 1; // need pairs
+    // Main processing loop — hot path
+    const endByte = data.length - 1;
     while (dataIdx < endByte) {
       const rawI = (data[dataIdx] - 127.5) / 127.5;
       const rawQ = (data[dataIdx + 1] - 127.5) / 127.5;
       dataIdx += 2;
 
-      // Frequency shift via NCO
-      const [cosP, sinP] = this.ncoLookup(phase);
+      // Inline NCO lookup — bitwise AND for fast power-of-2 table wrap
+      const idx = ((phase * tableScale + 0.5) | 0) & tableMask;
+      const cosP = cosTable[idx];
+      const sinP = sinTable[idx];
       let filtI = rawI * cosP - rawQ * sinP;
       let filtQ = rawI * sinP + rawQ * cosP;
       phase += freq;
+      if (phase >= 6.283185307) phase -= 6.283185307;
 
-      // Cascaded biquad LP filter (4th-order Butterworth)
       for (let s = 0; s < coeffs.length; s++) {
         filtI = biquadProcess(filtI, coeffs[s], statesI[s]);
         filtQ = biquadProcess(filtQ, coeffs[s], statesQ[s]);
       }
 
-      // Decimate
       decimCount++;
       if (decimCount >= this.decimationFactor) {
         decimCount = 0;
         output[outIdx++] = Math.max(-32768, Math.min(32767, Math.round(filtI * 32767)));
         output[outIdx++] = Math.max(-32768, Math.min(32767, Math.round(filtQ * 32767)));
       }
-      sampleCount++;
     }
 
-    // Handle trailing odd byte
     if (dataIdx < data.length) {
       this.residualByte = data[dataIdx];
     }
 
-    // Save state
-    this.ncoPhase = phase % (2 * Math.PI);
+    this.ncoPhase = phase;
     this.decimCounter = decimCount;
 
     return output.subarray(0, outIdx);

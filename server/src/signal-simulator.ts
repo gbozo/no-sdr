@@ -210,16 +210,16 @@ export function createTwoMeterSimulation(centerFreq = 146_000_000, sampleRate = 
 export class SignalSimulator extends EventEmitter {
   private running = false;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private phase = new Map<number, number>(); // per-signal oscillator phase
+  // Float64Array instead of Map — array index lookup is ~10x faster than Map.get/set
+  private phases: Float64Array;
   private sampleCounter = 0;
   private startTime = 0;
+  // Pre-allocated chunk buffer — avoids Buffer.alloc (zero-fill) on every interval
+  private chunkBuf: Buffer | null = null;
 
   constructor(private options: SimulatorOptions) {
     super();
-    // Initialize phases for each signal
-    for (let i = 0; i < options.signals.length; i++) {
-      this.phase.set(i, 0);
-    }
+    this.phases = new Float64Array(options.signals.length);
   }
 
   /**
@@ -231,8 +231,11 @@ export class SignalSimulator extends EventEmitter {
     this.startTime = Date.now();
     this.sampleCounter = 0;
 
-    const chunkSamples = this.options.fftSize * 2; // 2 FFT frames per chunk
-    const bytesPerChunk = chunkSamples * 2; // 2 bytes per sample (I + Q)
+    const chunkSamples = this.options.fftSize * 2;
+    const bytesPerChunk = chunkSamples * 2;
+
+    // Pre-allocate chunk buffer once — reused every interval tick
+    this.chunkBuf = Buffer.allocUnsafe(bytesPerChunk);
 
     logger.info(
       {
@@ -248,6 +251,7 @@ export class SignalSimulator extends EventEmitter {
       const chunk = this.generateChunk(chunkSamples);
       this.emit('data', chunk);
     }, this.options.intervalMs);
+    this.timer.unref(); // don't keep event loop alive after stop()
   }
 
   /**
@@ -268,47 +272,50 @@ export class SignalSimulator extends EventEmitter {
    * Output format: Buffer of unsigned 8-bit interleaved I/Q (same as rtl_sdr)
    */
   private generateChunk(numSamples: number): Buffer {
-    const buf = Buffer.alloc(numSamples * 2);
-    const elapsed = Date.now() - this.startTime;
+    const buf = this.chunkBuf ?? Buffer.allocUnsafe(numSamples * 2);
+    const elapsed = Date.now() - this.startTime; // computed once per chunk
+
+    // Pre-compute per-signal drift offsets for this chunk (constant across all samples)
+    const signals = this.options.signals;
+    const numSignals = signals.length;
+    const freqOffsets = new Float64Array(numSignals);
+    for (let sigIdx = 0; sigIdx < numSignals; sigIdx++) {
+      const sig = signals[sigIdx];
+      let freqOffset = sig.offsetHz;
+      if (sig.drift) {
+        freqOffset += Math.sin(elapsed / 1000 * sig.drift.rateHz * 2 * Math.PI / sig.drift.rangeHz)
+          * sig.drift.rangeHz;
+      }
+      freqOffsets[sigIdx] = freqOffset;
+    }
 
     for (let n = 0; n < numSamples; n++) {
       let iSum = 0;
       let qSum = 0;
 
-      // Add each signal
-      for (let sigIdx = 0; sigIdx < this.options.signals.length; sigIdx++) {
-        const sig = this.options.signals[sigIdx];
+      for (let sigIdx = 0; sigIdx < numSignals; sigIdx++) {
+        const sig = signals[sigIdx];
 
-        // Check intermittent on/off
         if (sig.intermittent) {
           const cycle = sig.intermittent.onMs + sig.intermittent.offMs;
           const pos = elapsed % cycle;
-          if (pos >= sig.intermittent.onMs) continue; // signal is OFF
+          if (pos >= sig.intermittent.onMs) continue;
         }
 
-        // Calculate frequency with drift
-        let freqOffset = sig.offsetHz;
-        if (sig.drift) {
-          freqOffset += Math.sin(elapsed / 1000 * sig.drift.rateHz * 2 * Math.PI / sig.drift.rangeHz)
-            * sig.drift.rangeHz;
-        }
+        const normalizedFreq = freqOffsets[sigIdx] / this.options.sampleRate;
+        let phase = this.phases[sigIdx];
 
-        const normalizedFreq = freqOffset / this.options.sampleRate;
-        let phase = this.phase.get(sigIdx) ?? 0;
-
-        // Generate signal based on type
         const { i, q } = this.generateSignalSample(sig, normalizedFreq, phase, elapsed, n);
         iSum += i;
         qSum += q;
 
-        // Advance phase
         phase += 2 * Math.PI * normalizedFreq;
         if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
         if (phase < -2 * Math.PI) phase += 2 * Math.PI;
-        this.phase.set(sigIdx, phase);
+        this.phases[sigIdx] = phase;
       }
 
-      // Add noise floor (Gaussian approximation via Box-Muller)
+      // Gaussian noise via Box-Muller
       const noiseAmp = this.options.noiseFloor;
       const u1 = Math.random() || 1e-10;
       const u2 = Math.random();
@@ -316,12 +323,8 @@ export class SignalSimulator extends EventEmitter {
       iSum += noiseMag * Math.cos(2 * Math.PI * u2);
       qSum += noiseMag * Math.sin(2 * Math.PI * u2);
 
-      // Convert to uint8 [0, 255] with 127.5 center (rtl_sdr format)
-      const iVal = Math.max(0, Math.min(255, Math.round(iSum * 127.5 + 127.5)));
-      const qVal = Math.max(0, Math.min(255, Math.round(qSum * 127.5 + 127.5)));
-
-      buf[n * 2] = iVal;
-      buf[n * 2 + 1] = qVal;
+      buf[n * 2]     = Math.max(0, Math.min(255, Math.round(iSum * 127.5 + 127.5)));
+      buf[n * 2 + 1] = Math.max(0, Math.min(255, Math.round(qSum * 127.5 + 127.5)));
 
       this.sampleCounter++;
     }

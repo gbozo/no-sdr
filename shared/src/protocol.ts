@@ -10,6 +10,10 @@
 //
 // ============================================================
 
+// Module-level TextEncoder singleton — avoids allocating a new instance
+// on every packMetaMessage / packRdsMessage call.
+const _textEncoder = new TextEncoder();
+
 // ---- Message Type Bytes (Server → Client) ----
 
 /** FFT magnitude data — Float32Array of dB values, broadcast to all on dongle */
@@ -167,9 +171,7 @@ export function packAudioMessage(audioData: Int16Array): ArrayBuffer {
  * Pack a JSON metadata message
  */
 export function packMetaMessage(meta: ServerMeta): ArrayBuffer {
-  const json = JSON.stringify(meta);
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(json);
+  const bytes = _textEncoder.encode(JSON.stringify(meta));
   return packBinaryMessage(MSG_META, bytes.buffer as ArrayBuffer);
 }
 
@@ -352,9 +354,7 @@ export function packFftHistoryAdpcmMessage(
  * Only sent on the Opus codec path when mode is WFM.
  */
 export function packRdsMessage(rdsData: object): ArrayBuffer {
-  const json = JSON.stringify(rdsData);
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(json);
+  const bytes = _textEncoder.encode(JSON.stringify(rdsData));
   return packBinaryMessage(MSG_RDS, bytes.buffer as ArrayBuffer);
 }
 

@@ -191,18 +191,21 @@ class FmMonoDemod implements ServerDemod {
   private deemph: Deemph;
   private decimFactor: number;
   private decimCounter = 0;
+  // Pre-allocated output buffer — reused every process() call
+  private outBuf: Float32Array;
 
   constructor(inputRate: number, isWideband: boolean) {
     const deviation = isWideband ? 75_000 : 5_000;
     this.gain = inputRate / (2 * Math.PI * deviation);
     this.deemph = new Deemph(75e-6, inputRate);
     this.decimFactor = isWideband ? Math.round(inputRate / 48_000) : 1;
+    this.outBuf = new Float32Array(Math.ceil(OPUS_FRAME_SAMPLES * 2 * this.decimFactor / this.decimFactor + 16));
   }
 
   process(iq: Int16Array): MonoResult {
     const pairs = iq.length >> 1;
     const maxOut = Math.ceil(pairs / this.decimFactor);
-    const out = new Float32Array(maxOut);
+    if (maxOut > this.outBuf.length) this.outBuf = new Float32Array(maxOut * 2);
     let outIdx = 0;
     const scale = 1 / 32768;
     for (let i = 0; i < pairs; i++) {
@@ -216,10 +219,10 @@ class FmMonoDemod implements ServerDemod {
       this.decimCounter++;
       if (this.decimCounter >= this.decimFactor) {
         this.decimCounter = 0;
-        out[outIdx++] = sample;
+        this.outBuf[outIdx++] = sample;
       }
     }
-    return { left: out.subarray(0, outIdx), stereo: false as const };
+    return { left: this.outBuf.subarray(0, outIdx), stereo: false as const };
   }
 
   reset(): void {
@@ -233,17 +236,18 @@ class AmMonoDemod implements ServerDemod {
   readonly isStereoCapable = false;
   private dc = new DcBlock();
   private agc = new SimpleAgc();
+  private outBuf: Float32Array = new Float32Array(OPUS_FRAME_SAMPLES * 2);
 
   process(iq: Int16Array): MonoResult {
     const pairs = iq.length >> 1;
-    const out = new Float32Array(pairs);
+    if (pairs > this.outBuf.length) this.outBuf = new Float32Array(pairs * 2);
     const scale = 1 / 32768;
     for (let i = 0; i < pairs; i++) {
       const iV = iq[i * 2] * scale;
       const qV = iq[i * 2 + 1] * scale;
-      out[i] = this.agc.process(this.dc.process(Math.sqrt(iV * iV + qV * qV)));
+      this.outBuf[i] = this.agc.process(this.dc.process(Math.sqrt(iV * iV + qV * qV)));
     }
-    return { left: out, stereo: false as const };
+    return { left: this.outBuf.subarray(0, pairs), stereo: false as const };
   }
 
   reset(): void { this.dc.reset(); this.agc.reset(); }
@@ -253,18 +257,19 @@ class SsbMonoDemod implements ServerDemod {
   readonly isStereoCapable = false;
   private dc = new DcBlock();
   private agc = new SimpleAgc(0.3, 0.005, 0.0001, 200);
+  private outBuf: Float32Array = new Float32Array(OPUS_FRAME_SAMPLES * 2);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   constructor(_isLsb: boolean) {}
 
   process(iq: Int16Array): MonoResult {
     const pairs = iq.length >> 1;
-    const out = new Float32Array(pairs);
+    if (pairs > this.outBuf.length) this.outBuf = new Float32Array(pairs * 2);
     const scale = 1 / 32768;
     for (let i = 0; i < pairs; i++) {
-      out[i] = this.agc.process(this.dc.process(iq[i * 2] * scale));
+      this.outBuf[i] = this.agc.process(this.dc.process(iq[i * 2] * scale));
     }
-    return { left: out, stereo: false as const };
+    return { left: this.outBuf.subarray(0, pairs), stereo: false as const };
   }
 
   reset(): void { this.dc.reset(); this.agc.reset(); }
@@ -276,30 +281,54 @@ class CwMonoDemod implements ServerDemod {
   private bfoPhaseInc: number;
   private dc = new DcBlock();
   private agc = new SimpleAgc(0.3, 0.01, 0.0005, 300);
+  private outBuf: Float32Array = new Float32Array(OPUS_FRAME_SAMPLES * 2);
+  // NCO lookup table for BFO (avoids Math.cos/sin per sample)
+  private readonly bfoTableSize = 1024;
+  private readonly bfoTableMask = 1023;
+  private readonly cosTable: Float32Array;
+  private readonly sinTable: Float32Array;
+  private readonly bfoTableScale: number;
+  private bfoTablePhase = 0;
 
   constructor(sampleRate: number) {
     this.bfoPhaseInc = 2 * Math.PI * 700 / sampleRate;
+    this.bfoTableScale = this.bfoTableSize / (2 * Math.PI);
+    this.cosTable = new Float32Array(this.bfoTableSize);
+    this.sinTable = new Float32Array(this.bfoTableSize);
+    for (let i = 0; i < this.bfoTableSize; i++) {
+      const a = (2 * Math.PI * i) / this.bfoTableSize;
+      this.cosTable[i] = Math.cos(a);
+      this.sinTable[i] = Math.sin(a);
+    }
   }
 
   process(iq: Int16Array): MonoResult {
     const pairs = iq.length >> 1;
-    const out = new Float32Array(pairs);
+    if (pairs > this.outBuf.length) this.outBuf = new Float32Array(pairs * 2);
     const scale = 1 / 32768;
+    let phase = this.bfoTablePhase;
+    const inc = this.bfoPhaseInc * this.bfoTableScale;
+    const mask = this.bfoTableMask;
+    const cos = this.cosTable;
+    const sin = this.sinTable;
     for (let i = 0; i < pairs; i++) {
       const iV = iq[i * 2] * scale;
       const qV = iq[i * 2 + 1] * scale;
-      let s = iV * Math.cos(this.bfoPhase) + qV * Math.sin(this.bfoPhase);
-      this.bfoPhase += this.bfoPhaseInc;
-      if (this.bfoPhase > 2 * Math.PI) this.bfoPhase -= 2 * Math.PI;
-      out[i] = this.agc.process(this.dc.process(s));
+      const idx = (phase | 0) & mask;
+      const s = iV * cos[idx] + qV * sin[idx];
+      phase += inc;
+      if (phase >= this.bfoTableSize) phase -= this.bfoTableSize;
+      this.outBuf[i] = this.agc.process(this.dc.process(s));
     }
-    return { left: out, stereo: false as const };
+    this.bfoTablePhase = phase;
+    return { left: this.outBuf.subarray(0, pairs), stereo: false as const };
   }
 
   reset(): void {
-    this.bfoPhase = 0;
     this.dc.reset();
     this.agc.reset();
+    this.bfoPhase = 0;
+    this.bfoTablePhase = 0;
   }
 }
 
@@ -341,6 +370,10 @@ class FmStereoDemod implements ServerDemod {
   private dcL = new DcBlock();
   private dcR = new DcBlock();
 
+  // Pre-allocated stereo output buffers
+  private leftOutBuf: Float32Array;
+  private rightOutBuf: Float32Array;
+
   // RDS decoder — taps composite at 240kHz
   private rdsDecoder: RdsDecoder;
   /** Latest decoded RDS data, or null if no group has been parsed yet */
@@ -368,6 +401,10 @@ class FmStereoDemod implements ServerDemod {
     this.deemphL = new Deemph(75e-6, inputRate);
     this.deemphR = new Deemph(75e-6, inputRate);
 
+    // Pre-allocate stereo output buffers
+    this.leftOutBuf  = new Float32Array(Math.ceil(OPUS_FRAME_SAMPLES * 5 * 2)); // 5× decimation headroom
+    this.rightOutBuf = new Float32Array(this.leftOutBuf.length);
+
     // RDS decoder at the same input rate (240kHz)
     this.rdsDecoder = new RdsDecoder(inputRate);
     this.rdsDecoder.setCallback((data) => {
@@ -378,8 +415,13 @@ class FmStereoDemod implements ServerDemod {
   process(iq: Int16Array): WfmStereoResult {
     const pairs = iq.length >> 1;
     const maxOut = Math.ceil(pairs / this.decimFactor);
-    const leftOut = new Float32Array(maxOut);
-    const rightOut = new Float32Array(maxOut);
+    // Grow output buffers if needed (larger-than-expected IQ chunk)
+    if (maxOut > this.leftOutBuf.length) {
+      this.leftOutBuf  = new Float32Array(maxOut * 2);
+      this.rightOutBuf = new Float32Array(maxOut * 2);
+    }
+    const leftOut  = this.leftOutBuf;
+    const rightOut = this.rightOutBuf;
     let outIdxL = 0;
     const scale = 1 / 32768;
 
@@ -682,6 +724,20 @@ export class OpusAudioPipeline {
   private monoBitrate: number;
   private stereoBitrate: number;
 
+  // Stereo/mono encoder switch hysteresis — only recreate encoder after
+  // stereo state is stable for STEREO_HOLD_FRAMES consecutive frames.
+  // Prevents encoder thrash when blend factor hovers near the 0.01 threshold.
+  private stereoHoldCounter = 0;
+  private static readonly STEREO_HOLD_FRAMES = 10;
+  private pendingChannels: number | null = null; // channel count waiting for hold to expire
+
+  // Pre-allocated Buffer view over pcmBuffer — avoids Buffer.from() every Opus frame
+  private pcmBufferView: Buffer | null = null;
+
+  // Pre-allocated resample output buffers
+  private resampleBufL: Float32Array = new Float32Array(OPUS_FRAME_SAMPLES * 8);
+  private resampleBufR: Float32Array = new Float32Array(OPUS_FRAME_SAMPLES * 8);
+
   constructor(mode: DemodMode, inputRate: number, hq = false) {
     this.mode = mode;
     this.inputRate = inputRate;
@@ -715,6 +771,8 @@ export class OpusAudioPipeline {
       this.encoder = new OpusScriptClass(48_000, this.channels, OpusScriptClass.Application.AUDIO);
       this.encoder.setBitrate(this.channels === 2 ? this.stereoBitrate : this.monoBitrate);
     }
+    // Rebuild the Buffer view over the new pcmBuffer
+    this.pcmBufferView = Buffer.from(this.pcmBuffer.buffer, this.pcmBuffer.byteOffset, this.pcmBuffer.byteLength);
   }
 
   static isAvailable(): boolean {
@@ -744,13 +802,29 @@ export class OpusAudioPipeline {
     const isStereo = !this._forceMono && result.stereo && result.right !== undefined;
     const rightAudio = isStereo ? result.right! : undefined;
 
-    // If stereo state changed, recreate encoder with right channel count
+    // Stereo/mono encoder switch with hysteresis.
+    // Only recreate the encoder after the stereo state has been stable for
+    // STEREO_HOLD_FRAMES frames — prevents thrash near the blend threshold.
     const needChannels = isStereo ? 2 : 1;
     if (needChannels !== this.channels) {
-      this.channels = needChannels;
-      this.pcmBuffer = new Int16Array(OPUS_FRAME_SAMPLES * this.channels);
-      this.pcmBufferPos = 0;
-      this.createEncoder();
+      if (this.pendingChannels !== needChannels) {
+        this.pendingChannels = needChannels;
+        this.stereoHoldCounter = 0;
+      } else {
+        this.stereoHoldCounter++;
+        if (this.stereoHoldCounter >= OpusAudioPipeline.STEREO_HOLD_FRAMES) {
+          this.channels = needChannels;
+          this.pcmBuffer = new Int16Array(OPUS_FRAME_SAMPLES * this.channels);
+          this.pcmBufferPos = 0;
+          this.createEncoder();
+          this.pendingChannels = null;
+          this.stereoHoldCounter = 0;
+        }
+      }
+    } else {
+      // State matches — clear any pending transition
+      this.pendingChannels = null;
+      this.stereoHoldCounter = 0;
     }
     this._isStereo = isStereo;
 
@@ -784,13 +858,12 @@ export class OpusAudioPipeline {
 
       if (this.pcmBufferPos >= samplesPerFrame) {
         try {
-          const buf = Buffer.from(this.pcmBuffer.buffer, this.pcmBuffer.byteOffset, samplesPerFrame * 2);
+          const buf = this.pcmBufferView!;
           const encoded: Buffer = this.encoder.encode(buf, OPUS_FRAME_SAMPLES);
           packets.push({
             packet: new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.byteLength),
             samples: OPUS_FRAME_SAMPLES,
             stereo: isStereo,
-            // Only include RDS data on the first packet of the batch (avoid redundant sends)
             rdsData: packets.length === 0 ? rdsData : null,
           });
         } catch (err) {
@@ -805,7 +878,12 @@ export class OpusAudioPipeline {
 
   private resampleCh(input: Float32Array, isLeft: boolean): Float32Array {
     const outLen = Math.ceil(input.length * this.resampleRatio);
-    const out = new Float32Array(outLen);
+    const buf = isLeft ? this.resampleBufL : this.resampleBufR;
+    if (outLen > buf.length) {
+      if (isLeft) this.resampleBufL = new Float32Array(outLen * 2);
+      else        this.resampleBufR = new Float32Array(outLen * 2);
+    }
+    const out = isLeft ? this.resampleBufL : this.resampleBufR;
     let outIdx = 0;
     let accum = isLeft ? this.resampleAccumL : this.resampleAccumR;
     let last = isLeft ? this.lastSampleL : this.lastSampleR;

@@ -67,6 +67,8 @@ export class DongleManager extends EventEmitter {
   private readonly maxRestarts = 5;
   private readonly restartDelay = 2000; // ms
   private readonly demoMode: boolean;
+  // Reusable 5-byte command buffer — socket.write() copies into kernel synchronously
+  private readonly rtlCmdBuf = Buffer.allocUnsafe(5);
 
   constructor(private config: ValidatedConfig) {
     super();
@@ -282,8 +284,9 @@ export class DongleManager extends EventEmitter {
     state.socket = socket;
     state.rtlTcpHeaderReceived = false;
 
-    // Buffer for accumulating data until we've consumed the header
-    let headerBuf = Buffer.alloc(0);
+    // Pre-allocated header accumulation buffer — no Buffer.concat needed
+    const headerBuf = Buffer.allocUnsafe(RTL_TCP_HEADER_SIZE);
+    let headerFill = 0;
 
     socket.on('connect', () => {
       logger.info({ dongleId, host, port }, 'Connected to rtl_tcp server');
@@ -342,10 +345,12 @@ export class DongleManager extends EventEmitter {
 
     socket.on('data', (chunk: Buffer) => {
       if (!state.rtlTcpHeaderReceived) {
-        // Accumulate until we have the 12-byte header
-        headerBuf = Buffer.concat([headerBuf, chunk]);
-        if (headerBuf.length >= RTL_TCP_HEADER_SIZE) {
-          // Parse header
+        // Copy into fixed header buffer until we have RTL_TCP_HEADER_SIZE bytes
+        const need = RTL_TCP_HEADER_SIZE - headerFill;
+        const copy = Math.min(need, chunk.length);
+        chunk.copy(headerBuf, headerFill, 0, copy);
+        headerFill += copy;
+        if (headerFill >= RTL_TCP_HEADER_SIZE) {
           const magic = headerBuf.subarray(0, 4).toString('ascii');
           const tunerType = headerBuf.readUInt32BE(4);
           const gainCount = headerBuf.readUInt32BE(8);
@@ -354,16 +359,12 @@ export class DongleManager extends EventEmitter {
             'rtl_tcp header received',
           );
           state.rtlTcpHeaderReceived = true;
-
-          // Any remaining data after header is IQ
-          const remaining = headerBuf.subarray(RTL_TCP_HEADER_SIZE);
+          const remaining = chunk.subarray(copy);
           if (remaining.length > 0) {
             this.emit('iq-data', dongleId, remaining);
           }
-          headerBuf = Buffer.alloc(0); // free
         }
       } else {
-        // Normal IQ data flow
         this.emit('iq-data', dongleId, chunk);
       }
     });
@@ -606,7 +607,8 @@ export class DongleManager extends EventEmitter {
     state.socket = socket;
     state.rtlTcpHeaderReceived = false;
 
-    let headerBuf = Buffer.alloc(0);
+    const headerBuf = Buffer.allocUnsafe(RSP_TCP_HEADER_SIZE);
+    let headerFill = 0;
 
     socket.on('connect', () => {
       logger.info({ dongleId, host, port }, 'Connected to rsp_tcp server');
@@ -668,8 +670,11 @@ export class DongleManager extends EventEmitter {
 
     socket.on('data', (chunk: Buffer) => {
       if (!state.rtlTcpHeaderReceived) {
-        headerBuf = Buffer.concat([headerBuf, chunk]);
-        if (headerBuf.length >= RSP_TCP_HEADER_SIZE) {
+        const need = RSP_TCP_HEADER_SIZE - headerFill;
+        const copy = Math.min(need, chunk.length);
+        chunk.copy(headerBuf, headerFill, 0, copy);
+        headerFill += copy;
+        if (headerFill >= RSP_TCP_HEADER_SIZE) {
           const magic = headerBuf.subarray(0, 4).toString('ascii');
           const deviceType = headerBuf.readUInt32BE(4);
           const serial = headerBuf.readUInt32BE(8);
@@ -678,11 +683,10 @@ export class DongleManager extends EventEmitter {
             'rsp_tcp header received',
           );
           state.rtlTcpHeaderReceived = true;
-          const remaining = headerBuf.subarray(RSP_TCP_HEADER_SIZE);
+          const remaining = chunk.subarray(copy);
           if (remaining.length > 0) {
             this.emit('iq-data', dongleId, remaining);
           }
-          headerBuf = Buffer.alloc(0);
         }
       } else {
         this.emit('iq-data', dongleId, chunk);
@@ -718,20 +722,15 @@ export class DongleManager extends EventEmitter {
    * Send a 5-byte rtl_tcp command packet
    */
   private rtlTcpSendCommand(socket: Socket, cmd: number, param: number): void {
-    const buf = Buffer.alloc(5);
-    buf.writeUInt8(cmd, 0);
-    buf.writeUInt32BE(param >>> 0, 1); // unsigned 32-bit
-    socket.write(buf);
+    this.rtlCmdBuf.writeUInt8(cmd, 0);
+    this.rtlCmdBuf.writeUInt32BE(param >>> 0, 1);
+    socket.write(this.rtlCmdBuf);
   }
 
-  /**
-   * Send a 5-byte RSP extended command (0x80-0x84).
-   */
   private rspSendExtended(socket: Socket, cmd: number, param: number): void {
-    const buf = Buffer.alloc(5);
-    buf.writeUInt8(cmd, 0);
-    buf.writeUInt32BE(param >>> 0, 1);
-    socket.write(buf);
+    this.rtlCmdBuf.writeUInt8(cmd, 0);
+    this.rtlCmdBuf.writeUInt32BE(param >>> 0, 1);
+    socket.write(this.rtlCmdBuf);
   }
 
   /**
@@ -827,7 +826,7 @@ export class DongleManager extends EventEmitter {
       'Scheduling dongle restart',
     );
 
-    setTimeout(() => {
+    const t = setTimeout(() => {
       if (!state.running) {
         switch (sourceType) {
           case 'rtl_tcp':
@@ -852,6 +851,7 @@ export class DongleManager extends EventEmitter {
         }
       }
     }, delay);
+    t.unref(); // don't keep event loop alive during shutdown
   }
 
   /**

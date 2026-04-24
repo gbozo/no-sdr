@@ -112,6 +112,12 @@ export class WebSocketManager {
   /** Number of FFT frames to keep per dongle — enough to fill a 1080p waterfall. */
   private static readonly HISTORY_CAPACITY = 1024;
 
+  // Pre-allocated scratch buffers for FFT encoding — avoids per-frame heap allocation.
+  // Sized to max fftSize (65536). Safe to share: Node.js event loop is single-threaded.
+  private readonly fftScratchDelta  = Buffer.allocUnsafe(65536);
+  private readonly fftScratchClamped = new Uint8Array(65536);
+  private readonly fftScratchHist   = new Uint32Array(256);
+
   constructor(
     private dongleManager: DongleManager,
     private decoderManager: DecoderManager,
@@ -246,166 +252,132 @@ export class WebSocketManager {
     this.iqBytes += data.length;
     const fftFrames = processor.processIqData(data);
 
-    // Broadcast FFT to all clients subscribed to this dongle.
-    // Each client gets their preferred codec:
-    //   'none'  → MSG_FFT_COMPRESSED (Uint8 quantization, ~4x reduction)
-    //   'adpcm' → MSG_FFT_ADPCM (ADPCM on Int16 dB×100, ~8x reduction)
+    // Broadcast FFT to all clients + send per-client IQ in a single loop.
+    // Codec messages are built lazily (only when the first client needing them is found).
     const FFT_MIN_DB = -130;
     const FFT_MAX_DB = 0;
+    const IQ_BACKPRESSURE = 1024 * 1024;
+
+    // Scratch buffers — pre-allocated, no per-frame heap allocation
+    const scratchDelta   = this.fftScratchDelta;
+    const scratchClamped = this.fftScratchClamped;
+    const scratchHist    = this.fftScratchHist;
 
     for (const fftData of fftFrames) {
       this.fftCount++;
-
-      // Store in history buffer for waterfall prefill on client connect
       this.fftHistories.get(dongleId)?.push(fftData);
-      // Pre-encode formats lazily (only if at least one client needs them)
+
       let uint8Msg: ArrayBuffer | null = null;
       let adpcmMsg: ArrayBuffer | null = null;
       let deflateMsg: ArrayBuffer | null = null;
       let deflateFloorMsg: ArrayBuffer | null = null;
-      // Shared Uint8 quantized FFT (used by both 'none' and 'deflate' codecs)
       let uint8Data: Uint8Array | null = null;
 
       for (const client of this.clients.values()) {
         if (client.session.dongleId !== dongleId) continue;
+
+        // ---- FFT broadcast ----
         try {
           const raw = client.ws.raw as any;
-          if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > WebSocketManager.BACKPRESSURE_THRESHOLD) {
+          const fftBackpressure = raw?.bufferedAmount !== undefined && raw.bufferedAmount > WebSocketManager.BACKPRESSURE_THRESHOLD;
+          if (fftBackpressure) {
             if (!this.backpressureWarned.has(client.id)) {
               logger.warn({ clientId: client.id, buffered: raw.bufferedAmount }, 'Backpressure: skipping FFT frame for slow client');
               this.backpressureWarned.add(client.id);
             }
-            continue;
-          }
-          if (this.backpressureWarned.has(client.id)) {
-            this.backpressureWarned.delete(client.id);
-          }
-
-          if (client.fftCodec === 'adpcm') {
-            if (!adpcmMsg) {
-              const adpcmPayload = encodeFftAdpcm(fftData, FFT_MIN_DB, FFT_MAX_DB);
-              adpcmMsg = packFftAdpcmMessage(adpcmPayload);
-            }
-            client.ws.send(adpcmMsg);
-          } else if (client.fftCodec === 'deflate') {
-            if (!deflateMsg) {
-              // Quantize to Uint8, delta-encode, then deflate compress
-              if (!uint8Data) {
-                uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
-              }
-              // Delta encode: first byte absolute, rest are (current - prev) as Int8
-              const delta = Buffer.allocUnsafe(uint8Data.length);
-              delta[0] = uint8Data[0];
-              for (let i = 1; i < uint8Data.length; i++) {
-                delta[i] = (uint8Data[i] - uint8Data[i - 1]) & 0xFF; // wrapping subtraction as uint8
-              }
-              const deflated = deflateRawSync(delta, { level: 6 });
-              deflateMsg = packFftDeflateMessage(
-                new Uint8Array(deflated.buffer, deflated.byteOffset, deflated.byteLength),
-                FFT_MIN_DB, FFT_MAX_DB, uint8Data.length,
-              );
-            }
-            client.ws.send(deflateMsg);
-          } else if (client.fftCodec === 'deflate-floor') {
-            if (!deflateFloorMsg) {
-              // Adaptive noise-floor delta+deflate.
-              // 1. Find the minimum bin dB in this frame (proxy for noise floor).
-              // 2. Advance a per-dongle EMA with alpha=0.05 (~20-frame time constant).
-              // 3. Clamp all bins below the smoothed floor to the floor value before
-              //    quantisation → delta → deflate.  The flat clamped region becomes a
-              //    long run of 0x00 deltas that deflate trivially compresses away.
-              //    Bins at or above the floor are untouched — no signal detail is lost.
-              if (!uint8Data) {
-                uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
-              }
-              // Build a 256-bucket histogram of the quantised bin values in one pass,
-              // then walk it to find the Nth percentile.  This is O(binCount + 256) and
-              // far more robust than frameMin: isolated quiet bins or spectral troughs
-              // cannot drag the estimate below the true noise level.
-              const hist = new Uint32Array(256);
-              for (let i = 0; i < uint8Data.length; i++) hist[uint8Data[i]]++;
-              const target = Math.ceil(uint8Data.length * WebSocketManager.NOISE_FLOOR_PERCENTILE / 100);
-              let cumulative = 0;
-              let percentileIdx = 0;
-              for (let b = 0; b < 256; b++) {
-                cumulative += hist[b];
-                if (cumulative >= target) { percentileIdx = b; break; }
-              }
-              // Advance EMA with the percentile Uint8 index (no dB conversion needed —
-              // we stay in Uint8 space for the EMA and the clamp).
-              const prevEmaIdx = this.fftNoiseFloorEma.get(dongleId) ?? percentileIdx;
-              const emaIdx = prevEmaIdx + WebSocketManager.NOISE_FLOOR_EMA_ALPHA * (percentileIdx - prevEmaIdx);
-              this.fftNoiseFloorEma.set(dongleId, emaIdx);
-              const floorIdx = Math.max(0, Math.min(255, Math.round(emaIdx)));
-              const clamped = new Uint8Array(uint8Data.length);
-              for (let i = 0; i < uint8Data.length; i++) {
-                clamped[i] = uint8Data[i] < floorIdx ? floorIdx : uint8Data[i];
-              }
-              const deltaFloor = Buffer.allocUnsafe(clamped.length);
-              deltaFloor[0] = clamped[0];
-              for (let i = 1; i < clamped.length; i++) {
-                deltaFloor[i] = (clamped[i] - clamped[i - 1]) & 0xFF;
-              }
-              const deflatedFloor = deflateRawSync(deltaFloor, { level: 6 });
-              deflateFloorMsg = packFftDeflateMessage(
-                new Uint8Array(deflatedFloor.buffer, deflatedFloor.byteOffset, deflatedFloor.byteLength),
-                FFT_MIN_DB, FFT_MAX_DB, uint8Data.length,
-              );
-            }
-            client.ws.send(deflateFloorMsg);
           } else {
-            if (!uint8Msg) {
-              if (!uint8Data) {
-                uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
-              }
-              uint8Msg = packCompressedFftMessage(uint8Data, FFT_MIN_DB, FFT_MAX_DB);
+            if (this.backpressureWarned.has(client.id)) {
+              this.backpressureWarned.delete(client.id);
             }
-            client.ws.send(uint8Msg);
+
+            if (client.fftCodec === 'adpcm') {
+              if (!adpcmMsg) {
+                const adpcmPayload = encodeFftAdpcm(fftData, FFT_MIN_DB, FFT_MAX_DB);
+                adpcmMsg = packFftAdpcmMessage(adpcmPayload);
+              }
+              client.ws.send(adpcmMsg);
+            } else if (client.fftCodec === 'deflate') {
+              if (!deflateMsg) {
+                if (!uint8Data) uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+                // Delta encode into pre-allocated scratch buffer
+                const n = uint8Data.length;
+                scratchDelta[0] = uint8Data[0];
+                for (let i = 1; i < n; i++) {
+                  scratchDelta[i] = (uint8Data[i] - uint8Data[i - 1]) & 0xFF;
+                }
+                const deflated = deflateRawSync(scratchDelta.subarray(0, n), { level: 6 });
+                deflateMsg = packFftDeflateMessage(
+                  new Uint8Array(deflated.buffer, deflated.byteOffset, deflated.byteLength),
+                  FFT_MIN_DB, FFT_MAX_DB, n,
+                );
+              }
+              client.ws.send(deflateMsg);
+            } else if (client.fftCodec === 'deflate-floor') {
+              if (!deflateFloorMsg) {
+                if (!uint8Data) uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+                const n = uint8Data.length;
+                // Histogram using pre-allocated scratch — zero it first
+                scratchHist.fill(0);
+                for (let i = 0; i < n; i++) scratchHist[uint8Data[i]]++;
+                const target = Math.ceil(n * WebSocketManager.NOISE_FLOOR_PERCENTILE / 100);
+                let cumulative = 0;
+                let percentileIdx = 0;
+                for (let b = 0; b < 256; b++) {
+                  cumulative += scratchHist[b];
+                  if (cumulative >= target) { percentileIdx = b; break; }
+                }
+                const prevEmaIdx = this.fftNoiseFloorEma.get(dongleId) ?? percentileIdx;
+                const emaIdx = prevEmaIdx + WebSocketManager.NOISE_FLOOR_EMA_ALPHA * (percentileIdx - prevEmaIdx);
+                this.fftNoiseFloorEma.set(dongleId, emaIdx);
+                const floorIdx = Math.max(0, Math.min(255, Math.round(emaIdx)));
+                // Clamp into pre-allocated scratch, then delta-encode in place
+                for (let i = 0; i < n; i++) {
+                  scratchClamped[i] = uint8Data[i] < floorIdx ? floorIdx : uint8Data[i];
+                }
+                scratchDelta[0] = scratchClamped[0];
+                for (let i = 1; i < n; i++) {
+                  scratchDelta[i] = (scratchClamped[i] - scratchClamped[i - 1]) & 0xFF;
+                }
+                const deflatedFloor = deflateRawSync(scratchDelta.subarray(0, n), { level: 6 });
+                deflateFloorMsg = packFftDeflateMessage(
+                  new Uint8Array(deflatedFloor.buffer, deflatedFloor.byteOffset, deflatedFloor.byteLength),
+                  FFT_MIN_DB, FFT_MAX_DB, n,
+                );
+              }
+              client.ws.send(deflateFloorMsg);
+            } else {
+              if (!uint8Msg) {
+                if (!uint8Data) uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
+                uint8Msg = packCompressedFftMessage(uint8Data, FFT_MIN_DB, FFT_MAX_DB);
+              }
+              client.ws.send(uint8Msg);
+            }
           }
         } catch {
           // Client may have disconnected
         }
-      }
-    }
 
-    // Send per-client IQ sub-band (frequency-shifted + decimated).
-    // IQ data is critical for audio continuity, so we use a higher
-    // backpressure threshold (1 MB) before dropping.
-    // Each client gets their preferred codec:
-    //   'none'  → MSG_IQ (raw Int16, no compression)
-    //   'adpcm' → MSG_IQ_ADPCM (4:1 compression, streaming state per client)
-    //   'opus'  → MSG_AUDIO_OPUS (server-side demod + Opus encode, ~20-60x compression)
-    const IQ_BACKPRESSURE = 1024 * 1024;
-    for (const client of this.clients.values()) {
-      if (client.session.dongleId === dongleId && client.iqExtractor && client.session.audioEnabled) {
-        try {
-          const raw = client.ws.raw as any;
-          if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > IQ_BACKPRESSURE) {
-            // Skip IQ for severely congested clients
-            continue;
-          }
-          const subBand = client.iqExtractor.process(data);
-          if (subBand.length > 0) {
-            this.iqOutSamples += subBand.length / 2; // count IQ pairs
-
-            if ((client.iqCodec === 'opus' || client.iqCodec === 'opus-hq') && client.opusPipeline) {
-              // Opus: server-side demod + Opus encode (has its own frame accumulation)
-              const packets = client.opusPipeline.process(subBand);
-              for (const { packet, samples, stereo, rdsData } of packets) {
-                client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
-                // Send RDS data when available (WFM mode only, first packet per IQ chunk)
-                if (rdsData !== null) {
-                  client.ws.send(packRdsMessage(rdsData));
+        // ---- Per-client IQ (merged into same loop) ----
+        if (client.iqExtractor && client.session.audioEnabled) {
+          try {
+            const raw = client.ws.raw as any;
+            if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > IQ_BACKPRESSURE) continue;
+            const subBand = client.iqExtractor.process(data);
+            if (subBand.length > 0) {
+              this.iqOutSamples += subBand.length / 2;
+              if ((client.iqCodec === 'opus' || client.iqCodec === 'opus-hq') && client.opusPipeline) {
+                const packets = client.opusPipeline.process(subBand);
+                for (const { packet, samples, stereo, rdsData } of packets) {
+                  client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
+                  if (rdsData !== null) client.ws.send(packRdsMessage(rdsData));
                 }
+              } else {
+                this.accumulateAndSendIq(client, subBand);
               }
-            } else {
-              // IQ path (none/adpcm): accumulate into fixed-size chunks
-              // before sending to reduce client-side jitter
-              this.accumulateAndSendIq(client, subBand);
             }
+          } catch {
+            // Client may have disconnected
           }
-        } catch {
-          // Client may have disconnected
         }
       }
     }
@@ -413,7 +385,11 @@ export class WebSocketManager {
     // Log throughput every 5 seconds
     const now = Date.now();
     if (now - this.lastLogTime > 5000) {
-      const subscriberCount = [...this.clients.values()].filter(c => c.session.dongleId === dongleId).length;
+      // Count subscribers without creating a temporary array
+      let subscriberCount = 0;
+      for (const c of this.clients.values()) {
+        if (c.session.dongleId === dongleId) subscriberCount++;
+      }
       const elapsed = (now - this.lastLogTime) / 1000;
       const iqSamplesPerSec = Math.round(this.iqBytes / 2 / elapsed); // 2 bytes per IQ pair (uint8 I + uint8 Q)
       const iqOutSPS = Math.round(this.iqOutSamples / elapsed);

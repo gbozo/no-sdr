@@ -20,11 +20,12 @@ export class FftHistoryBuffer {
   private head = 0;
   private _count = 0;
 
-  /** Storage bin count (may differ from live fftSize) */
   readonly binCount: number;
-
-  /** Live FFT size currently being pushed — used for downsampling ratio */
   private liveBinCount: number;
+
+  // Precomputed downsample index ranges — avoids float multiply/floor/ceil per bin per frame.
+  // Each entry is [lo, hi] source bin indices for one history bin.
+  private srcRanges: Int32Array = new Int32Array(0); // pairs: [lo0, hi0, lo1, hi1, ...]
 
   constructor(
     readonly capacity: number,
@@ -34,15 +35,26 @@ export class FftHistoryBuffer {
     this.binCount = historyBinCount;
     this.liveBinCount = liveBinCount;
     this.buffer = Array.from({ length: capacity }, () => new Uint8Array(historyBinCount));
+    this.computeSrcRanges();
   }
 
   get count(): number { return this._count; }
 
-  /**
-   * Push a live Float32 FFT frame (dB values, liveBinCount bins).
-   * Downsamples to historyBinCount using max-hold if needed, then
-   * quantizes to Uint8 and stores.
-   */
+  private computeSrcRanges(): void {
+    if (this.liveBinCount === this.binCount) {
+      this.srcRanges = new Int32Array(0); // 1:1 — not used
+      return;
+    }
+    const ranges = new Int32Array(this.binCount * 2);
+    const ratio = this.liveBinCount / this.binCount;
+    for (let h = 0; h < this.binCount; h++) {
+      const srcStart = h * ratio;
+      ranges[h * 2]     = Math.floor(srcStart);
+      ranges[h * 2 + 1] = Math.min(Math.ceil(srcStart + ratio), this.liveBinCount);
+    }
+    this.srcRanges = ranges;
+  }
+
   push(fftData: Float32Array): void {
     if (fftData.length !== this.liveBinCount) return;
 
@@ -50,20 +62,16 @@ export class FftHistoryBuffer {
     const range = FFT_HISTORY_MAX_DB - FFT_HISTORY_MIN_DB;
 
     if (this.liveBinCount === this.binCount) {
-      // 1:1 — no resampling needed
       for (let i = 0; i < this.binCount; i++) {
         const n = (fftData[i] - FFT_HISTORY_MIN_DB) / range;
         slot[i] = n < 0 ? 0 : n > 1 ? 255 : Math.round(n * 255);
       }
     } else {
-      // Downsample: each history bin covers (liveBinCount / binCount) live bins.
-      // Use max-hold so signal peaks are never lost.
-      const ratio = this.liveBinCount / this.binCount;
+      // Downsample using precomputed index ranges (max-hold)
+      const ranges = this.srcRanges;
       for (let h = 0; h < this.binCount; h++) {
-        const srcStart = h * ratio;
-        const srcEnd   = srcStart + ratio;
-        const lo = Math.floor(srcStart);
-        const hi = Math.min(Math.ceil(srcEnd), this.liveBinCount);
+        const lo = ranges[h * 2];
+        const hi = ranges[h * 2 + 1];
         let maxDb = fftData[lo];
         for (let s = lo + 1; s < hi; s++) {
           if (fftData[s] > maxDb) maxDb = fftData[s];
@@ -77,10 +85,6 @@ export class FftHistoryBuffer {
     if (this._count < this.capacity) this._count++;
   }
 
-  /**
-   * Return all stored frames in chronological order (oldest first).
-   * Returns views into the internal buffer — do not mutate.
-   */
   getFrames(): Uint8Array[] {
     if (this._count === 0) return [];
     const out: Uint8Array[] = new Array(this._count);
@@ -96,12 +100,9 @@ export class FftHistoryBuffer {
     this._count = 0;
   }
 
-  /**
-   * Update live bin count on profile change (different fftSize).
-   * Resets the buffer since stored frames are no longer valid.
-   */
   setLiveBinCount(newLiveBinCount: number): void {
     this.liveBinCount = newLiveBinCount;
+    this.computeSrcRanges();
     this.head = 0;
     this._count = 0;
   }
