@@ -140,6 +140,11 @@ function createStore() {
   const [wsBytes, setWsBytes] = createSignal(0);         // WebSocket bytes/sec (total inbound)
   const [wsBytesHistory, setWsBytesHistory] = createSignal<number[]>([]); // last 30 seconds
 
+  // ---- Server Stats (broadcast every 2s) ----
+  const [serverCpu, setServerCpu] = createSignal(0);     // server process CPU %
+  const [serverMem, setServerMem] = createSignal(0);     // server process RSS MB
+  const [serverClients, setServerClients] = createSignal(0); // total connected clients
+
   // ---- Codec Performance Stats (bytes/sec) ----
   const [fftWireBytes, setFftWireBytes] = createSignal(0);   // FFT wire bytes/sec (compressed)
   const [fftRawBytes, setFftRawBytes] = createSignal(0);     // FFT equivalent raw bytes/sec
@@ -233,6 +238,11 @@ function createStore() {
     iqRate, setIqRate,
     wsBytes, setWsBytes,
     wsBytesHistory, setWsBytesHistory,
+
+    // Server Stats
+    serverCpu, setServerCpu,
+    serverMem, setServerMem,
+    serverClients, setServerClients,
 
     // Codec Performance Stats
     fftWireBytes, setFftWireBytes,

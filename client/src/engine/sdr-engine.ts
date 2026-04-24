@@ -942,6 +942,12 @@ export class SdrEngine {
       case 'error':
         console.error(`[SDR] Server error: ${meta.message} (${meta.code ?? ''})`);
         break;
+
+      case 'server_stats':
+        store.setServerCpu(meta.cpuPercent);
+        store.setServerMem(meta.memMb);
+        store.setServerClients(meta.clients);
+        break;
     }
   }
 

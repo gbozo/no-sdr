@@ -199,6 +199,9 @@ const App: Component = () => {
           {/* Bandwidth Meter with sparkline */}
           <BandwidthMeter />
 
+          {/* Server CPU / memory */}
+          <ServerStatsMeter />
+
           <span class="border-l border-border pl-4">
             Dongle: <span class="text-text-secondary">{store.activeDongleId() || '—'}</span>
           </span>
@@ -274,6 +277,60 @@ const BandwidthMeter: Component = () => {
         </span>
       </div>
     </div>
+  );
+};
+
+// Server process CPU + memory display
+const ServerStatsMeter: Component = () => {
+  const cpu = () => store.serverCpu();
+  const mem = () => store.serverMem();
+
+  // Colour the CPU reading by load level
+  const cpuColor = () => {
+    const c = cpu();
+    if (c >= 80) return 'text-red-400';
+    if (c >= 50) return 'text-amber-400';
+    return 'text-text-secondary';
+  };
+
+  return (
+    <Show when={store.connected()}>
+      <div class="flex items-center gap-2 border-l border-border pl-4">
+        {/* CPU bar */}
+        <div class="flex flex-col gap-[2px]">
+          <div class="w-12 h-[3px] rounded-full bg-border overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${cpu()}%`,
+                background: cpu() >= 80 ? 'var(--color-red-400, #f87171)'
+                          : cpu() >= 50 ? 'var(--color-amber-400, #fbbf24)'
+                          : 'var(--sdr-accent)',
+              }}
+            />
+          </div>
+          <div class="w-12 h-[3px] rounded-full bg-border overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all duration-500 opacity-60"
+              style={{
+                width: `${Math.min(100, (mem() / 512) * 100)}%`,
+                background: 'var(--sdr-accent)',
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Text */}
+        <div class="flex flex-col leading-[1.1]">
+          <span class={`${cpuColor()} normal-case font-mono`}>
+            {cpu()}% CPU
+          </span>
+          <span class="text-text-muted text-[7px] normal-case">
+            {mem()} MB RSS
+          </span>
+        </div>
+      </div>
+    </Show>
   );
 };
 

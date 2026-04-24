@@ -112,11 +112,15 @@ export class WebSocketManager {
   /** Number of FFT frames to keep per dongle — enough to fill a 1080p waterfall. */
   private static readonly HISTORY_CAPACITY = 1024;
 
-  // Pre-allocated scratch buffers for FFT encoding — avoids per-frame heap allocation.
-  // Sized to max fftSize (65536). Safe to share: Node.js event loop is single-threaded.
-  private readonly fftScratchDelta  = Buffer.allocUnsafe(65536);
+  // Pre-allocated scratch buffers for FFT encoding
+  private readonly fftScratchDelta   = Buffer.allocUnsafe(65536);
   private readonly fftScratchClamped = new Uint8Array(65536);
-  private readonly fftScratchHist   = new Uint32Array(256);
+  private readonly fftScratchHist    = new Uint32Array(256);
+
+  // CPU usage tracking — process.cpuUsage() gives cumulative µs
+  private lastCpuUsage = process.cpuUsage();
+  private lastCpuTime  = Date.now();
+  private statsTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private dongleManager: DongleManager,
@@ -126,6 +130,34 @@ export class WebSocketManager {
   ) {
     this.setupDongleListeners();
     this.setupDecoderListeners();
+    this.startStatsTimer();
+  }
+
+  private startStatsTimer(): void {
+    // Broadcast server stats (CPU %, memory, client count) every 2 seconds.
+    this.statsTimer = setInterval(() => {
+      const now = Date.now();
+      const elapsed = now - this.lastCpuTime; // ms
+      const cpu = process.cpuUsage(this.lastCpuUsage); // µs since last sample
+      // CPU% = (user + system µs) / (elapsed ms × 1000 µs/ms) × 100
+      const cpuPercent = Math.min(100, Math.round((cpu.user + cpu.system) / (elapsed * 10)));
+      const memMb = Math.round(process.memoryUsage().rss / 1_048_576);
+      this.lastCpuUsage = process.cpuUsage();
+      this.lastCpuTime  = now;
+
+      const msg = packMetaMessage({
+        type: 'server_stats',
+        cpuPercent,
+        memMb,
+        clients: this.clients.size,
+      });
+
+      // Broadcast to all connected clients
+      for (const client of this.clients.values()) {
+        try { client.ws.send(msg); } catch { /* disconnected */ }
+      }
+    }, 2000);
+    this.statsTimer.unref();
   }
 
   private setupDongleListeners(): void {
@@ -299,7 +331,6 @@ export class WebSocketManager {
             } else if (client.fftCodec === 'deflate') {
               if (!deflateMsg) {
                 if (!uint8Data) uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
-                // Delta encode into pre-allocated scratch buffer
                 const n = uint8Data.length;
                 scratchDelta[0] = uint8Data[0];
                 for (let i = 1; i < n; i++) {
@@ -316,7 +347,6 @@ export class WebSocketManager {
               if (!deflateFloorMsg) {
                 if (!uint8Data) uint8Data = compressFft(fftData, FFT_MIN_DB, FFT_MAX_DB);
                 const n = uint8Data.length;
-                // Histogram using pre-allocated scratch — zero it first
                 scratchHist.fill(0);
                 for (let i = 0; i < n; i++) scratchHist[uint8Data[i]]++;
                 const target = Math.ceil(n * WebSocketManager.NOISE_FLOOR_PERCENTILE / 100);
@@ -330,7 +360,6 @@ export class WebSocketManager {
                 const emaIdx = prevEmaIdx + WebSocketManager.NOISE_FLOOR_EMA_ALPHA * (percentileIdx - prevEmaIdx);
                 this.fftNoiseFloorEma.set(dongleId, emaIdx);
                 const floorIdx = Math.max(0, Math.min(255, Math.round(emaIdx)));
-                // Clamp into pre-allocated scratch, then delta-encode in place
                 for (let i = 0; i < n; i++) {
                   scratchClamped[i] = uint8Data[i] < floorIdx ? floorIdx : uint8Data[i];
                 }
@@ -356,29 +385,33 @@ export class WebSocketManager {
         } catch {
           // Client may have disconnected
         }
+      }
+    }
 
-        // ---- Per-client IQ (merged into same loop) ----
-        if (client.iqExtractor && client.session.audioEnabled) {
-          try {
-            const raw = client.ws.raw as any;
-            if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > IQ_BACKPRESSURE) continue;
-            const subBand = client.iqExtractor.process(data);
-            if (subBand.length > 0) {
-              this.iqOutSamples += subBand.length / 2;
-              if ((client.iqCodec === 'opus' || client.iqCodec === 'opus-hq') && client.opusPipeline) {
-                const packets = client.opusPipeline.process(subBand);
-                for (const { packet, samples, stereo, rdsData } of packets) {
-                  client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
-                  if (rdsData !== null) client.ws.send(packRdsMessage(rdsData));
-                }
-              } else {
-                this.accumulateAndSendIq(client, subBand);
-              }
+    // Per-client IQ sub-band — runs once per raw IQ chunk, not once per FFT frame.
+    // IQ must be processed exactly once per data buffer regardless of how many
+    // FFT frames were emitted from that buffer.
+    for (const client of this.clients.values()) {
+      if (client.session.dongleId !== dongleId) continue;
+      if (!client.iqExtractor || !client.session.audioEnabled) continue;
+      try {
+        const raw = client.ws.raw as any;
+        if (raw?.bufferedAmount !== undefined && raw.bufferedAmount > IQ_BACKPRESSURE) continue;
+        const subBand = client.iqExtractor.process(data);
+        if (subBand.length > 0) {
+          this.iqOutSamples += subBand.length / 2;
+          if ((client.iqCodec === 'opus' || client.iqCodec === 'opus-hq') && client.opusPipeline) {
+            const packets = client.opusPipeline.process(subBand);
+            for (const { packet, samples, stereo, rdsData } of packets) {
+              client.ws.send(packAudioOpusMessage(packet, samples, stereo ? 2 : 1));
+              if (rdsData !== null) client.ws.send(packRdsMessage(rdsData));
             }
-          } catch {
-            // Client may have disconnected
+          } else {
+            this.accumulateAndSendIq(client, subBand);
           }
         }
+      } catch {
+        // Client may have disconnected
       }
     }
 
@@ -948,5 +981,12 @@ export class WebSocketManager {
       dongles: this.dongleManager.getDongles(),
       decoders: this.decoderManager.getRunningDecoders(),
     };
+  }
+
+  destroy(): void {
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = null;
+    }
   }
 }

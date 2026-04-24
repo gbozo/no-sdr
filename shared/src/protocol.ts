@@ -106,7 +106,8 @@ export type ServerMeta =
   | { type: 'dongle_status'; dongleId: string; running: boolean; clientCount: number }
   | { type: 'error'; message: string; code?: string }
   | { type: 'admin_auth_ok' }
-  | { type: 'decoder_data'; decoderType: string; data: unknown };
+  | { type: 'decoder_data'; decoderType: string; data: unknown }
+  | { type: 'server_stats'; cpuPercent: number; memMb: number; clients: number };
 
 // ---- Binary Message Helpers ----
 
