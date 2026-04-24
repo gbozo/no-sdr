@@ -29,7 +29,7 @@ const config = loadConfig(configPath);
 // ---- Initialize Core Systems ----
 const dongleManager = new DongleManager(config);
 const decoderManager = new DecoderManager();
-const wsManager = new WebSocketManager(dongleManager, decoderManager, config.server.adminPassword);
+const wsManager = new WebSocketManager(dongleManager, decoderManager, config.server.adminPassword, config);
 
 // ---- Create Hono App ----
 const app = new Hono();

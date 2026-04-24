@@ -43,7 +43,11 @@ const WaterfallDisplay: Component = () => {
     engine.setSpectrumAveraging(store.spectrumAveraging());
     const observer = new ResizeObserver(() => engine.handleResize());
     observer.observe(containerRef);
-    requestAnimationFrame(() => engine.handleResize());
+    requestAnimationFrame(() => {
+      engine.handleResize();
+      // Now the worker has real canvas dimensions — safe to send buffered history
+      engine.flushPendingHistory();
+    });
 
     // Poll buffer count so the scrub range max stays current
     const bufferPoll = setInterval(() => setBufferCount(engine.fftBufferCount), 500);

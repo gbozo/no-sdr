@@ -25,7 +25,12 @@ import {
   packIqAdpcmMessage,
   packAudioOpusMessage,
   packFftHistoryMessage,
+  packFftHistoryDeflateMessage,
+  packFftHistoryAdpcmMessage,
   packRdsMessage,
+  FFT_HISTORY_CODEC_NONE,
+  FFT_HISTORY_CODEC_DEFLATE,
+  FFT_HISTORY_CODEC_ADPCM,
   MSG_FFT,
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
@@ -111,6 +116,7 @@ export class WebSocketManager {
     private dongleManager: DongleManager,
     private decoderManager: DecoderManager,
     private adminPasswordHash: string,
+    private config: import('./config.js').ValidatedConfig,
   ) {
     this.setupDongleListeners();
     this.setupDecoderListeners();
@@ -130,12 +136,15 @@ export class WebSocketManager {
         averaging: 0.3,
         targetFps: profile.fftFps,
       }));
-      // Create or reset history buffer for this dongle
+      // Create or reset history buffer — stored at historyFftSize, live at profile.fftSize
+      const historyBins = this.config.server.fftHistoryFftSize;
       const existing = this.fftHistories.get(dongleId);
       if (existing) {
-        existing.resize(profile.fftSize);
+        existing.setLiveBinCount(profile.fftSize);
       } else {
-        this.fftHistories.set(dongleId, new FftHistoryBuffer(WebSocketManager.HISTORY_CAPACITY, profile.fftSize));
+        this.fftHistories.set(dongleId, new FftHistoryBuffer(
+          WebSocketManager.HISTORY_CAPACITY, historyBins, profile.fftSize,
+        ));
       }
     });
 
@@ -165,12 +174,15 @@ export class WebSocketManager {
           targetFps: profile.fftFps,
         }));
       }
-      // Reset history for the new profile (different fftSize possible)
+      // Reset history for the new profile (live fftSize may have changed)
+      const historyBins = this.config.server.fftHistoryFftSize;
       const history = this.fftHistories.get(dongleId);
       if (history) {
-        history.resize(profile.fftSize);
+        history.setLiveBinCount(profile.fftSize);
       } else {
-        this.fftHistories.set(dongleId, new FftHistoryBuffer(WebSocketManager.HISTORY_CAPACITY, profile.fftSize));
+        this.fftHistories.set(dongleId, new FftHistoryBuffer(
+          WebSocketManager.HISTORY_CAPACITY, historyBins, profile.fftSize,
+        ));
       }
       // Reset adaptive noise floor EMA so the new band's floor is learned fresh
       this.fftNoiseFloorEma.delete(dongleId);
@@ -737,7 +749,7 @@ export class WebSocketManager {
 
   /**
    * Send waterfall history to a client as a single MSG_FFT_HISTORY burst.
-   * Replies immediately with whatever frames are currently in the buffer.
+   * Compression is controlled by server.fftHistoryCompression config.
    * No-ops silently if the client isn't subscribed or there's no history yet.
    */
   private handleRequestHistory(client: ConnectedClient): void {
@@ -748,17 +760,70 @@ export class WebSocketManager {
     if (!history || history.count === 0) return;
 
     const frames = history.getFrames();
+    const frameCount = frames.length;
+    const binCount = history.binCount;
+    const compression = this.config.server.fftHistoryCompression ?? 'deflate';
+
     try {
-      const msg = packFftHistoryMessage(
-        frames,
-        history.binCount,
-        FFT_HISTORY_MIN_DB,
-        FFT_HISTORY_MAX_DB,
-      );
+      let msg: ArrayBuffer;
+
+      if (compression === 'deflate') {
+        // Concatenate all Uint8 frames into one buffer, delta-encode, deflate
+        const total = frameCount * binCount;
+        const flat = new Uint8Array(total);
+        for (let i = 0; i < frameCount; i++) {
+          flat.set(frames[i], i * binCount);
+        }
+        const delta = Buffer.allocUnsafe(total);
+        delta[0] = flat[0];
+        for (let i = 1; i < total; i++) {
+          delta[i] = (flat[i] - flat[i - 1]) & 0xFF;
+        }
+        const deflated = deflateRawSync(delta, { level: 6 });
+        msg = packFftHistoryDeflateMessage(
+          new Uint8Array(deflated.buffer, deflated.byteOffset, deflated.byteLength),
+          frameCount, binCount, FFT_HISTORY_MIN_DB, FFT_HISTORY_MAX_DB,
+        );
+        logger.debug(
+          { clientId: client.id, dongleId, frames: frameCount, rawBytes: total, compressedBytes: deflated.byteLength },
+          'Sent waterfall history (deflate)',
+        );
+
+      } else if (compression === 'adpcm') {
+        // Concatenate all frames into a single Float32 dB array, then ADPCM encode.
+        // History is stored as Uint8 (0-255 quantized), so dequantize first.
+        const total = frameCount * binCount;
+        const float32 = new Float32Array(total);
+        const range = FFT_HISTORY_MAX_DB - FFT_HISTORY_MIN_DB;
+        for (let i = 0; i < frameCount; i++) {
+          const frame = frames[i];
+          const off = i * binCount;
+          for (let b = 0; b < binCount; b++) {
+            float32[off + b] = FFT_HISTORY_MIN_DB + (frame[b] / 255) * range;
+          }
+        }
+        const adpcmPayload = encodeFftAdpcm(float32, FFT_HISTORY_MIN_DB, FFT_HISTORY_MAX_DB);
+        msg = packFftHistoryAdpcmMessage(
+          adpcmPayload,
+          frameCount, binCount, FFT_HISTORY_MIN_DB, FFT_HISTORY_MAX_DB,
+        );
+        logger.debug(
+          { clientId: client.id, dongleId, frames: frameCount, rawBytes: total, compressedBytes: adpcmPayload.byteLength },
+          'Sent waterfall history (adpcm)',
+        );
+
+      } else {
+        // none — raw Uint8 frames
+        msg = packFftHistoryMessage(frames, binCount, FFT_HISTORY_MIN_DB, FFT_HISTORY_MAX_DB);
+        logger.debug(
+          { clientId: client.id, dongleId, frames: frameCount },
+          'Sent waterfall history (none)',
+        );
+      }
+
       client.ws.send(msg);
-      logger.debug({ clientId: client.id, dongleId, frames: frames.length }, 'Sent waterfall history');
-    } catch {
-      // Client may have disconnected
+    } catch (err) {
+      logger.error({ clientId: client.id, error: (err as Error).message }, 'Failed to send waterfall history');
     }
   }
 

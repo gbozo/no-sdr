@@ -255,12 +255,18 @@ export function packAudioOpusMessage(opusPacket: Uint8Array, sampleCount: number
 }
 
 /**
- * Pack a waterfall history burst into a single binary message.
- * frames: Uint8Array[] — each frame is binCount Uint8 quantized dB values (0-255).
- * Frames must be ordered oldest-first.
+ * Codec byte values embedded in MSG_FFT_HISTORY header.
+ */
+export const FFT_HISTORY_CODEC_NONE    = 0; // raw Uint8 quantized frames
+export const FFT_HISTORY_CODEC_DEFLATE = 1; // delta + zlib deflateRaw over all frames
+export const FFT_HISTORY_CODEC_ADPCM   = 2; // IMA-ADPCM over Int16 dB×100 values
+
+/**
+ * Pack a waterfall history burst — raw Uint8 frames (no compression).
  *
- * Wire: [0x0D][Uint16 frameCount LE][Uint16 binCount LE][Int16 minDb LE][Int16 maxDb LE]
- *       [Uint8 frame0bin0 ... frame0binN][Uint8 frame1bin0 ... frameN-1binN]
+ * Wire: [0x0D][Uint16 frameCount LE][Uint32 binCount LE]
+ *       [Int16 minDb LE][Int16 maxDb LE][Uint8 codec=0]
+ *       [Uint8 frame data...]
  */
 export function packFftHistoryMessage(
   frames: Uint8Array[],
@@ -269,18 +275,74 @@ export function packFftHistoryMessage(
   maxDb: number,
 ): ArrayBuffer {
   const frameCount = frames.length;
-  // 1 type + 2 frameCount + 2 binCount + 2 minDb + 2 maxDb = 9 bytes header
-  const buf = new ArrayBuffer(9 + frameCount * binCount);
+  // 1 type + 2 frameCount + 4 binCount + 2 minDb + 2 maxDb + 1 codec = 12 bytes header
+  const buf = new ArrayBuffer(12 + frameCount * binCount);
   const view = new DataView(buf);
   view.setUint8(0, MSG_FFT_HISTORY);
   view.setUint16(1, frameCount, true);
-  view.setUint16(3, binCount, true);
-  view.setInt16(5, Math.round(minDb), true);
-  view.setInt16(7, Math.round(maxDb), true);
-  const payload = new Uint8Array(buf, 9);
+  view.setUint32(3, binCount, true);
+  view.setInt16(7, Math.round(minDb), true);
+  view.setInt16(9, Math.round(maxDb), true);
+  view.setUint8(11, FFT_HISTORY_CODEC_NONE);
+  const payload = new Uint8Array(buf, 12);
   for (let i = 0; i < frameCount; i++) {
     payload.set(frames[i], i * binCount);
   }
+  return buf;
+}
+
+/**
+ * Pack a waterfall history burst compressed with delta+deflateRaw.
+ * The compressed payload is produced server-side and passed in directly.
+ *
+ * Wire: [0x0D][Uint16 frameCount LE][Uint32 binCount LE]
+ *       [Int16 minDb LE][Int16 maxDb LE][Uint8 codec=1]
+ *       [deflated bytes...]
+ */
+export function packFftHistoryDeflateMessage(
+  deflated: Uint8Array,
+  frameCount: number,
+  binCount: number,
+  minDb: number,
+  maxDb: number,
+): ArrayBuffer {
+  // 1 type + 2 frameCount + 4 binCount + 2 minDb + 2 maxDb + 1 codec = 12 bytes
+  const buf = new ArrayBuffer(12 + deflated.byteLength);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_HISTORY);
+  view.setUint16(1, frameCount, true);
+  view.setUint32(3, binCount, true);
+  view.setInt16(7, Math.round(minDb), true);
+  view.setInt16(9, Math.round(maxDb), true);
+  view.setUint8(11, FFT_HISTORY_CODEC_DEFLATE);
+  new Uint8Array(buf, 12).set(deflated);
+  return buf;
+}
+
+/**
+ * Pack a waterfall history burst compressed with IMA-ADPCM.
+ * The ADPCM payload (encoding Int16 dB×100 values) is passed in directly.
+ *
+ * Wire: [0x0D][Uint16 frameCount LE][Uint32 binCount LE]
+ *       [Int16 minDb LE][Int16 maxDb LE][Uint8 codec=2]
+ *       [ADPCM bytes...]
+ */
+export function packFftHistoryAdpcmMessage(
+  adpcmBytes: Uint8Array,
+  frameCount: number,
+  binCount: number,
+  minDb: number,
+  maxDb: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(12 + adpcmBytes.byteLength);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_HISTORY);
+  view.setUint16(1, frameCount, true);
+  view.setUint32(3, binCount, true);
+  view.setInt16(7, Math.round(minDb), true);
+  view.setInt16(9, Math.round(maxDb), true);
+  view.setUint8(11, FFT_HISTORY_CODEC_ADPCM);
+  new Uint8Array(buf, 12).set(adpcmBytes);
   return buf;
 }
 

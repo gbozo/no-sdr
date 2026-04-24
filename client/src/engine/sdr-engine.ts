@@ -23,6 +23,9 @@ import {
   DEMOD_MODES,
   ImaAdpcmDecoder,
   decodeFftAdpcm,
+  FFT_HISTORY_CODEC_NONE,
+  FFT_HISTORY_CODEC_DEFLATE,
+  FFT_HISTORY_CODEC_ADPCM,
   type ServerMeta,
   type ClientCommand,
   type CodecType,
@@ -30,8 +33,9 @@ import {
 } from '@node-sdr/shared';
 import { inflateSync } from 'fflate';
 import { OpusDecoder } from 'opus-decoder';
-import { WaterfallRenderer } from './waterfall.js';
 import { SpectrumRenderer } from './spectrum.js';
+import type { FftDecodeRequest, FftDecodeResult } from './fft-decode.worker.js';
+import type { FftAnalysisFrame, FftAnalysisResult } from './fft-analysis.worker.js';
 import { AudioEngine } from './audio.js';
 import { FftFrameBuffer } from './fft-frame-buffer.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
@@ -42,7 +46,10 @@ import type { Bookmark } from '../store/index.js';
 
 export class SdrEngine {
   private ws: WebSocket | null = null;
-  private waterfall: WaterfallRenderer | null = null;
+  // Waterfall is now rendered by a dedicated Worker via OffscreenCanvas.
+  // The main thread keeps a reference to the canvas element only.
+  private waterfallWorker: Worker | null = null;
+  private waterfallCanvas: HTMLCanvasElement | null = null;
   private spectrum: SpectrumRenderer | null = null;
   private audio: AudioEngine;
   private demodulator: Demodulator;
@@ -50,6 +57,26 @@ export class SdrEngine {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
+
+  // FFT decode worker — offloads inflate/ADPCM/uint8 decode from the WS handler
+  private fftDecodeWorker: Worker;
+  private fftDecodeCallbacks = new Map<number, (result: FftDecodeResult) => void>();
+  private fftDecodeSeq = 0;
+
+  // Pending history: if MSG_FFT_HISTORY arrives before the waterfall worker is
+  // ready (worker is created in attachCanvases which fires after App onMount),
+  // buffer the decoded frames here and flush them once the worker initialises.
+  private pendingHistory: {
+    allFrames: Uint8Array;
+    frameCount: number;
+    binCount: number;
+    serverMinDb: number;
+    serverMaxDb: number;
+  } | null = null;
+
+  // FFT analysis worker — offloads signal level EMA and auto-range math
+  private fftAnalysisWorker: Worker;
+  private fftAnalysisFrameCount = 0;
 
   // Client-side FFT frame buffer — keeps last 1024 decoded Float32 frames.
   // Used for waterfall prefill on zoom/reset and future seek-back feature.
@@ -60,11 +87,13 @@ export class SdrEngine {
   private pendingWaterfallPrefill: number | null = null;
 
   private scheduleWaterfallPrefill(): void {
-    if (this.pendingWaterfallPrefill !== null) return; // already scheduled
+    if (this.pendingWaterfallPrefill !== null) return;
     this.pendingWaterfallPrefill = requestAnimationFrame(() => {
       this.pendingWaterfallPrefill = null;
-      if (this.waterfall && this.fftBuffer.count > 0) {
-        this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
+      if (this.waterfallWorker && this.fftBuffer.count > 0) {
+        // Frames are plain Float32Arrays — safe to transfer
+        const frames = this.fftBuffer.getFrames().map(f => f.slice()); // clone — buffer owns originals
+        this.waterfallWorker.postMessage({ type: 'prefill', frames });
       }
     });
   }
@@ -88,15 +117,10 @@ export class SdrEngine {
   private resamplePhase = 0; // fractional sample position for interpolation
 
 
-  // Auto-range tracking
-  private autoRangeMin = -60;
-  private autoRangeMax = -10;
-
   // Audio diagnostics
   private iqInCount = 0;
   private audioOutCount = 0;
   private lastAudioLog = performance.now();
-  private autoRangeFrameCount = 0;
 
   // Squelch grace period: after tuning/mode change, bypass squelch briefly
   // so the jitter buffer can fill and signal level can stabilize.
@@ -122,6 +146,38 @@ export class SdrEngine {
     this.audio = new AudioEngine();
     this.demodulator = getDemodulator(store.mode());
     this.attachRdsCallback();
+
+    // Spin up FFT decode worker
+    this.fftDecodeWorker = new Worker(
+      new URL('./fft-decode.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    this.fftDecodeWorker.onmessage = (e: MessageEvent<FftDecodeResult>) => {
+      const { id, fftData, wireBytes, rawBytes } = e.data;
+      const cb = this.fftDecodeCallbacks.get(id);
+      if (cb) {
+        this.fftDecodeCallbacks.delete(id);
+        cb({ id, fftData, wireBytes, rawBytes });
+      }
+    };
+
+    // Spin up FFT analysis worker
+    this.fftAnalysisWorker = new Worker(
+      new URL('./fft-analysis.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    this.fftAnalysisWorker.onmessage = (e: MessageEvent<FftAnalysisResult>) => {
+      const { signalLevel, newMin, newMax } = e.data;
+      store.setSignalLevel(signalLevel);
+      if (newMin !== undefined && newMax !== undefined) {
+        if (newMin !== store.waterfallMin() || newMax !== store.waterfallMax()) {
+          store.setWaterfallMin(newMin);
+          store.setWaterfallMax(newMax);
+          this.waterfallWorker?.postMessage({ type: 'set-range', minDb: newMin, maxDb: newMax });
+          this.spectrum?.setRange(newMin, newMax);
+        }
+      }
+    };
   }
 
   /** Attach RDS callback to current demodulator if it supports RDS */
@@ -211,17 +267,60 @@ export class SdrEngine {
   /**
    * Attach canvas elements for rendering
    */
+  /**
+   * Attach canvas elements for rendering.
+   * The waterfall canvas is transferred to the WaterfallWorker via OffscreenCanvas.
+   * The spectrum canvas stays on the main thread (needs synchronous tooltip reads).
+   */
   attachCanvases(waterfallCanvas: HTMLCanvasElement, spectrumCanvas: HTMLCanvasElement): void {
-    this.waterfall = new WaterfallRenderer(
-      waterfallCanvas,
-      store.waterfallTheme(),
-      store.waterfallMin(),
-      store.waterfallMax(),
+    this.waterfallCanvas = waterfallCanvas;
+
+    // Spin up the waterfall worker and transfer canvas control
+    this.waterfallWorker = new Worker(
+      new URL('./waterfall.worker.ts', import.meta.url),
+      { type: 'module' },
     );
+
+    const offscreen = waterfallCanvas.transferControlToOffscreen();
+    const rect = waterfallCanvas.getBoundingClientRect();
+    this.waterfallWorker.postMessage(
+      {
+        type: 'init',
+        canvas: offscreen,
+        width:  Math.round(rect.width)  || waterfallCanvas.clientWidth,
+        height: Math.round(rect.height) || waterfallCanvas.clientHeight,
+        theme:  store.waterfallTheme(),
+        minDb:  store.waterfallMin(),
+        maxDb:  store.waterfallMax(),
+        gamma:  store.waterfallGamma(),
+      },
+      [offscreen],
+    );
+
     this.spectrum = new SpectrumRenderer(
       spectrumCanvas,
       store.waterfallMin(),
       store.waterfallMax(),
+    );
+
+    // Flush any history that arrived before the worker was ready.
+    // Do NOT flush here — the canvas has no dimensions yet at onMount time.
+    // flushPendingHistory() is called by WaterfallDisplay after the first resize rAF.
+  }
+
+  /**
+   * Send buffered waterfall history to the worker.
+   * Must be called after handleResize() has given the worker real canvas dimensions.
+   */
+  flushPendingHistory(): void {
+    if (!this.pendingHistory || !this.waterfallWorker) {
+      return;
+    }
+    const h = this.pendingHistory;
+    this.pendingHistory = null;
+    this.waterfallWorker.postMessage(
+      { type: 'prefill-history', allFrames: h.allFrames, frameCount: h.frameCount, binCount: h.binCount, serverMinDb: h.serverMinDb, serverMaxDb: h.serverMaxDb },
+      [h.allFrames.buffer],
     );
   }
 
@@ -298,105 +397,38 @@ export class SdrEngine {
     this.updateBandwidthStats();
 
     switch (type) {
-      case MSG_FFT: {
-        this.bwFftFrames++;
-        const fftData = new Float32Array(payload);
-        // Track codec stats: MSG_FFT is raw Float32, no compression
-        this.bwFftWireBytes += payload.byteLength;
-        this.bwFftRawBytes += payload.byteLength;
-
-        // Auto-range: adapt waterfall min/max to actual data
-        if (store.waterfallAutoRange()) {
-          this.updateAutoRange(fftData);
-        }
-
-        // Compute signal level at tuned frequency for S-meter
-        this.updateSignalLevel(fftData);
-
-        this.renderFftFrame(fftData);
-        break;
-      }
-
-      case MSG_FFT_COMPRESSED: {
-        this.bwFftFrames++;
-        // Track codec stats: Uint8 compressed FFT (4-byte header + Uint8 bins)
-        this.bwFftWireBytes += payload.byteLength;
-        // Decompress uint8 to float32 dB values.
-        // Header: 4 bytes [Int16 minDb, Int16 maxDb] (little-endian)
-        const headerView = new DataView(payload);
-        const compMinDb = headerView.getInt16(0, true);
-        const compMaxDb = headerView.getInt16(2, true);
-        const compRange = compMaxDb - compMinDb;
-        const compressed = new Uint8Array(payload, 4);
-        const fftData = new Float32Array(compressed.length);
-        for (let i = 0; i < compressed.length; i++) {
-          fftData[i] = compMinDb + (compressed[i] / 255) * compRange;
-        }
-        this.bwFftRawBytes += fftData.length * 4; // equivalent Float32 size
-
-        // Auto-range: adapt waterfall min/max to actual data
-        if (store.waterfallAutoRange()) {
-          this.updateAutoRange(fftData);
-        }
-
-        // Compute signal level at tuned frequency for S-meter
-        this.updateSignalLevel(fftData);
-
-        this.renderFftFrame(fftData);
-        break;
-      }
-
-      case MSG_FFT_ADPCM: {
-        this.bwFftFrames++;
-        // Decode ADPCM-compressed FFT: Int16 (dB×100) with warmup padding → Float32 dB
-        this.bwFftWireBytes += payload.byteLength;
-        const fftData = decodeFftAdpcm(payload);
-        this.bwFftRawBytes += fftData.length * 4; // equivalent Float32 size
-
-        if (store.waterfallAutoRange()) {
-          this.updateAutoRange(fftData);
-        }
-        this.updateSignalLevel(fftData);
-
-        this.renderFftFrame(fftData);
-        break;
-      }
-
+      case MSG_FFT:
+      case MSG_FFT_COMPRESSED:
+      case MSG_FFT_ADPCM:
       case MSG_FFT_DEFLATE: {
         this.bwFftFrames++;
         this.bwFftWireBytes += payload.byteLength;
-        try {
-          // Header: [Int16 minDb LE] [Int16 maxDb LE] [Uint32 binCount LE] [deflate payload]
-          const headerView = new DataView(payload);
-          const deflMinDb = headerView.getInt16(0, true);
-          const deflMaxDb = headerView.getInt16(2, true);
-          const binCount = headerView.getUint32(4, true);
-          const deflPayload = new Uint8Array(payload, 8);
-          // Inflate the raw deflate payload
-          const delta = inflateSync(deflPayload);
-          // Undo delta encoding → Uint8 dB values
-          const uint8Bins = new Uint8Array(binCount);
-          uint8Bins[0] = delta[0];
-          for (let i = 1; i < binCount; i++) {
-            uint8Bins[i] = (uint8Bins[i - 1] + delta[i]) & 0xFF;
-          }
-          // Convert Uint8 (0-255) → Float32 dB using header min/max
-          const deflRange = deflMaxDb - deflMinDb;
-          const deflFftData = new Float32Array(binCount);
-          for (let i = 0; i < binCount; i++) {
-            deflFftData[i] = deflMinDb + (uint8Bins[i] / 255) * deflRange;
-          }
-          this.bwFftRawBytes += deflFftData.length * 4;
 
-          if (store.waterfallAutoRange()) {
-            this.updateAutoRange(deflFftData);
-          }
-          this.updateSignalLevel(deflFftData);
-
-          this.renderFftFrame(deflFftData);
-        } catch (e) {
-          console.error('[FFT_DEFLATE] decode error:', e);
-        }
+        // Dispatch raw payload to the FFT decode worker (zero-copy via transfer).
+        // The worker posts back a decoded Float32Array which drives renderFftFrame.
+        const id = this.fftDecodeSeq++;
+        const req: FftDecodeRequest = { id, type: type as any, payload };
+        this.fftDecodeCallbacks.set(id, ({ fftData, rawBytes }) => {
+          if (fftData.length === 0) return;
+          this.bwFftRawBytes += rawBytes;
+          // Send to analysis worker (also zero-copy via transfer — clone for spectrum)
+          const fftForAnalysis = fftData.slice();
+          this.fftAnalysisFrameCount++;
+          const analysisMsg: FftAnalysisFrame = {
+            type: 'frame',
+            fftData: fftForAnalysis,
+            tuneOffset:  store.tuneOffset(),
+            bandwidth:   store.bandwidth(),
+            sampleRate:  store.sampleRate(),
+            autoRange:   store.waterfallAutoRange(),
+            frameCount:  this.fftAnalysisFrameCount,
+          };
+          this.fftAnalysisWorker.postMessage(analysisMsg, [fftForAnalysis.buffer]);
+          // Drive spectrum + waterfall worker with the original data
+          this.renderFftFrame(fftData);
+        });
+        // Transfer the payload buffer to the worker — no copy
+        this.fftDecodeWorker.postMessage(req, [payload]);
         break;
       }
 
@@ -477,34 +509,96 @@ export class SdrEngine {
       }
 
       case MSG_FFT_HISTORY: {
-        // Waterfall prefill burst from server history buffer.
-        // Wire: [Uint16 frameCount][Uint16 binCount][Int16 minDb][Int16 maxDb][Uint8 frames...]
+        // Wire (payload, after type byte stripped):
+        //   [Uint16 frameCount LE][Uint32 binCount LE][Int16 minDb LE][Int16 maxDb LE]
+        //   [Uint8 codec][compressed/raw frame data...]
         try {
           const v = new DataView(payload);
           const frameCount = v.getUint16(0, true);
-          const binCount   = v.getUint16(2, true);
-          const minDb      = v.getInt16(4, true);
-          const maxDb      = v.getInt16(6, true);
+          const binCount   = v.getUint32(2, true);
+          const minDb      = v.getInt16(6, true);
+          const maxDb      = v.getInt16(8, true);
+          const codec      = v.getUint8(10);           // 0=none, 1=deflate, 2=adpcm
+
           if (frameCount > 0 && binCount > 0) {
             const serverRange = maxDb - minDb;
-            // Slice Uint8 views and dequantize into Float32 for the client buffer
-            const frames: Uint8Array[] = new Array(frameCount);
-            for (let i = 0; i < frameCount; i++) {
-              frames[i] = new Uint8Array(payload, 8 + i * binCount, binCount);
-            }
-            // Prefill waterfall display
-            if (this.waterfall) {
-              this.waterfall.prefillHistory(frames, binCount, minDb, maxDb);
-            }
-            // Populate client FFT buffer with dequantized Float32 frames
-            // so zoom/reset can immediately use local data without a server round-trip
-            this.fftBuffer.reset(); // replace any stale frames from before connect
-            for (const u8frame of frames) {
-              const f32 = new Float32Array(binCount);
-              for (let b = 0; b < binCount; b++) {
-                f32[b] = minDb + (u8frame[b] / 255) * serverRange;
+            const totalSamples = frameCount * binCount;
+
+            // Decode compressed payload → flat Uint8 array (frameCount × binCount)
+            let allFrames: Uint8Array;
+
+            if (codec === FFT_HISTORY_CODEC_DEFLATE) {
+              // Delta+deflate: inflate then undo delta
+              const deflPayload = new Uint8Array(payload, 11);
+              const delta = inflateSync(deflPayload);
+              allFrames = new Uint8Array(totalSamples);
+              allFrames[0] = delta[0];
+              for (let i = 1; i < totalSamples; i++) {
+                allFrames[i] = (allFrames[i - 1] + delta[i]) & 0xFF;
               }
-              this.fftBuffer.push(f32);
+
+            } else if (codec === FFT_HISTORY_CODEC_ADPCM) {
+              // ADPCM → Float32 dB → re-quantize to Uint8 for waterfall worker
+              const adpcmPayload = payload.slice(11); // copy — decodeFftAdpcm needs ArrayBuffer
+              const float32 = decodeFftAdpcm(adpcmPayload);
+              allFrames = new Uint8Array(totalSamples);
+              for (let i = 0; i < totalSamples; i++) {
+                const n = (float32[i] - minDb) / serverRange;
+                allFrames[i] = n < 0 ? 0 : n > 1 ? 255 : Math.round(n * 255);
+              }
+
+            } else {
+              // none — raw Uint8 frames starting at offset 11
+              allFrames = new Uint8Array(payload, 11, totalSamples).slice();
+            }
+
+
+            // Send decoded flat buffer to waterfall worker
+            if (this.waterfallWorker) {
+              const transfer = allFrames.slice(); // ensure own buffer for transfer
+              this.waterfallWorker.postMessage(
+                { type: 'prefill-history', allFrames: transfer, frameCount, binCount, serverMinDb: minDb, serverMaxDb: maxDb },
+                [transfer.buffer],
+              );
+            } else {
+              this.pendingHistory = {
+                allFrames: allFrames.slice(),
+                frameCount,
+                binCount,
+                serverMinDb: minDb,
+                serverMaxDb: maxDb,
+              };
+            }
+
+            // Populate client FFT buffer (zoom/seek uses this).
+            // Upsample from history binCount → live fftSize using linear interpolation
+            // so seek-back renders at full live resolution.
+            const liveBinCount = store.fftSize();
+            this.fftBuffer.reset();
+            for (let i = 0; i < frameCount; i++) {
+              const off = i * binCount;
+              if (liveBinCount === binCount) {
+                // 1:1 — no interpolation needed
+                const f32 = new Float32Array(binCount);
+                for (let b = 0; b < binCount; b++) {
+                  f32[b] = minDb + (allFrames[off + b] / 255) * serverRange;
+                }
+                this.fftBuffer.push(f32);
+              } else {
+                // Upsample via linear interpolation
+                const f32 = new Float32Array(liveBinCount);
+                const scale = (binCount - 1) / (liveBinCount - 1);
+                for (let b = 0; b < liveBinCount; b++) {
+                  const src = b * scale;
+                  const lo  = Math.floor(src);
+                  const hi  = Math.min(lo + 1, binCount - 1);
+                  const t   = src - lo;
+                  const dbLo = minDb + (allFrames[off + lo] / 255) * serverRange;
+                  const dbHi = minDb + (allFrames[off + hi] / 255) * serverRange;
+                  f32[b] = dbLo + t * (dbHi - dbLo);
+                }
+                this.fftBuffer.push(f32);
+              }
             }
           }
         } catch (e) {
@@ -547,6 +641,10 @@ export class SdrEngine {
         }
         break;
       }
+
+      default: {
+        console.warn(`[SDR] unhandled binary message type: 0x${type.toString(16).padStart(2, '0')}, payload ${payload.byteLength} bytes`);
+      }
     }
   }
 
@@ -556,10 +654,18 @@ export class SdrEngine {
    */
   private renderFftFrame(fftData: Float32Array): void {
     this.fftBuffer.push(fftData);
-    // When seeking, skip waterfall live update — frozen view is managed by seekTo()
-    if (this.seekOffset === 0) {
-      this.waterfall?.drawRow(fftData);
+
+    // Waterfall: post frame to worker (zero-copy transfer).
+    // Worker ignores the frame when seekOffset > 0.
+    if (this.waterfallWorker) {
+      const frame = fftData.slice(); // clone — fftBuffer owns the original
+      this.waterfallWorker.postMessage(
+        { type: 'frame', fftData: frame },
+        [frame.buffer],
+      );
     }
+
+    // Spectrum stays on main thread — needs synchronous lastPixelDb for tooltip
     this.spectrum?.draw(fftData);
     this.spectrum?.drawTuningIndicator(
       store.tuneOffset(),
@@ -569,102 +675,6 @@ export class SdrEngine {
   }
 
   /**
-   * Auto-range: slowly adapt waterfall min/max dB to actual data.
-   * Uses exponential smoothing so the range is stable but responsive.
-   */
-  private updateAutoRange(fftData: Float32Array): void {
-    this.autoRangeFrameCount++;
-    // Only update every 16 frames (~0.5s at 30fps) to avoid jitter
-    if (this.autoRangeFrameCount % 16 !== 0) return;
-
-    // Compute data statistics (skip DC bin ±2 and edges)
-    const skip = Math.max(4, Math.floor(fftData.length * 0.02));
-    let sum = 0;
-    let min = Infinity;
-    let max = -Infinity;
-    let count = 0;
-
-    for (let i = skip; i < fftData.length - skip; i++) {
-      const v = fftData[i];
-      if (!isFinite(v)) continue;
-      sum += v;
-      if (v < min) min = v;
-      if (v > max) max = v;
-      count++;
-    }
-
-    if (count === 0) return;
-    const avg = sum / count;
-
-    // Target: noise floor ~10% from bottom, strong signals visible at top
-    // Use median-like approach: min = avg - 10dB, max = avg + 35dB
-    const targetMin = avg - 10;
-    const targetMax = Math.max(avg + 35, max + 5);
-
-    // Smooth towards target (slow adaptation)
-    const alpha = 0.15;
-    this.autoRangeMin = this.autoRangeMin * (1 - alpha) + targetMin * alpha;
-    this.autoRangeMax = this.autoRangeMax * (1 - alpha) + targetMax * alpha;
-
-    // Round and apply
-    const newMin = Math.round(this.autoRangeMin);
-    const newMax = Math.round(this.autoRangeMax);
-
-    if (newMin !== store.waterfallMin() || newMax !== store.waterfallMax()) {
-      store.setWaterfallMin(newMin);
-      store.setWaterfallMax(newMax);
-      this.waterfall?.setRange(newMin, newMax);
-      this.spectrum?.setRange(newMin, newMax);
-    }
-  }
-
-  /**
-   * Compute signal level at the tuned frequency from FFT data.
-   * Uses a time-based EMA so the meter responds smoothly regardless
-   * of fftFps (which is configurable and may be as low as 16fps).
-   * Attack is fast (~60ms) so real signal peaks are caught quickly.
-   * Decay is slightly slower (~120ms) for a natural needle fall-off.
-   */
-  private smoothedSignalLevel = -120;
-  private lastSignalTime = 0;
-  private updateSignalLevel(fftData: Float32Array): void {
-    const sampleRate = store.sampleRate();
-    if (sampleRate <= 0 || fftData.length === 0) return;
-
-    const tuneOffset = store.tuneOffset();
-    const bandwidth = store.bandwidth();
-    const bins = fftData.length;
-
-    const centerBin = Math.round(((tuneOffset / sampleRate) + 0.5) * (bins - 1));
-    const halfBwBins = Math.round((bandwidth / sampleRate) * bins / 2);
-
-    const startBin = Math.max(0, centerBin - halfBwBins);
-    const endBin = Math.min(bins - 1, centerBin + halfBwBins);
-
-    if (startBin >= endBin) return;
-
-    let peak = -Infinity;
-    for (let i = startBin; i <= endBin; i++) {
-      const v = fftData[i];
-      if (isFinite(v) && v > peak) peak = v;
-    }
-
-    if (!isFinite(peak)) return;
-
-    // Time-based EMA: compute alpha from actual elapsed time so the time
-    // constant is independent of fftFps. Attack τ=60ms, decay τ=120ms.
-    const now = performance.now();
-    const dt = this.lastSignalTime > 0 ? Math.min(now - this.lastSignalTime, 200) : 0;
-    this.lastSignalTime = now;
-
-    const rising = peak > this.smoothedSignalLevel;
-    const tau = rising ? 60 : 120; // ms
-    const alpha = dt > 0 ? 1 - Math.exp(-dt / tau) : 1;
-    this.smoothedSignalLevel += alpha * (peak - this.smoothedSignalLevel);
-
-    store.setSignalLevel(this.smoothedSignalLevel);
-  }
-
   /**
    * Common IQ demodulation pipeline shared by MSG_IQ and MSG_IQ_ADPCM.
    * Handles squelch gating, stereo detection, and audio push.
@@ -920,7 +930,7 @@ export class SdrEngine {
         // Flush audio and reset waterfall + client FFT buffer
         this.audio.resetBuffer();
         this.fftBuffer.reset();
-        this.waterfall?.clear();
+        this.waterfallWorker?.postMessage({ type: 'clear' });
         // Update resampler for new mode's output rate
         this.updateResampleRatio();
         break;
@@ -977,9 +987,6 @@ export class SdrEngine {
     store.setTuneOffset(offsetHz);
     // Reset demodulator to clear stale filter state at the new frequency
     this.demodulator.reset();
-    // Reset signal level EMA so the meter doesn't chase a stale value
-    this.smoothedSignalLevel = -120;
-    this.lastSignalTime = 0;
     // On the IQ codec path the client holds demodulated samples that go stale
     // when the server shifts the extracted sub-band — flush the ring buffer.
     // On the Opus path the server re-tunes seamlessly; flushing causes a
@@ -1187,7 +1194,7 @@ export class SdrEngine {
 
   setWaterfallTheme(theme: string): void {
     store.setWaterfallTheme(theme as any);
-    this.waterfall?.setTheme(theme as any);
+    this.waterfallWorker?.postMessage({ type: 'set-theme', theme });
   }
 
   setWaterfallRange(minDb: number, maxDb: number): void {
@@ -1195,13 +1202,13 @@ export class SdrEngine {
     store.setWaterfallAutoRange(false);
     store.setWaterfallMin(minDb);
     store.setWaterfallMax(maxDb);
-    this.waterfall?.setRange(minDb, maxDb);
+    this.waterfallWorker?.postMessage({ type: 'set-range', minDb, maxDb });
     this.spectrum?.setRange(minDb, maxDb);
   }
 
   setWaterfallGamma(gamma: number): void {
     store.setWaterfallGamma(gamma);
-    this.waterfall?.setGamma(gamma);
+    this.waterfallWorker?.postMessage({ type: 'set-gamma', gamma });
   }
 
   setSpectrumPeakHold(enabled: boolean): void {
@@ -1256,7 +1263,7 @@ export class SdrEngine {
   setSpectrumZoom(start: number, end: number): void {
     store.setSpectrumZoom([start, end]);
     this.spectrum?.setZoom(start, end);
-    this.waterfall?.setZoom(start, end);
+    this.waterfallWorker?.postMessage({ type: 'set-zoom', start, end });
     // Defer waterfall prefill to next rAF — multiple wheel events within one
     // frame collapse into a single redraw instead of blocking on every tick.
     this.scheduleWaterfallPrefill();
@@ -1265,7 +1272,7 @@ export class SdrEngine {
   resetSpectrumZoom(): void {
     store.setSpectrumZoom([0, 1]);
     this.spectrum?.resetZoom();
-    this.waterfall?.resetZoom();
+    this.waterfallWorker?.postMessage({ type: 'reset-zoom' });
     this.scheduleWaterfallPrefill();
   }
 
@@ -1286,17 +1293,24 @@ export class SdrEngine {
   seekTo(offset: number): void {
     const count = this.fftBuffer.count;
     this.seekOffset = Math.max(0, Math.min(offset, count));
-    if (!this.waterfall) return;
+
+    // Tell the worker to freeze/unfreeze live drawing
+    this.waterfallWorker?.postMessage({ type: 'seek-offset', offset: this.seekOffset });
+
+    if (!this.waterfallWorker) return;
+
     if (this.seekOffset === 0) {
-      // Back to live — refill from full buffer then let live frames take over
-      this.waterfall.prefillFromBuffer(this.fftBuffer.getFrames());
+      // Back to live — refill from full buffer
+      const frames = this.fftBuffer.getFrames().map(f => f.slice());
+      this.waterfallWorker.postMessage({ type: 'prefill', frames });
       return;
     }
     // Show the window of frames ending `seekOffset` frames ago
     const frames = this.fftBuffer.getFrames();
-    const end    = frames.length - this.seekOffset;
+    const end = frames.length - this.seekOffset;
     if (end <= 0) return;
-    this.waterfall.prefillFromBuffer(frames.slice(0, end));
+    const sliced = frames.slice(0, end).map(f => f.slice());
+    this.waterfallWorker.postMessage({ type: 'prefill', frames: sliced });
   }
 
   /** Add a signal marker at an absolute frequency (Hz). */
@@ -1379,7 +1393,14 @@ export class SdrEngine {
   // ---- Resize Handling ----
 
   handleResize(): void {
-    this.waterfall?.resize();
+    if (this.waterfallCanvas && this.waterfallWorker) {
+      const rect = this.waterfallCanvas.getBoundingClientRect();
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      if (w > 0 && h > 0) {
+        this.waterfallWorker.postMessage({ type: 'resize', width: w, height: h });
+      }
+    }
     this.spectrum?.resize();
   }
 
@@ -1400,6 +1421,9 @@ export class SdrEngine {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
     this.audio.destroy();
+    this.fftDecodeWorker.terminate();
+    this.fftAnalysisWorker.terminate();
+    this.waterfallWorker?.terminate();
   }
 }
 

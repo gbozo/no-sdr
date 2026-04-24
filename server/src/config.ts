@@ -115,6 +115,23 @@ const ServerConfigSchema = z.object({
     port: z.number().int().positive().default(3000),
     adminPassword: z.string().min(1).default('admin'),
     demoMode: z.boolean().default(false),
+    /**
+     * FFT bin count used for history storage.
+     * Independent of per-profile fftSize — live frames are downsampled to this
+     * size before being stored. Clients interpolate back up to the live fftSize.
+     * Must be a power of 2 between 256 and 65536. Default: 8192.
+     */
+    fftHistoryFftSize: z.number().int().refine(
+      (n) => (n & (n - 1)) === 0 && n >= 256 && n <= 65536,
+      { message: 'fftHistoryFftSize must be a power of 2 between 256 and 65536' },
+    ).default(8192),
+    /**
+     * Compression codec used when sending FFT waterfall history to clients.
+     *   'deflate' — delta+zlib deflate, best ratio (~8-12x), default
+     *   'adpcm'   — IMA-ADPCM, ~8x, lower CPU
+     *   'none'    — uncompressed Uint8
+     */
+    fftHistoryCompression: z.enum(['deflate', 'adpcm', 'none']).default('deflate'),
   }),
   dongles: z.array(DongleConfigSchema).min(1),
 });
@@ -193,7 +210,9 @@ function getDefaultConfig(): ValidatedConfig {
       host: '0.0.0.0',
       port: 3000,
       adminPassword: 'admin',
-      demoMode: true, // default to demo when no config file exists
+      demoMode: true,
+      fftHistoryFftSize: 8192,
+      fftHistoryCompression: 'deflate' as const,
     },
     dongles: [
       {
