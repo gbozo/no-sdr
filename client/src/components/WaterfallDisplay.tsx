@@ -95,6 +95,7 @@ const WaterfallDisplay: Component = () => {
     let ns = zs + delta, ne = ze + delta;
     if (ns < 0) { ns = 0; ne = span; }
     if (ne > 1) { ne = 1; ns = 1 - span; }
+    if (zs === ns && ze === ne) return;
     engine.setSpectrumZoom(ns, ne);
   };
 
@@ -200,9 +201,11 @@ const WaterfallDisplay: Component = () => {
     if (newEnd   > 1) { newStart -= (newEnd - 1); newEnd = 1; }
     newStart = Math.max(0, newStart);
     newEnd   = Math.min(1, newEnd);
-    if (newEnd - newStart < 0.005) return;
-    if (newEnd - newStart > 0.999) engine.resetSpectrumZoom();
-    else engine.setSpectrumZoom(newStart, newEnd);
+    const finalSpan = newEnd - newStart;
+    if (finalSpan < 0.005) return;
+    if (finalSpan > 0.999) newStart = 0, newEnd = 1;
+    if (zs === newStart && ze === newEnd) return;
+    engine.setSpectrumZoom(newStart, newEnd);
   };
 
   const handleSpectrumDblClick = () => engine.resetSpectrumZoom();
