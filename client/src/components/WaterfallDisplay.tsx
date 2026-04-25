@@ -110,6 +110,7 @@ const WaterfallDisplay: Component = () => {
     // Middle-click or Shift+left-click → pan
     if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
       setPanAnchor(rx);
+      engine.beginWaterfallPan();
       return;
     }
     // Left-click + range select → zoom drag
@@ -134,6 +135,7 @@ const WaterfallDisplay: Component = () => {
       // Pan by the fraction moved (in viewport space → band space)
       pan((panAnchor()! - rx) * span);
       setPanAnchor(rx); // update anchor so pan is incremental
+      engine.drawWaterfallPan();
     }
   };
 
@@ -141,6 +143,7 @@ const WaterfallDisplay: Component = () => {
     // End pan
     if (panAnchor() !== null) {
       setPanAnchor(null);
+      engine.endWaterfallPan();
       return;
     }
     if (isDragging()) {
@@ -213,7 +216,10 @@ const WaterfallDisplay: Component = () => {
   const handleMouseLeave = () => {
     setHoverFreq(null);
     setHoverDb(null);
-    setPanAnchor(null);
+    if (panAnchor() !== null) {
+      setPanAnchor(null);
+      engine.endWaterfallPan();
+    }
     if (isDragging()) {
       setIsDragging(false);
       setDragStart(null);

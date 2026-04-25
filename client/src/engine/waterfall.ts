@@ -24,6 +24,9 @@ export class WaterfallRenderer {
   private zoomStart = 0;
   private zoomEnd   = 1;
 
+  // Pan snapshot — preserves full-view waterfall during pan for stale display
+  private panSnapshot: HTMLCanvasElement | null = null;
+
   // Reusable ImageData for one row to avoid GC pressure
   private rowImageData: ImageData | null = null;
 
@@ -146,10 +149,29 @@ export class WaterfallRenderer {
 
   resetZoom(): void {
     this.zoomStart = 0;
-    this.zoomEnd   = 1;
+    this.zoomEnd = 1;
     this.rowImageData = null;
     this.clear();
   }
+
+  beginPan(): void {
+    if (this.w < 1 || this.h < 1) return;
+    this.panSnapshot = document.createElement('canvas');
+    this.panSnapshot.width = this.w;
+    this.panSnapshot.height = this.h;
+    this.panSnapshot.getContext('2d')!.drawImage(this.canvas, 0, 0);
+  }
+
+  drawPanSnapshot(): void {
+    if (!this.panSnapshot) return;
+    this.ctx.drawImage(this.panSnapshot, 0, 0);
+  }
+
+  endPan(): void {
+    this.panSnapshot = null;
+  }
+
+  get isPanning(): boolean { return this.panSnapshot !== null; }
 
   /**
    * Resize canvas to match container.

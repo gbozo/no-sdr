@@ -134,6 +134,9 @@ let zoomEnd = 1;
 let seekOffset = 0;
 let rowImageData: ImageData | null = null;
 
+// Pan snapshot — preserves full-view waterfall during pan for stale display
+let panSnapshot: OffscreenCanvas | null = null;
+
 // Throttle: ~30fps
 let lastDrawTime = 0;
 const MIN_FRAME_INTERVAL = 33;
@@ -447,6 +450,24 @@ self.onmessage = (e: MessageEvent) => {
 
     case 'seek-offset': {
       seekOffset = msg.offset as number;
+      break;
+    }
+
+    case 'begin-pan': {
+      if (!ctx || w < 1 || h < 1) break;
+      panSnapshot = new OffscreenCanvas(w, h);
+      panSnapshot.getContext('2d')!.drawImage(ctx.canvas, 0, 0);
+      break;
+    }
+
+    case 'draw-pan': {
+      if (!ctx || !panSnapshot) break;
+      ctx.drawImage(panSnapshot, 0, 0);
+      break;
+    }
+
+    case 'end-pan': {
+      panSnapshot = null;
       break;
     }
   }

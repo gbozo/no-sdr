@@ -1282,6 +1282,18 @@ export class SdrEngine {
     this.scheduleWaterfallPrefill();
   }
 
+  beginWaterfallPan(): void {
+    this.waterfallWorker?.postMessage({ type: 'begin-pan' });
+  }
+
+  drawWaterfallPan(): void {
+    this.waterfallWorker?.postMessage({ type: 'draw-pan' });
+  }
+
+  endWaterfallPan(): void {
+    this.waterfallWorker?.postMessage({ type: 'end-pan' });
+  }
+
   // ---- Seek-back ----
 
   get fftBufferCount(): number { return this.fftBuffer.count; }
