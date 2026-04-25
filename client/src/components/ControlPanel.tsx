@@ -831,6 +831,7 @@ const SMeter: Component = () => {
 
   const pct = () => {
     const level = store.signalLevel();
+
     // Fixed scale: -120 dB = 0% (S0/noise floor), -13 dB = 100% (S9+60dB).
     const MIN_DB = -120;
     const MAX_DB = -13;
@@ -892,6 +893,7 @@ const SMeter: Component = () => {
     off.width  = Math.round(w * dpr);
     off.height = Math.round(h * dpr);
     const ctx = off.getContext('2d')!;
+    ctx.imageSmoothingEnabled = false;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // ── Theme-aware backlit face ──
@@ -949,13 +951,16 @@ const SMeter: Component = () => {
   };
 
   const buildStaticCache = (w: number, h: number, dpr: number) => {
+    // Build cache at 2× natural size so when scaled 2× to get target size, 
+    // we have more pixels = less blur from browser interpolation
+    const scaleW = 2;
+    const scaleH = 1.4;
     const off = document.createElement('canvas');
-    off.width  = Math.round(w * dpr);
-    off.height = Math.round(h * dpr);
+    off.width  = Math.round(w * scaleW * dpr);
+    off.height = Math.round(h * scaleH * dpr);
     const ctx = off.getContext('2d')!;
-    // DPR scale only — NO content scale transform here.
-    // The content scale (2×/1.4×) is applied at blit time in drawNeedleMeter.
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(scaleW * dpr, 0, 0, scaleH * dpr, 0, 0);
 
     // Theme-aware ink colours for ticks and labels
     const theme = document.documentElement.dataset.theme ?? 'default';
@@ -1195,11 +1200,13 @@ const SMeter: Component = () => {
       cacheW = 0; cacheH = 0;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
 
     // Rebuild caches if missing, stale, or theme changed
     const currentTheme = document.documentElement.dataset.theme ?? 'default';
     if (!bgCache || !scaleCache || cacheW !== w || cacheH !== h || cacheTheme !== currentTheme) {
       bgCache    = buildBgCache(w, h, dpr);
+      // Build cache at natural size (transform applied at blit)
       scaleCache = buildStaticCache(w, h, dpr);
       cacheW = w; cacheH = h; cacheTheme = currentTheme;
     }
@@ -1207,16 +1214,20 @@ const SMeter: Component = () => {
     // 1. Blit background at natural size (no transform)
     ctx.drawImage(bgCache, 0, 0, w, h);
 
-    // 2. Apply content scale, blit meter content, draw dynamic elements
+    // 2. Apply transform, draw static content, restore
+    ctx.save();
+    ctx.translate(w / 2, h / 2 + h * 0.10);
+    ctx.scale(2, 1.4);
+    ctx.translate(-w / 2, -(h / 2 + h * 0.10));
+    ctx.drawImage(scaleCache, 0, 0, w, h);
+    ctx.restore();
+
+    // ── Geometry (transformed coordinates) ──
     ctx.save();
     ctx.translate(w / 2, h / 2 + h * 0.10);
     ctx.scale(2, 1.4);
     ctx.translate(-w / 2, -(h / 2 + h * 0.10));
 
-    // Blit scale cache through the content transform
-    ctx.drawImage(scaleCache, 0, 0, w, h);
-
-    // ── Geometry (matches buildStaticCache exactly) ──
     const cx = w / 2;
     const cy = h + h * 0.60;
     const radius = Math.min(w * 0.55, h * 1.1);
@@ -1408,7 +1419,7 @@ const SMeter: Component = () => {
               cacheW = 0; cacheH = 0;
             }}
             class="w-full rounded-sm"
-            style={{ height: '110px' }}
+            style={{ height: '110px', imageRendering: 'crisp-edges' }}
           />
         </Show>
       </div>
