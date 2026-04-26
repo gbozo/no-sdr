@@ -190,12 +190,12 @@ export interface DongleConfig {
 
 // ---- Waterfall & Display ----
 
-export type WaterfallColorTheme = 'turbo' | 'viridis' | 'classic' | 'grayscale' | 'hot' | 'ocean' | 'inferno' | 'magma' | 'plasma' | 'fire' | 'radio';
+export type WaterfallColorTheme = 'turbo' | 'viridis' | 'classic' | 'grayscale' | 'hot' | 'ocean' | 'inferno' | 'magma' | 'plasma' | 'fire' | 'radio' | 'sdr';
 
 export type UITheme = 'default' | 'crt' | 'vfd';
 
 export interface WaterfallSettings {
-  colorTheme: WaterfallColorTheme;
+  colorTheme: WaterfallColorTheme | 'sdr';
   minDb: number;
   maxDb: number;
   speed: number; // rows per second

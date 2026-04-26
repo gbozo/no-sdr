@@ -656,6 +656,23 @@ const NoiseReduction: Component = () => {
 // ---- Waterfall Settings ----
 const WaterfallSettings: Component = () => {
   const themes = getPaletteNames();
+  const [themeDropdownOpen, setThemeDropdownOpen] = createSignal(false);
+
+  // Color preview bars for dropdown (CSS rgb strings)
+  const themePreviews: Record<string, string[]> = {
+    classic: ['rgb(0,0,0)', 'rgb(0,0,128)', 'rgb(0,0,255)', 'rgb(0,255,255)', 'rgb(255,255,0)', 'rgb(255,128,0)', 'rgb(255,0,0)', 'rgb(255,255,255)'],
+    sdr: ['rgb(0,0,8)', 'rgb(0,0,128)', 'rgb(0,160,220)', 'rgb(180,220,40)', 'rgb(255,200,0)', 'rgb(255,60,0)', 'rgb(255,0,0)'],
+    turbo: ['rgb(48,18,59)', 'rgb(70,117,237)', 'rgb(27,207,212)', 'rgb(97,252,108)', 'rgb(243,198,58)', 'rgb(254,155,45)', 'rgb(122,4,2)'],
+    viridis: ['rgb(68,1,84)', 'rgb(62,73,137)', 'rgb(38,130,142)', 'rgb(53,183,121)', 'rgb(253,231,37)'],
+    hot: ['rgb(0,0,0)', 'rgb(128,0,0)', 'rgb(255,0,0)', 'rgb(255,200,0)', 'rgb(255,255,255)'],
+    fire: ['rgb(0,0,0)', 'rgb(180,0,0)', 'rgb(255,80,0)', 'rgb(255,240,80)', 'rgb(255,255,255)'],
+    ocean: ['rgb(0,0,80)', 'rgb(0,120,200)', 'rgb(0,180,210)', 'rgb(180,240,250)', 'rgb(240,250,255)'],
+    grayscale: ['rgb(0,0,0)', 'rgb(255,255,255)'],
+    inferno: ['rgb(0,0,4)', 'rgb(133,54,120)', 'rgb(227,117,48)', 'rgb(252,254,164)', 'rgb(255,255,200)'],
+    magma: ['rgb(0,0,4)', 'rgb(140,58,115)', 'rgb(224,109,67)', 'rgb(252,223,148)', 'rgb(255,255,255)'],
+    plasma: ['rgb(4,6,68)', 'rgb(120,42,164)', 'rgb(195,99,107)', 'rgb(252,211,66)', 'rgb(252,253,85)'],
+    radio: ['rgb(8,24,32)', 'rgb(32,140,140)', 'rgb(80,200,120)', 'rgb(255,220,100)', 'rgb(255,255,200)'],
+  };
 
   const handleAutoRange = () => {
     const current = store.waterfallAutoRange();
@@ -686,22 +703,53 @@ const WaterfallSettings: Component = () => {
       </div>
       <Show when={open()}>
         <div class="p-3 space-y-3">
-        {/* Color Theme */}
+        {/* Color Theme Dropdown */}
         <div>
           <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1 block">
             Color Theme
           </label>
-          <div class="flex flex-wrap gap-2">
-            <For each={themes}>
-              {(theme) => (
-                <button
-                  class={`mil-btn ${store.waterfallTheme() === theme ? 'active' : ''}`}
-                  onClick={() => engine.setWaterfallTheme(theme)}
-                >
-                  {theme}
-                </button>
-              )}
-            </For>
+          <div class="relative">
+            <button
+              class="w-full flex items-center justify-between px-2 py-1.5 rounded border border-border bg-sdr-surface text-[10px] font-mono"
+              onClick={() => setThemeDropdownOpen(!themeDropdownOpen())}
+            >
+              <span>{store.waterfallTheme()}</span>
+              <span class="text-text-dim">{themeDropdownOpen() ? '▲' : '▼'}</span>
+            </button>
+            {/* Color preview bar */}
+            <div class="h-1.5 mt-1 rounded overflow-hidden flex">
+              <For each={themePreviews[store.waterfallTheme()]}>
+                {(color) => (
+                  <div class="flex-1" style={{ background: color }} />
+                )}
+              </For>
+            </div>
+            {/* Dropdown options */}
+            <Show when={themeDropdownOpen()}>
+              <div class="absolute z-50 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded border border-border bg-sdr-surface shadow-lg">
+                <For each={themes}>
+                  {(theme) => (
+                    <button
+                      class={`w-full px-2 py-1 text-left text-[10px] font-mono hover:bg-sdr-hover flex items-center gap-2
+                        ${store.waterfallTheme() === theme ? 'bg-sdr-elevated text-text-primary' : 'text-text-secondary'}`}
+                      onClick={() => {
+                        engine.setWaterfallTheme(theme);
+                        setThemeDropdownOpen(false);
+                      }}
+                    >
+                      <span class="flex-1">{theme}</span>
+                      <div class="h-3 flex-3 flex rounded overflow-hidden">
+                        <For each={themePreviews[theme]}>
+                          {(color) => (
+                            <div class="flex-1" style={{ background: color }} />
+                          )}
+                        </For>
+                      </div>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
           </div>
         </div>
 

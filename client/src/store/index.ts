@@ -88,8 +88,8 @@ function createStore() {
   const [nbLevel, setNbLevel] = persist<number>('audio.nbLevel', 0.5);
 
   // ---- Display ----
-  const [waterfallTheme, setWaterfallTheme] = persist<WaterfallColorTheme>('waterfallTheme', 'turbo');
-  const [uiTheme, setUITheme] = persist<UITheme>('uiTheme', 'default');
+  const [waterfallTheme, setWaterfallTheme] = persist<WaterfallColorTheme>('waterfallTheme', 'classic');
+  const [uiTheme, setUITheme] = persist<UITheme>('uiTheme', 'vfd');
   const [waterfallMin, setWaterfallMin] = createSignal(-60);
   const [waterfallMax, setWaterfallMax] = createSignal(-10);
   const [waterfallAutoRange, setWaterfallAutoRange] = createSignal(true);

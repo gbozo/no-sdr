@@ -144,6 +144,21 @@ const THEME_STOPS: Record<WaterfallColorTheme, ColorStop[]> = {
     { pos: 0.95, rgb: [255, 220, 100] },
     { pos: 1.00, rgb: [255, 255, 200] },
   ],
+  // Custom SDR palette: black → blue → cyan → yellow → red
+  sdr: [
+    { pos: 0.00, rgb: [0, 0, 8] },
+    { pos: 0.10, rgb: [0, 0, 64] },
+    { pos: 0.20, rgb: [0, 48, 128] },
+    { pos: 0.30, rgb: [0, 96, 192] },
+    { pos: 0.40, rgb: [0, 160, 220] },
+    { pos: 0.50, rgb: [0, 200, 180] },
+    { pos: 0.60, rgb: [80, 220, 120] },
+    { pos: 0.70, rgb: [180, 220, 40] },
+    { pos: 0.80, rgb: [255, 200, 0] },
+    { pos: 0.90, rgb: [255, 120, 0] },
+    { pos: 0.95, rgb: [255, 60, 0] },
+    { pos: 1.00, rgb: [255, 0, 0] },
+  ],
 };
 
 function buildPalette(stops: ColorStop[]): Palette {

@@ -95,10 +95,12 @@ export class WaterfallRenderer {
       } else {
         const binStart = Math.max(0, Math.floor(binF));
         const binEnd   = Math.min(bins, Math.floor(binF + binsPerPx));
-        db = fftData[binStart];
+        // Average aggregation for smoother waterfall (vs MAX which is noisier)
+        let sum = fftData[binStart];
         for (let b = binStart + 1; b < binEnd; b++) {
-          if (fftData[b] > db) db = fftData[b];
+          sum += fftData[b];
         }
+        db = sum / (binEnd - binStart);
       }
 
       // Normalize to 0-255 palette index
