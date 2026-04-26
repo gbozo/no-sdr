@@ -496,13 +496,13 @@ const timer = setInterval(() => {
         <canvas
           ref={waterfallRef!}
           class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-          style={{ "image-rendering": "crisp-edges" }}
+          style={{ "image-rendering": "auto" }}
           onClick={handleWaterfallClick}
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}
           onWheel={handleWaterfallWheel}
         />
-        <div class="sdr-scanlines" />
+        {/* <div class="sdr-scanlines" /> */}
         <RdsOverlay />
       </div>
 

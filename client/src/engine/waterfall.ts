@@ -63,11 +63,11 @@ export class WaterfallRenderer {
     const w = this.w;
     const h = this.h;
 
-    // Scroll existing content down by 1 pixel using getImageData/putImageData
+    // Scroll existing content down by 1 pixel
     const existing = this.ctx.getImageData(0, 0, w, h - 1);
     this.ctx.putImageData(existing, 0, 1);
 
-    // Create new row at top (reuse ImageData object if same width)
+    // Create new row at top
     if (!this.rowImageData || this.rowImageData.width !== w) {
       this.rowImageData = this.ctx.createImageData(w, 1);
     }
@@ -188,7 +188,7 @@ export class WaterfallRenderer {
       return;
     }
 
-    // Use 1:1 pixel mapping (no DPR scaling) for waterfall — each pixel = 1 row
+    // Use 1:1 for waterfall - CSS pixelated gives crisp non-blurry pixels
     if (this.canvas.width !== cw || this.canvas.height !== ch) {
       // Preserve existing waterfall content across resize by cloning to an offscreen canvas
       const oldW = this.canvas.width;
