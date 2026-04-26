@@ -1,6 +1,6 @@
 {
   "name": "no-sdr",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "private": true,
   "description": "Multi-user WebSDR server for RTL-SDR dongles — real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
   "license": "MIT",
