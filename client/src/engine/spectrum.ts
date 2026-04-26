@@ -20,8 +20,12 @@ export class SpectrumRenderer {
 
   // Peak hold
   private peakHoldEnabled = false;
-  private peakDb: Float32Array | null = null;
+  private _peakDb: Float32Array | null = null;
   private readonly peakDecayDbPerFrame = 0.4; // dB dropped per frame at 30fps
+  private peakDirty = false; // tracks whether peaks need redraw
+
+  // Signal fill (column fill mode)
+  private signalFillEnabled = false;
 
   // Pause / freeze
   private paused = false;
@@ -37,6 +41,18 @@ export class SpectrumRenderer {
 
   /** Per-pixel dB values from the most recent draw — used by tooltip. */
   get lastPixelDb(): Float32Array | null { return this._lastPixelDb; }
+
+  /** Peak dB values per pixel — used for tooltip peak display (and spectrum peak hold when enabled). */
+  get peakDbValues(): Float32Array | null { return this._peakDb; }
+
+  // Tooltip peak: tracks max dB over last N frames for variation display
+  private tooltipPeakFrames: Float32Array[] | null = null;
+  private tooltipPeakPos = 0;
+  private readonly TOOLTIP_PEAK_FRAMES = 30; // ~1 sec at 30fps
+  private _tooltipPeak: Float32Array | null = null;
+
+  /** Max dB over last ~1 second — used for tooltip peak display. */
+  get tooltipPeakDb(): Float32Array | null { return this._tooltipPeak; }
 
   // Noise floor estimation using a rolling minimum window per bin.
   // Tracks the true minimum dB seen in the last ~5 seconds (150 frames at 30fps).
@@ -174,6 +190,28 @@ export class SpectrumRenderer {
     // Store for tooltip dB readout
     this._lastPixelDb = pixelDb;
 
+    // Track tooltip peak: max dB over last ~1 second (30 frames)
+    if (!this.tooltipPeakFrames || this.tooltipPeakFrames[0].length !== w) {
+      this.tooltipPeakFrames = Array.from(
+        { length: this.TOOLTIP_PEAK_FRAMES },
+        () => new Float32Array(w).fill(this.minDb),
+      );
+      this._tooltipPeak = new Float32Array(w).fill(this.minDb);
+      this.tooltipPeakPos = 0;
+    }
+    // Store current frame in circular buffer
+    this.tooltipPeakFrames[this.tooltipPeakPos].set(pixelDb);
+    this.tooltipPeakPos = (this.tooltipPeakPos + 1) % this.TOOLTIP_PEAK_FRAMES;
+    // Compute max across all buffered frames
+    for (let x = 0; x < w; x++) {
+      let maxDb = this.minDb;
+      for (let f = 0; f < this.TOOLTIP_PEAK_FRAMES; f++) {
+        const val = this.tooltipPeakFrames[f][x];
+        if (val > maxDb) maxDb = val;
+      }
+      this._tooltipPeak![x] = maxDb;
+    }
+
     // Spectrum line + fill
     ctx.beginPath();
     ctx.moveTo(0, h);
@@ -223,25 +261,30 @@ export class SpectrumRenderer {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Peak hold — draw a thin line at peak dB per pixel
-    if (this.peakHoldEnabled) {
-      // Init or resize peak buffer
-      if (!this.peakDb || this.peakDb.length !== w) {
-        this.peakDb = new Float32Array(w).fill(this.minDb);
+    // Peak hold — always track peaks, only draw when enabled
+    // Classic peak hold: captures new highs, decays slowly when signal drops
+    if (!this._peakDb || this._peakDb.length !== w) {
+      this._peakDb = new Float32Array(w).fill(this.minDb);
+      this.peakDirty = true;
+    }
+    // Update peaks: capture new highs, apply slow decay
+    for (let x = 0; x < w; x++) {
+      if (pixelDb[x] > this._peakDb[x]) {
+        this._peakDb[x] = pixelDb[x];
+      } else {
+        // Slow decay: 0.4 dB per frame (~13 dB/sec at 30fps, ~27 frames to drop 10dB)
+        this._peakDb[x] -= this.peakDecayDbPerFrame;
+        if (this._peakDb[x] < this.minDb) this._peakDb[x] = this.minDb;
       }
-      // Update peaks and apply decay
-      for (let x = 0; x < w; x++) {
-        if (pixelDb[x] > this.peakDb[x]) {
-          this.peakDb[x] = pixelDb[x];
-        } else {
-          this.peakDb[x] -= this.peakDecayDbPerFrame;
-          if (this.peakDb[x] < this.minDb) this.peakDb[x] = this.minDb;
-        }
-      }
+    }
+    this.peakDirty = true;
+
+    // Draw peak line only when enabled
+    if (this.peakHoldEnabled && this.peakDirty) {
       // Draw peak line — same accent colour, slightly dimmer
       ctx.beginPath();
       for (let x = 0; x < w; x++) {
-        const normalized = (this.peakDb[x] - this.minDb) / range;
+        const normalized = (this._peakDb[x] - this.minDb) / range;
         const y = h - Math.max(0, Math.min(1, normalized)) * h;
         if (x === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -251,6 +294,7 @@ export class SpectrumRenderer {
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.globalAlpha = 1;
+      this.peakDirty = false;
     }
 
     // Noise floor — rolling minimum over last ~5s, drawn as a dim dashed line.
@@ -381,7 +425,7 @@ export class SpectrumRenderer {
 
   setPeakHold(enabled: boolean): void {
     this.peakHoldEnabled = enabled;
-    if (!enabled) this.peakDb = null;
+    if (!enabled) this._peakDb = null;
   }
 
   setSignalFill(enabled: boolean): void {
@@ -406,13 +450,13 @@ export class SpectrumRenderer {
     this.zoomEnd   = Math.min(1, Math.max(end, start + 0.01));
     // Clear peak buffer — pixel-indexed and now stale after zoom change.
     // Noise floor is bin-indexed so it survives zoom changes without reset.
-    this.peakDb = null;
+    this._peakDb = null;
   }
 
   resetZoom(): void {
     this.zoomStart = 0;
     this.zoomEnd   = 1;
-    this.peakDb = null;
+    this._peakDb = null;
   }
 
   /**

@@ -1246,6 +1246,22 @@ export class SdrEngine {
     return pd[idx];
   }
 
+  /** Get the peak dB value at a canvas X pixel on the spectrum — used by tooltip. */
+  getSpectrumPeakDbAtPixel(canvasX: number): number | null {
+    const pd = this.spectrum?.peakDbValues;
+    if (!pd) return null;
+    const idx = Math.max(0, Math.min(pd.length - 1, Math.round(canvasX)));
+    return pd[idx];
+  }
+
+  /** Get the max dB over last ~1 second at a canvas X pixel — used by tooltip. */
+  getSpectrumTooltipPeakDbAtPixel(canvasX: number): number | null {
+    const pd = this.spectrum?.tooltipPeakDb;
+    if (!pd) return null;
+    const idx = Math.max(0, Math.min(pd.length - 1, Math.round(canvasX)));
+    return pd[idx];
+  }
+
   setSpectrumNoiseFloor(enabled: boolean): void {
     store.setSpectrumNoiseFloor(enabled);
     this.spectrum?.setNoiseFloor(enabled);
