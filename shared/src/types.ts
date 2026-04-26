@@ -190,7 +190,7 @@ export interface DongleConfig {
 
 // ---- Waterfall & Display ----
 
-export type WaterfallColorTheme = 'turbo' | 'viridis' | 'classic' | 'grayscale' | 'hot';
+export type WaterfallColorTheme = 'turbo' | 'viridis' | 'classic' | 'grayscale' | 'hot' | 'ocean' | 'inferno' | 'magma' | 'plasma' | 'fire' | 'radio';
 
 export type UITheme = 'default' | 'crt' | 'vfd';
 
