@@ -6,10 +6,10 @@ import { Component, Show, For, createSignal, createEffect } from 'solid-js';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 
-type AdminTab = 'dongles' | 'profiles' | 'server';
+type AdminTab = 'receivers' | 'server';
 
 const AdminModal: Component = () => {
-  const [activeTab, setActiveTab] = createSignal<AdminTab>('dongles');
+  const [activeTab, setActiveTab] = createSignal<AdminTab>('receivers');
   const [dongles, setDongles] = createSignal<any[]>([]);
   const [selectedDongle, setSelectedDongle] = createSignal<string | null>(null);
   const [selectedProfile, setSelectedProfile] = createSignal<string | null>(null);
@@ -24,14 +24,19 @@ const AdminModal: Component = () => {
 
   const authHeaders = () => ({
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${password()}`,
+    ...(password() ? { 'Authorization': `Bearer ${password()}` } : {}),
   });
+
+  /** Fetch wrapper that always includes credentials for cookie-based auth */
+  const adminFetch = (url: string, opts: RequestInit = {}) =>
+    fetch(url, { ...opts, credentials: 'same-origin' });
 
   const loadDongles = async () => {
     if (!isAuthenticated()) return;
     try {
-      const res = await fetch(`${apiBase()}/api/admin/dongles`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles`, {
         headers: authHeaders(),
+        credentials: 'same-origin',
       });
       if (res.ok) {
         const data = await res.json();
@@ -42,6 +47,21 @@ const AdminModal: Component = () => {
     }
   };
 
+  // Check for existing session cookie when modal opens
+  createEffect(() => {
+    if (store.adminModalOpen() && !isAuthenticated()) {
+      fetch('/api/admin/session', { credentials: 'same-origin' })
+        .then(res => {
+          if (res.ok) {
+            setIsAuthenticated(true);
+            store.setIsAdmin(true);
+            loadDongles();
+          }
+        })
+        .catch(() => { /* no session, show login */ });
+    }
+  });
+
   createEffect(() => {
     if (isAuthenticated() && store.adminModalOpen()) {
       loadDongles();
@@ -50,10 +70,11 @@ const AdminModal: Component = () => {
 
   const handleLogin = async () => {
     try {
-      const res = await fetch(`${apiBase()}/api/admin/login`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: password() }),
+        credentials: 'same-origin',
       });
       if (res.ok) {
         setIsAuthenticated(true);
@@ -76,7 +97,7 @@ const AdminModal: Component = () => {
     setSuccess('');
 
     try {
-      const res = await fetch(`${apiBase()}/api/admin/save-config`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/save-config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -97,7 +118,7 @@ const AdminModal: Component = () => {
 
   const handleStartDongle = async (dongleId: string) => {
     try {
-      await fetch(`${apiBase()}/api/admin/dongles/${dongleId}/start`, {
+      await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}/start`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${password()}` },
       });
@@ -109,7 +130,7 @@ const AdminModal: Component = () => {
 
   const handleStopDongle = async (dongleId: string) => {
     try {
-      await fetch(`${apiBase()}/api/admin/dongles/${dongleId}/stop`, {
+      await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}/stop`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${password()}` },
       });
@@ -121,7 +142,7 @@ const AdminModal: Component = () => {
 
   const handleSwitchProfile = async (dongleId: string, profileId: string) => {
     try {
-      await fetch(`${apiBase()}/api/admin/dongles/${dongleId}/profile`, {
+      await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}/profile`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -137,7 +158,7 @@ const AdminModal: Component = () => {
 
   const handleUpdateDongle = async (dongleId: string, updates: any) => {
     try {
-      const res = await fetch(`${apiBase()}/api/admin/dongles/${dongleId}`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}`, {
         method: 'PUT',
         headers: authHeaders(),
         body: JSON.stringify(updates),
@@ -155,7 +176,7 @@ const AdminModal: Component = () => {
 
   const handleUpdateProfile = async (dongleId: string, profileId: string, updates: any) => {
     try {
-      const res = await fetch(`${apiBase()}/api/admin/dongles/${dongleId}/profiles/${profileId}`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}/profiles/${profileId}`, {
         method: 'PUT',
         headers: authHeaders(),
         body: JSON.stringify(updates),
@@ -196,7 +217,7 @@ const AdminModal: Component = () => {
       }],
     };
     try {
-      const res = await fetch(`${apiBase()}/api/admin/dongles`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify(newDongle),
@@ -231,7 +252,7 @@ const AdminModal: Component = () => {
       decoders: [],
     };
     try {
-      const res = await fetch(`${apiBase()}/api/admin/dongles/${selectedDongle()}/profiles`, {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles/${selectedDongle()}/profiles`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify(newProfile),
@@ -275,16 +296,10 @@ const AdminModal: Component = () => {
 
           <nav class="flex-1 p-2 space-y-0.5">
             <TabButton
-              active={activeTab() === 'dongles'}
-              onClick={() => setActiveTab('dongles')}
+              active={activeTab() === 'receivers'}
+              onClick={() => setActiveTab('receivers')}
             >
               Receivers
-            </TabButton>
-            <TabButton
-              active={activeTab() === 'profiles'}
-              onClick={() => setActiveTab('profiles')}
-            >
-              Profiles
             </TabButton>
             <TabButton
               active={activeTab() === 'server'}
@@ -320,7 +335,11 @@ const AdminModal: Component = () => {
                 <span class="text-[10px] font-mono text-amber">Authenticated</span>
                 <button
                   class="text-[9px] font-mono text-text-dim hover:text-text-secondary"
-                  onClick={() => { setIsAuthenticated(false); store.setIsAdmin(false); }}
+                  onClick={() => {
+                    fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+                    setIsAuthenticated(false);
+                    store.setIsAdmin(false);
+                  }}
                 >
                   Logout
                 </button>
@@ -334,8 +353,7 @@ const AdminModal: Component = () => {
           {/* Header */}
           <div class="h-14 px-4 border-b border-border flex items-center justify-between shrink-0">
             <h3 class="font-mono text-sm font-semibold text-text-primary">
-              {activeTab() === 'dongles' && 'Receivers'}
-              {activeTab() === 'profiles' && 'Profiles'}
+              {activeTab() === 'receivers' && 'Receivers & Profiles'}
               {activeTab() === 'server' && 'Server Configuration'}
             </h3>
             <button
@@ -356,33 +374,24 @@ const AdminModal: Component = () => {
             </Show>
 
             <Show when={isAuthenticated()}>
-              <Show when={activeTab() === 'dongles'}>
-                <DonglesTab
+              <Show when={activeTab() === 'receivers'}>
+                <ReceiversTab
                   dongles={dongles()}
                   selectedDongle={selectedDongle()}
                   onSelect={setSelectedDongle}
-                  onAdd={addNewDongle}
+                  onAddDongle={addNewDongle}
+                  onAddProfile={addNewProfile}
                   onStart={handleStartDongle}
                   onStop={handleStopDongle}
-                  onUpdate={handleUpdateDongle}
-                  password={password}
-                />
-              </Show>
-
-              <Show when={activeTab() === 'profiles'}>
-                <ProfilesTab
-                  dongles={dongles()}
-                  selectedDongle={selectedDongle()}
-                  onSelect={setSelectedDongle}
-                  onAdd={addNewProfile}
-                  onSwitch={handleSwitchProfile}
-                  onUpdate={handleUpdateProfile}
+                  onUpdateDongle={handleUpdateDongle}
+                  onUpdateProfile={handleUpdateProfile}
+                  onSwitchProfile={handleSwitchProfile}
                   password={password}
                 />
               </Show>
 
               <Show when={activeTab() === 'server'}>
-                <ServerTab />
+                <ServerTab password={password} />
               </Show>
             </Show>
           </div>
@@ -398,14 +407,7 @@ const AdminModal: Component = () => {
               </Show>
               <div class="flex gap-2 ml-auto">
                 <button class="sdr-btn text-[10px]" onClick={closeModal}>
-                  Cancel
-                </button>
-                <button
-                  class="sdr-btn sdr-btn-primary text-[10px]"
-                  onClick={handleSave}
-                  disabled={saving()}
-                >
-                  {saving() ? 'Saving...' : 'Save to YAML'}
+                  Close
                 </button>
               </div>
             </div>
@@ -428,130 +430,166 @@ const TabButton: Component<{ active: boolean; onClick: () => void; children: any
   </button>
 );
 
-const DonglesTab: Component<{
+// ---- Unified Receivers & Profiles Tab ----
+
+const ReceiversTab: Component<{
   dongles: any[];
   selectedDongle: string | null;
   onSelect: (id: string) => void;
-  onAdd: () => void;
+  onAddDongle: () => void;
+  onAddProfile: () => void;
   onStart: (id: string) => void;
   onStop: (id: string) => void;
-  onUpdate: (dongleId: string, updates: any) => void;
+  onUpdateDongle: (dongleId: string, updates: any) => void;
+  onUpdateProfile: (dongleId: string, profileId: string, updates: any) => void;
+  onSwitchProfile: (dongleId: string, profileId: string) => void;
   password: () => string;
 }> = (props) => {
-  const currentDongle = () => props.dongles.find(d => d.id === props.selectedDongle);
-  const [editing, setEditing] = createSignal(false);
-  const [formData, setFormData] = createSignal<any>({});
+  const currentDongle = () => props.dongles.find((d: any) => d.id === props.selectedDongle);
+  const [activeProfileTab, setActiveProfileTab] = createSignal<string | null>(null);
+  const [editingDongle, setEditingDongle] = createSignal(false);
+  const [dongleForm, setDongleForm] = createSignal<any>({});
+  const [profileForm, setProfileForm] = createSignal<any>({});
+  const [profileDirty, setProfileDirty] = createSignal(false);
 
-  const startEdit = () => {
+  // Auto-select first profile when dongle changes
+  createEffect(() => {
+    const d = currentDongle();
+    if (d?.profiles?.length > 0) {
+      setActiveProfileTab(d.profiles[0].id);
+    } else {
+      setActiveProfileTab(null);
+    }
+  });
+
+  const activeProfile = () => {
+    const d = currentDongle();
+    return d?.profiles?.find((p: any) => p.id === activeProfileTab());
+  };
+
+  // Load profile into form when tab changes
+  createEffect(() => {
+    const p = activeProfile();
+    if (p) {
+      setProfileForm({ ...p });
+      setProfileDirty(false);
+    }
+  });
+
+  const startDongleEdit = () => {
     const d = currentDongle();
     if (d) {
-      setFormData({
+      setDongleForm({
         name: d.name,
         sourceType: d.source?.type || 'local',
         host: d.source?.host || '',
         port: d.source?.port || 1234,
         ppmCorrection: d.ppmCorrection || 0,
+        deviceIndex: d.deviceIndex || 0,
         biasT: d.biasT || false,
+        digitalAgc: d.digitalAgc || false,
+        directSampling: d.directSampling || 0,
+        offsetTuning: d.offsetTuning || false,
         autoStart: d.autoStart !== false,
       });
-      setEditing(true);
+      setEditingDongle(true);
     }
   };
 
-  const saveEdit = () => {
+  const saveDongle = () => {
     const d = currentDongle();
-    if (d && formData()) {
-      props.onUpdate(d.id, {
-        name: formData().name,
+    if (d && dongleForm()) {
+      props.onUpdateDongle(d.id, {
+        name: dongleForm().name,
         source: {
-          type: formData().sourceType,
-          host: formData().host || undefined,
-          port: formData().port || undefined,
+          type: dongleForm().sourceType,
+          ...(dongleForm().host ? { host: dongleForm().host } : {}),
+          ...(dongleForm().port ? { port: dongleForm().port } : {}),
         },
-        ppmCorrection: formData().ppmCorrection,
-        biasT: formData().biasT,
-        autoStart: formData().autoStart,
+        deviceIndex: dongleForm().deviceIndex,
+        ppmCorrection: dongleForm().ppmCorrection,
+        biasT: dongleForm().biasT,
+        digitalAgc: dongleForm().digitalAgc,
+        directSampling: dongleForm().directSampling,
+        offsetTuning: dongleForm().offsetTuning,
+        autoStart: dongleForm().autoStart,
       });
-      setEditing(false);
+      setEditingDongle(false);
     }
+  };
+
+  const saveProfile = () => {
+    const d = currentDongle();
+    const pId = activeProfileTab();
+    if (d && pId && profileForm()) {
+      props.onUpdateProfile(d.id, pId, profileForm());
+      setProfileDirty(false);
+    }
+  };
+
+  const updateProfileField = (key: string, value: any) => {
+    setProfileForm((prev: any) => ({ ...prev, [key]: value }));
+    setProfileDirty(true);
   };
 
   return (
-    <div class="flex gap-4 h-full">
-      {/* Dongle list */}
-      <div class="w-1/2 space-y-2">
-        <div class="flex justify-between items-center mb-2">
-          <span class="text-[10px] font-mono text-text-dim uppercase">Receivers</span>
-          <button class="sdr-btn sdr-btn-primary text-[9px]" onClick={props.onAdd}>
-            + Add
-          </button>
-        </div>
-        <div class="space-y-1 max-h-[300px] overflow-y-auto">
+    <div class="space-y-4">
+      {/* Dongle selector row */}
+      <div class="flex items-center gap-3">
+        <select
+          class="flex-1 bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                 text-[11px] font-mono text-text-primary
+                 focus:border-border-focus focus:outline-none"
+          value={props.selectedDongle || ''}
+          onChange={(e) => props.onSelect(e.currentTarget.value)}
+        >
+          <option value="">Select a receiver...</option>
           <For each={props.dongles}>
             {(dongle) => (
-              <div
-                class={`p-2 border rounded cursor-pointer transition-colors
-                        ${props.selectedDongle === dongle.id
-                          ? 'border-cyan bg-cyan/10'
-                          : 'border-border hover:border-border-focus'}`}
-                onClick={() => props.onSelect(dongle.id)}
-              >
-                <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <div class={`w-2 h-2 rounded-full ${dongle.running ? 'bg-status-online' : 'bg-status-offline'}`} />
-                    <span class="font-mono text-xs text-text-primary">{dongle.name}</span>
-                  </div>
-                  <span class="text-[8px] font-mono text-text-dim">{dongle.source?.type}</span>
-                </div>
-              </div>
+              <option value={dongle.id}>
+                {dongle.name} ({dongle.source?.type}) {dongle.running ? '● Running' : '○ Stopped'}
+              </option>
             )}
           </For>
-        </div>
+        </select>
+        <button class="sdr-btn sdr-btn-primary text-[9px] whitespace-nowrap" onClick={props.onAddDongle}>
+          + Receiver
+        </button>
       </div>
 
-      {/* Dongle detail/edit panel */}
-      <div class="w-1/2 border-l border-border pl-4">
-        <Show when={currentDongle()} fallback={
-          <div class="text-text-dim text-[10px] font-mono">Select a receiver to view details</div>
-        }>
-          {(dongle) => (
-            <div class="space-y-3">
-              <div class="flex justify-between items-center">
-                <div class="text-[10px] font-mono text-text-dim uppercase">Details</div>
-                <Show when={!editing()}>
-                  <button class="sdr-btn text-[9px]" onClick={startEdit}>Edit</button>
-                </Show>
+      {/* Dongle hardware settings */}
+      <Show when={currentDongle()}>
+        {(dongle) => (
+          <div class="border border-border rounded-md">
+            {/* Dongle header */}
+            <div class="flex items-center justify-between px-3 py-2 border-b border-border bg-sdr-base rounded-t-md">
+              <div class="flex items-center gap-2">
+                <div class={`w-2 h-2 rounded-full ${dongle().running ? 'bg-status-online' : 'bg-status-offline'}`} />
+                <span class="text-[11px] font-mono text-text-primary font-medium">{dongle().name}</span>
+                <span class="text-[9px] font-mono text-text-dim">{dongle().source?.type}</span>
               </div>
-              
-              <Show when={editing()} fallback={
-                <div class="space-y-2">
-                  <div class="text-[9px] font-mono text-text-primary">{dongle().name}</div>
-                  <div class="text-[8px] font-mono text-text-dim">Type: {dongle().source?.type}</div>
-                  <Show when={dongle().source?.host}>
-                    <div class="text-[8px] font-mono text-text-dim">Host: {dongle().source?.host}:{dongle().source?.port}</div>
-                  </Show>
-                </div>
-              }>
-                <div class="space-y-2">
+              <div class="flex items-center gap-1.5">
+                <button class="sdr-btn text-[8px]" onClick={() => props.onStart(dongle().id)}>Start</button>
+                <button class="sdr-btn text-[8px]" onClick={() => props.onStop(dongle().id)}>Stop</button>
+                <button class="sdr-btn text-[8px]" onClick={startDongleEdit}>
+                  {editingDongle() ? 'Cancel' : 'Edit'}
+                </button>
+              </div>
+            </div>
+
+            {/* Dongle edit form */}
+            <Show when={editingDongle()}>
+              <div class="p-3 border-b border-border bg-sdr-elevated space-y-3">
+                <div class="grid grid-cols-2 gap-3">
                   <div>
-                    <label class="text-[9px] font-mono text-text-dim block">Name</label>
-                    <input
-                      type="text"
-                      aria-label="Dongle name"
-                      value={formData().name || ''}
-                      onInput={(e) => setFormData({...formData(), name: e.currentTarget.value})}
-                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
-                    />
+                    <label class="block text-[9px] font-mono text-text-dim mb-0.5">Name</label>
+                    <input type="text" value={dongleForm().name || ''} onInput={(e) => setDongleForm({...dongleForm(), name: e.currentTarget.value})}
+                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                   </div>
-                  
                   <div>
-                    <label class="text-[9px] font-mono text-text-dim block">Source Type</label>
-                    <select
-                      aria-label="Source type"
-                      value={formData().sourceType || 'local'}
-                      onChange={(e) => setFormData({...formData(), sourceType: e.currentTarget.value})}
-                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
-                    >
+                    <label class="block text-[9px] font-mono text-text-dim mb-0.5">Source Type</label>
+                    <select value={dongleForm().sourceType || 'local'} onChange={(e) => setDongleForm({...dongleForm(), sourceType: e.currentTarget.value})}
+                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
                       <option value="local">Local (USB)</option>
                       <option value="rtl_tcp">RTL-TCP</option>
                       <option value="airspy_tcp">AirSpy TCP</option>
@@ -560,268 +598,497 @@ const DonglesTab: Component<{
                       <option value="demo">Demo</option>
                     </select>
                   </div>
+                </div>
 
-                  <Show when={['rtl_tcp', 'airspy_tcp', 'hfp_tcp', 'rsp_tcp'].includes(formData().sourceType)}>
+                <Show when={['rtl_tcp', 'airspy_tcp', 'hfp_tcp', 'rsp_tcp'].includes(dongleForm().sourceType)}>
+                  <div class="grid grid-cols-2 gap-3">
                     <div>
-                      <label class="text-[9px] font-mono text-text-dim block">Host</label>
-                      <input
-                        type="text"
-                        aria-label="Host address"
-                        value={formData().host || ''}
-                        onInput={(e) => setFormData({...formData(), host: e.currentTarget.value})}
+                      <label class="block text-[9px] font-mono text-text-dim mb-0.5">Host</label>
+                      <input type="text" value={dongleForm().host || ''} onInput={(e) => setDongleForm({...dongleForm(), host: e.currentTarget.value})}
                         placeholder="192.168.1.100"
-                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
-                      />
+                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                     </div>
                     <div>
-                      <label class="text-[9px] font-mono text-text-dim block">Port</label>
-                      <input
-                        type="number"
-                        aria-label="Port number"
-                        value={formData().port || 1234}
-                        onInput={(e) => setFormData({...formData(), port: parseInt(e.currentTarget.value) || 1234})}
-                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
-                      />
+                      <label class="block text-[9px] font-mono text-text-dim mb-0.5">Port</label>
+                      <input type="number" value={dongleForm().port || 1234} onInput={(e) => setDongleForm({...dongleForm(), port: parseInt(e.currentTarget.value) || 1234})}
+                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                     </div>
-                  </Show>
+                  </div>
+                </Show>
 
+                <div class="grid grid-cols-3 gap-3">
                   <div>
-                    <label class="text-[9px] font-mono text-text-dim block">PPM Correction</label>
-                    <input
-                      type="number"
-                      aria-label="PPM correction"
-                      step="0.1"
-                      value={formData().ppmCorrection || 0}
-                      onInput={(e) => setFormData({...formData(), ppmCorrection: parseFloat(e.currentTarget.value) || 0})}
-                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono"
-                    />
+                    <label class="block text-[9px] font-mono text-text-dim mb-0.5">Device Index</label>
+                    <input type="number" min="0" value={dongleForm().deviceIndex || 0} onInput={(e) => setDongleForm({...dongleForm(), deviceIndex: parseInt(e.currentTarget.value) || 0})}
+                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                   </div>
-
-                  <div class="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={formData().biasT || false}
-                      onChange={(e) => setFormData({...formData(), biasT: e.currentTarget.checked})}
-                      id="biasT"
-                    />
-                    <label for="biasT" class="text-[9px] font-mono text-text-dim">Bias-T</label>
+                  <div>
+                    <label class="block text-[9px] font-mono text-text-dim mb-0.5">PPM Correction</label>
+                    <input type="number" step="0.1" value={dongleForm().ppmCorrection || 0} onInput={(e) => setDongleForm({...dongleForm(), ppmCorrection: parseFloat(e.currentTarget.value) || 0})}
+                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                   </div>
-
-                  <div class="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={formData().autoStart !== false}
-                      onChange={(e) => setFormData({...formData(), autoStart: e.currentTarget.checked})}
-                      id="autoStart"
-                    />
-                    <label for="autoStart" class="text-[9px] font-mono text-text-dim">Auto-start</label>
-                  </div>
-
-                  <div class="flex gap-2 pt-2">
-                    <button class="sdr-btn text-[9px]" onClick={() => setEditing(false)}>Cancel</button>
-                    <button class="sdr-btn sdr-btn-primary text-[9px]" onClick={saveEdit}>Save</button>
+                  <div>
+                    <label class="block text-[9px] font-mono text-text-dim mb-0.5">Direct Sampling</label>
+                    <select value={dongleForm().directSampling || 0} onChange={(e) => setDongleForm({...dongleForm(), directSampling: parseInt(e.currentTarget.value)})}
+                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
+                      <option value={0}>Off</option>
+                      <option value={1}>I-ADC (Q branch)</option>
+                      <option value={2}>Q-ADC (I branch)</option>
+                    </select>
                   </div>
                 </div>
-              </Show>
 
-              <Show when={!editing()}>
-                <div class="flex gap-2 pt-2">
+                <div class="flex flex-wrap gap-4">
+                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                    <input type="checkbox" checked={dongleForm().biasT || false} onChange={(e) => setDongleForm({...dongleForm(), biasT: e.currentTarget.checked})} class="accent-cyan" />
+                    Bias-T
+                  </label>
+                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                    <input type="checkbox" checked={dongleForm().digitalAgc || false} onChange={(e) => setDongleForm({...dongleForm(), digitalAgc: e.currentTarget.checked})} class="accent-cyan" />
+                    Digital AGC
+                  </label>
+                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                    <input type="checkbox" checked={dongleForm().offsetTuning || false} onChange={(e) => setDongleForm({...dongleForm(), offsetTuning: e.currentTarget.checked})} class="accent-cyan" />
+                    Offset Tuning
+                  </label>
+                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                    <input type="checkbox" checked={dongleForm().autoStart !== false} onChange={(e) => setDongleForm({...dongleForm(), autoStart: e.currentTarget.checked})} class="accent-cyan" />
+                    Auto-start
+                  </label>
+                </div>
+
+                <div class="flex gap-2">
+                  <button class="sdr-btn text-[9px]" onClick={() => setEditingDongle(false)}>Cancel</button>
+                  <button class="sdr-btn sdr-btn-primary text-[9px]" onClick={saveDongle}>Save Receiver</button>
+                </div>
+              </div>
+            </Show>
+
+            {/* Profile tabs */}
+            <div class="flex flex-wrap items-center gap-0 border-b border-border bg-sdr-base">
+              <For each={dongle().profiles || []}>
+                {(profile: any) => (
                   <button
-                    class="sdr-btn text-[9px]"
-                    onClick={(e) => { e.stopPropagation(); props.onStart(dongle().id); }}
+                    class={`px-3 py-1.5 text-[9px] font-mono border-b-2 transition-colors
+                      ${activeProfileTab() === profile.id
+                        ? 'border-cyan text-cyan bg-sdr-surface'
+                        : 'border-transparent text-text-dim hover:text-text-secondary hover:bg-sdr-elevated'}`}
+                    onClick={() => setActiveProfileTab(profile.id)}
                   >
-                    Start
+                    {profile.name}
                   </button>
-                  <button
-                    class="sdr-btn text-[9px]"
-                    onClick={(e) => { e.stopPropagation(); props.onStop(dongle().id); }}
-                  >
-                    Stop
-                  </button>
-                </div>
-
-                <div class="pt-2">
-                  <div class="text-[9px] font-mono text-text-dim uppercase mb-1">Profiles ({dongle().profiles?.length || 0})</div>
-                  <For each={dongle().profiles || []}>
-                    {(profile: any) => (
-                      <div class="text-[9px] font-mono text-text-secondary py-0.5">
-                        {profile.name} — {profile.centerFrequency / 1e6}MHz {profile.defaultMode}
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </Show>
+                )}
+              </For>
+              <button
+                class="px-3 py-1.5 text-[9px] font-mono text-text-muted hover:text-cyan border-b-2 border-transparent transition-colors"
+                onClick={props.onAddProfile}
+                title="Add new profile"
+              >
+                +
+              </button>
             </div>
-          )}
-        </Show>
-      </div>
-    </div>
-  );
-};
 
-const ProfilesTab: Component<{
-  dongles: any[];
-  selectedDongle: string | null;
-  onSelect: (id: string) => void;
-  onAdd: () => void;
-  onSwitch: (dongleId: string, profileId: string) => void;
-  onUpdate: (dongleId: string, profileId: string, updates: any) => void;
-  password: () => string;
-}> = (props) => {
-  const currentDongle = () => props.dongles.find(d => d.id === props.selectedDongle);
-  const [editingProfile, setEditingProfile] = createSignal<string | null>(null);
-  const [formData, setFormData] = createSignal<any>({});
-
-  const startEdit = (profile: any) => {
-    setFormData({...profile});
-    setEditingProfile(profile.id);
-  };
-
-  const saveEdit = (profileId: string) => {
-    if (props.selectedDongle()) {
-      props.onUpdate(props.selectedDongle()!, profileId, formData());
-      setEditingProfile(null);
-    }
-  };
-
-  return (
-    <div class="flex gap-4 h-full">
-      <div class="w-1/2 space-y-2">
-        <div class="flex justify-between items-center mb-2">
-          <span class="text-[10px] font-mono text-text-dim uppercase">Select Receiver</span>
-        </div>
-        <select
-          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1.5
-                 text-[10px] font-mono text-text-primary"
-          value={props.selectedDongle || ''}
-          onChange={(e) => props.onSelect(e.currentTarget.value)}
-        >
-          <option value="">Choose a receiver...</option>
-          <For each={props.dongles}>
-            {(dongle) => (
-              <option value={dongle.id}>{dongle.name}</option>
-            )}
-          </For>
-        </select>
-
-        <Show when={currentDongle()}>
-          <div class="flex justify-between items-center mt-4">
-            <span class="text-[10px] font-mono text-text-dim uppercase">Profiles</span>
-            <button
-              class="sdr-btn sdr-btn-primary text-[9px]"
-              onClick={props.onAdd}
-            >
-              + Add Profile
-            </button>
-          </div>
-
-          <div class="space-y-1 max-h-[250px] overflow-y-auto">
-            <For each={currentDongle()?.profiles || []}>
-              {(profile: any) => (
-                <div class="p-2 border border-border rounded">
-                  <Show when={editingProfile() === profile.id} fallback={
-                    <>
-                      <div class="flex items-center justify-between">
-                        <span class="font-mono text-xs text-text-primary">{profile.name}</span>
-                        <span class="text-[8px] font-mono text-cyan">{profile.defaultMode}</span>
-                      </div>
-                      <div class="text-[8px] font-mono text-text-dim mt-1">
-                        {profile.centerFrequency / 1e6} MHz | {profile.sampleRate / 1e3} kS/s | FFT {profile.fftSize}
-                      </div>
-                      <div class="flex gap-1 mt-1">
-                        <button
-                          class="sdr-btn text-[8px]"
-                          onClick={() => startEdit(profile)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          class="sdr-btn text-[8px]"
-                          onClick={() => props.onSwitch(props.selectedDongle!, profile.id)}
-                        >
-                          Use This
-                        </button>
-                      </div>
-                    </>
-                  }>
-                    <div class="space-y-1">
-                      <input
-                        type="text"
-                        aria-label="Profile name"
-                        value={formData().name || ''}
-                        onInput={(e) => setFormData({...formData(), name: e.currentTarget.value})}
-                        class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
-                        placeholder="Profile name"
-                      />
-                      <input
-                        type="number"
-                        aria-label="Center frequency in Hz"
-                        value={formData().centerFrequency || 0}
-                        onInput={(e) => setFormData({...formData(), centerFrequency: parseInt(e.currentTarget.value) || 0})}
-                        class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
-                        placeholder="Frequency Hz"
-                      />
-                      <input
-                        type="number"
-                        aria-label="Sample rate"
-                        value={formData().sampleRate || 0}
-                        onInput={(e) => setFormData({...formData(), sampleRate: parseInt(e.currentTarget.value) || 0})}
-                        class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
-                        placeholder="Sample rate"
-                      />
-                      <select
-                        aria-label="Default demodulation mode"
-                        value={formData().defaultMode || 'wfm'}
-                        onChange={(e) => setFormData({...formData(), defaultMode: e.currentTarget.value})}
-                        class="w-full bg-sdr-base border border-border rounded-sm px-1 py-0.5 text-[9px] font-mono"
-                      >
-                        <option value="wfm">WFM</option>
-                        <option value="nfm">NFM</option>
-                        <option value="am">AM</option>
-                        <option value="usb">USB</option>
-                        <option value="lsb">LSB</option>
-                        <option value="cw">CW</option>
-                        <option value="raw">RAW</option>
+            {/* Active profile editor */}
+            <Show when={activeProfile()} fallback={
+              <div class="p-4 text-[10px] font-mono text-text-dim">
+                No profiles yet. Click + to create one.
+              </div>
+            }>
+              {(_profile) => (
+                <div class="p-3 space-y-4">
+                  {/* Row 1: Name + Mode + Description */}
+                  <div class="grid grid-cols-3 gap-3">
+                    <div>
+                      <label class="block text-[9px] font-mono text-text-dim mb-0.5">Profile Name</label>
+                      <input type="text" value={profileForm().name || ''} onInput={(e) => updateProfileField('name', e.currentTarget.value)}
+                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                    </div>
+                    <div>
+                      <label class="block text-[9px] font-mono text-text-dim mb-0.5">Default Mode</label>
+                      <select value={profileForm().defaultMode || 'nfm'} onChange={(e) => updateProfileField('defaultMode', e.currentTarget.value)}
+                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
+                        <option value="wfm">WFM (Wideband FM)</option>
+                        <option value="nfm">NFM (Narrowband FM)</option>
+                        <option value="am">AM (Amplitude Mod)</option>
+                        <option value="am-stereo">AM Stereo (C-QUAM)</option>
+                        <option value="usb">USB (Upper Sideband)</option>
+                        <option value="lsb">LSB (Lower Sideband)</option>
+                        <option value="cw">CW (Morse)</option>
+                        <option value="raw">RAW (Passthrough)</option>
                       </select>
-                      <div class="flex gap-1">
-                        <button class="sdr-btn text-[8px]" onClick={() => setEditingProfile(null)}>Cancel</button>
-                        <button class="sdr-btn sdr-btn-primary text-[8px]" onClick={() => saveEdit(profile.id)}>Save</button>
+                    </div>
+                    <div>
+                      <label class="block text-[9px] font-mono text-text-dim mb-0.5">Description</label>
+                      <input type="text" value={profileForm().description || ''} onInput={(e) => updateProfileField('description', e.currentTarget.value)}
+                        placeholder="e.g. FM broadcast band"
+                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none" />
+                    </div>
+                  </div>
+
+                  {/* Row 2: Frequency settings */}
+                  <div>
+                    <h4 class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">Frequency & Sampling</h4>
+                    <div class="grid grid-cols-3 gap-3">
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Center Frequency (Hz)</label>
+                        <input type="number" value={profileForm().centerFrequency || 0} onInput={(e) => updateProfileField('centerFrequency', parseInt(e.currentTarget.value) || 0)}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                        <span class="text-[8px] font-mono text-text-muted">{((profileForm().centerFrequency || 0) / 1e6).toFixed(4)} MHz</span>
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Sample Rate (S/s)</label>
+                        <select value={profileForm().sampleRate || 2400000} onChange={(e) => updateProfileField('sampleRate', parseInt(e.currentTarget.value))}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
+                          <option value={250000}>250 kS/s</option>
+                          <option value={500000}>500 kS/s</option>
+                          <option value={1000000}>1.0 MS/s</option>
+                          <option value={1024000}>1.024 MS/s</option>
+                          <option value={1200000}>1.2 MS/s</option>
+                          <option value={1400000}>1.4 MS/s</option>
+                          <option value={1600000}>1.6 MS/s</option>
+                          <option value={1800000}>1.8 MS/s</option>
+                          <option value={2000000}>2.0 MS/s</option>
+                          <option value={2400000}>2.4 MS/s</option>
+                          <option value={2800000}>2.8 MS/s</option>
+                          <option value={3200000}>3.2 MS/s</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Default Bandwidth (Hz)</label>
+                        <input type="number" value={profileForm().defaultBandwidth || 12500} onInput={(e) => updateProfileField('defaultBandwidth', parseInt(e.currentTarget.value) || 12500)}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                       </div>
                     </div>
-                  </Show>
+                  </div>
+
+                  {/* Row 3: Gain & FFT */}
+                  <div>
+                    <h4 class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">Gain & FFT</h4>
+                    <div class="grid grid-cols-4 gap-3">
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">RF Gain (dB)</label>
+                        <input type="number" step="0.1"
+                          value={profileForm().gain ?? ''}
+                          onInput={(e) => {
+                            const v = e.currentTarget.value;
+                            updateProfileField('gain', v === '' ? null : parseFloat(v));
+                          }}
+                          placeholder="Auto"
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none" />
+                        <span class="text-[8px] font-mono text-text-muted">Empty = AGC</span>
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">FFT Size</label>
+                        <select value={profileForm().fftSize || 2048} onChange={(e) => updateProfileField('fftSize', parseInt(e.currentTarget.value))}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
+                          <option value={256}>256</option>
+                          <option value={512}>512</option>
+                          <option value={1024}>1024</option>
+                          <option value={2048}>2048</option>
+                          <option value={4096}>4096</option>
+                          <option value={8192}>8192</option>
+                          <option value={16384}>16384</option>
+                          <option value={32768}>32768</option>
+                          <option value={65536}>65536</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">FFT FPS</label>
+                        <input type="number" min="1" max="60" value={profileForm().fftFps || 30} onInput={(e) => updateProfileField('fftFps', Math.max(1, Math.min(60, parseInt(e.currentTarget.value) || 30)))}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Tune Offset (Hz)</label>
+                        <input type="number" value={profileForm().defaultTuneOffset || 0} onInput={(e) => updateProfileField('defaultTuneOffset', parseInt(e.currentTarget.value) || 0)}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div class="flex items-center gap-2 pt-2 border-t border-border">
+                    <button
+                      class={`sdr-btn sdr-btn-primary text-[9px] ${!profileDirty() ? 'opacity-50' : ''}`}
+                      onClick={saveProfile}
+                      disabled={!profileDirty()}
+                    >
+                      Save Profile
+                    </button>
+                    <button
+                      class="sdr-btn text-[9px]"
+                      onClick={() => props.onSwitchProfile(dongle().id, activeProfileTab()!)}
+                    >
+                      Activate
+                    </button>
+                    <Show when={store.activeProfileId() === activeProfileTab()}>
+                      <span class="text-[9px] font-mono text-status-online ml-2">Active</span>
+                    </Show>
+                  </div>
                 </div>
               )}
-            </For>
+            </Show>
           </div>
-        </Show>
-      </div>
-
-      <div class="w-1/2 border-l border-border pl-4">
-        <Show when={currentDongle()?.profiles?.length}>
-          <div class="text-[10px] font-mono text-text-dim uppercase">Help</div>
-          <div class="mt-2 text-[9px] font-mono text-text-dim space-y-1">
-            <div>• Click "Edit" to modify profile settings</div>
-            <div>• Click "Use This" to switch active profile</div>
-            <div>• Click "+ Add Profile" to create new profile</div>
-            <div>• Changes auto-save to config.yaml</div>
-          </div>
-        </Show>
-      </div>
+        )}
+      </Show>
     </div>
   );
 };
 
-const ServerTab: Component = () => {
+const ServerTab: Component<{ password: () => string }> = (props) => {
+  const [callsign, setCallsign] = createSignal('');
+  const [description, setDescription] = createSignal('');
+  const [location, setLocation] = createSignal('');
+  const [host, setHost] = createSignal('');
+  const [port, setPort] = createSignal(3000);
+  const [adminPassword, setAdminPassword] = createSignal('');
+  const [demoMode, setDemoMode] = createSignal(false);
+  const [fftHistoryFftSize, setFftHistoryFftSize] = createSignal(8192);
+  const [fftHistoryCompression, setFftHistoryCompression] = createSignal('deflate');
+  const [saving, setSaving] = createSignal(false);
+  const [saved, setSaved] = createSignal(false);
+
+  const authHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${props.password()}`,
+  });
+
+  // Load current server config on mount
+  const loadConfig = async () => {
+    try {
+      const res = await fetch('/api/admin/server/config', { headers: authHeaders(), credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setHost(data.host ?? '');
+        setPort(data.port ?? 3000);
+        setAdminPassword(data.adminPassword ?? '');
+        setDemoMode(data.demoMode ?? false);
+        setCallsign(data.callsign ?? '');
+        setDescription(data.description ?? '');
+        setLocation(data.location ?? '');
+        setFftHistoryFftSize(data.fftHistoryFftSize ?? 8192);
+        setFftHistoryCompression(data.fftHistoryCompression ?? 'deflate');
+      }
+    } catch { /* ignore */ }
+  };
+
+  createEffect(() => {
+    if (store.adminModalOpen()) {
+      loadConfig();
+    }
+  });
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(false);
+    try {
+      const res = await fetch('/api/admin/server/config', {
+        method: 'PUT',
+        headers: authHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          adminPassword: adminPassword(),
+          demoMode: demoMode(),
+          callsign: callsign(),
+          description: description(),
+          location: location(),
+          fftHistoryFftSize: fftHistoryFftSize(),
+          fftHistoryCompression: fftHistoryCompression(),
+        }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } catch { /* ignore */ }
+    setSaving(false);
+  };
+
   return (
-    <div class="space-y-4">
-      <p class="text-text-secondary text-[11px]">
-        Server configuration options will appear here.
-      </p>
-      <div class="p-4 bg-sdr-base border border-border rounded-md">
-        <div class="text-[10px] font-mono text-text-dim">
-          Port: 3000<br />
-          Host: 0.0.0.0
+    <div class="space-y-5">
+      {/* Station Info Section */}
+      <div>
+        <h3 class="text-[10px] font-mono text-text-secondary uppercase tracking-wider mb-3 border-b border-border pb-1">
+          Station Information
+        </h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              Callsign
+            </label>
+            <input
+              type="text"
+              value={callsign()}
+              onInput={(e) => setCallsign(e.currentTarget.value)}
+              placeholder="e.g. N0CALL"
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-primary
+                     placeholder:text-text-muted
+                     focus:border-border-focus focus:outline-none"
+            />
+          </div>
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              Description
+            </label>
+            <textarea
+              value={description()}
+              onInput={(e) => setDescription(e.currentTarget.value)}
+              placeholder="e.g. Wideband RTL-SDR receiver covering FM broadcast and air band"
+              rows={2}
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-primary
+                     placeholder:text-text-muted resize-none
+                     focus:border-border-focus focus:outline-none"
+            />
+          </div>
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              Location
+            </label>
+            <input
+              type="text"
+              value={location()}
+              onInput={(e) => setLocation(e.currentTarget.value)}
+              placeholder="e.g. San Francisco, CA — Grid CM87"
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-primary
+                     placeholder:text-text-muted
+                     focus:border-border-focus focus:outline-none"
+            />
+          </div>
         </div>
+      </div>
+
+      {/* Network Section */}
+      <div>
+        <h3 class="text-[10px] font-mono text-text-secondary uppercase tracking-wider mb-3 border-b border-border pb-1">
+          Network (requires restart)
+        </h3>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              Host
+            </label>
+            <input
+              type="text"
+              value={host()}
+              disabled
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-dim opacity-60 cursor-not-allowed"
+            />
+          </div>
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              Port
+            </label>
+            <input
+              type="number"
+              value={port()}
+              disabled
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-dim opacity-60 cursor-not-allowed"
+            />
+          </div>
+        </div>
+        <p class="text-[8px] font-mono text-text-muted mt-1">
+          Host and port require a server restart to take effect.
+        </p>
+      </div>
+
+      {/* Security Section */}
+      <div>
+        <h3 class="text-[10px] font-mono text-text-secondary uppercase tracking-wider mb-3 border-b border-border pb-1">
+          Security
+        </h3>
+        <div>
+          <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+            Admin Password
+          </label>
+          <input
+            type="password"
+            value={adminPassword()}
+            onInput={(e) => setAdminPassword(e.currentTarget.value)}
+            class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                   text-[11px] font-mono text-text-primary
+                   focus:border-border-focus focus:outline-none"
+          />
+        </div>
+      </div>
+
+      {/* DSP Section */}
+      <div>
+        <h3 class="text-[10px] font-mono text-text-secondary uppercase tracking-wider mb-3 border-b border-border pb-1">
+          DSP / FFT History
+        </h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              History FFT Size
+            </label>
+            <select
+              value={fftHistoryFftSize()}
+              onChange={(e) => setFftHistoryFftSize(Number(e.currentTarget.value))}
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-primary
+                     focus:border-border-focus focus:outline-none"
+            >
+              <option value={256}>256</option>
+              <option value={512}>512</option>
+              <option value={1024}>1024</option>
+              <option value={2048}>2048</option>
+              <option value={4096}>4096</option>
+              <option value={8192}>8192</option>
+              <option value={16384}>16384</option>
+              <option value={32768}>32768</option>
+              <option value={65536}>65536</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1">
+              History Compression
+            </label>
+            <select
+              value={fftHistoryCompression()}
+              onChange={(e) => setFftHistoryCompression(e.currentTarget.value)}
+              class="w-full bg-sdr-base border border-border rounded-sm px-3 py-1.5
+                     text-[11px] font-mono text-text-primary
+                     focus:border-border-focus focus:outline-none"
+            >
+              <option value="deflate">Deflate (best ratio, ~8-12x)</option>
+              <option value="adpcm">ADPCM (~8x, lower CPU)</option>
+              <option value="none">None (uncompressed)</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="demoMode"
+              checked={demoMode()}
+              onChange={(e) => setDemoMode(e.currentTarget.checked)}
+              class="accent-cyan"
+            />
+            <label for="demoMode" class="text-[10px] font-mono text-text-secondary">
+              Demo Mode (simulated signals, no hardware)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {/* Save button */}
+      <div class="flex items-center gap-3 pt-2 border-t border-border">
+        <button
+          class="px-4 py-1.5 bg-sdr-elevated border border-border rounded-sm
+                 text-[10px] font-mono text-text-primary
+                 hover:border-border-focus hover:text-cyan transition-colors
+                 disabled:opacity-50"
+          onClick={handleSave}
+          disabled={saving()}
+        >
+          {saving() ? 'Saving...' : 'Save Configuration'}
+        </button>
+        <Show when={saved()}>
+          <span class="text-[10px] font-mono text-status-online">Saved to config.yaml</span>
+        </Show>
       </div>
     </div>
   );

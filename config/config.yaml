@@ -16,16 +16,11 @@ server:
   port: 3000
   adminPassword: admin
   demoMode: false
-  # FFT resolution used for history storage (independent of per-profile fftSize).
-  # Live frames are downsampled to this size using max-hold before storage.
-  # Clients interpolate back up to the live fftSize on display.
-  # Must be a power of 2 between 256 and 65536.
+  callsign: ''
+  description: ''
+  location: ''
   fftHistoryFftSize: 4096
-  # Compression codec for waterfall history sent on page load/reconnect.
-  # 'deflate' — delta+zlib, best ratio (~8-12x), recommended
-  # 'adpcm'   — IMA-ADPCM, ~8x, lower CPU
-  # 'none'    — uncompressed (64MB+ for large fftSize)
-  fftHistoryCompression: adpcm
+  fftHistoryCompression: deflate
 dongles:
   - id: dongle-remote
     deviceIndex: 0

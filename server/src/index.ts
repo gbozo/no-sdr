@@ -10,8 +10,10 @@ import { serve } from '@hono/node-server';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { cors } from 'hono/cors';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig, writeDefaultConfig, saveConfig } from './config.js';
@@ -25,6 +27,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ---- Load Configuration ----
 const configPath = process.env.NODE_SDR_CONFIG;
 const config = loadConfig(configPath);
+
+// ---- Admin Session ----
+// Generate a per-boot secret for signing session cookies.
+// Sessions invalidate on server restart (stateless, no DB needed).
+const SESSION_SECRET = randomBytes(32).toString('hex');
+const COOKIE_NAME = 'node_sdr_admin';
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+
+function generateSessionToken(): string {
+  const payload = `${config.server.adminPassword}:${SESSION_SECRET}`;
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+function isValidSessionToken(token: string): boolean {
+  return token === generateSessionToken();
+}
 
 // ---- Initialize Core Systems ----
 const dongleManager = new DongleManager(config);
@@ -68,6 +86,15 @@ app.get('/api/dongles/:id/profiles', (c) => {
   return c.json(profiles);
 });
 
+// Public server info (callsign, description, location)
+app.get('/api/server/info', (c) => {
+  return c.json({
+    callsign: config.server.callsign ?? '',
+    description: config.server.description ?? '',
+    location: config.server.location ?? '',
+  });
+});
+
 // Generate default config (admin utility)
 app.post('/api/admin/generate-config', (c) => {
   try {
@@ -82,6 +109,14 @@ app.post('/api/admin/generate-config', (c) => {
 
 // Simple admin auth middleware
 const adminAuth = async (c: any, next: any) => {
+  // Check cookie first
+  const sessionCookie = getCookie(c, COOKIE_NAME);
+  if (sessionCookie && isValidSessionToken(sessionCookie)) {
+    await next();
+    return;
+  }
+
+  // Fall back to Authorization header
   const auth = c.req.header('Authorization');
   if (!auth) {
     return c.json({ error: 'Authorization required' }, 401);
@@ -96,13 +131,36 @@ const adminAuth = async (c: any, next: any) => {
   await next();
 };
 
-// Admin login check
+// Admin login — sets session cookie
 app.post('/api/admin/login', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (body.password === config.server.adminPassword) {
+    const token = generateSessionToken();
+    setCookie(c, COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: false, // Allow HTTP for local dev; set true behind HTTPS proxy
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: COOKIE_MAX_AGE,
+    });
     return c.json({ ok: true, message: 'Authenticated' });
   }
   return c.json({ error: 'Invalid password' }, 403);
+});
+
+// Admin session check — returns 200 if cookie is valid
+app.get('/api/admin/session', (c) => {
+  const sessionCookie = getCookie(c, COOKIE_NAME);
+  if (sessionCookie && isValidSessionToken(sessionCookie)) {
+    return c.json({ ok: true, authenticated: true });
+  }
+  return c.json({ ok: false, authenticated: false }, 401);
+});
+
+// Admin logout — clears session cookie
+app.post('/api/admin/logout', (c) => {
+  deleteCookie(c, COOKIE_NAME, { path: '/' });
+  return c.json({ ok: true });
 });
 
 // Admin: Start a dongle
@@ -155,6 +213,60 @@ app.get('/api/admin/status', adminAuth, (c) => {
     memoryUsage: process.memoryUsage(),
     ...status,
   });
+});
+
+// Admin: Update server info (callsign, description, location)
+app.put('/api/admin/server/info', adminAuth, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (body.callsign !== undefined) config.server.callsign = String(body.callsign);
+  if (body.description !== undefined) config.server.description = String(body.description);
+  if (body.location !== undefined) config.server.location = String(body.location);
+  saveConfig(config);
+  return c.json({
+    ok: true,
+    callsign: config.server.callsign,
+    description: config.server.description,
+    location: config.server.location,
+  });
+});
+
+// Admin: Get full server config
+app.get('/api/admin/server/config', adminAuth, (c) => {
+  return c.json({
+    host: config.server.host,
+    port: config.server.port,
+    adminPassword: config.server.adminPassword,
+    demoMode: config.server.demoMode,
+    callsign: config.server.callsign ?? '',
+    description: config.server.description ?? '',
+    location: config.server.location ?? '',
+    fftHistoryFftSize: config.server.fftHistoryFftSize,
+    fftHistoryCompression: config.server.fftHistoryCompression,
+  });
+});
+
+// Admin: Update server config (all fields except host/port which require restart)
+app.put('/api/admin/server/config', adminAuth, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (body.adminPassword !== undefined) config.server.adminPassword = String(body.adminPassword);
+  if (body.demoMode !== undefined) config.server.demoMode = Boolean(body.demoMode);
+  if (body.callsign !== undefined) config.server.callsign = String(body.callsign);
+  if (body.description !== undefined) config.server.description = String(body.description);
+  if (body.location !== undefined) config.server.location = String(body.location);
+  if (body.fftHistoryFftSize !== undefined) {
+    const size = Number(body.fftHistoryFftSize);
+    if (size >= 256 && size <= 65536 && (size & (size - 1)) === 0) {
+      config.server.fftHistoryFftSize = size;
+    }
+  }
+  if (body.fftHistoryCompression !== undefined) {
+    const codec = String(body.fftHistoryCompression);
+    if (['deflate', 'adpcm', 'none'].includes(codec)) {
+      config.server.fftHistoryCompression = codec as 'deflate' | 'adpcm' | 'none';
+    }
+  }
+  saveConfig(config);
+  return c.json({ ok: true });
 });
 
 // ---- Admin: Dongle Management ----
@@ -401,10 +513,14 @@ const server = serve(
       { host: info.address, port: info.port },
       `node-sdr server started`,
     );
-    logger.info(
-      { dongles: config.dongles.length },
-      `Configured dongles: ${config.dongles.map((d) => d.name).join(', ')}`,
-    );
+    if (config.dongles.length > 0) {
+      logger.info(
+        { dongles: config.dongles.length },
+        `Configured dongles: ${config.dongles.map((d) => d.name).join(', ')}`,
+      );
+    } else {
+      logger.info('No receivers configured — add them via the admin panel');
+    }
   },
 );
 

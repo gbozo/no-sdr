@@ -65,7 +65,7 @@ const DongleConfigSchema = z.object({
   serial: z.string().optional(),
   ppmCorrection: z.number().default(0),
   source: SourceConfigSchema,
-  profiles: z.array(DongleProfileSchema).min(1),
+  profiles: z.array(DongleProfileSchema).default([]),
   autoStart: z.boolean().default(true),
 
   // ---- Hardware options (RTL-SDR) ----
@@ -115,6 +115,12 @@ const ServerConfigSchema = z.object({
     port: z.number().int().positive().default(3000),
     adminPassword: z.string().min(1).default('admin'),
     demoMode: z.boolean().default(false),
+    /** Operator callsign (e.g. ham radio callsign) */
+    callsign: z.string().default(''),
+    /** Description of this SDR station */
+    description: z.string().default(''),
+    /** Geographic location / QTH of the SDR */
+    location: z.string().default(''),
     /**
      * FFT bin count used for history storage.
      * Independent of per-profile fftSize — live frames are downsampled to this
@@ -133,7 +139,7 @@ const ServerConfigSchema = z.object({
      */
     fftHistoryCompression: z.enum(['deflate', 'adpcm', 'none']).default('deflate'),
   }),
-  dongles: z.array(DongleConfigSchema).min(1),
+  dongles: z.array(DongleConfigSchema).default([]),
 });
 
 export type ValidatedConfig = z.infer<typeof ServerConfigSchema>;
@@ -169,8 +175,10 @@ export function loadConfig(configPath?: string): ValidatedConfig {
   if (!filePath) {
     logger.warn(
       { searchPaths },
-      'No config file found, generating default config',
+      'No config file found, starting with defaults (configure via admin panel)',
     );
+    // Set the resolved path so saveConfig knows where to write
+    resolvedConfigPath = path.join(PROJECT_ROOT, 'config', 'config.yaml');
     return getDefaultConfig();
   }
 
@@ -181,8 +189,8 @@ export function loadConfig(configPath?: string): ValidatedConfig {
 
   const result = ServerConfigSchema.safeParse(parsed);
   if (!result.success) {
-    logger.error({ errors: result.error.issues }, 'Configuration validation failed');
-    throw new Error(`Invalid configuration: ${result.error.message}`);
+    logger.error({ errors: result.error.issues }, 'Configuration validation failed — falling back to defaults');
+    return getDefaultConfig();
   }
 
   // Populate dongleId on profiles
@@ -204,17 +212,24 @@ export function loadConfig(configPath?: string): ValidatedConfig {
 }
 
 function getDefaultConfig(): ValidatedConfig {
-  logger.info('Using default demo configuration (no config file found)');
+  const isDemoMode = !!process.env.NODE_SDR_DEMO;
+  logger.info(isDemoMode
+    ? 'Using default demo configuration (NODE_SDR_DEMO=1)'
+    : 'Using empty default configuration — add receivers via admin panel',
+  );
   return {
     server: {
       host: '0.0.0.0',
       port: 3000,
       adminPassword: 'admin',
-      demoMode: true,
+      demoMode: isDemoMode,
+      callsign: '',
+      description: '',
+      location: '',
       fftHistoryFftSize: 8192,
       fftHistoryCompression: 'deflate' as const,
     },
-    dongles: [
+    dongles: isDemoMode ? [
       {
         id: 'dongle-0',
         deviceIndex: 0,
@@ -239,7 +254,7 @@ function getDefaultConfig(): ValidatedConfig {
           },
         ],
       },
-    ],
+    ] : [],
   };
 }
 
