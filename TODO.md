@@ -50,6 +50,7 @@
 ## Completed (Recent)
 
 - [x] **Dongle & Profile selector dropdown** — new fancy dropdown above demodulation section in sidebar. Shows "Profile Name › Frequency" in trigger, lists all dongles with their profiles, active dongle info below. Replaces old basic DongleSelector at bottom.
+- [x] **Profile switching fixed** — subscribe command now triggers `switchProfile` when profileId differs from active. Server rebuilds IQ extractors for all existing clients on profile change. Dropdown and admin panel both work correctly. Added reactive `activeProfileId` store signal updated on `subscribed`/`profile_changed` events.
 - [x] **Codec preferences persisted to localStorage** — fftCodec and iqCodec now saved across page reloads. Always sent to server on subscribe (removes conditional check).
 - [x] **DSP allocation optimizations** — eliminated per-frame GC pressure in client demodulators: `iqInt16ToFloat()` uses shared scratch buffers, `processMonoPath()` and `processWfmStereo()` use pre-allocated Float32Array outputs instead of dynamic `number[]` arrays (~6-8 MB/s GC pressure removed for WFM stereo).
 - [x] **ADPCM FFT decode optimization** — eliminated intermediate Int16Array allocation by decoding ADPCM nibbles directly to Float32 (÷100 inline). Saves ~128KB allocation per frame at 65536 FFT bins.

@@ -52,6 +52,7 @@ function createStore() {
   const [dongles, setDongles] = createSignal<DongleInfo[]>([]);
   const [activeDongleId, setActiveDongleId] = createSignal('');
   const [activeProfile, setActiveProfile] = createSignal<DongleProfile | null>(null);
+  const [activeProfileId, setActiveProfileId] = createSignal('');
   const [profiles, setProfiles] = createSignal<DongleProfile[]>([]);
 
   // ---- Tuning ----
@@ -167,6 +168,7 @@ function createStore() {
     dongles, setDongles,
     activeDongleId, setActiveDongleId,
     activeProfile, setActiveProfile,
+    activeProfileId, setActiveProfileId,
     profiles, setProfiles,
 
     // Tuning

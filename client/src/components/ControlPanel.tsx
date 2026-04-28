@@ -214,6 +214,14 @@ const DongleProfileSelector: Component = () => {
     } catch { /* ignore */ }
   };
 
+  // Load profiles for the active dongle eagerly (so trigger label shows profile name)
+  createEffect(() => {
+    const dongleId = store.activeDongleId();
+    if (dongleId && !profileMap()[dongleId]) {
+      fetchProfiles(dongleId);
+    }
+  });
+
   // Load profiles for all dongles when dropdown opens
   createEffect(() => {
     if (open()) {
@@ -231,10 +239,10 @@ const DongleProfileSelector: Component = () => {
     if (!dongle) return null;
     const freq = store.centerFrequency();
     const mhz = (freq / 1e6).toFixed(3);
-    // Find active profile name
+    // Find active profile name using the reactive activeProfileId signal
     const dongleProfileList = profileMap()[dongle.id] ?? [];
-    const activeProfile = dongleProfileList.find(p => p.id === dongle.activeProfileId);
-    const profileName = activeProfile?.name ?? dongle.activeProfileId ?? '';
+    const activeProfile = dongleProfileList.find(p => p.id === store.activeProfileId());
+    const profileName = activeProfile?.name ?? store.activeProfileId() ?? '';
     return { dongleName: dongle.name, freq: `${mhz} MHz`, profileName };
   };
 
@@ -326,7 +334,7 @@ const DongleProfileSelector: Component = () => {
                       <div class="py-0.5">
                         <For each={dongleProfiles()}>
                           {(profile) => {
-                            const isActive = () => store.activeDongleId() === dongle.id && dongle.activeProfileId === profile.id;
+                            const isActive = () => store.activeDongleId() === dongle.id && store.activeProfileId() === profile.id;
                             return (
                               <button
                                 class={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors rounded-none
@@ -2189,7 +2197,7 @@ const AdminPanel: Component = () => {
                           <button
                             class={`w-full text-left px-2 py-1 rounded-sm text-[9px] font-mono
                                     transition-colors duration-100
-                                    ${dongle.activeProfileId === profile.id
+                                    ${store.activeProfileId() === profile.id
                                       ? 'bg-cyan-dim text-cyan'
                                       : 'text-text-secondary hover:bg-sdr-hover'}`}
                             onClick={() => handleSwitchProfile(dongle.id, profile.id)}

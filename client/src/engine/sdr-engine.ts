@@ -811,6 +811,7 @@ export class SdrEngine {
         const audioWasActive = this.audio.isInitialized;
 
         store.setActiveDongleId(meta.dongleId);
+        store.setActiveProfileId(meta.profileId ?? '');
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
@@ -905,6 +906,7 @@ export class SdrEngine {
       }
 
       case 'profile_changed':
+        store.setActiveProfileId(meta.profileId ?? '');
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);

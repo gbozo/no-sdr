@@ -225,6 +225,26 @@ export class WebSocketManager {
       // Reset adaptive noise floor EMA so the new band's floor is learned fresh
       this.fftNoiseFloorEma.delete(dongleId);
 
+      // Rebuild IQ extractors for all clients on this dongle with the new profile's sample rate
+      const iqOutputRate = getOutputSampleRate(profile.defaultMode);
+      for (const client of this.clients.values()) {
+        if (client.session.dongleId === dongleId) {
+          client.session.mode = profile.defaultMode;
+          client.session.bandwidth = profile.defaultBandwidth;
+          client.session.tuneOffset = profile.defaultTuneOffset;
+          client.iqExtractor = new IqExtractor({
+            inputSampleRate: profile.sampleRate,
+            outputSampleRate: iqOutputRate,
+            tuneOffset: profile.defaultTuneOffset,
+          });
+          this.resetIqAccumBuffer(client, iqOutputRate);
+          // Rebuild Opus pipeline if active
+          if (client.opusPipeline) {
+            client.opusPipeline.setMode(profile.defaultMode, iqOutputRate);
+          }
+        }
+      }
+
       // Notify all clients on this dongle
       this.broadcastToDongle(dongleId, packMetaMessage({
         type: 'profile_changed',
@@ -233,7 +253,7 @@ export class WebSocketManager {
         centerFreq: profile.centerFrequency,
         sampleRate: profile.sampleRate,
         fftSize: profile.fftSize,
-        iqSampleRate: getOutputSampleRate(profile.defaultMode),
+        iqSampleRate: iqOutputRate,
         mode: profile.defaultMode,
       }));
     });
@@ -547,7 +567,9 @@ export class WebSocketManager {
   private processCommand(client: ConnectedClient, cmd: ClientCommand): void {
     switch (cmd.cmd) {
       case 'subscribe':
-        this.handleSubscribe(client, cmd.dongleId, cmd.profileId);
+        this.handleSubscribe(client, cmd.dongleId, cmd.profileId).catch(err => {
+          logger.error({ err, clientId: client.id }, 'Subscribe handler failed');
+        });
         break;
 
       case 'unsubscribe':
@@ -692,7 +714,7 @@ export class WebSocketManager {
     }
   }
 
-  private handleSubscribe(client: ConnectedClient, dongleId: string, profileId?: string): void {
+  private async handleSubscribe(client: ConnectedClient, dongleId: string, profileId?: string): Promise<void> {
     // Unsubscribe from previous dongle
     if (client.session.dongleId) {
       this.dongleManager.updateClientCount(client.session.dongleId, -1);
@@ -707,6 +729,17 @@ export class WebSocketManager {
     if (!dongle.running) {
       this.sendMeta(client.ws, { type: 'error', message: `Dongle ${dongleId} is not running`, code: 'DONGLE_STOPPED' });
       return;
+    }
+
+    // If a specific profile was requested and it differs from the active one, switch to it.
+    // This restarts the dongle with the new profile (affects all clients on this dongle).
+    if (profileId && dongle.activeProfileId !== profileId) {
+      try {
+        await this.dongleManager.switchProfile(dongleId, profileId);
+      } catch (err) {
+        this.sendMeta(client.ws, { type: 'error', message: (err as Error).message, code: 'PROFILE_SWITCH_FAILED' });
+        return;
+      }
     }
 
     const profile = this.dongleManager.getActiveProfile(dongleId);
