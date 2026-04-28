@@ -6,10 +6,10 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "dev:demo": "NODE_SDR_DEMO=1 tsx watch src/index.ts",
+    "dev:demo": "cross-env NODE_SDR_DEMO=1 tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "start:demo": "NODE_SDR_DEMO=1 node dist/index.js",
+    "start:demo": "cross-env NODE_SDR_DEMO=1 node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

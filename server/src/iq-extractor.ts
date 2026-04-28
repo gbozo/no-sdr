@@ -102,11 +102,14 @@ export class IqExtractor {
   private ncoFreq: number; // radians per sample
 
   // NCO lookup table — size must be power of 2 for fast bitwise wrap
+  // Float32 is sufficient: output is quantized to Int16 (~96 dB) anyway,
+  // and Float32 gives ~150 dB precision. Halves table memory (32KB → 16KB)
+  // and improves L1 cache hit rate on the hot inner loop.
   private readonly ncoTableSize = 4096;
   private readonly ncoTableMask = 4095; // ncoTableSize - 1
   private readonly ncoTableScale: number; // ncoTableSize / (2π)
-  private cosTable: Float64Array;
-  private sinTable: Float64Array;
+  private cosTable: Float32Array;
+  private sinTable: Float32Array;
 
   // 4th-order Butterworth LPF (2 cascaded biquads, separate for I and Q)
   private biquadCoeffs: BiquadCoeffs[] = [];
@@ -132,8 +135,8 @@ export class IqExtractor {
     this.ncoFreq = (-2 * Math.PI * this.tuneOffset) / this.inputSampleRate;
     this.ncoTableScale = this.ncoTableSize / (2 * Math.PI);
 
-    this.cosTable = new Float64Array(this.ncoTableSize);
-    this.sinTable = new Float64Array(this.ncoTableSize);
+    this.cosTable = new Float32Array(this.ncoTableSize);
+    this.sinTable = new Float32Array(this.ncoTableSize);
     for (let i = 0; i < this.ncoTableSize; i++) {
       const angle = (2 * Math.PI * i) / this.ncoTableSize;
       this.cosTable[i] = Math.cos(angle);

@@ -130,9 +130,9 @@ function createStore() {
   // Init markers from stored bookmarks on load
   setSignalMarkers(bookmarksRaw().map(b => b.hz));
 
-  // ---- Codec Preferences ----
-  const [fftCodec, setFftCodec] = createSignal<FftCodecType>('deflate-floor');
-  const [iqCodec, setIqCodec] = createSignal<IqCodecType>('opus');
+  // ---- Codec Preferences (localStorage-persisted) ----
+  const [fftCodec, setFftCodec] = persist<FftCodecType>('codec.fft', 'deflate-floor');
+  const [iqCodec, setIqCodec] = persist<IqCodecType>('codec.iq', 'opus');
 
   // ---- Bandwidth / Throughput Metrics ----
   const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec

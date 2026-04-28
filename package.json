@@ -19,8 +19,8 @@
     "build:client": "npm run build --workspace=client",
     "build:server": "npm run build --workspace=server",
     "start": "npm run start --workspace=server",
-    "start:demo": "NODE_SDR_DEMO=1 npm run start --workspace=server",
-    "clean": "rmdir /s /q shared\\dist server\\dist client\\dist 2>nul & del /f /s /q node_modules\\.cache shared\\tsconfig.tsbuildinfo server\\tsconfig.tsbuildinfo 2>nul",
+    "start:demo": "cross-env NODE_SDR_DEMO=1 npm run start --workspace=server",
+    "clean": "rimraf shared/dist server/dist client/dist node_modules/.cache shared/tsconfig.tsbuildinfo server/tsconfig.tsbuildinfo",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {
@@ -29,6 +29,8 @@
   "devDependencies": {
     "@napi-rs/canvas": "^0.1.99",
     "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "rimraf": "^6.1.3",
     "start-server-and-test": "^3.0.2",
     "wait-on": "^9.0.5"
   }

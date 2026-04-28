@@ -13,7 +13,7 @@
 - [ ] **Hang-timer AGC for SSB** — dual-averager AGC with hang timer (Moe Wheatley N0V design) for better SSB voice quality
 - [ ] **FM-IF spectral NR** — peak-bin FFT on IQ before FM demodulation (SDR++ approach) for WFM hiss reduction at source
 - [ ] **Adaptive L-R LPF for WFM** — frequency cutoff proportional to stereo blend factor for smoother weak-station behavior
-- [ ] **Opus audio codec** — server-side demodulation + Opus VBR encoding for ultra-low-bandwidth clients (`@discordjs/opus` server + `opus-decoder` client)
+- [x] **Opus audio codec** — server-side demodulation + Opus VBR encoding for ultra-low-bandwidth clients (`opusscript` server + `opus-decoder` client WASM)
 
 ### Display & UI
 - [ ] **WebGL waterfall** — GPU-accelerated rendering for large FFT sizes and smooth zoom
@@ -48,6 +48,13 @@
 - [ ] `server/src/config.ts` — Zod schema validation edge cases
 
 ## Completed (Recent)
+
+- [x] **Dongle & Profile selector dropdown** — new fancy dropdown above demodulation section in sidebar. Shows "Profile Name › Frequency" in trigger, lists all dongles with their profiles, active dongle info below. Replaces old basic DongleSelector at bottom.
+- [x] **Codec preferences persisted to localStorage** — fftCodec and iqCodec now saved across page reloads. Always sent to server on subscribe (removes conditional check).
+- [x] **DSP allocation optimizations** — eliminated per-frame GC pressure in client demodulators: `iqInt16ToFloat()` uses shared scratch buffers, `processMonoPath()` and `processWfmStereo()` use pre-allocated Float32Array outputs instead of dynamic `number[]` arrays (~6-8 MB/s GC pressure removed for WFM stereo).
+- [x] **ADPCM FFT decode optimization** — eliminated intermediate Int16Array allocation by decoding ADPCM nibbles directly to Float32 (÷100 inline). Saves ~128KB allocation per frame at 65536 FFT bins.
+- [x] **NCO lookup tables Float64→Float32** — halves table memory (32KB→16KB per client) with no precision loss since output is Int16.
+- [x] **Git workflow rules in AGENTS.md** — explicit rules for commit/push/release requiring user instruction.
 
 - [x] **Multi-SDR network-TCP sources** — Added `airspy_tcp` (AirSpy Mini/R2), `hfp_tcp` (AirSpy HF+), and `rsp_tcp` (SDRplay RSP1/2/duo/dx) via rtl_tcp-compatible protocols. Extended DongleManager with device-specific gain controls and RSP extended commands (antenna port, notch filter, refclk, RF gain, LNA state). See `docs/hardware-integration.md` for CLI-based sources and extended features roadmap.
 - [x] **C-QUAM AM stereo demodulator** — full Motorola C-QUAM decode with PLL carrier lock, cosGamma correction, 25Hz Goertzel pilot detection, per-channel notch filter + AGC

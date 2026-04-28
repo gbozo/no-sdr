@@ -283,6 +283,33 @@ No test framework is set up yet. Priority areas for testing:
 - `client/src/engine/rds-decoder.ts` — block sync, group parsing, CRC validation
 - `server/src/config.ts` — Zod schema validation edge cases
 
+## Git Workflow
+
+### Rules — read before touching git
+
+1. **Never commit** code unless the user has explicitly written an instruction to commit (e.g. "commit", "commit changes", "git commit").
+2. **Never push** to any remote unless the user has explicitly written an instruction to push (e.g. "push", "push to remote", "git push").
+3. **Never create a GitHub release** (`gh release create` or equivalent) unless the user has explicitly instructed it.
+4. **"Wrap up"** is the one shorthand exception: when the user says "wrap up" (or "wrapup"), perform all three steps in order:
+   1. Update `TODO.md` to reflect completed and pending work.
+   2. `git add` relevant changes and `git commit` with a descriptive message.
+   3. `git push` to the upstream remote.
+   Do **not** create a GitHub release as part of wrap-up unless separately instructed.
+5. Outside of the wrap-up shorthand, treat commit and push as two independent, explicit instructions — receiving one does not authorise the other.
+6. Never amend a commit that has already been pushed to the remote.
+7. Never force-push (`--force` / `--force-with-lease`) to `main` or `master` without explicit user approval.
+
+### Commit message format
+
+```
+<type>(<scope>): <short summary>
+
+[optional body — what changed and why]
+```
+
+Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`.
+Example: `feat(client): add 5-band EQ to AudioWorklet pipeline`
+
 ## Known Issues
 
 - **Spectral NR artifacts**: The Wiener filter in `noise-reduction.ts` produces robotic artifacts on music/tonal signals. Noise blanker is recommended for now. See TODO.md.

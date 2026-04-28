@@ -25,7 +25,7 @@ server:
   # 'deflate' — delta+zlib, best ratio (~8-12x), recommended
   # 'adpcm'   — IMA-ADPCM, ~8x, lower CPU
   # 'none'    — uncompressed (64MB+ for large fftSize)
-  fftHistoryCompression: deflate
+  fftHistoryCompression: adpcm
 dongles:
   - id: dongle-remote
     deviceIndex: 0

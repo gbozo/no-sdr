@@ -16,6 +16,9 @@ const ControlPanel: Component = () => {
       {/* S-Meter */}
       <SMeter />
 
+      {/* Dongle & Profile Selector */}
+      <DongleProfileSelector />
+
       {/* Mode Selector */}
       <ModeSelector />
 
@@ -36,9 +39,6 @@ const ControlPanel: Component = () => {
 
       {/* Connection Status */}
       <ConnectionStatus />
-
-      {/* Dongle Selector */}
-      <DongleSelector />
     </div>
   );
 };
@@ -193,6 +193,193 @@ const AudioSpectrum: Component<{ audioOpen: () => boolean }> = (props) => {
         class="w-full rounded-sm"
         style={{ height: '56px' }}
       />
+    </Show>
+  );
+};
+
+// ---- Dongle & Profile Selector (fancy dropdown) ----
+
+const DongleProfileSelector: Component = () => {
+  const [open, setOpen] = createSignal(false);
+  const [profileMap, setProfileMap] = createSignal<Record<string, DongleProfile[]>>({});
+
+  // Fetch profiles for a dongle and merge into the map
+  const fetchProfiles = async (dongleId: string) => {
+    try {
+      const res = await fetch(`/api/dongles/${dongleId}/profiles`);
+      if (res.ok) {
+        const data: DongleProfile[] = await res.json();
+        setProfileMap(prev => ({ ...prev, [dongleId]: data }));
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Load profiles for all dongles when dropdown opens
+  createEffect(() => {
+    if (open()) {
+      for (const dongle of store.dongles()) {
+        if (!profileMap()[dongle.id]) {
+          fetchProfiles(dongle.id);
+        }
+      }
+    }
+  });
+
+  // Build the label for the currently active selection
+  const currentLabel = () => {
+    const dongle = store.dongles().find(d => d.id === store.activeDongleId());
+    if (!dongle) return null;
+    const freq = store.centerFrequency();
+    const mhz = (freq / 1e6).toFixed(3);
+    // Find active profile name
+    const dongleProfileList = profileMap()[dongle.id] ?? [];
+    const activeProfile = dongleProfileList.find(p => p.id === dongle.activeProfileId);
+    const profileName = activeProfile?.name ?? dongle.activeProfileId ?? '';
+    return { dongleName: dongle.name, freq: `${mhz} MHz`, profileName };
+  };
+
+  const handleSelect = (dongleId: string, profileId?: string) => {
+    engine.subscribe(dongleId, profileId);
+    setOpen(false);
+  };
+
+  // Close dropdown on outside click
+  let containerRef: HTMLDivElement | undefined;
+  const handleClickOutside = (e: MouseEvent) => {
+    if (containerRef && !containerRef.contains(e.target as Node)) {
+      setOpen(false);
+    }
+  };
+  onMount(() => document.addEventListener('mousedown', handleClickOutside));
+  onCleanup(() => document.removeEventListener('mousedown', handleClickOutside));
+
+  return (
+    <Show when={store.dongles().length > 0}>
+      <div class="sdr-panel relative" ref={containerRef}>
+        {/* Trigger button */}
+        <button
+          class="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-sdr-hover rounded-sm"
+          onClick={() => setOpen(o => !o)}
+        >
+          {/* Radio icon */}
+          <svg class="w-3.5 h-3.5 text-[var(--sdr-accent)] shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M2 5h12v9H2z" stroke-linejoin="round"/>
+            <circle cx="5.5" cy="9.5" r="2"/>
+            <path d="M9 8h3M9 11h3"/>
+            <path d="M4 5L11 2" stroke-linecap="round"/>
+          </svg>
+
+          <Show when={currentLabel()} fallback={<span class="text-[10px] font-mono text-text-dim">No receiver</span>}>
+            {(label) => (
+              <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                <Show when={label().profileName}>
+                  <span class="text-[10px] font-mono text-text-primary truncate font-medium">
+                    {label().profileName}
+                  </span>
+                  <svg class="w-2.5 h-2.5 text-text-muted shrink-0" viewBox="0 0 10 10" fill="none">
+                    <path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </Show>
+                <span class="text-[10px] font-mono text-[var(--sdr-accent)] truncate">
+                  {label().freq}
+                </span>
+              </div>
+            )}
+          </Show>
+
+          {/* Chevron */}
+          <svg class={`w-3 h-3 text-text-muted shrink-0 transition-transform ${open() ? 'rotate-180' : ''}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 4.5L6 7.5L9 4.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        {/* Dropdown panel */}
+        <Show when={open()}>
+          <div class="absolute left-0 right-0 top-full mt-1 z-50 bg-sdr-surface border border-border rounded-sm shadow-lg shadow-black/40 max-h-64 overflow-y-auto">
+            <For each={store.dongles()}>
+              {(dongle) => {
+                const dongleProfiles = () => profileMap()[dongle.id] ?? [];
+                return (
+                  <div class="border-b border-border last:border-b-0">
+                    {/* Dongle header */}
+                    <div
+                      class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-sdr-hover
+                        ${store.activeDongleId() === dongle.id ? 'bg-sdr-elevated' : 'bg-sdr-surface'}`}
+                      onClick={() => {
+                        // If no profiles, subscribe directly to the dongle
+                        if (dongleProfiles().length === 0) handleSelect(dongle.id);
+                      }}
+                    >
+                      <div class={`w-1.5 h-1.5 rounded-full shrink-0 ${dongle.running ? 'bg-status-online' : 'bg-status-offline'}`} />
+                      <span class={`text-[10px] font-mono font-medium ${store.activeDongleId() === dongle.id ? 'text-[var(--sdr-accent)]' : 'text-text-primary'}`}>
+                        {dongle.name}
+                      </span>
+                      <Show when={dongle.clientCount > 0}>
+                        <span class="ml-auto text-[8px] font-mono text-text-dim">
+                          {dongle.clientCount} user{dongle.clientCount > 1 ? 's' : ''}
+                        </span>
+                      </Show>
+                    </div>
+
+                    {/* Profiles for this dongle */}
+                    <Show when={dongleProfiles().length > 0}>
+                      <div class="py-0.5">
+                        <For each={dongleProfiles()}>
+                          {(profile) => {
+                            const isActive = () => store.activeDongleId() === dongle.id && dongle.activeProfileId === profile.id;
+                            return (
+                              <button
+                                class={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors rounded-none
+                                  ${isActive()
+                                    ? 'bg-cyan-dim text-cyan'
+                                    : 'text-text-secondary hover:bg-sdr-hover hover:text-text-primary'}`}
+                                onClick={() => handleSelect(dongle.id, profile.id)}
+                              >
+                                <svg class={`w-2.5 h-2.5 shrink-0 ${isActive() ? 'text-cyan' : 'text-text-muted'}`} viewBox="0 0 10 10" fill="none">
+                                  <path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                <span class="text-[10px] font-mono truncate">{profile.name}</span>
+                                <span class="ml-auto text-[9px] font-mono text-text-dim whitespace-nowrap">
+                                  {(profile.centerFrequency / 1e6).toFixed(3)} MHz
+                                </span>
+                              </button>
+                            );
+                          }}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+        </Show>
+
+        {/* Active dongle info display */}
+        <Show when={store.activeDongleId()}>
+          {(_id) => {
+            const dongle = () => store.dongles().find(d => d.id === store.activeDongleId());
+            return (
+              <Show when={dongle()}>
+                {(d) => (
+                  <div class="flex items-center gap-2 px-3 py-1.5 border-t border-border">
+                    <div class={`w-1.5 h-1.5 rounded-full shrink-0 ${d().running ? 'bg-status-online' : 'bg-status-offline'}`} />
+                    <span class="text-[9px] font-mono text-text-secondary truncate">{d().name}</span>
+                    <Show when={d().source}>
+                      <span class="text-[8px] font-mono text-text-dim uppercase">{d().source}</span>
+                    </Show>
+                    <Show when={d().clientCount > 0}>
+                      <span class="ml-auto text-[8px] font-mono text-text-dim">
+                        {d().clientCount} user{d().clientCount > 1 ? 's' : ''}
+                      </span>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+            );
+          }}
+        </Show>
+      </div>
     </Show>
   );
 };
@@ -1804,40 +1991,6 @@ const ConnectionStatus: Component = () => {
 };
 
 // ---- Dongle Selector ----
-const DongleSelector: Component = () => {
-  return (
-    <Show when={store.dongles().length > 0}>
-      <div class="sdr-panel">
-        <div class="sdr-panel-header">Receivers</div>
-        <div class="p-2">
-          <For each={store.dongles()}>
-            {(dongle) => (
-              <button
-                class={`w-full text-left p-2 rounded-sm text-[10px] font-mono
-                        transition-colors duration-100
-                        ${store.activeDongleId() === dongle.id
-                          ? 'bg-cyan-dim text-cyan'
-                          : 'text-text-secondary hover:bg-sdr-hover'}`}
-                onClick={() => engine.subscribe(dongle.id)}
-              >
-                <div class="flex items-center gap-2">
-                  <div class={`w-1.5 h-1.5 rounded-full ${dongle.running ? 'bg-status-online' : 'bg-status-offline'}`} />
-                  <span>{dongle.name}</span>
-                </div>
-                <Show when={dongle.activeProfileId}>
-                  <div class="text-text-dim ml-3.5 mt-0.5">
-                    Profile: {dongle.activeProfileId}
-                  </div>
-                </Show>
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-    </Show>
-  );
-};
-
 // ---- Admin Panel ----
 const AdminPanel: Component = () => {
   const [password, setPassword] = createSignal('');

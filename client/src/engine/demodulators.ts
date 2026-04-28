@@ -249,15 +249,27 @@ class Decimator {
 
 // ---- Utility: Convert interleaved Int16 IQ to normalized Float32 I and Q ----
 
+/**
+ * Reusable scratch buffers for IQ deinterleaving.
+ * Avoids allocating two Float32Arrays per process() call (~38KB every 20ms at WFM rates).
+ * The buffers auto-grow and are shared across all demodulators (only one is active at a time).
+ */
+let _scratchI = new Float32Array(8192);
+let _scratchQ = new Float32Array(8192);
+
 function iqInt16ToFloat(iq: Int16Array): [Float32Array, Float32Array] {
   const n = iq.length >> 1;
-  const iSamples = new Float32Array(n);
-  const qSamples = new Float32Array(n);
-  for (let k = 0; k < n; k++) {
-    iSamples[k] = iq[k * 2] / 32768;
-    qSamples[k] = iq[k * 2 + 1] / 32768;
+  // Grow scratch buffers if needed (rare — only on sample rate change)
+  if (n > _scratchI.length) {
+    _scratchI = new Float32Array(n * 2); // 2× headroom
+    _scratchQ = new Float32Array(n * 2);
   }
-  return [iSamples, qSamples];
+  for (let k = 0; k < n; k++) {
+    _scratchI[k] = iq[k * 2] / 32768;
+    _scratchQ[k] = iq[k * 2 + 1] / 32768;
+  }
+  // Return subarrays — valid until the next iqInt16ToFloat() call
+  return [_scratchI.subarray(0, n), _scratchQ.subarray(0, n)];
 }
 
 // ============================================================
@@ -519,6 +531,12 @@ class FmDemodulator implements Demodulator {
   private rdsDecoder: RdsDecoder | null = null;
   private onRdsCallback?: (data: RdsData) => void;
 
+  // Pre-allocated output buffers to avoid per-call heap allocations
+  private _monoOutBuf: Float32Array | null = null;
+  private _stereoLeftBuf: Float32Array | null = null;
+  private _stereoRightBuf: Float32Array | null = null;
+  private _stereoMonoBuf: Float32Array | null = null;
+
   constructor(wideband: boolean) {
     this.wideband = wideband;
     this.mode = wideband ? 'wfm' : 'nfm';
@@ -609,7 +627,13 @@ class FmDemodulator implements Demodulator {
   }
 
   private processMonoPath(iSamples: Float32Array, qSamples: Float32Array, n: number): Float32Array {
-    const output: number[] = [];
+    // Pre-allocate output buffer sized for worst case (no decimation)
+    // and for decimation case (÷5 for WFM). Reuse across calls.
+    const maxOut = this.decimator ? Math.ceil(n / Math.floor(this.inputSampleRate / this.outputSampleRate)) : n;
+    if (!this._monoOutBuf || this._monoOutBuf.length < maxOut) {
+      this._monoOutBuf = new Float32Array(maxOut * 2); // 2× headroom
+    }
+    let outIdx = 0;
 
     for (let k = 0; k < n; k++) {
       const i = iSamples[k];
@@ -638,16 +662,16 @@ class FmDemodulator implements Demodulator {
       if (this.decimator) {
         const decimated = this.decimator.process(phase);
         if (decimated !== null) {
-          output.push(this.dcBlocker.process(decimated));
+          this._monoOutBuf[outIdx++] = this.dcBlocker.process(decimated);
         }
       } else {
         // NFM: no decimation needed (input is already at audio rate).
         // De-emphasis already applied above (line 630) — do NOT apply again.
-        output.push(this.dcBlocker.process(phase));
+        this._monoOutBuf[outIdx++] = this.dcBlocker.process(phase);
       }
     }
 
-    return new Float32Array(output);
+    return this._monoOutBuf.subarray(0, outIdx);
   }
 
   private processWfmStereo(
@@ -655,9 +679,20 @@ class FmDemodulator implements Demodulator {
     qSamples: Float32Array,
     n: number,
   ): { mono: Float32Array; left?: Float32Array; right?: Float32Array; stereo: boolean } {
-    const leftOut: number[] = [];
-    const rightOut: number[] = [];
-    const monoOut: number[] = [];
+    // WFM: 240kHz → 48kHz = decimation factor 5
+    const decimFactor = Math.floor(this.inputSampleRate / this.outputSampleRate);
+    const maxOut = Math.ceil(n / decimFactor);
+
+    // Grow pre-allocated buffers if needed
+    if (!this._stereoLeftBuf || this._stereoLeftBuf.length < maxOut) {
+      this._stereoLeftBuf = new Float32Array(maxOut * 2);
+      this._stereoRightBuf = new Float32Array(maxOut * 2);
+      this._stereoMonoBuf = new Float32Array(maxOut * 2);
+    }
+    const leftOut = this._stereoLeftBuf;
+    const rightOut = this._stereoRightBuf!;
+    const monoOut = this._stereoMonoBuf!;
+    let outIdx = 0;
 
     const pll = this.pilotPll!;
     const lprLpf = this.lprFilter!; // L+R filter
@@ -720,23 +755,25 @@ class FmDemodulator implements Demodulator {
         const decL = this.decimator.process(left);
         const decR = this.decimatorR.process(right);
         if (decL !== null && decR !== null) {
-          leftOut.push(this.dcBlocker.process(decL));
-          rightOut.push(this.dcBlockerR.process(decR));
-          // Mono is the average
-          monoOut.push((leftOut[leftOut.length - 1] + rightOut[rightOut.length - 1]) / 2);
+          const lVal = this.dcBlocker.process(decL);
+          const rVal = this.dcBlockerR.process(decR);
+          leftOut[outIdx] = lVal;
+          rightOut[outIdx] = rVal;
+          monoOut[outIdx] = (lVal + rVal) * 0.5;
+          outIdx++;
         }
       }
     }
 
     this._stereoDetected = pll.detected;
 
-    const mono = new Float32Array(monoOut);
+    const mono = monoOut.subarray(0, outIdx);
 
     if (pll.blendFactor > 0.01) {
       return {
         mono,
-        left: new Float32Array(leftOut),
-        right: new Float32Array(rightOut),
+        left: leftOut.subarray(0, outIdx),
+        right: rightOut.subarray(0, outIdx),
         stereo: true,
       };
     }

@@ -840,10 +840,9 @@ export class SdrEngine {
         this.iqAdpcmDecoder.reset();
         // Update resampler for this mode's output rate
         this.updateResampleRatio();
-        // Re-send codec preferences so the server applies them to this subscription
-        if (store.fftCodec() !== 'none' || store.iqCodec() !== 'none') {
-          this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
-        }
+        // Re-send codec preferences so the server applies them to this subscription.
+        // Always send — persisted values from localStorage may differ from server defaults.
+        this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
         // Always sync stereo preference for Opus path immediately after codec is set.
         // The server creates a fresh OpusAudioPipeline with stereo enabled by default,
         // so we must send stereo_enabled even when the value is false — otherwise the

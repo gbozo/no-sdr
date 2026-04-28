@@ -209,26 +209,52 @@ export function encodeFftAdpcm(
 
 /**
  * Decode an ADPCM-encoded FFT frame back to Float32 dB values.
- * Strips the warmup padding and converts Int16 (dB×100) → Float32.
+ * Decodes ADPCM nibbles directly to Float32 (÷100) without allocating
+ * an intermediate Int16Array — eliminates ~128KB of GC pressure per frame
+ * at 65536 FFT bins.
  *
  * @param payload The raw payload (after stripping the message type byte).
  *   Format: [4 bytes header] [ADPCM nibbles]
  * @returns Float32Array of dB values
  */
 export function decodeFftAdpcm(payload: ArrayBuffer): Float32Array {
-  const headerView = new DataView(payload, 0, 4);
-  const _minDb = headerView.getInt16(0, true); // available if needed for range display
-  const _maxDb = headerView.getInt16(2, true);
-
   const adpcm = new Uint8Array(payload, 4);
-  const decoder = new ImaAdpcmDecoder();
-  const int16 = decoder.decode(adpcm);
-
-  // Strip warmup padding, convert Int16 (dB×100) → Float32 dB
-  const fftLen = int16.length - FFT_ADPCM_PAD;
+  const totalSamples = adpcm.length * 2;
+  const fftLen = totalSamples - FFT_ADPCM_PAD;
   const fftData = new Float32Array(fftLen);
-  for (let i = 0; i < fftLen; i++) {
-    fftData[i] = int16[FFT_ADPCM_PAD + i] / 100;
+
+  // Decode ADPCM directly to Float32 — inline the decoder to avoid
+  // creating an Int16Array intermediate. State matches ImaAdpcmDecoder.
+  let predictor = 0;
+  let stepIndex = 0;
+  let step = STEP_TABLE[0];
+  let sampleIdx = 0;
+
+  for (let byteIdx = 0; byteIdx < adpcm.length; byteIdx++) {
+    const byte = adpcm[byteIdx];
+
+    // Low nibble first, then high nibble
+    for (let nibblePos = 0; nibblePos < 2; nibblePos++) {
+      const nibble = nibblePos === 0 ? (byte & 0x0f) : ((byte >> 4) & 0x0f);
+
+      stepIndex = Math.max(0, Math.min(88, stepIndex + INDEX_TABLE[nibble]));
+
+      let diff = step >> 3;
+      if (nibble & 1) diff += step >> 2;
+      if (nibble & 2) diff += step >> 1;
+      if (nibble & 4) diff += step;
+      if (nibble & 8) diff = -diff;
+
+      predictor = Math.max(-32768, Math.min(32767, predictor + diff));
+      step = STEP_TABLE[stepIndex];
+
+      // Skip warmup padding, write directly as Float32 dB (÷100)
+      if (sampleIdx >= FFT_ADPCM_PAD) {
+        fftData[sampleIdx - FFT_ADPCM_PAD] = predictor / 100;
+      }
+      sampleIdx++;
+    }
   }
+
   return fftData;
 }
