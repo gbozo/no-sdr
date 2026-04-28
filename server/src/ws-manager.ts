@@ -300,6 +300,16 @@ export class WebSocketManager {
       return;
     }
 
+    // Swap I/Q channels if the active profile requests it (fixes inverted spectrum)
+    const profile = this.dongleManager.getActiveProfile(dongleId);
+    if (profile?.swapIQ) {
+      for (let i = 0; i < data.length - 1; i += 2) {
+        const tmp = data[i];
+        data[i] = data[i + 1];
+        data[i + 1] = tmp;
+      }
+    }
+
     this.iqCount++;
     this.iqBytes += data.length;
     const fftFrames = processor.processIqData(data);

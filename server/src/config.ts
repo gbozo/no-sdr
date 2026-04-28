@@ -40,6 +40,12 @@ const DongleProfileSchema = z.object({
   defaultBandwidth: z.number().positive().default(12_500),
   gain: z.number().nullable().default(null),
   description: z.string().default(''),
+  /** Direct sampling per profile: 0=off, 1=I-ADC, 2=Q-ADC */
+  directSampling: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0).optional(),
+  /** Swap I and Q channels (fixes inverted spectrum) */
+  swapIQ: z.boolean().default(false).optional(),
+  /** Oscillator frequency offset in Hz (compensates LO error) */
+  oscillatorOffset: z.number().default(0).optional(),
   decoders: z.array(DecoderConfigSchema).default([]),
 });
 

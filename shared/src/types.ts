@@ -78,6 +78,12 @@ export interface DongleProfile {
   gain: number | null;
   /** Description shown in UI */
   description: string;
+  /** Direct sampling mode: 0=off, 1=I-ADC, 2=Q-ADC (for HF reception) */
+  directSampling?: number;
+  /** Swap I and Q channels (fixes inverted spectrum on some dongles) */
+  swapIQ?: boolean;
+  /** Oscillator frequency offset in Hz (compensates LO error on cheap dongles) */
+  oscillatorOffset?: number;
   /** Active digital decoders for this profile */
   decoders: DecoderConfig[];
 }

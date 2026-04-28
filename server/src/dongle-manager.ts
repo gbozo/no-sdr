@@ -179,7 +179,7 @@ export class DongleManager extends EventEmitter {
     // Build rtl_sdr arguments
     const args: string[] = [
       '-d', state.config.deviceIndex.toString(),
-      '-f', profile.centerFrequency.toString(),
+      '-f', (profile.centerFrequency + (profile.oscillatorOffset ?? 0)).toString(),
       '-s', profile.sampleRate.toString(),
       '-p', state.config.ppmCorrection.toString(),
     ];
@@ -189,9 +189,10 @@ export class DongleManager extends EventEmitter {
       args.push('-g', profile.gain.toString());
     }
 
-    // Direct sampling mode (HF reception)
-    if (state.config.directSampling && state.config.directSampling > 0) {
-      args.push('-D', state.config.directSampling.toString());
+    // Direct sampling: profile-level overrides dongle-level
+    const directSampling = profile.directSampling ?? state.config.directSampling ?? 0;
+    if (directSampling > 0) {
+      args.push('-D', directSampling.toString());
     }
 
     // Tuner bandwidth (requires rtl-sdr-blog fork or compatible binary with -w flag)
@@ -293,7 +294,7 @@ export class DongleManager extends EventEmitter {
       state.running = true;
 
       // Send initial configuration commands
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency + (profile.oscillatorOffset ?? 0));
       this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
       this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ_CORR, state.config.ppmCorrection);
 
@@ -305,12 +306,13 @@ export class DongleManager extends EventEmitter {
         this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);  // enable AGC
       }
 
-      // ---- Hardware options (dongle-level) ----
+      // ---- Hardware options (profile-level overrides dongle-level) ----
 
       // Direct sampling (HF reception via I/Q-ADC bypass)
-      if (state.config.directSampling !== undefined && state.config.directSampling > 0) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, state.config.directSampling);
-        logger.info({ dongleId, mode: state.config.directSampling }, 'Direct sampling enabled');
+      const directSampling = profile.directSampling ?? state.config.directSampling ?? 0;
+      if (directSampling > 0) {
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, directSampling);
+        logger.info({ dongleId, mode: directSampling }, 'Direct sampling enabled');
       }
 
       // Bias-T power on antenna connector

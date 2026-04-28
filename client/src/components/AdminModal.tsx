@@ -805,6 +805,34 @@ const ReceiversTab: Component<{
                     </div>
                   </div>
 
+                  {/* Row 4: Hardware overrides (per-profile) */}
+                  <div>
+                    <h4 class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">Hardware Overrides</h4>
+                    <div class="grid grid-cols-3 gap-3">
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Direct Sampling</label>
+                        <select value={profileForm().directSampling ?? 0} onChange={(e) => updateProfileField('directSampling', parseInt(e.currentTarget.value))}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
+                          <option value={0}>Off (normal tuner)</option>
+                          <option value={1}>I-ADC (HF via I branch)</option>
+                          <option value={2}>Q-ADC (HF via Q branch)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Oscillator Offset (Hz)</label>
+                        <input type="number" value={profileForm().oscillatorOffset ?? 0} onInput={(e) => updateProfileField('oscillatorOffset', parseInt(e.currentTarget.value) || 0)}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                        <span class="text-[8px] font-mono text-text-muted">Compensates LO error</span>
+                      </div>
+                      <div class="flex items-end pb-1">
+                        <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                          <input type="checkbox" checked={profileForm().swapIQ ?? false} onChange={(e) => updateProfileField('swapIQ', e.currentTarget.checked)} class="accent-cyan" />
+                          Swap I/Q
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Actions */}
                   <div class="flex items-center gap-2 pt-2 border-t border-border">
                     <button
