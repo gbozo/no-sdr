@@ -142,13 +142,16 @@ const App: Component = () => {
 
         {/* Admin Button */}
         <button
-          class="ml-4 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
-                 border border-border rounded-sm
+          class="ml-4 p-1.5 border border-border rounded-sm
                  text-text-dim hover:text-amber hover:border-amber
                  transition-colors"
           onClick={() => store.setAdminModalOpen(true)}
+          title="Admin Settings"
         >
-          Admin
+          <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
+            <path d="M13.3 10a1.1 1.1 0 00.2 1.2l.04.04a1.34 1.34 0 11-1.9 1.9l-.04-.04a1.1 1.1 0 00-1.2-.2 1.1 1.1 0 00-.67 1.01v.11a1.34 1.34 0 11-2.68 0v-.06a1.1 1.1 0 00-.72-1.01 1.1 1.1 0 00-1.2.2l-.04.04a1.34 1.34 0 11-1.9-1.9l.04-.04a1.1 1.1 0 00.2-1.2 1.1 1.1 0 00-1.01-.67h-.11a1.34 1.34 0 110-2.68h.06a1.1 1.1 0 001.01-.72 1.1 1.1 0 00-.2-1.2l-.04-.04a1.34 1.34 0 111.9-1.9l.04.04a1.1 1.1 0 001.2.2h.05a1.1 1.1 0 00.67-1.01v-.11a1.34 1.34 0 112.68 0v.06a1.1 1.1 0 00.72 1.01 1.1 1.1 0 001.2-.2l.04-.04a1.34 1.34 0 111.9 1.9l-.04.04a1.1 1.1 0 00-.2 1.2v.05a1.1 1.1 0 001.01.67h.11a1.34 1.34 0 110 2.68h-.06a1.1 1.1 0 00-1.01.72z"/>
+          </svg>
         </button>
       </header>
 
@@ -202,9 +205,6 @@ const App: Component = () => {
           {/* Server CPU / memory */}
           <ServerStatsMeter />
 
-          <span class="border-l border-border pl-4">
-            Dongle: <span class="text-text-secondary">{store.activeDongleId() || '—'}</span>
-          </span>
           <Show when={store.isAdmin()}>
             <span class="text-amber">ADMIN</span>
           </Show>
