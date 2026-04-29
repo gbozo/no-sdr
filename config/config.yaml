@@ -57,10 +57,11 @@ dongles:
         defaultMode: am
         defaultTuneOffset: 0
         defaultBandwidth: 8330
-        gain: 49
+        gain: 20
         description: Aviation communications — 118 to 137 MHz
         decoders: []
         dongleId: dongle-remote
+        tuningStep: 500
       - id: two-meter
         name: 2m Amateur
         centerFrequency: 146000000

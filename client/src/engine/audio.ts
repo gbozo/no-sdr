@@ -296,6 +296,13 @@ export class AudioEngine {
    */
   pushDemodulatedAudio(float32Data: Float32Array): void {
     if (!this.workletNode) return;
+    // Sanitize: clamp and replace NaN/Infinity to prevent biquad instability
+    for (let i = 0; i < float32Data.length; i++) {
+      const v = float32Data[i];
+      if (v !== v || v === Infinity || v === -Infinity) { float32Data[i] = 0; }
+      else if (v > 1.0) { float32Data[i] = 1.0; }
+      else if (v < -1.0) { float32Data[i] = -1.0; }
+    }
     this.workletNode.port.postMessage({ left: float32Data });
   }
 
@@ -304,6 +311,19 @@ export class AudioEngine {
    */
   pushStereoAudio(left: Float32Array, right: Float32Array): void {
     if (!this.workletNode) return;
+    // Sanitize both channels
+    for (let i = 0; i < left.length; i++) {
+      const v = left[i];
+      if (v !== v || v === Infinity || v === -Infinity) { left[i] = 0; }
+      else if (v > 1.0) { left[i] = 1.0; }
+      else if (v < -1.0) { left[i] = -1.0; }
+    }
+    for (let i = 0; i < right.length; i++) {
+      const v = right[i];
+      if (v !== v || v === Infinity || v === -Infinity) { right[i] = 0; }
+      else if (v > 1.0) { right[i] = 1.0; }
+      else if (v < -1.0) { right[i] = -1.0; }
+    }
     this.workletNode.port.postMessage({ left, right });
   }
 

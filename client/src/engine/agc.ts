@@ -31,28 +31,28 @@ export const AGC_PRESETS: Record<string, AgcPreset> = {
     decayMs: 250,
     hangMs: 300,
     targetLevel: 0.5,
-    maxGainDb: 60,
+    maxGainDb: 40,
   },
   cw: {
     attackMs: 2,
     decayMs: 100,
     hangMs: 200,
     targetLevel: 0.4,
-    maxGainDb: 70,
+    maxGainDb: 40,
   },
   am: {
     attackMs: 5,
     decayMs: 500,
     hangMs: 0, // No hang for AM (continuous carrier)
     targetLevel: 0.5,
-    maxGainDb: 50,
+    maxGainDb: 30,
   },
   fm: {
     attackMs: 10,
     decayMs: 1000,
     hangMs: 0,
     targetLevel: 0.6,
-    maxGainDb: 40,
+    maxGainDb: 20,
   },
 };
 
@@ -184,7 +184,9 @@ export class HangAgc {
       if (gain < 0.001) gain = 0.001;
 
       // Apply gain to the DELAYED sample (the look-ahead)
-      samples[i] = delayed * gain;
+      // Clamp output to ±1.0 to prevent downstream Web Audio biquad instability
+      const out = delayed * gain;
+      samples[i] = out > 1.0 ? 1.0 : out < -1.0 ? -1.0 : out;
     }
 
     this.delayIdx = idx;
@@ -251,8 +253,10 @@ export class HangAgc {
       if (gain > maxGain) gain = maxGain;
       if (gain < 0.001) gain = 0.001;
 
-      left[i] = delayedL * gain;
-      right[i] = delayedR * gain;
+      const outL = delayedL * gain;
+      const outR = delayedR * gain;
+      left[i] = outL > 1.0 ? 1.0 : outL < -1.0 ? -1.0 : outL;
+      right[i] = outR > 1.0 ? 1.0 : outR < -1.0 ? -1.0 : outR;
     }
 
     this.delayIdx = idx;

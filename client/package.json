@@ -1,6 +1,6 @@
 {
   "name": "@node-sdr/client",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {

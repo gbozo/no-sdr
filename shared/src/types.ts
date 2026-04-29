@@ -123,7 +123,7 @@ export interface DecoderConfig {
 
 // ---- Demodulation ----
 
-export type DemodMode = 'wfm' | 'nfm' | 'am' | 'am-stereo' | 'usb' | 'lsb' | 'cw' | 'raw';
+export type DemodMode = 'wfm' | 'nfm' | 'am' | 'am-stereo' | 'sam' | 'usb' | 'lsb' | 'cw' | 'raw';
 
 export type DigitalMode =
   | 'adsb'

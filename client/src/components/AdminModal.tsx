@@ -903,6 +903,7 @@ const ReceiversTab: Component<{
                         <option value="nfm">NFM (Narrowband FM)</option>
                         <option value="am">AM (Amplitude Mod)</option>
                         <option value="am-stereo">AM Stereo (C-QUAM)</option>
+                        <option value="sam">SAM (Synchronous AM)</option>
                         <option value="usb">USB (Upper Sideband)</option>
                         <option value="lsb">LSB (Lower Sideband)</option>
                         <option value="cw">CW (Morse)</option>

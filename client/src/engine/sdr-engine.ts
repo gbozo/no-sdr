@@ -123,6 +123,9 @@ export class SdrEngine {
   private autoNotch = new AutoNotch(48000);
   private hiBlend = new HiBlendFilter(48000);
 
+  // Soft mute: smoothed gain factor (0-1) based on signal level
+  private softMuteGain = 1.0;
+
   // Hang-timer AGC (post-demod, pre-audio)
   private agc = new HangAgc(48000);
 
@@ -514,6 +517,7 @@ export class SdrEngine {
               if (store.agcEnabled()) {
                 this.agc.processStereo(channelData[0], channelData[1]);
               }
+              this.applySoftMuteStereo(channelData[0], channelData[1]);
               this.audio.pushStereoAudio(channelData[0], channelData[1]);
               if (!store.stereoDetected()) store.setStereoDetected(true);
             } else {
@@ -528,6 +532,7 @@ export class SdrEngine {
               if (store.agcEnabled()) {
                 this.agc.process(channelData[0]);
               }
+              this.applySoftMute(channelData[0]);
               this.audio.pushDemodulatedAudio(channelData[0]);
               if (store.stereoDetected()) store.setStereoDetected(false);
             }
@@ -759,6 +764,7 @@ export class SdrEngine {
         }
         this.audioOutCount += resampled.left.length;
         if (resampled.left.length > 0 && squelchOpen) {
+          this.applySoftMuteStereo(resampled.left, resampled.right);
           this.audio.pushStereoAudio(resampled.left, resampled.right);
         }
         if (!store.stereoDetected()) {
@@ -780,6 +786,7 @@ export class SdrEngine {
         }
         this.audioOutCount += resampled.length;
         if (resampled.length > 0 && squelchOpen) {
+          this.applySoftMute(resampled);
           this.audio.pushDemodulatedAudio(resampled);
         }
         if (store.stereoDetected()) {
@@ -804,6 +811,7 @@ export class SdrEngine {
       }
       this.audioOutCount += resampled.length;
       if (resampled.length > 0 && squelchOpen) {
+        this.applySoftMute(resampled);
         this.audio.pushDemodulatedAudio(resampled);
       }
       if (store.stereoDetected()) {
@@ -1215,11 +1223,11 @@ export class SdrEngine {
     store.setNrStrength(strength);
     // Map 0-1 strength to ANR gain.
     // At 0: gain = 0 (true passthrough, no adaptation)
-    // At 1: gain = 5e-4 (aggressive adaptation)
+    // At 1: gain = 1e-4 (moderate adaptation — safe for all signal types)
     if (strength <= 0) {
       this.anr.setOptions({ gain: 0 });
     } else {
-      const gain = strength * 5e-4;
+      const gain = strength * 1e-4;
       this.anr.setOptions({ gain });
     }
   }
@@ -1260,7 +1268,8 @@ export class SdrEngine {
       case 'lsb': return 'ssb';
       case 'cw': return 'cw';
       case 'am':
-      case 'am-stereo': return 'am';
+      case 'am-stereo':
+      case 'sam': return 'am';
       case 'wfm':
       case 'nfm': return 'fm';
       default: return 'ssb';
@@ -1274,8 +1283,9 @@ export class SdrEngine {
       case 'lsb': return 'ssb';
       case 'cw': return 'cw';
       case 'am':
-      case 'am-stereo': return 'am';
-      default: return 'ssb'; // default works for FM too (NR usually off for FM)
+      case 'am-stereo':
+      case 'sam': return 'am';
+      default: return 'ssb';
     }
   }
 
@@ -1304,6 +1314,58 @@ export class SdrEngine {
   setHiBlendCutoff(hz: number): void {
     store.setHiBlendCutoff(hz);
     this.hiBlend.setCutoff(hz);
+  }
+
+  setSoftMuteEnabled(enabled: boolean): void {
+    store.setSoftMuteEnabled(enabled);
+    if (!enabled) this.softMuteGain = 1.0;
+  }
+
+  setSoftMuteThreshold(dB: number): void {
+    store.setSoftMuteThreshold(dB);
+  }
+
+  /**
+   * Apply soft mute gain to audio samples in-place.
+   * Gain is smoothed and proportional to signal level above threshold.
+   * Below threshold: progressively attenuated. Above: full volume.
+   */
+  private applySoftMute(samples: Float32Array): void {
+    if (!store.softMuteEnabled()) return;
+
+    const signalDb = store.signalLevel();
+    const threshold = store.softMuteThreshold();
+    // Linear gain: 0 when 10dB below threshold, 1 when at/above threshold
+    const targetGain = Math.min(1.0, Math.max(0.0, (signalDb - threshold + 10) / 10));
+    // Smooth with 50ms time constant to avoid pumping
+    const alpha = 0.02; // ~50ms at typical call rate
+    this.softMuteGain += alpha * (targetGain - this.softMuteGain);
+
+    if (this.softMuteGain < 0.999) {
+      const g = this.softMuteGain;
+      for (let i = 0; i < samples.length; i++) {
+        samples[i] *= g;
+      }
+    }
+  }
+
+  private applySoftMuteStereo(left: Float32Array, right: Float32Array): void {
+    if (!store.softMuteEnabled()) return;
+
+    const signalDb = store.signalLevel();
+    const threshold = store.softMuteThreshold();
+    const targetGain = Math.min(1.0, Math.max(0.0, (signalDb - threshold + 10) / 10));
+    const alpha = 0.02;
+    this.softMuteGain += alpha * (targetGain - this.softMuteGain);
+
+    if (this.softMuteGain < 0.999) {
+      const g = this.softMuteGain;
+      const len = Math.min(left.length, right.length);
+      for (let i = 0; i < len; i++) {
+        left[i] *= g;
+        right[i] *= g;
+      }
+    }
   }
 
   // ---- Codec Settings ----

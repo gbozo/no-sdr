@@ -68,6 +68,17 @@ export const DEMOD_MODES: Record<DemodMode, DemodModeInfo> = {
     hasAudio: true,
     sideband: 'both',
   },
+  sam: {
+    id: 'sam',
+    name: 'Synchronous AM',
+    shortName: 'SAM',
+    description: 'PLL carrier lock — superior on fading/weak AM signals',
+    bandwidthRange: [3_000, 10_000],
+    defaultBandwidth: 6_000,
+    minSampleRate: 48_000,
+    hasAudio: true,
+    sideband: 'both',
+  },
   usb: {
     id: 'usb',
     name: 'Upper Sideband',

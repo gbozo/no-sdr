@@ -49,6 +49,11 @@
 
 ## Completed (Recent)
 
+- [x] **Synchronous AM (SAM) demodulator** — new demod mode with 2nd-order PLL carrier lock, coherent detection (6-10 dB gain on fading signals), ±1000Hz frequency tracking, lock detector. Available in mode selector alongside AM/SSB/CW.
+- [x] **Soft mute** — SNR-proportional volume reduction on weak signals. Adjustable threshold (-80 to -10 dB). Smooth 50ms transitions. Alternative to hard squelch for scanning.
+- [x] **BiquadFilterNode stability fix** — AGC output clamped to ±1.0, SAM demod output clamped, LMS ANR output clamped, audio engine sanitizes all samples (NaN/Infinity/overflow) before Web Audio EQ chain. Prevents "state is bad" errors.
+- [x] **LMS ANR weight divergence fix** — epsilon raised from 1e-30 to 1e-6 (prevents weight explosion on silence), hard weight clamp ±10, max gain reduced to 1e-4. Fixes audio going silent at any NR strength > 0%.
+- [x] **AGC max gain reduced** — SSB/CW: 40dB, AM: 30dB, FM: 20dB (was 50-70dB). Prevents noise amplification to extreme levels.
 - [x] **Phase 1 signal improvements** — DC offset removal (IIR blocker, dongle default + profile override), pre-filter noise blanker (server-side, disabled — not useful without impulse noise), hang-timer AGC (client-side, mode-specific presets, 15ms look-ahead). Admin panel DSP Processing section.
 - [x] **LMS Adaptive NR** — NLMS predictor with adaptive leakage (WDSP algorithm). Replaces old Wiener spectral NR which was causing quality degradation. Mode-specific presets (SSB/CW/AM). Strength slider maps to adaptation gain (0% = true passthrough).
 - [x] **FM Hi-Blend filter** — frequency-dependent stereo reduction for weak FM stations. LPF on L-R difference channel. Adjustable cutoff (500Hz–8kHz). Only shown in UI when WFM + stereo detected. Dramatically reduces FM hiss.

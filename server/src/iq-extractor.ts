@@ -422,6 +422,7 @@ export function getOutputSampleRate(mode: string): number {
     case 'nfm': return 48_000;
     case 'am': return 48_000;
     case 'am-stereo': return 48_000;
+    case 'sam': return 48_000;
     case 'usb':
     case 'lsb': return 24_000;
     case 'cw': return 12_000;

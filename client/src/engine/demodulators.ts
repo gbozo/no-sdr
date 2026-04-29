@@ -1319,6 +1319,174 @@ class CQuamDemodulator implements Demodulator {
 }
 
 // ============================================================
+// Synchronous AM (SAM) — PLL carrier lock + coherent detection
+// ============================================================
+// Locks a PLL to the AM carrier and coherently demodulates.
+// Superior to envelope detection on fading signals (6-10 dB gain).
+// The PLL tracks carrier frequency drift and selective fading.
+// ============================================================
+
+class SamDemodulator implements Demodulator {
+  readonly name = 'SAM';
+  readonly mode: DemodMode = 'sam';
+  stereoCapable = false;
+
+  private inputSampleRate = 48_000;
+
+  // PLL state
+  private pllPhase = 0;        // VCO phase (radians)
+  private pllFreq = 0;         // VCO frequency offset (radians/sample)
+  private pllOmega = 0;        // Loop filter integrator
+
+  // PLL loop filter coefficients (2nd-order, critically damped)
+  private g1 = 0;   // proportional gain
+  private g2 = 0;   // integral gain
+
+  // Lock detector
+  private lockAlpha = 0;
+  private lockLevel = 0;       // 0 = unlocked, 1 = locked
+  private locked = false;
+
+  // DC removal on audio output
+  private dcAlpha = 0;
+  private dcState = 0;
+
+  // Audio LPF (simple 1st-order for bandwidth control)
+  private lpAlpha = 0;
+  private lpState = 0;
+
+  // Output buffer
+  private outputBuffer = new Float32Array(4096);
+
+  constructor() {
+    this.computeLoopCoeffs(150); // 150 Hz initial loop BW
+    this.computeLpf(5000);       // 5kHz audio LPF
+    this.dcAlpha = 1 - (2 * Math.PI * 2.0 / this.inputSampleRate); // 2Hz DC blocker
+    this.lockAlpha = 1 - Math.exp(-1000 / (50 * this.inputSampleRate)); // 50ms
+  }
+
+  private computeLoopCoeffs(bwHz: number): void {
+    // 2nd-order PLL loop filter: ωn = 2π×BW, ζ = 0.707
+    const omegaN = 2 * Math.PI * bwHz / this.inputSampleRate;
+    const zeta = 0.707;
+    this.g1 = 2 * zeta * omegaN;    // proportional
+    this.g2 = omegaN * omegaN;       // integral
+  }
+
+  private computeLpf(cutoffHz: number): void {
+    const rc = 1 / (2 * Math.PI * cutoffHz);
+    const dt = 1 / this.inputSampleRate;
+    this.lpAlpha = dt / (rc + dt);
+  }
+
+  setInputSampleRate(rate: number): void {
+    this.inputSampleRate = rate;
+    this.computeLoopCoeffs(150);
+    this.computeLpf(5000);
+    this.dcAlpha = 1 - (2 * Math.PI * 2.0 / rate);
+    this.lockAlpha = 1 - Math.exp(-1000 / (50 * rate));
+  }
+
+  setBandwidth(hz: number): void {
+    this.computeLpf(Math.min(hz / 2, 8000));
+  }
+
+  reset(): void {
+    this.pllPhase = 0;
+    this.pllFreq = 0;
+    this.pllOmega = 0;
+    this.lockLevel = 0;
+    this.locked = false;
+    this.dcState = 0;
+    this.lpState = 0;
+  }
+
+  /** Returns true if PLL is locked to carrier */
+  isLocked(): boolean {
+    return this.locked;
+  }
+
+  process(iq: Int16Array): Float32Array {
+    const n = iq.length >> 1;
+    if (n > this.outputBuffer.length) {
+      this.outputBuffer = new Float32Array(n);
+    }
+    const out = this.outputBuffer;
+    const scale = 1 / 32768;
+
+    let phase = this.pllPhase;
+    let freq = this.pllFreq;
+    let omega = this.pllOmega;
+    let dc = this.dcState;
+    let lp = this.lpState;
+    let lock = this.lockLevel;
+    const g1 = this.g1;
+    const g2 = this.g2;
+    const dcA = this.dcAlpha;
+    const lpA = this.lpAlpha;
+    const lockA = this.lockAlpha;
+
+    // Max frequency excursion: ±1000Hz in radians/sample
+    const maxFreq = 2 * Math.PI * 1000 / this.inputSampleRate;
+
+    for (let i = 0; i < n; i++) {
+      const I = iq[i * 2] * scale;
+      const Q = iq[i * 2 + 1] * scale;
+
+      // Generate VCO output
+      const cosP = Math.cos(phase);
+      const sinP = Math.sin(phase);
+
+      // Coherent demodulation: mix input with VCO
+      // audio = I*cos + Q*sin (both sidebands)
+      const audio = I * cosP + Q * sinP;
+
+      // Phase error detector: cross product
+      // error = Q*cos - I*sin = Im(signal × conj(VCO))
+      const error = Q * cosP - I * sinP;
+
+      // Lock detector
+      const absErr = Math.abs(error);
+      lock += lockA * ((absErr < 0.3 ? 1.0 : 0.0) - lock);
+
+      // 2nd-order loop filter
+      omega += g2 * error;
+      freq = omega + g1 * error;
+
+      // Clamp frequency excursion
+      if (freq > maxFreq) { freq = maxFreq; omega = maxFreq; }
+      if (freq < -maxFreq) { freq = -maxFreq; omega = -maxFreq; }
+
+      // Advance VCO phase
+      phase += freq;
+      if (phase > Math.PI) phase -= 2 * Math.PI;
+      if (phase < -Math.PI) phase += 2 * Math.PI;
+
+      // DC removal
+      dc = dcA * dc + (1 - dcA) * audio;
+      let sample = audio - dc;
+
+      // Audio low-pass filter
+      lp += lpA * (sample - lp);
+      sample = lp;
+
+      // Clamp output to prevent downstream biquad instability
+      out[i] = sample > 1.0 ? 1.0 : sample < -1.0 ? -1.0 : sample;
+    }
+
+    this.pllPhase = phase;
+    this.pllFreq = freq;
+    this.pllOmega = omega;
+    this.dcState = dc;
+    this.lpState = lp;
+    this.lockLevel = lock;
+    this.locked = lock > 0.6;
+
+    return out.subarray(0, n);
+  }
+}
+
+// ============================================================
 // SSB Demodulator (USB / LSB)
 // ============================================================
 // Frequency-shifts the IQ signal then takes the real part.
@@ -1554,6 +1722,9 @@ export function getDemodulator(mode: DemodMode): Demodulator {
       break;
     case 'am-stereo':
       demod = new CQuamDemodulator();
+      break;
+    case 'sam':
+      demod = new SamDemodulator();
       break;
     case 'usb':
       demod = new SsbDemodulator(true);

@@ -100,6 +100,9 @@ function createStore() {
   const [autoNotchEnabled, setAutoNotchEnabled] = persist<boolean>('audio.autoNotch', false);
   const [hiBlendEnabled, setHiBlendEnabled] = persist<boolean>('audio.hiBlend', false);
   const [hiBlendCutoff, setHiBlendCutoff] = persist<number>('audio.hiBlendCutoff', 2500);
+  const [softMuteEnabled, setSoftMuteEnabled] = persist<boolean>('audio.softMute', false);
+  /** Soft mute threshold in dB — below this level, volume is progressively reduced */
+  const [softMuteThreshold, setSoftMuteThreshold] = persist<number>('audio.softMuteThreshold', -40);
 
   // ---- Display ----
   const [waterfallTheme, setWaterfallTheme] = persist<WaterfallColorTheme>('waterfallTheme', 'classic');
@@ -226,6 +229,8 @@ function createStore() {
     autoNotchEnabled, setAutoNotchEnabled,
     hiBlendEnabled, setHiBlendEnabled,
     hiBlendCutoff, setHiBlendCutoff,
+    softMuteEnabled, setSoftMuteEnabled,
+    softMuteThreshold, setSoftMuteThreshold,
 
     // Display
     waterfallTheme, setWaterfallTheme,

@@ -683,6 +683,7 @@ function createDemod(mode: DemodMode, inputRate: number): ServerDemod {
     case 'nfm': return new FmMonoDemod(inputRate, false);
     case 'am': return new AmMonoDemod();
     case 'am-stereo': return new CQuamStereoDemod(inputRate);
+    case 'sam': return new AmMonoDemod(); // SAM uses client-side PLL; server falls back to envelope AM
     case 'usb': return new SsbMonoDemod(false);
     case 'lsb': return new SsbMonoDemod(true);
     case 'cw': return new CwMonoDemod(inputRate);

@@ -35,7 +35,7 @@ const DongleProfileSchema = z.object({
     message: 'fftSize must be a power of 2 between 256 and 65536',
   }).default(2048),
   fftFps: z.number().int().min(1).max(60).default(30),
-  defaultMode: z.enum(['wfm', 'nfm', 'am', 'am-stereo', 'usb', 'lsb', 'cw', 'raw']).default('nfm'),
+  defaultMode: z.enum(['wfm', 'nfm', 'am', 'am-stereo', 'sam', 'usb', 'lsb', 'cw', 'raw']).default('nfm'),
   defaultTuneOffset: z.number().default(0),
   defaultBandwidth: z.number().positive().default(12_500),
   /** Tuning step in Hz (UI click/arrow step size). Defaults to channel bandwidth. */

@@ -137,7 +137,7 @@ export class LmsAnr {
     const lincr = this.lincr;
     const ldecr = this.ldecr;
     const denMult = this.denMult;
-    const eps = 1e-30; // prevent division by zero
+    const eps = 1e-6; // Meaningful epsilon — prevents weight explosion on silence
 
     for (let i = 0; i < samples.length; i++) {
       const input = samples[i];
@@ -159,7 +159,8 @@ export class LmsAnr {
       const error = input - y;
 
       // Output = prediction (contains the correlated/predictable part = signal)
-      samples[i] = y;
+      // Clamp to prevent downstream Web Audio biquad instability
+      samples[i] = y > 1.0 ? 1.0 : y < -1.0 ? -1.0 : y;
 
       // ---- Adaptive leakage control ----
       // Prevents weight divergence on non-stationary signals
@@ -184,7 +185,11 @@ export class LmsAnr {
       const leakFactor = 1.0 - twoMu * ngamma;
       for (let j = 0; j < n; j++) {
         const dIdx = (idx - dly - j) & mask;
-        w[j] = leakFactor * w[j] + normFactor * error * dline[dIdx];
+        let wNew = leakFactor * w[j] + normFactor * error * dline[dIdx];
+        // Hard clamp weights to prevent divergence
+        if (wNew > 10) wNew = 10;
+        else if (wNew < -10) wNew = -10;
+        w[j] = wNew;
       }
 
       idx = (idx + 1) & mask;

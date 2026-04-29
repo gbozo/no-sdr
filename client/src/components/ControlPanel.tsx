@@ -393,7 +393,7 @@ const DongleProfileSelector: Component = () => {
 };
 
 const ModeSelector: Component = () => {
-  const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw', 'raw'];
+  const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'sam', 'am-stereo', 'usb', 'lsb', 'cw', 'raw'];
   const [open, setOpen] = createSignal(true);
 
   return (
@@ -948,6 +948,47 @@ const NoiseReduction: Component = () => {
             </Show>
           </div>
         </Show>
+
+        {/* Soft Mute */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Soft Mute
+            </label>
+            <button
+              class={`mil-btn ${store.softMuteEnabled() ? 'active' : ''}`}
+              onClick={() => engine.setSoftMuteEnabled(!store.softMuteEnabled())}
+              title="Soft mute — progressively reduces volume on weak signals instead of playing noise"
+            >
+              {store.softMuteEnabled() ? 'On' : 'Off'}
+            </button>
+          </div>
+          <Show when={store.softMuteEnabled()}>
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-[9px] font-mono text-text-dim">
+                  Threshold
+                </label>
+                <span class="text-[9px] font-mono text-text-dim">
+                  {store.softMuteThreshold()} dB
+                </span>
+              </div>
+              <input
+                type="range"
+                aria-label="Soft mute threshold"
+                min={-80}
+                max={-10}
+                step={1}
+                value={store.softMuteThreshold()}
+                onInput={(e) => engine.setSoftMuteThreshold(parseInt(e.currentTarget.value))}
+                class="sdr-range"
+              />
+              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                Below threshold: volume fades to silence. Above: full volume.
+              </div>
+            </div>
+          </Show>
+        </div>
       </div>
       </Show>
     </div>
