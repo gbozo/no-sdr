@@ -255,6 +255,7 @@ export class WebSocketManager {
         fftSize: profile.fftSize,
         iqSampleRate: iqOutputRate,
         mode: profile.defaultMode,
+        tuningStep: profile.tuningStep ?? 0,
       }));
     });
   }
@@ -784,6 +785,7 @@ export class WebSocketManager {
       fftSize: profile.fftSize,
       iqSampleRate: iqOutputRate,
       mode: profile.defaultMode,
+      tuningStep: profile.tuningStep ?? 0,
     });
 
     logger.info(

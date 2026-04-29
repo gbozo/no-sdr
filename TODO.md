@@ -49,6 +49,7 @@
 
 ## Completed (Recent)
 
+- [x] **Tuning step UI & keyboard tuning** — tuning step selector in frequency display (auto/1Hz–200kHz). Arrow keys: left/right = step, up/down = 10x step. Step snaps to grid. Scroll wheel on frequency digits uses digit position (no snap). Click-to-tune on waterfall uses exact frequency (no snap). Profile's tuningStep sent from server on subscribe/profile_changed. Dropdown auto-blurs after selection so arrow keys work immediately.
 - [x] **Direct sampling / bias-T / offset tuning always sent on profile switch** — previously these rtl_tcp commands were only sent when enabled, so switching from an HF profile (direct sampling=2) to VHF (direct sampling=0) left hardware in the old mode. Now all three are always explicitly sent (including 0 to disable).
 - [x] **Per-profile bias-T and offset tuning** — these hardware settings now override dongle-level defaults per frequency profile (same pattern as directSampling). Admin UI checkboxes in Hardware Overrides section.
 - [x] **Profile list cache invalidation** — the user-facing dongle/profile dropdown now always re-fetches profiles when opened and when activeProfileId changes. Fixes stale list after admin deletes/adds profiles.

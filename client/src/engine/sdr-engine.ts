@@ -815,6 +815,7 @@ export class SdrEngine {
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
+        store.setTuningStep(meta.tuningStep ?? 0);
         if (meta.iqSampleRate) {
           store.setIqSampleRate(meta.iqSampleRate);
           // Tell demodulator the actual IQ sample rate from server
@@ -910,6 +911,7 @@ export class SdrEngine {
         store.setCenterFrequency(meta.centerFreq);
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
+        store.setTuningStep(meta.tuningStep ?? 0);
         if (meta.iqSampleRate) {
           store.setIqSampleRate(meta.iqSampleRate);
         }

@@ -45,6 +45,7 @@ dongles:
         directSampling: 0
         decoders: []
         dongleId: dongle-remote
+        tuningStep: 10000
       - id: aviation
         name: Aviation VHF
         centerFrequency: 125000000
@@ -82,9 +83,9 @@ dongles:
         defaultBandwidth: 10000
         gain: 49.6
         description: MW broadcast band — 530 to 1700 kHz (direct sampling required)
+        directSampling: 0
         decoders: []
         dongleId: dongle-remote
-        directSampling: 0
       - id: profile-1777493231538
         name: ADS-B (1090 MHz)
         centerFrequency: 1090000000

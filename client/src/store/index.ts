@@ -62,6 +62,8 @@ function createStore() {
   const [tuneOffset, setTuneOffset] = createSignal(0);
   const [mode, setMode] = createSignal<DemodMode>('nfm');
   const [bandwidth, setBandwidth] = createSignal(12_500);
+  /** Tuning step in Hz. 0 = auto (use bandwidth). User can override. */
+  const [tuningStep, setTuningStep] = createSignal(0);
 
   // Computed: actual tuned frequency
   const tunedFrequency = () => centerFrequency() + tuneOffset();
@@ -178,6 +180,7 @@ function createStore() {
     tuneOffset, setTuneOffset,
     mode, setMode,
     bandwidth, setBandwidth,
+    tuningStep, setTuningStep,
     tunedFrequency,
 
     // Audio

@@ -181,9 +181,10 @@ const timer = setInterval(() => {
       setDragStart(null);
       setDragEnd(null);
     } else if (e.button === 0 && !e.shiftKey) {
-      // Plain click-to-tune
+      // Plain click-to-tune (no step snapping — user clicked an exact frequency)
       const rect = spectrumRef.getBoundingClientRect();
-      engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
+      const offset = xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency();
+      engine.tune(Math.round(offset));
 
       // Spectrum click = intent to listen — start audio if not yet running
       if (!engine.isAudioInitialized) {
