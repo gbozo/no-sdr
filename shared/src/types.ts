@@ -90,6 +90,17 @@ export interface DongleProfile {
   biasT?: boolean;
   /** Offset tuning / zero-IF shift (overrides dongle-level setting) */
   offsetTuning?: boolean;
+
+  // ---- DSP options (per-profile, override dongle-level defaults) ----
+
+  /** Remove DC offset with adaptive IIR blocker (overrides dongle-level default) */
+  dcOffsetRemoval?: boolean;
+  /** Enable pre-filter noise blanker (blanks impulses BEFORE decimation filter) */
+  preFilterNb?: boolean;
+  /** Pre-filter noise blanker threshold multiplier (default: 10, range 3-50).
+   *  Blanks samples exceeding avgMag × threshold. Lower = more aggressive. */
+  preFilterNbThreshold?: number;
+
   /** Active digital decoders for this profile */
   decoders: DecoderConfig[];
 }
@@ -200,6 +211,12 @@ export interface DongleConfig {
    *  Local: requires rtl-sdr-blog fork (passes -w flag). Not in stock rtl_sdr.
    *  rtl_tcp: not in standard protocol; requires modified server. */
   tunerBandwidth?: number;
+
+  // ---- DSP options (dongle-level defaults, overridable per profile) ----
+
+  /** Remove DC offset with adaptive IIR blocker (default: true).
+   *  Eliminates the center spike from RTL-SDR's ADC DC bias. */
+  dcOffsetRemoval?: boolean;
 }
 
 // ---- Waterfall & Display ----

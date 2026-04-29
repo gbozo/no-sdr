@@ -90,6 +90,17 @@ function createStore() {
   const [nbEnabled, setNbEnabled] = persist<boolean>('audio.nbEnabled', false);
   const [nbLevel, setNbLevel] = persist<number>('audio.nbLevel', 0.5);
 
+  // ---- AGC ----
+  const [agcEnabled, setAgcEnabled] = persist<boolean>('audio.agcEnabled', true);
+  const [agcDecayMs, setAgcDecayMs] = persist<number>('audio.agcDecayMs', 250);
+
+  // ---- Audio Filters ----
+  const [rumbleFilterEnabled, setRumbleFilterEnabled] = persist<boolean>('audio.rumbleFilter', false);
+  const [rumbleFilterCutoff, setRumbleFilterCutoff] = persist<number>('audio.rumbleCutoff', 65);
+  const [autoNotchEnabled, setAutoNotchEnabled] = persist<boolean>('audio.autoNotch', false);
+  const [hiBlendEnabled, setHiBlendEnabled] = persist<boolean>('audio.hiBlend', false);
+  const [hiBlendCutoff, setHiBlendCutoff] = persist<number>('audio.hiBlendCutoff', 2500);
+
   // ---- Display ----
   const [waterfallTheme, setWaterfallTheme] = persist<WaterfallColorTheme>('waterfallTheme', 'classic');
   const [uiTheme, setUITheme] = persist<UITheme>('uiTheme', 'vfd');
@@ -204,6 +215,17 @@ function createStore() {
     nrStrength, setNrStrength,
     nbEnabled, setNbEnabled,
     nbLevel, setNbLevel,
+
+    // AGC
+    agcEnabled, setAgcEnabled,
+    agcDecayMs, setAgcDecayMs,
+
+    // Audio Filters
+    rumbleFilterEnabled, setRumbleFilterEnabled,
+    rumbleFilterCutoff, setRumbleFilterCutoff,
+    autoNotchEnabled, setAutoNotchEnabled,
+    hiBlendEnabled, setHiBlendEnabled,
+    hiBlendCutoff, setHiBlendCutoff,
 
     // Display
     waterfallTheme, setWaterfallTheme,

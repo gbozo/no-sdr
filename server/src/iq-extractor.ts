@@ -20,6 +20,12 @@ export interface IqExtractorOptions {
   outputSampleRate: number;
   /** Frequency offset from center to shift to (Hz) */
   tuneOffset: number;
+  /** Enable adaptive DC offset removal (IIR blocker). Default: true. */
+  dcOffsetRemoval?: boolean;
+  /** Enable pre-filter noise blanker. Default: false. */
+  preFilterNb?: boolean;
+  /** Pre-filter NB threshold multiplier (3-50). Default: 10. */
+  preFilterNbThreshold?: number;
 }
 
 /**
@@ -126,6 +132,20 @@ export class IqExtractor {
   // Sized to the maximum possible output for a 16 KB input chunk
   private outputBuffer: Int16Array;
 
+  // ---- DC offset removal (IIR blocker) ----
+  private dcRemovalEnabled: boolean;
+  private dcAlpha: number; // IIR coefficient: 1 - 2π×cornerHz/sampleRate
+  private dcI = 0; // Running DC estimate for I channel
+  private dcQ = 0; // Running DC estimate for Q channel
+
+  // ---- Pre-filter noise blanker ----
+  private preNbEnabled: boolean;
+  private preNbThreshold: number; // multiplier over average magnitude
+  private preNbAvgMag = 0.05; // EMA of magnitude (initialized to typical noise floor)
+  private preNbBlankCount = 0; // remaining guard samples to blank
+  private preNbHoldI = 0; // last good I sample (sample-and-hold blanking)
+  private preNbHoldQ = 0; // last good Q sample
+
   constructor(options: IqExtractorOptions) {
     this.inputSampleRate = options.inputSampleRate;
     this.outputSampleRate = options.outputSampleRate;
@@ -149,11 +169,22 @@ export class IqExtractor {
     const maxInputSamples = 16384;
     this.outputBuffer = new Int16Array(Math.ceil(maxInputSamples / this.decimationFactor) * 2);
 
+    // DC offset removal: IIR high-pass with ~1Hz corner frequency
+    this.dcRemovalEnabled = options.dcOffsetRemoval !== false; // default ON
+    this.dcAlpha = 1 - (2 * Math.PI * 1.0 / this.inputSampleRate); // 1Hz corner
+
+    // Pre-filter noise blanker
+    this.preNbEnabled = options.preFilterNb ?? false;
+    this.preNbThreshold = options.preFilterNbThreshold ?? 10;
+
     logger.debug({
       inputRate: this.inputSampleRate,
       outputRate: this.outputSampleRate,
       decimation: this.decimationFactor,
       tuneOffset: this.tuneOffset,
+      dcRemoval: this.dcRemovalEnabled,
+      preFilterNb: this.preNbEnabled,
+      preFilterNbThreshold: this.preNbThreshold,
     }, 'IQ extractor initialized');
   }
 
@@ -227,8 +258,28 @@ export class IqExtractor {
 
     // Process first sample from residual if needed
     if (extraI !== undefined && data.length > 0) {
-      const rawI = (extraI - 127.5) / 127.5;
-      const rawQ = (data[dataIdx++] - 127.5) / 127.5;
+      let rawI = (extraI - 127.5) / 127.5;
+      let rawQ = (data[dataIdx++] - 127.5) / 127.5;
+
+      // DC removal + NB for residual sample (uses same state as main loop)
+      if (this.dcRemovalEnabled) {
+        this.dcI = this.dcAlpha * this.dcI + (1 - this.dcAlpha) * rawI;
+        this.dcQ = this.dcAlpha * this.dcQ + (1 - this.dcAlpha) * rawQ;
+        rawI -= this.dcI;
+        rawQ -= this.dcQ;
+      }
+      if (this.preNbEnabled) {
+        const mag = Math.sqrt(rawI * rawI + rawQ * rawQ);
+        const nbAlpha = 2.0 / (0.050 * this.inputSampleRate);
+        if (this.preNbBlankCount > 0) {
+          rawI = this.preNbHoldI; rawQ = this.preNbHoldQ; this.preNbBlankCount--;
+        } else if (mag > this.preNbAvgMag * this.preNbThreshold) {
+          rawI = this.preNbHoldI; rawQ = this.preNbHoldQ; this.preNbBlankCount = 5;
+        } else {
+          this.preNbHoldI = rawI; this.preNbHoldQ = rawQ;
+          this.preNbAvgMag += nbAlpha * (mag - this.preNbAvgMag);
+        }
+      }
 
       // Inline NCO lookup — bitwise AND instead of modulo (tableSize is power of 2)
       const idx = ((phase * tableScale + 0.5) | 0) & tableMask;
@@ -254,10 +305,60 @@ export class IqExtractor {
 
     // Main processing loop — hot path
     const endByte = data.length - 1;
+    const dcEnabled = this.dcRemovalEnabled;
+    const nbEnabled = this.preNbEnabled;
+    const nbThreshold = this.preNbThreshold;
+    let dcI = this.dcI;
+    let dcQ = this.dcQ;
+    const dcAlpha = this.dcAlpha;
+    const dcBeta = 1 - dcAlpha;
+    let nbAvg = this.preNbAvgMag;
+    let nbBlank = this.preNbBlankCount;
+    // EMA alpha for NB magnitude tracking — SLOW time constant (~50ms)
+    // so that brief impulses clearly exceed the baseline.
+    // At 2.4MS/s: 50ms = 120000 samples → alpha ≈ 1/120000 ≈ 8.3e-6
+    const nbMagAlpha = 2.0 / (0.050 * this.inputSampleRate); // ~50ms time constant
+    // Guard samples: blank for 5 samples after an impulse (~2µs at 2.4MS/s)
+    const nbGuard = 5;
+    // Sample-and-hold: last good IQ values (prevents discontinuities when blanking)
+    let nbHoldI = this.preNbHoldI;
+    let nbHoldQ = this.preNbHoldQ;
+
     while (dataIdx < endByte) {
-      const rawI = (data[dataIdx] - 127.5) / 127.5;
-      const rawQ = (data[dataIdx + 1] - 127.5) / 127.5;
+      let rawI = (data[dataIdx] - 127.5) / 127.5;
+      let rawQ = (data[dataIdx + 1] - 127.5) / 127.5;
       dataIdx += 2;
+
+      // ---- DC offset removal (IIR high-pass blocker) ----
+      if (dcEnabled) {
+        dcI = dcAlpha * dcI + dcBeta * rawI;
+        dcQ = dcAlpha * dcQ + dcBeta * rawQ;
+        rawI -= dcI;
+        rawQ -= dcQ;
+      }
+
+      // ---- Pre-filter noise blanker ----
+      if (nbEnabled) {
+        const mag = Math.sqrt(rawI * rawI + rawQ * rawQ);
+
+        if (nbBlank > 0) {
+          // Still in guard period — hold last good sample (no discontinuity)
+          rawI = nbHoldI;
+          rawQ = nbHoldQ;
+          nbBlank--;
+        } else if (mag > nbAvg * nbThreshold) {
+          // Impulse detected — replace with last good sample and start guard
+          rawI = nbHoldI;
+          rawQ = nbHoldQ;
+          nbBlank = nbGuard;
+          // Do NOT update EMA on impulse samples — prevents desensitization
+        } else {
+          // Normal sample — update hold values and EMA
+          nbHoldI = rawI;
+          nbHoldQ = rawQ;
+          nbAvg = nbAvg + nbMagAlpha * (mag - nbAvg);
+        }
+      }
 
       // Inline NCO lookup — bitwise AND for fast power-of-2 table wrap
       const idx = ((phase * tableScale + 0.5) | 0) & tableMask;
@@ -287,6 +388,12 @@ export class IqExtractor {
 
     this.ncoPhase = phase;
     this.decimCounter = decimCount;
+    this.dcI = dcI;
+    this.dcQ = dcQ;
+    this.preNbAvgMag = nbAvg;
+    this.preNbBlankCount = nbBlank;
+    this.preNbHoldI = nbHoldI;
+    this.preNbHoldQ = nbHoldQ;
 
     return output.subarray(0, outIdx);
   }
@@ -297,6 +404,12 @@ export class IqExtractor {
     this.residualByte = null;
     for (const s of this.biquadStatesI) { s.z1 = 0; s.z2 = 0; }
     for (const s of this.biquadStatesQ) { s.z1 = 0; s.z2 = 0; }
+    this.dcI = 0;
+    this.dcQ = 0;
+    this.preNbAvgMag = 0.05;
+    this.preNbBlankCount = 0;
+    this.preNbHoldI = 0;
+    this.preNbHoldQ = 0;
   }
 }
 

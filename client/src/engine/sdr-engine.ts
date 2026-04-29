@@ -41,6 +41,9 @@ import { FftFrameBuffer } from './fft-frame-buffer.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
 import type { RdsData } from './demodulators.js';
 import { NoiseReductionEngine } from './noise-reduction.js';
+import { LmsAnr } from './lms-anr.js';
+import { HangAgc, AGC_PRESETS } from './agc.js';
+import { RumbleFilter, AutoNotch, HiBlendFilter } from './audio-filters.js';
 import { store } from '../store/index.js';
 import type { Bookmark } from '../store/index.js';
 
@@ -109,8 +112,19 @@ export class SdrEngine {
   private opusDecoderReady = false;
   private opusDecoderChannels = 1;
 
-  // Noise reduction engine (spectral NR + noise blanker)
+  // Noise reduction engine (spectral NR + noise blanker — legacy)
   private nr = new NoiseReductionEngine();
+
+  // LMS Adaptive NR (replaces spectral NR for CW/SSB/AM)
+  private anr = new LmsAnr();
+
+  // Audio filters (rumble HPF + auto-notch + hi-blend for FM stereo)
+  private rumbleFilter = new RumbleFilter(48000);
+  private autoNotch = new AutoNotch(48000);
+  private hiBlend = new HiBlendFilter(48000);
+
+  // Hang-timer AGC (post-demod, pre-audio)
+  private agc = new HangAgc(48000);
 
   // Resampler state for sub-48kHz modes (SSB 24kHz, CW 12kHz → 48kHz)
   private resampleRatio = 1; // inputRate / 48000 (1 = no resampling needed)
@@ -487,9 +501,33 @@ export class SdrEngine {
             this.bwIqRawBytes += opusSamples * channels * 2;
 
             if (channels === 2 && channelData.length >= 2) {
+              // Apply Adaptive NR
+              if (store.nrEnabled()) {
+                this.anr.process(channelData[0]);
+                this.anr.process(channelData[1]);
+              }
+              // Apply audio filters (rumble + auto-notch + hi-blend)
+              this.rumbleFilter.processStereo(channelData[0], channelData[1]);
+              this.autoNotch.processStereo(channelData[0], channelData[1]);
+              this.hiBlend.processStereo(channelData[0], channelData[1]);
+              // Apply AGC
+              if (store.agcEnabled()) {
+                this.agc.processStereo(channelData[0], channelData[1]);
+              }
               this.audio.pushStereoAudio(channelData[0], channelData[1]);
               if (!store.stereoDetected()) store.setStereoDetected(true);
             } else {
+              // Apply Adaptive NR
+              if (store.nrEnabled()) {
+                this.anr.process(channelData[0]);
+              }
+              // Apply audio filters
+              this.rumbleFilter.process(channelData[0]);
+              this.autoNotch.process(channelData[0]);
+              // Apply AGC
+              if (store.agcEnabled()) {
+                this.agc.process(channelData[0]);
+              }
               this.audio.pushDemodulatedAudio(channelData[0]);
               if (store.stereoDetected()) store.setStereoDetected(false);
             }
@@ -706,8 +744,19 @@ export class SdrEngine {
       if (stereoResult.stereo) {
         // Apply noise reduction to stereo audio
         const filtered = this.nr.processStereo(stereoResult.left, stereoResult.right);
+        // Apply LMS adaptive NR
+        this.anr.process(filtered.left);
+        this.anr.process(filtered.right);
         // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
         const resampled = this.resampleStereoTo48k(filtered.left, filtered.right);
+        // Apply audio filters (rumble + auto-notch + hi-blend)
+        this.rumbleFilter.processStereo(resampled.left, resampled.right);
+        this.autoNotch.processStereo(resampled.left, resampled.right);
+        this.hiBlend.processStereo(resampled.left, resampled.right);
+        // Apply AGC
+        if (store.agcEnabled()) {
+          this.agc.processStereo(resampled.left, resampled.right);
+        }
         this.audioOutCount += resampled.left.length;
         if (resampled.left.length > 0 && squelchOpen) {
           this.audio.pushStereoAudio(resampled.left, resampled.right);
@@ -718,8 +767,17 @@ export class SdrEngine {
       } else {
         // Apply noise reduction to mono audio
         const filtered = this.nr.processMono(stereoResult.left);
+        // Apply LMS adaptive NR
+        this.anr.process(filtered);
         // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
         const resampled = this.resampleTo48k(filtered);
+        // Apply audio filters
+        this.rumbleFilter.process(resampled);
+        this.autoNotch.process(resampled);
+        // Apply AGC
+        if (store.agcEnabled()) {
+          this.agc.process(resampled);
+        }
         this.audioOutCount += resampled.length;
         if (resampled.length > 0 && squelchOpen) {
           this.audio.pushDemodulatedAudio(resampled);
@@ -733,8 +791,17 @@ export class SdrEngine {
       this.iqInCount += iqData.length / 2;
       // Apply noise reduction to mono audio
       const filtered = this.nr.processMono(audioSamples);
+      // Apply LMS adaptive NR
+      this.anr.process(filtered);
       // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
       const resampled = this.resampleTo48k(filtered);
+      // Apply audio filters
+      this.rumbleFilter.process(resampled);
+      this.autoNotch.process(resampled);
+      // Apply AGC
+      if (store.agcEnabled()) {
+        this.agc.process(resampled);
+      }
       this.audioOutCount += resampled.length;
       if (resampled.length > 0 && squelchOpen) {
         this.audio.pushDemodulatedAudio(resampled);
@@ -996,6 +1063,8 @@ export class SdrEngine {
     store.setTuneOffset(offsetHz);
     // Reset demodulator to clear stale filter state at the new frequency
     this.demodulator.reset();
+    // Reset ADPCM decoder — predictor state is invalid after frequency change
+    this.iqAdpcmDecoder.reset();
     // On the IQ codec path the client holds demodulated samples that go stale
     // when the server shifts the extracted sub-band — flush the ring buffer.
     // On the Opus path the server re-tunes seamlessly; flushing causes a
@@ -1031,8 +1100,15 @@ export class SdrEngine {
     }
     // Flush stale audio data
     this.audio.resetBuffer();
+    // Reset ADPCM decoder — mode/rate change invalidates predictor
+    this.iqAdpcmDecoder.reset();
     // Reset noise reduction state for new mode
     this.nr.reset();
+    this.anr.reset();
+    this.anr.setPreset(this.getAnrPresetForMode(m));
+    // Update AGC preset for new mode
+    this.agc.setPreset(this.getAgcPresetForMode(m));
+    this.agc.reset();
     // Update resampler for new mode's output rate
     this.updateResampleRatio();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
@@ -1132,22 +1208,102 @@ export class SdrEngine {
 
   setNrEnabled(enabled: boolean): void {
     store.setNrEnabled(enabled);
-    this.nr.setNrEnabled(enabled);
+    this.anr.setEnabled(enabled);
   }
 
   setNrStrength(strength: number): void {
     store.setNrStrength(strength);
-    this.nr.setNrStrength(strength);
+    // Map 0-1 strength to ANR gain.
+    // At 0: gain = 0 (true passthrough, no adaptation)
+    // At 1: gain = 5e-4 (aggressive adaptation)
+    if (strength <= 0) {
+      this.anr.setOptions({ gain: 0 });
+    } else {
+      const gain = strength * 5e-4;
+      this.anr.setOptions({ gain });
+    }
   }
 
   setNbEnabled(enabled: boolean): void {
     store.setNbEnabled(enabled);
-    this.nr.setNbEnabled(enabled);
+    // NB is now server-side — send command to server
+    this.send({ cmd: 'set_pre_filter_nb', enabled });
   }
 
   setNbLevel(level: number): void {
     store.setNbLevel(level);
-    this.nr.setNbLevel(level);
+    // Map 0-1 to threshold 20-2 (inverted: higher level = lower threshold = more aggressive)
+    // 2 = very aggressive (audible on any signal — blanks anything 2× above average)
+    // 20 = gentle (only blanks strong impulses 20× above average)
+    const threshold = Math.round(20 - level * 18);
+    this.send({ cmd: 'set_pre_filter_nb_threshold', threshold });
+  }
+
+  // ---- AGC ----
+
+  setAgcEnabled(enabled: boolean): void {
+    store.setAgcEnabled(enabled);
+    if (!enabled) {
+      this.agc.reset();
+    }
+  }
+
+  setAgcDecay(ms: number): void {
+    store.setAgcDecayMs(ms);
+    this.agc.setDecayMs(ms);
+  }
+
+  /** Map demod mode to AGC preset name */
+  private getAgcPresetForMode(mode: string): string {
+    switch (mode) {
+      case 'usb':
+      case 'lsb': return 'ssb';
+      case 'cw': return 'cw';
+      case 'am':
+      case 'am-stereo': return 'am';
+      case 'wfm':
+      case 'nfm': return 'fm';
+      default: return 'ssb';
+    }
+  }
+
+  /** Map demod mode to ANR preset name */
+  private getAnrPresetForMode(mode: string): string {
+    switch (mode) {
+      case 'usb':
+      case 'lsb': return 'ssb';
+      case 'cw': return 'cw';
+      case 'am':
+      case 'am-stereo': return 'am';
+      default: return 'ssb'; // default works for FM too (NR usually off for FM)
+    }
+  }
+
+  // ---- Audio Filters ----
+
+  setRumbleFilterEnabled(enabled: boolean): void {
+    store.setRumbleFilterEnabled(enabled);
+    this.rumbleFilter.setEnabled(enabled);
+  }
+
+  setRumbleFilterCutoff(hz: number): void {
+    store.setRumbleFilterCutoff(hz);
+    this.rumbleFilter.setCutoff(hz);
+  }
+
+  setAutoNotchEnabled(enabled: boolean): void {
+    store.setAutoNotchEnabled(enabled);
+    this.autoNotch.setEnabled(enabled);
+  }
+
+  setHiBlendEnabled(enabled: boolean): void {
+    store.setHiBlendEnabled(enabled);
+    this.hiBlend.setEnabled(enabled);
+  }
+
+  setHiBlendCutoff(hz: number): void {
+    store.setHiBlendCutoff(hz);
+    this.hiBlend.setCutoff(hz);
   }
 
   // ---- Codec Settings ----
@@ -1406,10 +1562,28 @@ export class SdrEngine {
     this.audio.setEqHighMid(store.eqHighMid());
     this.audio.setEqHigh(store.eqHigh());
     this.audio.setLoudness(store.loudness());
-    this.nr.setNrEnabled(store.nrEnabled());
-    this.nr.setNrStrength(store.nrStrength());
-    this.nr.setNbEnabled(store.nbEnabled());
-    this.nr.setNbLevel(store.nbLevel());
+    this.nr.setNrEnabled(false);  // Legacy spectral NR disabled — replaced by LMS ANR
+    this.nr.setNrStrength(0);
+    this.nr.setNbEnabled(false);  // Legacy client NB disabled — replaced by server pre-filter NB
+    this.nr.setNbLevel(0);
+    // Restore LMS ANR state
+    this.anr.setPreset(this.getAnrPresetForMode(store.mode()));
+    this.anr.setEnabled(store.nrEnabled());
+    if (store.nrStrength()) {
+      const gain = 5e-5 + store.nrStrength() * 4.5e-4;
+      this.anr.setOptions({ gain });
+    }
+    // Restore AGC settings from store
+    this.agc.setPreset(this.getAgcPresetForMode(store.mode()));
+    if (store.agcDecayMs()) {
+      this.agc.setDecayMs(store.agcDecayMs());
+    }
+    // Restore audio filter settings from store
+    this.rumbleFilter.setEnabled(store.rumbleFilterEnabled());
+    this.rumbleFilter.setCutoff(store.rumbleFilterCutoff());
+    this.autoNotch.setEnabled(store.autoNotchEnabled());
+    this.hiBlend.setEnabled(store.hiBlendEnabled());
+    this.hiBlend.setCutoff(store.hiBlendCutoff());
 
     // For Opus codec path: initialise the WASM decoder with the correct
     // channel count before sending audio_enabled. On a fresh page load

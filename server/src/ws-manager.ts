@@ -236,8 +236,11 @@ export class WebSocketManager {
             inputSampleRate: profile.sampleRate,
             outputSampleRate: iqOutputRate,
             tuneOffset: profile.defaultTuneOffset,
+            ...this.getDspOptions(dongleId, profile),
           });
           this.resetIqAccumBuffer(client, iqOutputRate);
+          // Reset ADPCM encoder — new profile invalidates predictor state
+          client.iqAdpcmEncoder?.reset();
           // Rebuild Opus pipeline if active
           if (client.opusPipeline) {
             client.opusPipeline.setMode(profile.defaultMode, iqOutputRate);
@@ -593,6 +596,8 @@ export class WebSocketManager {
         client.iqExtractor?.reset();
         // Flush IQ accumulation buffer to avoid stale data across tune
         client.iqAccumPos = 0;
+        // Reset ADPCM encoder — predictor state is invalid after frequency change
+        client.iqAdpcmEncoder?.reset();
         break;
 
       case 'mode': {
@@ -602,6 +607,8 @@ export class WebSocketManager {
         client.iqExtractor?.reset();
         // Reset IQ accumulation buffer for new sample rate
         this.resetIqAccumBuffer(client, newRate);
+        // Reset ADPCM encoder — sample rate change invalidates predictor
+        client.iqAdpcmEncoder?.reset();
         // Update Opus pipeline for new mode/rate
         if (client.opusPipeline) {
           client.opusPipeline.setMode(cmd.mode as DemodMode, newRate);
@@ -641,6 +648,11 @@ export class WebSocketManager {
         // Client-side only, acknowledged
         break;
 
+      case 'set_pre_filter_nb':
+      case 'set_pre_filter_nb_threshold':
+        // NB disabled — commands ignored (kept for protocol compatibility)
+        break;
+
       case 'codec':
         this.handleCodecChange(client, cmd);
         break;
@@ -676,6 +688,20 @@ export class WebSocketManager {
    * For WFM at 240kHz: 20ms × 240000 = 4800 IQ pairs = 9600 Int16 values.
    * For NFM at 48kHz: 20ms × 48000 = 960 IQ pairs = 1920 Int16 values.
    */
+  /**
+   * Get DSP options for IqExtractor from dongle + profile config.
+   * Profile-level settings override dongle-level defaults.
+   */
+  private getDspOptions(dongleId: string, profile: DongleProfile) {
+    const dongleConfig = this.config.dongles.find(d => d.id === dongleId);
+    const dcDefault = dongleConfig?.dcOffsetRemoval ?? true; // default ON
+    return {
+      dcOffsetRemoval: profile.dcOffsetRemoval ?? dcDefault,
+      preFilterNb: false, // Disabled — NB not useful without real impulse noise sources
+      preFilterNbThreshold: 10,
+    };
+  }
+
   private resetIqAccumBuffer(client: ConnectedClient, sampleRate: number): void {
     const iqPairs = Math.round(sampleRate * IQ_CHUNK_DURATION_S);
     const int16Elements = iqPairs * 2; // I + Q per pair
@@ -771,6 +797,7 @@ export class WebSocketManager {
       inputSampleRate: profile.sampleRate,
       outputSampleRate: iqOutputRate,
       tuneOffset: profile.defaultTuneOffset,
+      ...this.getDspOptions(dongleId, profile),
     });
 
     // Set up IQ accumulation buffer for fixed-chunk sending

@@ -52,6 +52,12 @@ const DongleProfileSchema = z.object({
   biasT: z.boolean().optional(),
   /** Offset tuning per profile (overrides dongle-level) */
   offsetTuning: z.boolean().optional(),
+  /** DC offset removal per profile (overrides dongle-level, default: true) */
+  dcOffsetRemoval: z.boolean().optional(),
+  /** Pre-filter noise blanker (blanks impulses before decimation LPF) */
+  preFilterNb: z.boolean().optional(),
+  /** Pre-filter NB threshold multiplier (3-50, default: 10) */
+  preFilterNbThreshold: z.number().min(3).max(50).optional(),
   decoders: z.array(DecoderConfigSchema).default([]),
 });
 
@@ -95,6 +101,10 @@ const DongleConfigSchema = z.object({
   ifGain: z.array(z.tuple([z.number().int().min(1).max(6), z.number().int()])).optional(),
   /** Tuner bandwidth in Hz (R820T/R828D only) */
   tunerBandwidth: z.number().int().positive().optional(),
+
+  // ---- DSP options (dongle-level defaults) ----
+  /** DC offset removal (adaptive IIR blocker). Default: true. */
+  dcOffsetRemoval: z.boolean().default(true).optional(),
 
   // ---- Hardware options (AirSpy Mini/R2) ----
   /** AirSpy: VGA/IF gain (0-15, default varies by mode) */

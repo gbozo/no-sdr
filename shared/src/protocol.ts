@@ -91,6 +91,8 @@ export type ClientCommand =
   | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
   | { cmd: 'stereo_enabled'; enabled: boolean }
   | { cmd: 'request_history' }
+  | { cmd: 'set_pre_filter_nb'; enabled: boolean }
+  | { cmd: 'set_pre_filter_nb_threshold'; threshold: number }
   // Admin commands
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }

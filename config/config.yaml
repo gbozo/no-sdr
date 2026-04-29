@@ -35,17 +35,19 @@ dongles:
         name: FM Broadcast
         centerFrequency: 100000000
         sampleRate: 2400000
-        fftSize: 8192
-        fftFps: 18
+        fftSize: 4096
+        fftFps: 8
         defaultMode: wfm
         defaultTuneOffset: 0
         defaultBandwidth: 200000
-        gain: 29
+        tuningStep: 10000
+        gain: 23
         description: FM broadcast band — 87.5 to 108 MHz
         directSampling: 0
+        preFilterNb: true
+        preFilterNbThreshold: 50
         decoders: []
         dongleId: dongle-remote
-        tuningStep: 10000
       - id: aviation
         name: Aviation VHF
         centerFrequency: 125000000
@@ -65,25 +67,25 @@ dongles:
         sampleRate: 2400000
         fftSize: 8192
         fftFps: 30
-        defaultMode: nfm
+        defaultMode: am
         defaultTuneOffset: 0
         defaultBandwidth: 12500
-        gain: 40
+        gain: 20
         description: Amateur 2m band — 144 to 148 MHz
         decoders: []
         dongleId: dongle-remote
       - id: mw-broadcast
         name: MW Broadcast
-        centerFrequency: 1000000
+        centerFrequency: 1500000
         sampleRate: 2400000
         fftSize: 4096
         fftFps: 8
         defaultMode: am
         defaultTuneOffset: 485000
         defaultBandwidth: 10000
-        gain: 49.6
+        gain: 20
         description: MW broadcast band — 530 to 1700 kHz (direct sampling required)
-        directSampling: 0
+        directSampling: 2
         decoders: []
         dongleId: dongle-remote
       - id: profile-1777493231538

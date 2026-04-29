@@ -756,23 +756,23 @@ const NoiseReduction: Component = () => {
         <span>Noise Reduction</span>
         <Show when={!open()}>
           <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
-            {[store.nrEnabled() ? 'NR' : '', store.nbEnabled() ? 'NB' : ''].filter(Boolean).join(' · ') || 'off'}
+            {[store.nrEnabled() ? 'NR' : '', store.agcEnabled() ? 'AGC' : ''].filter(Boolean).join(' · ') || 'off'}
           </span>
         </Show>
         <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-3 space-y-3">
-        {/* Spectral NR */}
+        {/* Adaptive NR (LMS) */}
         <div>
           <div class="flex justify-between items-center mb-1">
             <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Spectral NR
+              Adaptive NR
             </label>
             <button
               class={`mil-btn ${store.nrEnabled() ? 'active' : ''}`}
               onClick={() => engine.setNrEnabled(!store.nrEnabled())}
-              title="Spectral noise reduction — reduces background noise using Wiener filter"
+              title="LMS adaptive noise reduction — reduces noise without musical artifacts"
             >
               {store.nrEnabled() ? 'On' : 'Off'}
             </button>
@@ -797,51 +797,157 @@ const NoiseReduction: Component = () => {
                 class="sdr-range"
               />
               <div class="text-[7px] font-mono text-text-muted mt-0.5">
-                Wiener filter — min. statistics noise floor estimation
+                LMS adaptive predictor — best for SSB/CW. May affect music on AM/FM.
               </div>
             </div>
           </Show>
         </div>
 
-        {/* Noise Blanker */}
+        {/* AGC (Automatic Gain Control) */}
         <div>
           <div class="flex justify-between items-center mb-1">
             <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Noise Blanker
+              AGC
             </label>
             <button
-              class={`mil-btn ${store.nbEnabled() ? 'active' : ''}`}
-              onClick={() => engine.setNbEnabled(!store.nbEnabled())}
-              title="Noise blanker — removes impulse noise (clicks, pops)"
+              class={`mil-btn ${store.agcEnabled() ? 'active' : ''}`}
+              onClick={() => engine.setAgcEnabled(!store.agcEnabled())}
+              title="Automatic gain control — normalizes audio level with hang timer"
             >
-              {store.nbEnabled() ? 'On' : 'Off'}
+              {store.agcEnabled() ? 'On' : 'Off'}
             </button>
           </div>
-          <Show when={store.nbEnabled()}>
+          <Show when={store.agcEnabled()}>
             <div>
               <div class="flex justify-between items-center mb-1">
                 <label class="text-[9px] font-mono text-text-dim">
-                  Threshold
+                  Decay
                 </label>
                 <span class="text-[9px] font-mono text-text-dim">
-                  {Math.round(store.nbLevel() * 100)}%
+                  {store.agcDecayMs()} ms
                 </span>
               </div>
               <input
                 type="range"
-                aria-label="Noise blanker threshold"
-                min={0}
-                max={100}
-                value={Math.round(store.nbLevel() * 100)}
-                onInput={(e) => engine.setNbLevel(parseInt(e.currentTarget.value) / 100)}
+                aria-label="AGC decay time"
+                min={50}
+                max={2000}
+                step={50}
+                value={store.agcDecayMs()}
+                onInput={(e) => engine.setAgcDecay(parseInt(e.currentTarget.value))}
                 class="sdr-range"
               />
               <div class="text-[7px] font-mono text-text-muted mt-0.5">
-                Impulse blanker — EMA amplitude tracking + hang timer
+                Hang-timer AGC — fast attack, adjustable decay
               </div>
             </div>
           </Show>
         </div>
+
+        {/* Rumble Filter (HPF) */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Rumble Filter
+            </label>
+            <button
+              class={`mil-btn ${store.rumbleFilterEnabled() ? 'active' : ''}`}
+              onClick={() => engine.setRumbleFilterEnabled(!store.rumbleFilterEnabled())}
+              title="High-pass filter — removes hum and wind/blowing noise below cutoff"
+            >
+              {store.rumbleFilterEnabled() ? 'On' : 'Off'}
+            </button>
+          </div>
+          <Show when={store.rumbleFilterEnabled()}>
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-[9px] font-mono text-text-dim">
+                  Cutoff
+                </label>
+                <span class="text-[9px] font-mono text-text-dim">
+                  {store.rumbleFilterCutoff()} Hz
+                </span>
+              </div>
+              <input
+                type="range"
+                aria-label="Rumble filter cutoff frequency"
+                min={30}
+                max={150}
+                step={5}
+                value={store.rumbleFilterCutoff()}
+                onInput={(e) => engine.setRumbleFilterCutoff(parseInt(e.currentTarget.value))}
+                class="sdr-range"
+              />
+              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                4th-order HPF — removes hum, wind, and rumble below cutoff
+              </div>
+            </div>
+          </Show>
+        </div>
+
+        {/* Auto-Notch (tone removal) */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              Auto-Notch
+            </label>
+            <button
+              class={`mil-btn ${store.autoNotchEnabled() ? 'active' : ''}`}
+              onClick={() => engine.setAutoNotchEnabled(!store.autoNotchEnabled())}
+              title="Adaptive notch — removes hum harmonics and heterodyne tones"
+            >
+              {store.autoNotchEnabled() ? 'On' : 'Off'}
+            </button>
+          </div>
+          <Show when={store.autoNotchEnabled()}>
+            <div class="text-[7px] font-mono text-text-muted">
+              LMS adaptive — removes 50/60Hz harmonics and carrier tones automatically
+            </div>
+          </Show>
+        </div>
+
+        {/* FM Hi-Blend (stereo noise reduction) — only shown for WFM stereo */}
+        <Show when={store.mode() === 'wfm' && store.stereoDetected()}>
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                Hi-Blend
+              </label>
+              <button
+                class={`mil-btn ${store.hiBlendEnabled() ? 'active' : ''}`}
+                onClick={() => engine.setHiBlendEnabled(!store.hiBlendEnabled())}
+                title="FM stereo hi-blend — reduces hiss on weak stations by narrowing stereo separation at high frequencies"
+              >
+                {store.hiBlendEnabled() ? 'On' : 'Off'}
+              </button>
+            </div>
+            <Show when={store.hiBlendEnabled()}>
+              <div>
+                <div class="flex justify-between items-center mb-1">
+                  <label class="text-[9px] font-mono text-text-dim">
+                    Cutoff
+                  </label>
+                  <span class="text-[9px] font-mono text-text-dim">
+                    {(store.hiBlendCutoff() / 1000).toFixed(1)} kHz
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  aria-label="Hi-blend stereo cutoff"
+                  min={500}
+                  max={8000}
+                  step={100}
+                  value={store.hiBlendCutoff()}
+                  onInput={(e) => engine.setHiBlendCutoff(parseInt(e.currentTarget.value))}
+                  class="sdr-range"
+                />
+                <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                  Below cutoff: full stereo. Above: fades to mono. Reduces FM hiss.
+                </div>
+              </div>
+            </Show>
+          </div>
+        </Show>
       </div>
       </Show>
     </div>

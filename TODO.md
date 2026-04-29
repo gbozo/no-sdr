@@ -49,6 +49,14 @@
 
 ## Completed (Recent)
 
+- [x] **Phase 1 signal improvements** — DC offset removal (IIR blocker, dongle default + profile override), pre-filter noise blanker (server-side, disabled — not useful without impulse noise), hang-timer AGC (client-side, mode-specific presets, 15ms look-ahead). Admin panel DSP Processing section.
+- [x] **LMS Adaptive NR** — NLMS predictor with adaptive leakage (WDSP algorithm). Replaces old Wiener spectral NR which was causing quality degradation. Mode-specific presets (SSB/CW/AM). Strength slider maps to adaptation gain (0% = true passthrough).
+- [x] **FM Hi-Blend filter** — frequency-dependent stereo reduction for weak FM stations. LPF on L-R difference channel. Adjustable cutoff (500Hz–8kHz). Only shown in UI when WFM + stereo detected. Dramatically reduces FM hiss.
+- [x] **Rumble filter** — 4th-order Butterworth HPF (30–150Hz cutoff). Removes hum fundamentals and wind/blowing noise.
+- [x] **Auto-notch** — LMS adaptive tone removal (outputs error signal). Slow adaptation (locks in ~200ms), 128-sample decorrelation delay preserves bass/music while removing stationary hum harmonics.
+- [x] **ADPCM codec quality fix** — encoder and decoder were never reset on tune/mode/profile change, causing predictor state mismatch and degraded quality. Both sides now reset simultaneously on any stream discontinuity.
+- [x] **Legacy spectral NR disabled** — old Wiener filter was still running alongside new LMS ANR (double-processing), causing significant quality loss. Now permanently disabled.
+- [x] **All DSP filters work on all codec paths** — Adaptive NR, AGC, Rumble, Auto-Notch, Hi-Blend all process decoded audio on both IQ and Opus paths.
 - [x] **Tuning step UI & keyboard tuning** — tuning step selector in frequency display (auto/1Hz–200kHz). Arrow keys: left/right = step, up/down = 10x step. Step snaps to grid. Scroll wheel on frequency digits uses digit position (no snap). Click-to-tune on waterfall uses exact frequency (no snap). Profile's tuningStep sent from server on subscribe/profile_changed. Dropdown auto-blurs after selection so arrow keys work immediately.
 - [x] **Direct sampling / bias-T / offset tuning always sent on profile switch** — previously these rtl_tcp commands were only sent when enabled, so switching from an HF profile (direct sampling=2) to VHF (direct sampling=0) left hardware in the old mode. Now all three are always explicitly sent (including 0 to disable).
 - [x] **Per-profile bias-T and offset tuning** — these hardware settings now override dongle-level defaults per frequency profile (same pattern as directSampling). Admin UI checkboxes in Hardware Overrides section.

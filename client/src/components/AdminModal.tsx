@@ -1063,6 +1063,20 @@ const ReceiversTab: Component<{
                     </div>
                   </div>
 
+                  {/* Row 5: DSP Processing (per-profile) */}
+                  <div>
+                    <h4 class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">DSP Processing</h4>
+                    <div class="grid grid-cols-1 gap-3">
+                      <div class="flex flex-col gap-2 justify-center">
+                        <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                          <input type="checkbox" checked={profileForm().dcOffsetRemoval !== false} onChange={(e) => updateProfileField('dcOffsetRemoval', e.currentTarget.checked)} class="accent-cyan" />
+                          DC Offset Removal
+                        </label>
+                        <span class="text-[8px] font-mono text-text-muted">IIR blocker removes center spike from ADC DC bias</span>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Actions */}
                   <div class="flex items-center justify-between pt-2 border-t border-border">
                     <div class="flex items-center gap-2">
