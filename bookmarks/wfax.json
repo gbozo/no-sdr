@@ -1,0 +1,442 @@
+[
+    {
+        "name" : "JMH - Tokyo",
+        "frequency" : 3620600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JMH2 - Tokyo",
+        "frequency" : 7793100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JMH4 - Tokyo",
+        "frequency" : 13986600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "PVK - Pevek",
+        "frequency" : 146100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "HLL2 - Seoul",
+        "frequency" : 3583100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "HLL2 - Seoul",
+        "frequency" : 5855600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "HLL2 - Seoul",
+        "frequency" : 7431600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "HLL2 - Seoul",
+        "frequency" : 9163100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "HLL2 - Seoul",
+        "frequency" : 13568100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "HSW64 - Bangkok",
+        "frequency" : 7393100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JJC - Kyodo News",
+        "frequency" : 4314100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JJC - Kyodo News",
+        "frequency" : 8465600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JJC - Kyodo News",
+        "frequency" : 12743600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JJC - Kyodo News",
+        "frequency" : 16969100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JJC - Kyodo News",
+        "frequency" : 17067699,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "JJC - Kyodo News",
+        "frequency" : 22540100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "9VF - Kyodo News",
+        "frequency" : 16033100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "9VF - Kyodo News",
+        "frequency" : 17428100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "XSQ - Guangzhou",
+        "frequency" : 4197850,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "XSQ - Guangzhou",
+        "frequency" : 8410600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "XSQ - Guangzhou",
+        "frequency" : 12627350,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "XSQ - Guangzhou",
+        "frequency" : 16824350,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CBV - Valparaiso Playa Ancha",
+        "frequency" : 4226100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CBV - Valparaiso Playa Ancha",
+        "frequency" : 8675100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CBV - Valparaiso Playa Ancha",
+        "frequency" : 17144500,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CBM - Punta Arenas Maganalles",
+        "frequency" : 4320100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CBM - Punta Arenas Maganalles",
+        "frequency" : 8694100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CFH - Halifax",
+        "frequency" : 120600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CFH - Halifax",
+        "frequency" : 4269100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CFH - Halifax",
+        "frequency" : 6494500,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CFH - Halifax",
+        "frequency" : 10534100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "CFH - Halifax",
+        "frequency" : 13508100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VFF - Iqalut",
+        "frequency" : 3251100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VFF - Iqalut",
+        "frequency" : 7708100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VFR - Resolute",
+        "frequency" : 7708100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VFR - Resolute",
+        "frequency" : 3251100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VCO - Sydney",
+        "frequency" : 4414100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VCO - Sydney",
+        "frequency" : 6913200,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VFA - Inuvik",
+        "frequency" : 4290100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VFA - Inuvik",
+        "frequency" : 8454100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NOJ - Kodiak",
+        "frequency" : 2052100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NOJ - Kodiak",
+        "frequency" : 4296100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NOJ - Kodiak",
+        "frequency" : 8457100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NOJ - Kodiak",
+        "frequency" : 12410600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMC - Point Reyes",
+        "frequency" : 4344100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMC - Point Reyes",
+        "frequency" : 8680100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMC - Point Reyes",
+        "frequency" : 12784100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMC - Point Reyes",
+        "frequency" : 17149300,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMC - Point Reyes",
+        "frequency" : 22525100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMG - New Orleans",
+        "frequency" : 4316000,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMG - New Orleans",
+        "frequency" : 8502000,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMG - New Orleans",
+        "frequency" : 12788000,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMG - New Orleans",
+        "frequency" : 17144500,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMF - Boston",
+        "frequency" : 4233100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMF - Boston",
+        "frequency" : 6338600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMF - Boston",
+        "frequency" : 9108100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "NMF - Boston",
+        "frequency" : 12748100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMC - Charleville",
+        "frequency" : 2626100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMC - Charleville",
+        "frequency" : 5098100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMC - Charleville",
+        "frequency" : 11028100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMC - Charleville",
+        "frequency" : 13918100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMC - Charleville",
+        "frequency" : 20467100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMW - Wiluna",
+        "frequency" : 5753100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMW - Wiluna",
+        "frequency" : 7533100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMW - Wiluna",
+        "frequency" : 10553100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMW - Wiluna",
+        "frequency" : 15613100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "VMW - Wiluna",
+        "frequency" : 18058100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "ZKLF - Wellington",
+        "frequency" : 3245500,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "ZKLF - Wellington",
+        "frequency" : 5805100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "ZKLF - Wellington",
+        "frequency" : 9457100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "ZKLF - Wellington",
+        "frequency" : 13548600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "ZKLF - Wellington",
+        "frequency" : 16338200,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "KVM70 - Honolulu",
+        "frequency" : 9980600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "KVM70 - Honolulu",
+        "frequency" : 11088100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "KVM70 - Honolulu",
+        "frequency" : 16133100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "SVJ4 - Athens",
+        "frequency" : 4479100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "SVJ4 - Athens",
+        "frequency" : 8103100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "RBW41 - Murmansk",
+        "frequency" : 5334100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "RBW41 - Murmansk",
+        "frequency" : 6443600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "RBW41 - Murmansk",
+        "frequency" : 7906900,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "RBW48 - Murmansk",
+        "frequency" : 10128100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "DDH3 - Hamburg",
+        "frequency" : 3853100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "DDK3 - Hamburg",
+        "frequency" : 7878100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "DDK6 - Hamburg",
+        "frequency" : 13880600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "GYA - Northwood",
+        "frequency" : 2616600,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "GYA - Northwood",
+        "frequency" : 4608100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "GYA - Northwood",
+        "frequency" : 8038100,
+        "modulation" : "fax"
+    },
+    {
+        "name" : "GYA - Northwood",
+        "frequency" : 11084600,
+        "modulation" : "fax"
+    }
+]

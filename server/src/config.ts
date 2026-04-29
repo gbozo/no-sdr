@@ -38,6 +38,8 @@ const DongleProfileSchema = z.object({
   defaultMode: z.enum(['wfm', 'nfm', 'am', 'am-stereo', 'usb', 'lsb', 'cw', 'raw']).default('nfm'),
   defaultTuneOffset: z.number().default(0),
   defaultBandwidth: z.number().positive().default(12_500),
+  /** Tuning step in Hz (UI click/arrow step size). Defaults to channel bandwidth. */
+  tuningStep: z.number().positive().optional(),
   gain: z.number().nullable().default(null),
   description: z.string().default(''),
   /** Direct sampling per profile: 0=off, 1=I-ADC, 2=Q-ADC */
@@ -72,6 +74,8 @@ const DongleConfigSchema = z.object({
   ppmCorrection: z.number().default(0),
   source: SourceConfigSchema,
   profiles: z.array(DongleProfileSchema).default([]),
+  /** Whether this dongle is enabled (disabled dongles won't start or accept connections) */
+  enabled: z.boolean().default(true),
   autoStart: z.boolean().default(true),
 
   // ---- Hardware options (RTL-SDR) ----
@@ -242,6 +246,7 @@ function getDefaultConfig(): ValidatedConfig {
         name: 'Simulated SDR (Demo)',
         ppmCorrection: 0,
         source: { type: 'demo' },
+        enabled: true,
         autoStart: true,
         profiles: [
           {

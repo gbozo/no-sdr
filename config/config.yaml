@@ -83,6 +83,35 @@ dongles:
         description: MW broadcast band — 530 to 1700 kHz (direct sampling required)
         decoders: []
         dongleId: dongle-remote
+      - id: profile-1777493188871
+        name: New Profile
+        centerFrequency: 100000000
+        sampleRate: 2400000
+        fftSize: 2048
+        fftFps: 30
+        defaultMode: wfm
+        defaultTuneOffset: 0
+        defaultBandwidth: 200000
+        gain: null
+        description: ''
+        decoders: []
+        dongleId: dongle-remote
+      - id: profile-1777493231538
+        name: ADS-B (1090 MHz)
+        centerFrequency: 1090000000
+        sampleRate: 2400000
+        fftSize: 2048
+        fftFps: 10
+        defaultMode: nfm
+        defaultTuneOffset: 0
+        defaultBandwidth: 2000000
+        gain: 49
+        description: Aircraft transponder 1090 MHz
+        decoders: []
+        dongleId: dongle-remote
+    enabled: true
     autoStart: true
+    directSampling: 2
     biasT: false
     digitalAgc: true
+    offsetTuning: false

@@ -3,6 +3,7 @@
 // ============================================================
 
 import { Component, Show, For, createSignal, createEffect } from 'solid-js';
+import { PROFILE_PRESETS, PRESET_CATEGORIES } from '@node-sdr/shared';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 
@@ -19,6 +20,8 @@ const AdminModal: Component = () => {
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal('');
   const [success, setSuccess] = createSignal('');
+  /** When set, ReceiversTab will auto-enter edit mode for this dongle */
+  const [editNewDongleId, setEditNewDongleId] = createSignal<string | null>(null);
 
   const apiBase = () => '';
 
@@ -192,15 +195,37 @@ const AdminModal: Component = () => {
     }
   };
 
+  const handleDeleteDongle = async (dongleId: string) => {
+    try {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (res.ok) {
+        await loadDongles();
+        setSelectedDongle(null);
+        setSuccess('Receiver deleted');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to delete receiver');
+      }
+    } catch {
+      setError('Failed to delete receiver');
+    }
+  };
+
   const addNewDongle = async () => {
     setLoading(true);
+    setError('');
+    const newId = `dongle-${Date.now()}`;
     const newDongle = {
-      id: `dongle-${Date.now()}`,
+      id: newId,
       name: 'New Dongle',
       deviceIndex: 0,
       ppmCorrection: 0,
       source: { type: 'local' },
-      autoStart: true,
+      enabled: false,
+      autoStart: false,
       profiles: [{
         id: 'default',
         name: 'Default Profile',
@@ -224,6 +249,9 @@ const AdminModal: Component = () => {
       });
       if (res.ok) {
         await loadDongles();
+        setSelectedDongle(newId);
+        setEditNewDongleId(newId);
+        setSuccess('Receiver created — configure it below');
       } else {
         setError('Failed to add dongle');
       }
@@ -233,11 +261,25 @@ const AdminModal: Component = () => {
     setLoading(false);
   };
 
-  const addNewProfile = async () => {
+  const addNewProfile = async (preset?: any) => {
     if (!selectedDongle()) return;
     setLoading(true);
     setError('');
-    const newProfile = {
+    const newProfile = preset ? {
+      id: `profile-${Date.now()}`,
+      name: preset.name,
+      centerFrequency: preset.centerFrequency,
+      sampleRate: preset.sampleRate,
+      fftSize: preset.fftSize,
+      fftFps: preset.fftFps,
+      defaultMode: preset.defaultMode,
+      defaultTuneOffset: preset.defaultTuneOffset,
+      defaultBandwidth: preset.defaultBandwidth,
+      gain: preset.gain,
+      description: preset.description,
+      directSampling: preset.directSampling ?? 0,
+      decoders: [],
+    } : {
       id: `profile-${Date.now()}`,
       name: 'New Profile',
       centerFrequency: 100000000,
@@ -261,7 +303,7 @@ const AdminModal: Component = () => {
       console.log('Add profile response:', res.status, data);
       if (res.ok) {
         await loadDongles();
-        setSuccess('Profile added!');
+        setSuccess(preset ? `Profile "${preset.name}" added from preset!` : 'Profile added!');
       } else {
         setError(data.error || 'Failed to add profile');
       }
@@ -270,6 +312,42 @@ const AdminModal: Component = () => {
       setError('Failed to add profile');
     }
     setLoading(false);
+  };
+
+  const handleDeleteProfile = async (dongleId: string, profileId: string) => {
+    try {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}/profiles/${profileId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (res.ok) {
+        await loadDongles();
+        setSuccess('Profile deleted');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to delete profile');
+      }
+    } catch {
+      setError('Failed to delete profile');
+    }
+  };
+
+  const handleReorderProfiles = async (dongleId: string, profileIds: string[]) => {
+    try {
+      const res = await adminFetch(`${apiBase()}/api/admin/dongles/${dongleId}/profiles-order`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ profileIds }),
+      });
+      if (res.ok) {
+        await loadDongles();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to reorder profiles');
+      }
+    } catch {
+      setError('Failed to reorder profiles');
+    }
   };
 
   const closeModal = () => {
@@ -385,8 +463,13 @@ const AdminModal: Component = () => {
                   onStop={handleStopDongle}
                   onUpdateDongle={handleUpdateDongle}
                   onUpdateProfile={handleUpdateProfile}
+                  onDeleteDongle={handleDeleteDongle}
+                  onDeleteProfile={handleDeleteProfile}
+                  onReorderProfiles={handleReorderProfiles}
                   onSwitchProfile={handleSwitchProfile}
                   password={password}
+                  editNewDongleId={editNewDongleId()}
+                  onEditNewDongleHandled={() => setEditNewDongleId(null)}
                 />
               </Show>
 
@@ -437,13 +520,20 @@ const ReceiversTab: Component<{
   selectedDongle: string | null;
   onSelect: (id: string) => void;
   onAddDongle: () => void;
-  onAddProfile: () => void;
+  onAddProfile: (preset?: any) => void;
   onStart: (id: string) => void;
   onStop: (id: string) => void;
   onUpdateDongle: (dongleId: string, updates: any) => void;
   onUpdateProfile: (dongleId: string, profileId: string, updates: any) => void;
+  onDeleteDongle: (dongleId: string) => void;
+  onDeleteProfile: (dongleId: string, profileId: string) => void;
+  onReorderProfiles: (dongleId: string, profileIds: string[]) => void;
   onSwitchProfile: (dongleId: string, profileId: string) => void;
   password: () => string;
+  /** When set, auto-enter edit mode for this dongle ID */
+  editNewDongleId?: string | null;
+  /** Called after the edit-new signal has been consumed */
+  onEditNewDongleHandled?: () => void;
 }> = (props) => {
   const currentDongle = () => props.dongles.find((d: any) => d.id === props.selectedDongle);
   const [activeProfileTab, setActiveProfileTab] = createSignal<string | null>(null);
@@ -459,6 +549,32 @@ const ReceiversTab: Component<{
       setActiveProfileTab(d.profiles[0].id);
     } else {
       setActiveProfileTab(null);
+    }
+  });
+
+  // Auto-enter edit mode when a new dongle is created
+  createEffect(() => {
+    const newId = props.editNewDongleId;
+    if (newId && props.selectedDongle === newId) {
+      const d = props.dongles.find((dd: any) => dd.id === newId);
+      if (d) {
+        setDongleForm({
+          name: d.name,
+          sourceType: d.source?.type || 'local',
+          host: d.source?.host || '',
+          port: d.source?.port || 1234,
+          ppmCorrection: d.ppmCorrection || 0,
+          deviceIndex: d.deviceIndex || 0,
+          biasT: d.biasT || false,
+          digitalAgc: d.digitalAgc || false,
+          directSampling: d.directSampling || 0,
+          offsetTuning: d.offsetTuning || false,
+          autoStart: d.autoStart !== false,
+          enabled: d.enabled !== false,
+        });
+        setEditingDongle(true);
+        props.onEditNewDongleHandled?.();
+      }
     }
   });
 
@@ -491,6 +607,7 @@ const ReceiversTab: Component<{
         directSampling: d.directSampling || 0,
         offsetTuning: d.offsetTuning || false,
         autoStart: d.autoStart !== false,
+        enabled: d.enabled !== false,
       });
       setEditingDongle(true);
     }
@@ -513,6 +630,7 @@ const ReceiversTab: Component<{
         directSampling: dongleForm().directSampling,
         offsetTuning: dongleForm().offsetTuning,
         autoStart: dongleForm().autoStart,
+        enabled: dongleForm().enabled,
       });
       setEditingDongle(false);
     }
@@ -547,7 +665,7 @@ const ReceiversTab: Component<{
           <For each={props.dongles}>
             {(dongle) => (
               <option value={dongle.id}>
-                {dongle.name} ({dongle.source?.type}) {dongle.running ? '● Running' : '○ Stopped'}
+                {dongle.name} ({dongle.source?.type || 'local'}) {dongle.enabled === false ? '⊘ Disabled' : dongle.running ? '● Running' : '○ Stopped'}
               </option>
             )}
           </For>
@@ -564,18 +682,48 @@ const ReceiversTab: Component<{
             {/* Dongle header */}
             <div class="flex items-center justify-between px-3 py-2 border-b border-border bg-sdr-base rounded-t-md">
               <div class="flex items-center gap-2">
-                <div class={`w-2 h-2 rounded-full ${dongle().running ? 'bg-status-online' : 'bg-status-offline'}`} />
+                <div class={`w-2 h-2 rounded-full ${dongle().enabled === false ? 'bg-text-muted' : dongle().running ? 'bg-status-online' : 'bg-status-offline'}`} />
                 <span class="text-[11px] font-mono text-text-primary font-medium">{dongle().name}</span>
-                <span class="text-[9px] font-mono text-text-dim">{dongle().source?.type}</span>
+                <Show when={dongle().enabled === false}>
+                  <span class="text-[8px] font-mono text-text-muted bg-sdr-elevated px-1.5 py-0.5 rounded">DISABLED</span>
+                </Show>
               </div>
               <div class="flex items-center gap-1.5">
-                <button class="sdr-btn text-[8px]" onClick={() => props.onStart(dongle().id)}>Start</button>
+                <button class="sdr-btn text-[8px]" onClick={() => props.onStart(dongle().id)} disabled={dongle().enabled === false}>Start</button>
                 <button class="sdr-btn text-[8px]" onClick={() => props.onStop(dongle().id)}>Stop</button>
-                <button class="sdr-btn text-[8px]" onClick={startDongleEdit}>
+                <button class="sdr-btn sdr-btn-primary text-[8px]" onClick={startDongleEdit}>
                   {editingDongle() ? 'Cancel' : 'Edit'}
                 </button>
               </div>
             </div>
+
+            {/* Connection info (always visible) */}
+            <Show when={!editingDongle()}>
+              <div class="px-3 py-2 border-b border-border bg-sdr-surface">
+                <div class="flex items-center gap-4 text-[9px] font-mono">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-text-dim">Source:</span>
+                    <span class="text-text-primary font-medium">{dongle().source?.type || 'local'}</span>
+                  </div>
+                  <Show when={dongle().source?.host}>
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-text-dim">Host:</span>
+                      <span class="text-text-primary">{dongle().source?.host}:{dongle().source?.port || 1234}</span>
+                    </div>
+                  </Show>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-text-dim">Device:</span>
+                    <span class="text-text-primary">{dongle().deviceIndex ?? 0}</span>
+                  </div>
+                  <Show when={dongle().ppmCorrection}>
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-text-dim">PPM:</span>
+                      <span class="text-text-primary">{dongle().ppmCorrection}</span>
+                    </div>
+                  </Show>
+                </div>
+              </div>
+            </Show>
 
             {/* Dongle edit form */}
             <Show when={editingDongle()}>
@@ -640,6 +788,14 @@ const ReceiversTab: Component<{
 
                 <div class="flex flex-wrap gap-4">
                   <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                    <input type="checkbox" checked={dongleForm().enabled !== false} onChange={(e) => setDongleForm({...dongleForm(), enabled: e.currentTarget.checked})} class="accent-cyan" />
+                    Enabled
+                  </label>
+                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                    <input type="checkbox" checked={dongleForm().autoStart !== false} onChange={(e) => setDongleForm({...dongleForm(), autoStart: e.currentTarget.checked})} class="accent-cyan" />
+                    Auto-start
+                  </label>
+                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
                     <input type="checkbox" checked={dongleForm().biasT || false} onChange={(e) => setDongleForm({...dongleForm(), biasT: e.currentTarget.checked})} class="accent-cyan" />
                     Bias-T
                   </label>
@@ -651,15 +807,24 @@ const ReceiversTab: Component<{
                     <input type="checkbox" checked={dongleForm().offsetTuning || false} onChange={(e) => setDongleForm({...dongleForm(), offsetTuning: e.currentTarget.checked})} class="accent-cyan" />
                     Offset Tuning
                   </label>
-                  <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
-                    <input type="checkbox" checked={dongleForm().autoStart !== false} onChange={(e) => setDongleForm({...dongleForm(), autoStart: e.currentTarget.checked})} class="accent-cyan" />
-                    Auto-start
-                  </label>
                 </div>
 
-                <div class="flex gap-2">
-                  <button class="sdr-btn text-[9px]" onClick={() => setEditingDongle(false)}>Cancel</button>
-                  <button class="sdr-btn sdr-btn-primary text-[9px]" onClick={saveDongle}>Save Receiver</button>
+                <div class="flex items-center justify-between">
+                  <div class="flex gap-2">
+                    <button class="sdr-btn text-[9px]" onClick={() => setEditingDongle(false)}>Cancel</button>
+                    <button class="sdr-btn sdr-btn-primary text-[9px]" onClick={saveDongle}>Save Receiver</button>
+                  </div>
+                  <button
+                    class="sdr-btn text-[9px] text-red-400 hover:text-red-300 hover:border-red-400/50"
+                    onClick={() => {
+                      if (confirm('Delete this receiver? This cannot be undone.')) {
+                        const d = currentDongle();
+                        if (d) props.onDeleteDongle(d.id);
+                      }
+                    }}
+                  >
+                    Delete Receiver
+                  </button>
                 </div>
               </div>
             </Show>
@@ -681,11 +846,38 @@ const ReceiversTab: Component<{
               </For>
               <button
                 class="px-3 py-1.5 text-[9px] font-mono text-text-muted hover:text-cyan border-b-2 border-transparent transition-colors"
-                onClick={props.onAddProfile}
-                title="Add new profile"
+                onClick={() => props.onAddProfile()}
+                title="Add blank profile"
               >
                 +
               </button>
+              <select
+                class="px-2 py-1 text-[8px] font-mono text-text-muted bg-transparent border-b-2 border-transparent
+                       hover:text-cyan focus:text-cyan focus:outline-none cursor-pointer"
+                value=""
+                onChange={(e) => {
+                  const presetId = e.currentTarget.value;
+                  if (presetId) {
+                    const preset = PROFILE_PRESETS.find(p => p.id === presetId);
+                    if (preset) props.onAddProfile(preset);
+                    e.currentTarget.value = '';
+                  }
+                }}
+                title="Add profile from preset"
+              >
+                <option value="">+ From preset...</option>
+                <For each={Object.entries(PRESET_CATEGORIES)}>
+                  {([catId, catName]) => (
+                    <optgroup label={catName}>
+                      <For each={PROFILE_PRESETS.filter(p => p.category === catId)}>
+                        {(preset) => (
+                          <option value={preset.id}>{preset.name}</option>
+                        )}
+                      </For>
+                    </optgroup>
+                  )}
+                </For>
+              </select>
             </div>
 
             {/* Active profile editor */}
@@ -728,7 +920,7 @@ const ReceiversTab: Component<{
                   {/* Row 2: Frequency settings */}
                   <div>
                     <h4 class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">Frequency & Sampling</h4>
-                    <div class="grid grid-cols-3 gap-3">
+                    <div class="grid grid-cols-4 gap-3">
                       <div>
                         <label class="block text-[9px] font-mono text-text-dim mb-0.5">Center Frequency (Hz)</label>
                         <input type="number" value={profileForm().centerFrequency || 0} onInput={(e) => updateProfileField('centerFrequency', parseInt(e.currentTarget.value) || 0)}
@@ -757,6 +949,36 @@ const ReceiversTab: Component<{
                         <label class="block text-[9px] font-mono text-text-dim mb-0.5">Default Bandwidth (Hz)</label>
                         <input type="number" value={profileForm().defaultBandwidth || 12500} onInput={(e) => updateProfileField('defaultBandwidth', parseInt(e.currentTarget.value) || 12500)}
                           class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                      </div>
+                      <div>
+                        <label class="block text-[9px] font-mono text-text-dim mb-0.5">Tuning Step (Hz)</label>
+                        <select
+                          value={profileForm().tuningStep || ''}
+                          onChange={(e) => {
+                            const v = e.currentTarget.value;
+                            updateProfileField('tuningStep', v === '' ? undefined : parseInt(v));
+                          }}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none"
+                        >
+                          <option value="">Auto (bandwidth)</option>
+                          <option value={1}>1 Hz</option>
+                          <option value={10}>10 Hz</option>
+                          <option value={100}>100 Hz</option>
+                          <option value={500}>500 Hz</option>
+                          <option value={1000}>1 kHz</option>
+                          <option value={2500}>2.5 kHz</option>
+                          <option value={5000}>5 kHz</option>
+                          <option value={6250}>6.25 kHz</option>
+                          <option value={8330}>8.33 kHz</option>
+                          <option value={9000}>9 kHz</option>
+                          <option value={10000}>10 kHz</option>
+                          <option value={12500}>12.5 kHz</option>
+                          <option value={25000}>25 kHz</option>
+                          <option value={50000}>50 kHz</option>
+                          <option value={100000}>100 kHz</option>
+                          <option value={200000}>200 kHz</option>
+                        </select>
+                        <span class="text-[8px] font-mono text-text-muted">Click/arrow step</span>
                       </div>
                     </div>
                   </div>
@@ -834,23 +1056,77 @@ const ReceiversTab: Component<{
                   </div>
 
                   {/* Actions */}
-                  <div class="flex items-center gap-2 pt-2 border-t border-border">
-                    <button
-                      class={`sdr-btn sdr-btn-primary text-[9px] ${!profileDirty() ? 'opacity-50' : ''}`}
-                      onClick={saveProfile}
-                      disabled={!profileDirty()}
-                    >
-                      Save Profile
-                    </button>
-                    <button
-                      class="sdr-btn text-[9px]"
-                      onClick={() => props.onSwitchProfile(dongle().id, activeProfileTab()!)}
-                    >
-                      Activate
-                    </button>
-                    <Show when={store.activeProfileId() === activeProfileTab()}>
-                      <span class="text-[9px] font-mono text-status-online ml-2">Active</span>
-                    </Show>
+                  <div class="flex items-center justify-between pt-2 border-t border-border">
+                    <div class="flex items-center gap-2">
+                      <button
+                        class={`sdr-btn sdr-btn-primary text-[9px] ${!profileDirty() ? 'opacity-50' : ''}`}
+                        onClick={saveProfile}
+                        disabled={!profileDirty()}
+                      >
+                        Save Profile
+                      </button>
+                      <button
+                        class="sdr-btn text-[9px]"
+                        onClick={() => props.onSwitchProfile(dongle().id, activeProfileTab()!)}
+                      >
+                        Activate
+                      </button>
+                      <Show when={store.activeProfileId() === activeProfileTab()}>
+                        <span class="text-[9px] font-mono text-status-online ml-2">Active</span>
+                      </Show>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                      {/* Move left / right */}
+                      <button
+                        class="sdr-btn text-[8px] px-1.5"
+                        title="Move profile left"
+                        onClick={() => {
+                          const profiles = dongle().profiles || [];
+                          const idx = profiles.findIndex((p: any) => p.id === activeProfileTab());
+                          if (idx > 0) {
+                            const ids = profiles.map((p: any) => p.id);
+                            [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+                            props.onReorderProfiles(dongle().id, ids);
+                          }
+                        }}
+                        disabled={(dongle().profiles || []).findIndex((p: any) => p.id === activeProfileTab()) <= 0}
+                      >
+                        ←
+                      </button>
+                      <button
+                        class="sdr-btn text-[8px] px-1.5"
+                        title="Move profile right"
+                        onClick={() => {
+                          const profiles = dongle().profiles || [];
+                          const idx = profiles.findIndex((p: any) => p.id === activeProfileTab());
+                          if (idx >= 0 && idx < profiles.length - 1) {
+                            const ids = profiles.map((p: any) => p.id);
+                            [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+                            props.onReorderProfiles(dongle().id, ids);
+                          }
+                        }}
+                        disabled={(() => {
+                          const profiles = dongle().profiles || [];
+                          const idx = profiles.findIndex((p: any) => p.id === activeProfileTab());
+                          return idx < 0 || idx >= profiles.length - 1;
+                        })()}
+                      >
+                        →
+                      </button>
+                      {/* Delete */}
+                      <button
+                        class="sdr-btn text-[8px] text-red-400 hover:text-red-300 hover:border-red-400/50"
+                        title="Delete this profile"
+                        onClick={() => {
+                          if (confirm('Delete this profile? This cannot be undone.')) {
+                            props.onDeleteProfile(dongle().id, activeProfileTab()!);
+                            setActiveProfileTab(null);
+                          }
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

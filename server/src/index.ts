@@ -273,7 +273,19 @@ app.put('/api/admin/server/config', adminAuth, async (c) => {
 
 // Get all dongles with full config (for admin UI)
 app.get('/api/admin/dongles', adminAuth, (c) => {
-  return c.json(dongleManager.getConfig().dongles);
+  // Merge static config with runtime state (running, activeProfileId, clientCount)
+  const config = dongleManager.getConfig().dongles;
+  const runtimeInfo = dongleManager.getDongles();
+  const merged = config.map(d => {
+    const runtime = runtimeInfo.find(r => r.id === d.id);
+    return {
+      ...d,
+      running: runtime?.running ?? false,
+      activeProfileId: runtime?.activeProfileId ?? null,
+      clientCount: runtime?.clientCount ?? 0,
+    };
+  });
+  return c.json(merged);
 });
 
 // Get full config for a specific dongle
@@ -327,6 +339,9 @@ app.put('/api/admin/dongles/:id', adminAuth, async (c) => {
     const idx = config.dongles.findIndex(d => d.id === dongleId);
     if (idx === -1) return c.json({ error: 'Dongle not found' }, 404);
     config.dongles[idx] = { ...config.dongles[idx], ...body, id: dongleId };
+    // Update the live runtime state so startDongle/stopDongle see the change
+    // without requiring a server restart.
+    dongleManager.updateDongleConfig(dongleId, body);
     saveConfig(config);
     return c.json({ ok: true, dongle: config.dongles[idx] });
   } catch (err) {
@@ -415,6 +430,23 @@ app.delete('/api/admin/dongles/:id/profiles/:profileId', adminAuth, async (c) =>
     dongleManager.deleteProfile(dongleId, profileId);
     saveConfig(dongleManager.getConfig());
     return c.json({ ok: true, message: `Profile ${profileId} deleted` });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Reorder profiles for a dongle
+app.put('/api/admin/dongles/:id/profiles-order', adminAuth, async (c) => {
+  const dongleId = c.req.param('id');
+  const body = await c.req.json().catch(() => null);
+  if (!body || !Array.isArray(body.profileIds)) {
+    return c.json({ error: 'Required: profileIds (array of profile IDs in desired order)' }, 400);
+  }
+
+  try {
+    dongleManager.reorderProfiles(dongleId, body.profileIds);
+    saveConfig(dongleManager.getConfig());
+    return c.json({ ok: true, message: 'Profiles reordered' });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }

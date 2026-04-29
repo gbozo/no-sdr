@@ -1,0 +1,152 @@
+[
+    {
+        "name" : "GMRS1",
+        "frequency" : 462562500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS2",
+        "frequency" : 462587500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS3",
+        "frequency" : 462612500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS4",
+        "frequency" : 462637500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS5",
+        "frequency" : 462662500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS6",
+        "frequency" : 462687500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS7",
+        "frequency" : 462712500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS8",
+        "frequency" : 467562500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS9",
+        "frequency" : 467587500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS10",
+        "frequency" : 467612500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS11",
+        "frequency" : 467637500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS12",
+        "frequency" : 467662500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS13",
+        "frequency" : 467687500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS14",
+        "frequency" : 467712500,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS15",
+        "frequency" : 462550000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS16",
+        "frequency" : 462575000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS17",
+        "frequency" : 462600000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS18",
+        "frequency" : 462625000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS19",
+        "frequency" : 462650000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS20",
+        "frequency" : 462675000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS21",
+        "frequency" : 462700000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS22",
+        "frequency" : 462725000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS15R",
+        "frequency" : 467550000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS16R",
+        "frequency" : 467575000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS17R",
+        "frequency" : 467600000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS18R",
+        "frequency" : 467625000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS19R",
+        "frequency" : 467650000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS20R",
+        "frequency" : 467675000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS21R",
+        "frequency" : 467700000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "GMRS22R",
+        "frequency" : 467725000,
+        "modulation" : "nfm"
+    }
+]

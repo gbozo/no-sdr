@@ -74,6 +74,8 @@ export interface DongleProfile {
   defaultTuneOffset: number;
   /** Default bandwidth for the demodulator (Hz) */
   defaultBandwidth: number;
+  /** Tuning step size in Hz (used by UI for click-to-tune and arrow key steps) */
+  tuningStep?: number;
   /** RF gain in dB, null = auto */
   gain: number | null;
   /** Description shown in UI */
@@ -161,6 +163,8 @@ export interface DongleConfig {
   /** How to connect to this dongle's hardware */
   source: SourceConfig;
   profiles: DongleProfile[];
+  /** Whether this dongle is enabled (disabled dongles won't start or accept connections) */
+  enabled: boolean;
   /** Auto-start first profile on server boot */
   autoStart: boolean;
 

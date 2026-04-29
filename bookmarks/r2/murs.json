@@ -1,0 +1,27 @@
+[
+    {
+        "name" : "MURS1",
+        "frequency" : 151820000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "MURS2",
+        "frequency" : 151880000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "MURS3",
+        "frequency" : 151940000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "MURS4",
+        "frequency" : 154570000,
+        "modulation" : "nfm"
+    },
+    {
+        "name" : "MURS5",
+        "frequency" : 154600000,
+        "modulation" : "nfm"
+    }
+]

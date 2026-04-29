@@ -35,6 +35,13 @@ interface DongleState {
   lastError: string | null;
   /** Tracks whether we've received the rtl_tcp 12-byte dongle info header */
   rtlTcpHeaderReceived: boolean;
+  /**
+   * Monotonically increasing generation counter. Incremented every time a
+   * connection is started. Socket event handlers capture the generation at
+   * creation time and bail out if it no longer matches — this prevents stale
+   * events from a destroyed socket from corrupting the state of a new connection.
+   */
+  generation: number;
 }
 
 // ---- rtl_tcp protocol constants ----
@@ -92,6 +99,7 @@ export class DongleManager extends EventEmitter {
         restartCount: 0,
         lastError: null,
         rtlTcpHeaderReceived: false,
+        generation: 0,
       });
     }
     logger.info({ dongles: this.dongles.size }, 'Dongles initialized');
@@ -115,6 +123,11 @@ export class DongleManager extends EventEmitter {
       throw new Error(`Unknown dongle: ${dongleId}`);
     }
 
+    // Check if dongle is enabled
+    if (state.config.enabled === false) {
+      throw new Error(`Dongle ${dongleId} is disabled`);
+    }
+
     // Resolve profile
     const profile = profileId
       ? state.config.profiles.find((p) => p.id === profileId)
@@ -125,8 +138,14 @@ export class DongleManager extends EventEmitter {
     }
 
     // Stop if already running
-    if (state.running) {
+    if (state.running || state.socket || state.process || state.simulator) {
       await this.stopDongle(dongleId);
+      // Give rtl_tcp server time to clean up its internal state (USB re-init, buffer flush).
+      // Without this delay, rapid disconnect+reconnect causes rtl_tcp to hang.
+      const sourceType = this.getEffectiveSource(state);
+      if (sourceType === 'rtl_tcp' || sourceType === 'rsp_tcp' || sourceType === 'airspy_tcp' || sourceType === 'hfp_tcp') {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
     }
 
     const sourceType = this.getEffectiveSource(state);
@@ -144,22 +163,25 @@ export class DongleManager extends EventEmitter {
 
     state.activeProfile = profile as DongleProfile;
     state.restartCount = 0;
+    // Increment generation so stale event handlers from the old socket/process
+    // detect they are outdated and no-op instead of corrupting state.
+    state.generation++;
 
     switch (sourceType) {
       case 'demo':
         this.startSimulator(dongleId, state, profile as DongleProfile);
         break;
       case 'rtl_tcp':
-        this.connectRtlTcp(dongleId, state, profile as DongleProfile);
+        await this.connectRtlTcp(dongleId, state, profile as DongleProfile);
         break;
       case 'airspy_tcp':
-        this.connectAirspyTcp(dongleId, state, profile as DongleProfile);
+        await this.connectAirspyTcp(dongleId, state, profile as DongleProfile);
         break;
       case 'hfp_tcp':
-        this.connectHfpTcp(dongleId, state, profile as DongleProfile);
+        await this.connectHfpTcp(dongleId, state, profile as DongleProfile);
         break;
       case 'rsp_tcp':
-        this.connectRspTcp(dongleId, state, profile as DongleProfile);
+        await this.connectRspTcp(dongleId, state, profile as DongleProfile);
         break;
       case 'local':
       default:
@@ -273,128 +295,155 @@ export class DongleManager extends EventEmitter {
    *   1. Server sends 12-byte header: "RTL0" (4B) + tuner type (4B BE) + gain count (4B BE)
    *   2. Server then streams raw uint8 interleaved I/Q continuously
    *   3. Client sends 5-byte commands: cmd (1B) + param (4B BE)
+   *
+   * Returns a promise that resolves once the connection is established and
+   * initial configuration commands have been sent. Rejects on connection error.
    */
-  private connectRtlTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+  private connectRtlTcp(dongleId: string, state: DongleState, profile: DongleProfile): Promise<void> {
     const source = state.config.source ?? { type: 'rtl_tcp' as const };
     const host = source.host ?? '127.0.0.1';
     const port = source.port ?? 1234;
+    const gen = state.generation; // capture generation for stale-event detection
 
-    logger.info({ dongleId, host, port }, 'Connecting to rtl_tcp server');
+    logger.info({ dongleId, host, port, generation: gen }, 'Connecting to rtl_tcp server');
 
-    const socket = new Socket();
-    state.socket = socket;
-    state.rtlTcpHeaderReceived = false;
+    return new Promise<void>((resolve, reject) => {
+      const socket = new Socket();
+      state.socket = socket;
+      state.rtlTcpHeaderReceived = false;
 
-    // Pre-allocated header accumulation buffer — no Buffer.concat needed
-    const headerBuf = Buffer.allocUnsafe(RTL_TCP_HEADER_SIZE);
-    let headerFill = 0;
+      // Pre-allocated header accumulation buffer — no Buffer.concat needed
+      const headerBuf = Buffer.allocUnsafe(RTL_TCP_HEADER_SIZE);
+      let headerFill = 0;
+      let connected = false;
 
-    socket.on('connect', () => {
-      logger.info({ dongleId, host, port }, 'Connected to rtl_tcp server');
-      state.running = true;
-
-      // Send initial configuration commands
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency + (profile.oscillatorOffset ?? 0));
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ_CORR, state.config.ppmCorrection);
-
-      if (profile.gain !== null && profile.gain !== undefined) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1); // manual gain
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain * 10)); // tenths of dB
-      } else {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0); // auto gain
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);  // enable AGC
-      }
-
-      // ---- Hardware options (profile-level overrides dongle-level) ----
-
-      // Direct sampling (HF reception via I/Q-ADC bypass)
-      const directSampling = profile.directSampling ?? state.config.directSampling ?? 0;
-      if (directSampling > 0) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, directSampling);
-        logger.info({ dongleId, mode: directSampling }, 'Direct sampling enabled');
-      }
-
-      // Bias-T power on antenna connector
-      if (state.config.biasT) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
-        logger.info({ dongleId }, 'Bias-T enabled');
-      }
-
-      // RTL2832U digital AGC
-      if (state.config.digitalAgc) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
-        logger.info({ dongleId }, 'Digital AGC enabled');
-      }
-
-      // Offset tuning (zero-IF shift, useful for E4000 tuner)
-      if (state.config.offsetTuning) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_OFFSET_TUNING, 1);
-        logger.info({ dongleId }, 'Offset tuning enabled');
-      }
-
-      // Tuner IF gain stages
-      if (state.config.ifGain?.length) {
-        for (const [stage, tenthsDb] of state.config.ifGain) {
-          const param = ((stage & 0xFFFF) << 16) | (tenthsDb & 0xFFFF);
-          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_IF_GAIN, param);
-          logger.info({ dongleId, stage, gainTenthsDb: tenthsDb }, 'IF gain stage set');
+      socket.on('connect', () => {
+        if (state.generation !== gen) {
+          // Stale socket from a previous generation — tear it down
+          socket.destroy();
+          return;
         }
-      }
+        connected = true;
+        logger.info({ dongleId, host, port, generation: gen }, 'Connected to rtl_tcp server');
+        state.running = true;
 
-      this.emit('dongle-started', dongleId, profile);
-    });
+        // Send initial configuration commands
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency + (profile.oscillatorOffset ?? 0));
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ_CORR, state.config.ppmCorrection);
 
-    socket.on('data', (chunk: Buffer) => {
-      if (!state.rtlTcpHeaderReceived) {
-        // Copy into fixed header buffer until we have RTL_TCP_HEADER_SIZE bytes
-        const need = RTL_TCP_HEADER_SIZE - headerFill;
-        const copy = Math.min(need, chunk.length);
-        chunk.copy(headerBuf, headerFill, 0, copy);
-        headerFill += copy;
-        if (headerFill >= RTL_TCP_HEADER_SIZE) {
-          const magic = headerBuf.subarray(0, 4).toString('ascii');
-          const tunerType = headerBuf.readUInt32BE(4);
-          const gainCount = headerBuf.readUInt32BE(8);
-          logger.info(
-            { dongleId, magic, tunerType, gainCount },
-            'rtl_tcp header received',
-          );
-          state.rtlTcpHeaderReceived = true;
-          const remaining = chunk.subarray(copy);
-          if (remaining.length > 0) {
-            this.emit('iq-data', dongleId, remaining);
+        if (profile.gain !== null && profile.gain !== undefined) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1); // manual gain
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain * 10)); // tenths of dB
+        } else {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0); // auto gain
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);  // enable AGC
+        }
+
+        // ---- Hardware options (profile-level overrides dongle-level) ----
+
+        // Direct sampling (HF reception via I/Q-ADC bypass)
+        const directSampling = profile.directSampling ?? state.config.directSampling ?? 0;
+        if (directSampling > 0) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, directSampling);
+          logger.info({ dongleId, mode: directSampling }, 'Direct sampling enabled');
+        }
+
+        // Bias-T power on antenna connector
+        if (state.config.biasT) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+          logger.info({ dongleId }, 'Bias-T enabled');
+        }
+
+        // RTL2832U digital AGC
+        if (state.config.digitalAgc) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+          logger.info({ dongleId }, 'Digital AGC enabled');
+        }
+
+        // Offset tuning (zero-IF shift, useful for E4000 tuner)
+        if (state.config.offsetTuning) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_OFFSET_TUNING, 1);
+          logger.info({ dongleId }, 'Offset tuning enabled');
+        }
+
+        // Tuner IF gain stages
+        if (state.config.ifGain?.length) {
+          for (const [stage, tenthsDb] of state.config.ifGain) {
+            const param = ((stage & 0xFFFF) << 16) | (tenthsDb & 0xFFFF);
+            this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_IF_GAIN, param);
+            logger.info({ dongleId, stage, gainTenthsDb: tenthsDb }, 'IF gain stage set');
           }
         }
-      } else {
-        this.emit('iq-data', dongleId, chunk);
-      }
+
+        this.emit('dongle-started', dongleId, profile);
+        resolve();
+      });
+
+      socket.on('data', (chunk: Buffer) => {
+        if (state.generation !== gen) return; // stale socket
+
+        if (!state.rtlTcpHeaderReceived) {
+          // Copy into fixed header buffer until we have RTL_TCP_HEADER_SIZE bytes
+          const need = RTL_TCP_HEADER_SIZE - headerFill;
+          const copy = Math.min(need, chunk.length);
+          chunk.copy(headerBuf, headerFill, 0, copy);
+          headerFill += copy;
+          if (headerFill >= RTL_TCP_HEADER_SIZE) {
+            const magic = headerBuf.subarray(0, 4).toString('ascii');
+            const tunerType = headerBuf.readUInt32BE(4);
+            const gainCount = headerBuf.readUInt32BE(8);
+            logger.info(
+              { dongleId, magic, tunerType, gainCount },
+              'rtl_tcp header received',
+            );
+            state.rtlTcpHeaderReceived = true;
+            const remaining = chunk.subarray(copy);
+            if (remaining.length > 0) {
+              this.emit('iq-data', dongleId, remaining);
+            }
+          }
+        } else {
+          this.emit('iq-data', dongleId, chunk);
+        }
+      });
+
+      socket.on('error', (err) => {
+        if (state.generation !== gen) return; // stale socket
+        logger.error({ dongleId, host, port, error: err.message, generation: gen }, 'rtl_tcp connection error');
+        state.lastError = err.message;
+        state.running = false;
+        state.socket = null;
+        this.emit('dongle-error', dongleId, err);
+        if (!connected) {
+          reject(err);
+        } else {
+          this.scheduleRestart(dongleId, state, profile, 'rtl_tcp');
+        }
+      });
+
+      socket.on('close', () => {
+        if (state.generation !== gen) {
+          // This close event is from an old socket that was already replaced.
+          // Do NOT touch state — the new socket owns it now.
+          logger.debug({ dongleId, generation: gen, currentGen: state.generation }, 'Ignoring stale rtl_tcp close event');
+          return;
+        }
+        logger.info({ dongleId, generation: gen }, 'rtl_tcp connection closed');
+        const wasRunning = state.running;
+        state.running = false;
+        state.socket = null;
+
+        if (wasRunning) {
+          // Unexpected close — try to reconnect
+          this.scheduleRestart(dongleId, state, profile, 'rtl_tcp');
+        } else {
+          this.emit('dongle-stopped', dongleId);
+        }
+      });
+
+      socket.connect(port, host);
     });
-
-    socket.on('error', (err) => {
-      logger.error({ dongleId, host, port, error: err.message }, 'rtl_tcp connection error');
-      state.lastError = err.message;
-      state.running = false;
-      state.socket = null;
-      this.emit('dongle-error', dongleId, err);
-      this.scheduleRestart(dongleId, state, profile, 'rtl_tcp');
-    });
-
-    socket.on('close', () => {
-      logger.info({ dongleId }, 'rtl_tcp connection closed');
-      const wasRunning = state.running;
-      state.running = false;
-      state.socket = null;
-
-      if (wasRunning) {
-        // Unexpected close — try to reconnect
-        this.scheduleRestart(dongleId, state, profile, 'rtl_tcp');
-      } else {
-        this.emit('dongle-stopped', dongleId);
-      }
-    });
-
-    socket.connect(port, host);
   }
 
   // ----------------------------------------------------------------
@@ -412,84 +461,101 @@ export class DongleManager extends EventEmitter {
    *   - TLeconte/airspy_tcp: github.com/TLeconte/airspy_tcp
    *   - F4FHH version
    */
-  private connectAirspyTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+  private connectAirspyTcp(dongleId: string, state: DongleState, profile: DongleProfile): Promise<void> {
     const source = state.config.source ?? { type: 'airspy_tcp' as const };
     const host = source.host ?? '127.0.0.1';
     const port = source.port ?? 1234;
+    const gen = state.generation;
 
-    logger.info({ dongleId, host, port }, 'Connecting to airspy_tcp server');
+    logger.info({ dongleId, host, port, generation: gen }, 'Connecting to airspy_tcp server');
 
-    const socket = new Socket();
-    state.socket = socket;
-    state.rtlTcpHeaderReceived = true; // No header to wait for
+    return new Promise<void>((resolve, reject) => {
+      const socket = new Socket();
+      state.socket = socket;
+      state.rtlTcpHeaderReceived = true; // No header to wait for
+      let connected = false;
 
-    socket.on('connect', () => {
-      logger.info({ dongleId, host, port }, 'Connected to airspy_tcp server');
-      state.running = true;
+      socket.on('connect', () => {
+        if (state.generation !== gen) { socket.destroy(); return; }
+        connected = true;
+        logger.info({ dongleId, host, port }, 'Connected to airspy_tcp server');
+        state.running = true;
 
-      // Send initial configuration
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+        // Send initial configuration
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
 
-      // Gain control (simplified — maps to linearity/sensitivity mode)
-      if (profile.gain !== null && profile.gain !== undefined) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain));
-      } else {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
-      }
+        // Gain control (simplified — maps to linearity/sensitivity mode)
+        if (profile.gain !== null && profile.gain !== undefined) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain));
+        } else {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+        }
 
-      // AirSpy-specific gain stages
-      if (state.config.vgaGain !== undefined) {
-        this.rtlTcpSendCommand(socket, 0x06, state.config.vgaGain); // VGA/IF gain
-      }
-      if (state.config.mixerGain !== undefined) {
-        this.rtlTcpSendCommand(socket, 0x07, state.config.mixerGain); // Mixer gain
-      }
-      if (state.config.lnaGain !== undefined) {
-        this.rtlTcpSendCommand(socket, 0x08, state.config.lnaGain); // LNA gain
-      }
-      if (state.config.linearityMode !== undefined) {
-        this.rtlTcpSendCommand(socket, 0x09, state.config.linearityMode ? 1 : 0); // Linearity vs sensitivity
-      }
+        // AirSpy-specific gain stages
+        if (state.config.vgaGain !== undefined) {
+          this.rtlTcpSendCommand(socket, 0x06, state.config.vgaGain); // VGA/IF gain
+        }
+        if (state.config.mixerGain !== undefined) {
+          this.rtlTcpSendCommand(socket, 0x07, state.config.mixerGain); // Mixer gain
+        }
+        if (state.config.lnaGain !== undefined) {
+          this.rtlTcpSendCommand(socket, 0x08, state.config.lnaGain); // LNA gain
+        }
+        if (state.config.linearityMode !== undefined) {
+          this.rtlTcpSendCommand(socket, 0x09, state.config.linearityMode ? 1 : 0); // Linearity vs sensitivity
+        }
 
-      // Bias-T
-      if (state.config.biasT) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
-        logger.info({ dongleId }, 'Bias-T enabled');
-      }
+        // Bias-T
+        if (state.config.biasT) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+          logger.info({ dongleId }, 'Bias-T enabled');
+        }
 
-      this.emit('dongle-started', dongleId, profile);
+        this.emit('dongle-started', dongleId, profile);
+        resolve();
+      });
+
+      socket.on('data', (chunk: Buffer) => {
+        if (state.generation !== gen) return;
+        this.emit('iq-data', dongleId, chunk);
+      });
+
+      socket.on('error', (err) => {
+        if (state.generation !== gen) return;
+        logger.error({ dongleId, host, port, error: err.message }, 'airspy_tcp connection error');
+        state.lastError = err.message;
+        state.running = false;
+        state.socket = null;
+        this.emit('dongle-error', dongleId, err);
+        if (!connected) {
+          reject(err);
+        } else {
+          this.scheduleRestart(dongleId, state, profile, 'airspy_tcp');
+        }
+      });
+
+      socket.on('close', () => {
+        if (state.generation !== gen) {
+          logger.debug({ dongleId, generation: gen, currentGen: state.generation }, 'Ignoring stale airspy_tcp close event');
+          return;
+        }
+        logger.info({ dongleId }, 'airspy_tcp connection closed');
+        const wasRunning = state.running;
+        state.running = false;
+        state.socket = null;
+
+        if (wasRunning) {
+          this.scheduleRestart(dongleId, state, profile, 'airspy_tcp');
+        } else {
+          this.emit('dongle-stopped', dongleId);
+        }
+      });
+
+      socket.connect(port, host);
     });
-
-    socket.on('data', (chunk: Buffer) => {
-      this.emit('iq-data', dongleId, chunk);
-    });
-
-    socket.on('error', (err) => {
-      logger.error({ dongleId, host, port, error: err.message }, 'airspy_tcp connection error');
-      state.lastError = err.message;
-      state.running = false;
-      state.socket = null;
-      this.emit('dongle-error', dongleId, err);
-      this.scheduleRestart(dongleId, state, profile, 'airspy_tcp');
-    });
-
-    socket.on('close', () => {
-      logger.info({ dongleId }, 'airspy_tcp connection closed');
-      const wasRunning = state.running;
-      state.running = false;
-      state.socket = null;
-
-      if (wasRunning) {
-        this.scheduleRestart(dongleId, state, profile, 'airspy_tcp');
-      } else {
-        this.emit('dongle-stopped', dongleId);
-      }
-    });
-
-    socket.connect(port, host);
   }
 
   // ----------------------------------------------------------------
@@ -506,74 +572,91 @@ export class DongleManager extends EventEmitter {
    *
    * Server: hotpaw2/hfp_tcp
    */
-  private connectHfpTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+  private connectHfpTcp(dongleId: string, state: DongleState, profile: DongleProfile): Promise<void> {
     const source = state.config.source ?? { type: 'hfp_tcp' as const };
     const host = source.host ?? '127.0.0.1';
     const port = source.port ?? 1234;
+    const gen = state.generation;
 
-    logger.info({ dongleId, host, port }, 'Connecting to hfp_tcp server');
+    logger.info({ dongleId, host, port, generation: gen }, 'Connecting to hfp_tcp server');
 
-    const socket = new Socket();
-    state.socket = socket;
-    state.rtlTcpHeaderReceived = true; // No header to wait for
+    return new Promise<void>((resolve, reject) => {
+      const socket = new Socket();
+      state.socket = socket;
+      state.rtlTcpHeaderReceived = true; // No header to wait for
+      let connected = false;
 
-    socket.on('connect', () => {
-      logger.info({ dongleId, host, port }, 'Connected to hfp_tcp server');
-      state.running = true;
+      socket.on('connect', () => {
+        if (state.generation !== gen) { socket.destroy(); return; }
+        connected = true;
+        logger.info({ dongleId, host, port }, 'Connected to hfp_tcp server');
+        state.running = true;
 
-      // Send initial configuration
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+        // Send initial configuration
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
 
-      // Gain control (AirSpy HF+ uses RF gain reduction, not individual stages)
-      if (profile.gain !== null && profile.gain !== undefined) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain));
-      } else {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
-      }
+        // Gain control (AirSpy HF+ uses RF gain reduction, not individual stages)
+        if (profile.gain !== null && profile.gain !== undefined) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN, Math.round(profile.gain));
+        } else {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+        }
 
-      // HF LNA (HF mode: enable for 0–31MHz)
-      if (state.config.hfLna !== undefined) {
-        this.rtlTcpSendCommand(socket, 0x06, state.config.hfLna ? 1 : 0);
-      }
+        // HF LNA (HF mode: enable for 0–31MHz)
+        if (state.config.hfLna !== undefined) {
+          this.rtlTcpSendCommand(socket, 0x06, state.config.hfLna ? 1 : 0);
+        }
 
-      // HF AGC mode
-      if (state.config.hfAgc !== undefined) {
-        this.rtlTcpSendCommand(socket, 0x07, state.config.hfAgc ? 1 : 0);
-      }
+        // HF AGC mode
+        if (state.config.hfAgc !== undefined) {
+          this.rtlTcpSendCommand(socket, 0x07, state.config.hfAgc ? 1 : 0);
+        }
 
-      this.emit('dongle-started', dongleId, profile);
+        this.emit('dongle-started', dongleId, profile);
+        resolve();
+      });
+
+      socket.on('data', (chunk: Buffer) => {
+        if (state.generation !== gen) return;
+        this.emit('iq-data', dongleId, chunk);
+      });
+
+      socket.on('error', (err) => {
+        if (state.generation !== gen) return;
+        logger.error({ dongleId, host, port, error: err.message }, 'hfp_tcp connection error');
+        state.lastError = err.message;
+        state.running = false;
+        state.socket = null;
+        this.emit('dongle-error', dongleId, err);
+        if (!connected) {
+          reject(err);
+        } else {
+          this.scheduleRestart(dongleId, state, profile, 'hfp_tcp');
+        }
+      });
+
+      socket.on('close', () => {
+        if (state.generation !== gen) {
+          logger.debug({ dongleId, generation: gen, currentGen: state.generation }, 'Ignoring stale hfp_tcp close event');
+          return;
+        }
+        logger.info({ dongleId }, 'hfp_tcp connection closed');
+        const wasRunning = state.running;
+        state.running = false;
+        state.socket = null;
+
+        if (wasRunning) {
+          this.scheduleRestart(dongleId, state, profile, 'hfp_tcp');
+        } else {
+          this.emit('dongle-stopped', dongleId);
+        }
+      });
+
+      socket.connect(port, host);
     });
-
-    socket.on('data', (chunk: Buffer) => {
-      this.emit('iq-data', dongleId, chunk);
-    });
-
-    socket.on('error', (err) => {
-      logger.error({ dongleId, host, port, error: err.message }, 'hfp_tcp connection error');
-      state.lastError = err.message;
-      state.running = false;
-      state.socket = null;
-      this.emit('dongle-error', dongleId, err);
-      this.scheduleRestart(dongleId, state, profile, 'hfp_tcp');
-    });
-
-    socket.on('close', () => {
-      logger.info({ dongleId }, 'hfp_tcp connection closed');
-      const wasRunning = state.running;
-      state.running = false;
-      state.socket = null;
-
-      if (wasRunning) {
-        this.scheduleRestart(dongleId, state, profile, 'hfp_tcp');
-      } else {
-        this.emit('dongle-stopped', dongleId);
-      }
-    });
-
-    socket.connect(port, host);
   }
 
   // ----------------------------------------------------------------
@@ -598,126 +681,143 @@ export class DongleManager extends EventEmitter {
    *   0x83: RF gain reduction (dB)
    *   0x84: LNA state (0-3)
    */
-  private connectRspTcp(dongleId: string, state: DongleState, profile: DongleProfile): void {
+  private connectRspTcp(dongleId: string, state: DongleState, profile: DongleProfile): Promise<void> {
     const source = state.config.source ?? { type: 'rsp_tcp' as const };
     const host = source.host ?? '127.0.0.1';
     const port = source.port ?? 1234;
+    const gen = state.generation;
 
-    logger.info({ dongleId, host, port }, 'Connecting to rsp_tcp server');
+    logger.info({ dongleId, host, port, generation: gen }, 'Connecting to rsp_tcp server');
 
-    const socket = new Socket();
-    state.socket = socket;
-    state.rtlTcpHeaderReceived = false;
+    return new Promise<void>((resolve, reject) => {
+      const socket = new Socket();
+      state.socket = socket;
+      state.rtlTcpHeaderReceived = false;
+      let connected = false;
 
-    const headerBuf = Buffer.allocUnsafe(RSP_TCP_HEADER_SIZE);
-    let headerFill = 0;
+      const headerBuf = Buffer.allocUnsafe(RSP_TCP_HEADER_SIZE);
+      let headerFill = 0;
 
-    socket.on('connect', () => {
-      logger.info({ dongleId, host, port }, 'Connected to rsp_tcp server');
-      state.running = true;
+      socket.on('connect', () => {
+        if (state.generation !== gen) { socket.destroy(); return; }
+        connected = true;
+        logger.info({ dongleId, host, port }, 'Connected to rsp_tcp server');
+        state.running = true;
 
-      // Send initial configuration
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
-      this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
+        // Send initial configuration
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_FREQ, profile.centerFrequency);
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_SAMPLERATE, profile.sampleRate);
 
-      // SDRplay uses gain reduction (20-59 dB, higher = less gain)
-      if (state.config.sdrplayGain !== undefined) {
-        this.rspSendExtended(socket, 0x83, state.config.sdrplayGain);
-      } else if (profile.gain !== null && profile.gain !== undefined) {
-        // Map generic gain to SDRplay gain reduction (20-59)
-        const sdrGain = Math.min(59, Math.max(20, Math.round(profile.gain)));
-        this.rspSendExtended(socket, 0x83, sdrGain);
-      }
-
-      // LNA state
-      if (state.config.sdrplayLna !== undefined) {
-        this.rspSendExtended(socket, 0x84, state.config.sdrplayLna);
-      }
-
-      // AGC
-      if (state.config.sdrplayAgc === false) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 0);
-      } else {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
-      }
-
-      // Antenna port (SDRplay RSP2/RSPduo)
-      if (source.antennaPort !== undefined) {
-        this.rspSendExtended(socket, 0x80, source.antennaPort);
-        logger.info({ dongleId, port: source.antennaPort }, 'Antenna port set');
-      }
-
-      // Notch filter
-      if (source.notchFilter) {
-        this.rspSendExtended(socket, 0x81, 1);
-        logger.info({ dongleId }, 'Notch filter enabled');
-      }
-
-      // Refclk output
-      if (source.refclk) {
-        this.rspSendExtended(socket, 0x82, 1);
-        logger.info({ dongleId }, 'Refclk output enabled');
-      }
-
-      // Bias-T
-      if (state.config.biasT) {
-        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
-        logger.info({ dongleId }, 'Bias-T enabled');
-      }
-
-      this.emit('dongle-started', dongleId, profile);
-    });
-
-    socket.on('data', (chunk: Buffer) => {
-      if (!state.rtlTcpHeaderReceived) {
-        const need = RSP_TCP_HEADER_SIZE - headerFill;
-        const copy = Math.min(need, chunk.length);
-        chunk.copy(headerBuf, headerFill, 0, copy);
-        headerFill += copy;
-        if (headerFill >= RSP_TCP_HEADER_SIZE) {
-          const magic = headerBuf.subarray(0, 4).toString('ascii');
-          const deviceType = headerBuf.readUInt32BE(4);
-          const serial = headerBuf.readUInt32BE(8);
-          logger.info(
-            { dongleId, magic, deviceType, serial },
-            'rsp_tcp header received',
-          );
-          state.rtlTcpHeaderReceived = true;
-          const remaining = chunk.subarray(copy);
-          if (remaining.length > 0) {
-            this.emit('iq-data', dongleId, remaining);
-          }
+        // SDRplay uses gain reduction (20-59 dB, higher = less gain)
+        if (state.config.sdrplayGain !== undefined) {
+          this.rspSendExtended(socket, 0x83, state.config.sdrplayGain);
+        } else if (profile.gain !== null && profile.gain !== undefined) {
+          // Map generic gain to SDRplay gain reduction (20-59)
+          const sdrGain = Math.min(59, Math.max(20, Math.round(profile.gain)));
+          this.rspSendExtended(socket, 0x83, sdrGain);
         }
-      } else {
-        this.emit('iq-data', dongleId, chunk);
-      }
+
+        // LNA state
+        if (state.config.sdrplayLna !== undefined) {
+          this.rspSendExtended(socket, 0x84, state.config.sdrplayLna);
+        }
+
+        // AGC
+        if (state.config.sdrplayAgc === false) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 1);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 0);
+        } else {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_GAIN_MODE, 0);
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_AGC_MODE, 1);
+        }
+
+        // Antenna port (SDRplay RSP2/RSPduo)
+        if (source.antennaPort !== undefined) {
+          this.rspSendExtended(socket, 0x80, source.antennaPort);
+          logger.info({ dongleId, port: source.antennaPort }, 'Antenna port set');
+        }
+
+        // Notch filter
+        if (source.notchFilter) {
+          this.rspSendExtended(socket, 0x81, 1);
+          logger.info({ dongleId }, 'Notch filter enabled');
+        }
+
+        // Refclk output
+        if (source.refclk) {
+          this.rspSendExtended(socket, 0x82, 1);
+          logger.info({ dongleId }, 'Refclk output enabled');
+        }
+
+        // Bias-T
+        if (state.config.biasT) {
+          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+          logger.info({ dongleId }, 'Bias-T enabled');
+        }
+
+        this.emit('dongle-started', dongleId, profile);
+        resolve();
+      });
+
+      socket.on('data', (chunk: Buffer) => {
+        if (state.generation !== gen) return;
+        if (!state.rtlTcpHeaderReceived) {
+          const need = RSP_TCP_HEADER_SIZE - headerFill;
+          const copy = Math.min(need, chunk.length);
+          chunk.copy(headerBuf, headerFill, 0, copy);
+          headerFill += copy;
+          if (headerFill >= RSP_TCP_HEADER_SIZE) {
+            const magic = headerBuf.subarray(0, 4).toString('ascii');
+            const deviceType = headerBuf.readUInt32BE(4);
+            const serial = headerBuf.readUInt32BE(8);
+            logger.info(
+              { dongleId, magic, deviceType, serial },
+              'rsp_tcp header received',
+            );
+            state.rtlTcpHeaderReceived = true;
+            const remaining = chunk.subarray(copy);
+            if (remaining.length > 0) {
+              this.emit('iq-data', dongleId, remaining);
+            }
+          }
+        } else {
+          this.emit('iq-data', dongleId, chunk);
+        }
+      });
+
+      socket.on('error', (err) => {
+        if (state.generation !== gen) return;
+        logger.error({ dongleId, host, port, error: err.message }, 'rsp_tcp connection error');
+        state.lastError = err.message;
+        state.running = false;
+        state.socket = null;
+        this.emit('dongle-error', dongleId, err);
+        if (!connected) {
+          reject(err);
+        } else {
+          this.scheduleRestart(dongleId, state, profile, 'rsp_tcp');
+        }
+      });
+
+      socket.on('close', () => {
+        if (state.generation !== gen) {
+          logger.debug({ dongleId, generation: gen, currentGen: state.generation }, 'Ignoring stale rsp_tcp close event');
+          return;
+        }
+        logger.info({ dongleId }, 'rsp_tcp connection closed');
+        const wasRunning = state.running;
+        state.running = false;
+        state.socket = null;
+
+        if (wasRunning) {
+          this.scheduleRestart(dongleId, state, profile, 'rsp_tcp');
+        } else {
+          this.emit('dongle-stopped', dongleId);
+        }
+      });
+
+      socket.connect(port, host);
     });
-
-    socket.on('error', (err) => {
-      logger.error({ dongleId, host, port, error: err.message }, 'rsp_tcp connection error');
-      state.lastError = err.message;
-      state.running = false;
-      state.socket = null;
-      this.emit('dongle-error', dongleId, err);
-      this.scheduleRestart(dongleId, state, profile, 'rsp_tcp');
-    });
-
-    socket.on('close', () => {
-      logger.info({ dongleId }, 'rsp_tcp connection closed');
-      const wasRunning = state.running;
-      state.running = false;
-      state.socket = null;
-
-      if (wasRunning) {
-        this.scheduleRestart(dongleId, state, profile, 'rsp_tcp');
-      } else {
-        this.emit('dongle-stopped', dongleId);
-      }
-    });
-
-    socket.connect(port, host);
   }
 
   /**
@@ -822,6 +922,9 @@ export class DongleManager extends EventEmitter {
     }
 
     state.restartCount++;
+    // Increment generation so that if a stale restart timer fires after a new
+    // switchProfile() call, the stale connect will detect the mismatch.
+    state.generation++;
     const delay = this.restartDelay * state.restartCount;
     logger.warn(
       { dongleId, restartCount: state.restartCount, delayMs: delay, sourceType },
@@ -830,18 +933,21 @@ export class DongleManager extends EventEmitter {
 
     const t = setTimeout(() => {
       if (!state.running) {
+        const handleErr = (err: Error) => {
+          logger.error({ dongleId, error: err.message }, 'Restart connection failed');
+        };
         switch (sourceType) {
           case 'rtl_tcp':
-            this.connectRtlTcp(dongleId, state, profile);
+            this.connectRtlTcp(dongleId, state, profile).catch(handleErr);
             break;
           case 'airspy_tcp':
-            this.connectAirspyTcp(dongleId, state, profile);
+            this.connectAirspyTcp(dongleId, state, profile).catch(handleErr);
             break;
           case 'hfp_tcp':
-            this.connectHfpTcp(dongleId, state, profile);
+            this.connectHfpTcp(dongleId, state, profile).catch(handleErr);
             break;
           case 'rsp_tcp':
-            this.connectRspTcp(dongleId, state, profile);
+            this.connectRspTcp(dongleId, state, profile).catch(handleErr);
             break;
           case 'demo':
             this.startSimulator(dongleId, state, profile);
@@ -876,13 +982,18 @@ export class DongleManager extends EventEmitter {
       return;
     }
 
-    // Close rtl_tcp socket
+    // Close rtl_tcp socket (or any TCP-based source)
     if (state.socket) {
-      logger.info({ dongleId }, 'Closing rtl_tcp connection');
+      logger.info({ dongleId }, 'Closing TCP connection');
+      const oldSocket = state.socket;
       state.running = false; // prevent reconnect on close event
-      state.socket.destroy();
       state.socket = null;
       state.activeProfile = null;
+      // Remove all listeners BEFORE destroy to prevent stale events from
+      // the old socket's 'close'/'error' callbacks from corrupting state
+      // (especially nullifying state.socket after a new socket is assigned).
+      oldSocket.removeAllListeners();
+      oldSocket.destroy();
       this.emit('dongle-stopped', dongleId);
       return;
     }
@@ -946,7 +1057,7 @@ export class DongleManager extends EventEmitter {
    */
   async autoStartAll(): Promise<void> {
     for (const [dongleId, state] of this.dongles) {
-      if (state.config.autoStart) {
+      if (state.config.enabled !== false && state.config.autoStart) {
         try {
           await this.startDongle(dongleId);
         } catch (err) {
@@ -1033,6 +1144,50 @@ export class DongleManager extends EventEmitter {
 
     state.config.profiles.splice(idx, 1);
     logger.info({ dongleId, profileId }, 'Profile deleted');
+  }
+
+  /**
+   * Reorder profiles for a dongle. The profileIds array must contain
+   * all existing profile IDs in the desired new order.
+   */
+  reorderProfiles(dongleId: string, profileIds: string[]): void {
+    const state = this.dongles.get(dongleId);
+    if (!state) throw new Error(`Unknown dongle: ${dongleId}`);
+
+    const existing = state.config.profiles;
+    if (profileIds.length !== existing.length) {
+      throw new Error(`profileIds length (${profileIds.length}) does not match existing profiles (${existing.length})`);
+    }
+
+    const reordered: typeof existing = [];
+    for (const id of profileIds) {
+      const profile = existing.find((p) => p.id === id);
+      if (!profile) throw new Error(`Unknown profile in order: ${id}`);
+      reordered.push(profile);
+    }
+
+    state.config.profiles.length = 0;
+    state.config.profiles.push(...reordered);
+    logger.info({ dongleId, order: profileIds }, 'Profiles reordered');
+  }
+
+  /**
+   * Update the runtime config for a dongle. Called when the admin edits
+   * dongle settings (enabled, source, name, etc.) via the REST API.
+   * This keeps the DongleState.config in sync with the persisted config
+   * so that subsequent startDongle/stopDongle calls see the new values.
+   */
+  updateDongleConfig(dongleId: string, updates: Partial<ValidatedConfig['dongles'][number]>): void {
+    const state = this.dongles.get(dongleId);
+    if (!state) throw new Error(`Unknown dongle: ${dongleId}`);
+
+    // Merge updates into the live state config (preserving the same reference
+    // that DongleState holds, so all methods see the change immediately).
+    Object.assign(state.config, updates);
+    // Don't overwrite 'id' — it's immutable
+    state.config.id = dongleId;
+
+    logger.info({ dongleId, updates: Object.keys(updates) }, 'Dongle config updated at runtime');
   }
 
   /**

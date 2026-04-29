@@ -49,6 +49,17 @@
 
 ## Completed (Recent)
 
+- [x] **Profile switching race condition fixed** — `connectRtlTcp` (and all TCP variants) now returns a Promise awaited by `startDongle`. Added generation counter to prevent stale socket events from corrupting state. 300ms settle delay between disconnect/reconnect prevents rtl_tcp server hangs. `stopDongle` removes all listeners before socket destroy. Fixes: waterfall freezing after 2-3 profile switches, rtl_tcp backend hanging.
+- [x] **Dongle enabled/disabled flag** — new `enabled` field on DongleConfig. Disabled dongles cannot be started (manual or auto-start). Admin UI shows DISABLED badge, grayed indicator, and disabled Start button. Defaults to `true` for backward compatibility.
+- [x] **Admin dongle config: source type & connection** — connection info bar (source type, host:port, device index, PPM) always visible below dongle header. Runtime state (running, activeProfileId, clientCount) merged into admin API response.
+- [x] **Admin: create receiver UX** — new dongles are created disabled with auto-start off. Success message shown. Dongle auto-selected and edit form opens immediately for configuration.
+- [x] **Admin: delete receiver** — "Delete Receiver" button in dongle edit form with confirmation dialog. Calls DELETE endpoint, clears selection.
+- [x] **Admin: delete profile** — red "Delete" button in profile actions bar with confirmation. Server prevents deleting last or active profile.
+- [x] **Admin: reorder profiles** — left/right arrow buttons to move profiles. New `PUT /api/admin/dongles/:id/profiles-order` endpoint + `reorderProfiles()` in DongleManager.
+- [x] **Profile presets** — 30 curated presets (FM, MW, SW, DAB, ham bands, airband, marine, PMR, GMRS, CB, ISM, public safety, satellite, weather) derived from ITU band plans. "From preset..." dropdown in profile tab bar creates pre-filled profiles.
+- [x] **Tuning step per profile** — optional `tuningStep` field on DongleProfile. Dropdown with common steps (1 Hz to 200 kHz, including 8.33 kHz aviation, 9 kHz MW). Defaults to "Auto (bandwidth)".
+- [x] **Live dongle config updates** — `updateDongleConfig()` method syncs admin REST changes to DongleManager runtime state without requiring server restart. Fixes: enabling a disabled dongle via admin panel then starting it.
+- [x] **Band plan & bookmark data** — downloaded ITU band plans (bands.json, bands-r1/r2/r3.json) and 26 bookmark files (aviation, marine, CB, PMR, GMRS, NOAA, etc.) from openwebrx for future use.
 - [x] **Dongle & Profile selector dropdown** — new fancy dropdown above demodulation section in sidebar. Shows "Profile Name › Frequency" in trigger, lists all dongles with their profiles, active dongle info below. Replaces old basic DongleSelector at bottom.
 - [x] **Profile switching fixed** — subscribe command now triggers `switchProfile` when profileId differs from active. Server rebuilds IQ extractors for all existing clients on profile change. Dropdown and admin panel both work correctly. Added reactive `activeProfileId` store signal updated on `subscribed`/`profile_changed` events.
 - [x] **Admin panel reworked** — unified Receivers tab with dongle selector, hardware settings editor (source type, PPM, device index, direct sampling, bias-T, digital AGC, offset tuning, auto-start), and profile tabs with full editor (name, mode, frequency, sample rate, bandwidth, gain, FFT size/fps, tune offset). Server tab with callsign/description/location, network, security, and DSP settings.

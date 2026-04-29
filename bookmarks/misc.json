@@ -1,0 +1,127 @@
+[
+    {
+        "name" : "Squeaky Wheel - day",
+        "frequency" : 5473000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Squeaky Wheel - night",
+        "frequency" : 3828000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Goose - day",
+        "frequency" : 4310000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Goose - night",
+        "frequency" : 3012000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Pip - day",
+        "frequency" : 5448000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Pip - night",
+        "frequency" : 3756000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Buzzer - UVB-76",
+        "frequency" : 4625000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Air Horn",
+        "frequency" : 4020000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "D Marker - Fazan-37",
+        "frequency" : 3240000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "T Marker - Osnova-98",
+        "frequency" : 4182000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - WWV, WWVH, BPM",
+        "frequency" : 2500000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - CHU",
+        "frequency" : 3330000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - RWM",
+        "frequency" : 4996000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - EBC",
+        "frequency" : 4998000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - WWV, WWVH, BPM",
+        "frequency" : 5000000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - CHU",
+        "frequency" : 7850000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - RWM",
+        "frequency" : 9996000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - WWV, WWVH, BPM",
+        "frequency" : 10000000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - PLC",
+        "frequency" : 11440000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - CHU",
+        "frequency" : 14670000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - RWM",
+        "frequency" : 14996000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - WWV, WWVH, BPM",
+        "frequency" : 15000000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - EBC",
+        "frequency" : 15006000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - WWV",
+        "frequency" : 20000000,
+        "modulation" : "usb"
+    },
+    {
+        "name" : "Time - WWV, OIZ",
+        "frequency" : 25000000,
+        "modulation" : "usb"
+    }
+]
