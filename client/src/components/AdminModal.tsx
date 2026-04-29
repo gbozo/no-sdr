@@ -1046,7 +1046,15 @@ const ReceiversTab: Component<{
                           class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                         <span class="text-[8px] font-mono text-text-muted">Compensates LO error</span>
                       </div>
-                      <div class="flex items-end pb-1">
+                      <div class="flex flex-col gap-2 justify-center">
+                        <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                          <input type="checkbox" checked={profileForm().biasT ?? false} onChange={(e) => updateProfileField('biasT', e.currentTarget.checked || undefined)} class="accent-cyan" />
+                          Bias-T
+                        </label>
+                        <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                          <input type="checkbox" checked={profileForm().offsetTuning ?? false} onChange={(e) => updateProfileField('offsetTuning', e.currentTarget.checked || undefined)} class="accent-cyan" />
+                          Offset Tuning
+                        </label>
                         <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
                           <input type="checkbox" checked={profileForm().swapIQ ?? false} onChange={(e) => updateProfileField('swapIQ', e.currentTarget.checked)} class="accent-cyan" />
                           Swap I/Q

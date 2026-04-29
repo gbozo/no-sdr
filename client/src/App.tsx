@@ -79,7 +79,7 @@ const App: Component = () => {
 
         <div class="flex items-center gap-3 flex-1">
           <h1 class="font-mono text-xs font-bold tracking-[0.15em] text-text-primary uppercase">
-            node-sdr
+            <span class="text-cyan">NO</span><span class="text-text-dim">(DE)</span><span class="text-cyan">-SDR</span>
           </h1>
 
           {/* PWA Install Icon */}

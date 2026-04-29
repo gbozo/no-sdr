@@ -86,6 +86,10 @@ export interface DongleProfile {
   swapIQ?: boolean;
   /** Oscillator frequency offset in Hz (compensates LO error on cheap dongles) */
   oscillatorOffset?: number;
+  /** Enable bias-T power on the antenna connector (overrides dongle-level setting) */
+  biasT?: boolean;
+  /** Offset tuning / zero-IF shift (overrides dongle-level setting) */
+  offsetTuning?: boolean;
   /** Active digital decoders for this profile */
   decoders: DecoderConfig[];
 }

@@ -18,8 +18,8 @@ export default defineConfig({
       },
       // Web app manifest
       manifest: {
-        name: 'node-sdr — WebSDR',
-        short_name: 'node-sdr',
+        name: 'NO(DE)-SDR — WebSDR',
+        short_name: 'NO(DE)-SDR',
         description: 'Multi-user WebSDR receiver for RTL-SDR dongles',
         start_url: '/',
         display: 'standalone',

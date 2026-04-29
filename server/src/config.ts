@@ -48,6 +48,10 @@ const DongleProfileSchema = z.object({
   swapIQ: z.boolean().default(false).optional(),
   /** Oscillator frequency offset in Hz (compensates LO error) */
   oscillatorOffset: z.number().default(0).optional(),
+  /** Bias-T per profile (overrides dongle-level) */
+  biasT: z.boolean().optional(),
+  /** Offset tuning per profile (overrides dongle-level) */
+  offsetTuning: z.boolean().optional(),
   decoders: z.array(DecoderConfigSchema).default([]),
 });
 

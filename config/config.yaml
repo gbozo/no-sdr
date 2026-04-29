@@ -42,6 +42,7 @@ dongles:
         defaultBandwidth: 200000
         gain: 29
         description: FM broadcast band — 87.5 to 108 MHz
+        directSampling: 0
         decoders: []
         dongleId: dongle-remote
       - id: aviation
@@ -83,19 +84,7 @@ dongles:
         description: MW broadcast band — 530 to 1700 kHz (direct sampling required)
         decoders: []
         dongleId: dongle-remote
-      - id: profile-1777493188871
-        name: New Profile
-        centerFrequency: 100000000
-        sampleRate: 2400000
-        fftSize: 2048
-        fftFps: 30
-        defaultMode: wfm
-        defaultTuneOffset: 0
-        defaultBandwidth: 200000
-        gain: null
-        description: ''
-        decoders: []
-        dongleId: dongle-remote
+        directSampling: 0
       - id: profile-1777493231538
         name: ADS-B (1090 MHz)
         centerFrequency: 1090000000
@@ -111,7 +100,7 @@ dongles:
         dongleId: dongle-remote
     enabled: true
     autoStart: true
-    directSampling: 2
+    directSampling: 0
     biasT: false
     digitalAgc: true
     offsetTuning: false

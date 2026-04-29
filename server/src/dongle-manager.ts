@@ -217,6 +217,12 @@ export class DongleManager extends EventEmitter {
       args.push('-D', directSampling.toString());
     }
 
+    // Bias-T (profile overrides dongle; requires rtl-sdr-blog fork with -T flag)
+    const biasT = profile.biasT ?? state.config.biasT ?? false;
+    if (biasT) {
+      args.push('-T');
+    }
+
     // Tuner bandwidth (requires rtl-sdr-blog fork or compatible binary with -w flag)
     if (state.config.tunerBandwidth && state.config.tunerBandwidth > 0) {
       args.push('-w', state.config.tunerBandwidth.toString());
@@ -343,15 +349,19 @@ export class DongleManager extends EventEmitter {
         // ---- Hardware options (profile-level overrides dongle-level) ----
 
         // Direct sampling (HF reception via I/Q-ADC bypass)
+        // Always send the command — explicitly set to 0 to disable when switching
+        // from an HF profile back to a VHF/UHF profile.
         const directSampling = profile.directSampling ?? state.config.directSampling ?? 0;
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, directSampling);
         if (directSampling > 0) {
-          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_DIRECT_SAMPLING, directSampling);
           logger.info({ dongleId, mode: directSampling }, 'Direct sampling enabled');
         }
 
-        // Bias-T power on antenna connector
-        if (state.config.biasT) {
-          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+        // Bias-T power on antenna connector (profile overrides dongle)
+        // Always send — explicitly disable when switching profiles.
+        const biasT = profile.biasT ?? state.config.biasT ?? false;
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, biasT ? 1 : 0);
+        if (biasT) {
           logger.info({ dongleId }, 'Bias-T enabled');
         }
 
@@ -361,9 +371,11 @@ export class DongleManager extends EventEmitter {
           logger.info({ dongleId }, 'Digital AGC enabled');
         }
 
-        // Offset tuning (zero-IF shift, useful for E4000 tuner)
-        if (state.config.offsetTuning) {
-          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_OFFSET_TUNING, 1);
+        // Offset tuning (zero-IF shift, profile overrides dongle)
+        // Always send — explicitly disable when switching profiles.
+        const offsetTuning = profile.offsetTuning ?? state.config.offsetTuning ?? false;
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_OFFSET_TUNING, offsetTuning ? 1 : 0);
+        if (offsetTuning) {
           logger.info({ dongleId }, 'Offset tuning enabled');
         }
 
@@ -508,9 +520,10 @@ export class DongleManager extends EventEmitter {
           this.rtlTcpSendCommand(socket, 0x09, state.config.linearityMode ? 1 : 0); // Linearity vs sensitivity
         }
 
-        // Bias-T
-        if (state.config.biasT) {
-          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+        // Bias-T (profile overrides dongle) — always send to explicitly disable
+        const biasT = profile.biasT ?? state.config.biasT ?? false;
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, biasT ? 1 : 0);
+        if (biasT) {
           logger.info({ dongleId }, 'Bias-T enabled');
         }
 
@@ -749,9 +762,10 @@ export class DongleManager extends EventEmitter {
           logger.info({ dongleId }, 'Refclk output enabled');
         }
 
-        // Bias-T
-        if (state.config.biasT) {
-          this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, 1);
+        // Bias-T (profile overrides dongle) — always send to explicitly disable
+        const biasT = profile.biasT ?? state.config.biasT ?? false;
+        this.rtlTcpSendCommand(socket, RTL_TCP_CMD_SET_BIAS_TEE, biasT ? 1 : 0);
+        if (biasT) {
           logger.info({ dongleId }, 'Bias-T enabled');
         }
 

@@ -49,6 +49,10 @@
 
 ## Completed (Recent)
 
+- [x] **Direct sampling / bias-T / offset tuning always sent on profile switch** — previously these rtl_tcp commands were only sent when enabled, so switching from an HF profile (direct sampling=2) to VHF (direct sampling=0) left hardware in the old mode. Now all three are always explicitly sent (including 0 to disable).
+- [x] **Per-profile bias-T and offset tuning** — these hardware settings now override dongle-level defaults per frequency profile (same pattern as directSampling). Admin UI checkboxes in Hardware Overrides section.
+- [x] **Profile list cache invalidation** — the user-facing dongle/profile dropdown now always re-fetches profiles when opened and when activeProfileId changes. Fixes stale list after admin deletes/adds profiles.
+- [x] **UI title changed to NO(DE)-SDR** — navbar, HTML title, PWA manifest all updated.
 - [x] **Profile switching race condition fixed** — `connectRtlTcp` (and all TCP variants) now returns a Promise awaited by `startDongle`. Added generation counter to prevent stale socket events from corrupting state. 300ms settle delay between disconnect/reconnect prevents rtl_tcp server hangs. `stopDongle` removes all listeners before socket destroy. Fixes: waterfall freezing after 2-3 profile switches, rtl_tcp backend hanging.
 - [x] **Dongle enabled/disabled flag** — new `enabled` field on DongleConfig. Disabled dongles cannot be started (manual or auto-start). Admin UI shows DISABLED badge, grayed indicator, and disabled Start button. Defaults to `true` for backward compatibility.
 - [x] **Admin dongle config: source type & connection** — connection info bar (source type, host:port, device index, PPM) always visible below dongle header. Runtime state (running, activeProfileId, clientCount) merged into admin API response.

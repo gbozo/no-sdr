@@ -215,20 +215,20 @@ const DongleProfileSelector: Component = () => {
   };
 
   // Load profiles for the active dongle eagerly (so trigger label shows profile name)
+  // Re-fetch when activeProfileId changes (profile added/deleted/switched)
   createEffect(() => {
     const dongleId = store.activeDongleId();
-    if (dongleId && !profileMap()[dongleId]) {
+    const _profileId = store.activeProfileId(); // track changes
+    if (dongleId) {
       fetchProfiles(dongleId);
     }
   });
 
-  // Load profiles for all dongles when dropdown opens
+  // Load profiles for all dongles when dropdown opens (always refresh)
   createEffect(() => {
     if (open()) {
       for (const dongle of store.dongles()) {
-        if (!profileMap()[dongle.id]) {
-          fetchProfiles(dongle.id);
-        }
+        fetchProfiles(dongle.id);
       }
     }
   });
