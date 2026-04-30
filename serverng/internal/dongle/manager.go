@@ -22,6 +22,9 @@ type Manager struct {
 	// Per-client IQ extraction pipelines
 	clientPipelines map[string]*clientPipeline
 
+	// Debug counter for periodic logging
+	fftFrameCount int64
+
 	mu sync.Mutex
 }
 
@@ -493,10 +496,24 @@ func (m *Manager) broadcastFftFrame(d *activeDongle, fftFrame []float32) {
 	var adpcmMsg []byte
 	var uint8Msg []byte
 
+	// Debug: log codec distribution every 100 frames
+	m.fftFrameCount++
+	if m.fftFrameCount%100 == 1 {
+		codecCounts := map[string]int{}
+		for _, c := range clients {
+			codec := c.FftCodec
+			if codec == "" {
+				codec = "(empty/default)"
+			}
+			codecCounts[codec]++
+		}
+		m.logger.Debug("FFT broadcast", "dongle", d.id, "clients", len(clients), "codecs", codecCounts, "fftBins", len(fftFrame))
+	}
+
 	for _, client := range clients {
 		var msg []byte
 		switch client.FftCodec {
-		case "deflate":
+		case "deflate", "deflate-floor":
 			if deflateMsg == nil {
 				payload, err := d.deflateEnc.EncodePayload(fftFrame, minDb, maxDb)
 				if err != nil {
