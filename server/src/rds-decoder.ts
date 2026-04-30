@@ -496,6 +496,13 @@ export class RdsDecoder {
   private ncoPhase = 0;
   private ncoPhaseInc: number;
 
+  // NCO lookup table — replaces Math.cos(ncoPhase) at 240 kHz.
+  // 4096 entries, power-of-2 for bitwise-AND index wrap.
+  private readonly ncoTableSize = 4096;
+  private readonly ncoTableMask = 4095;
+  private readonly ncoTableScale: number;
+  private readonly ncoCosTable: Float32Array;
+
   private decimateCounter = 0;
   private readonly DECIMATE: number;
   private readonly decimatedRate: number;
@@ -515,6 +522,13 @@ export class RdsDecoder {
 
     this.ncoPhaseInc = 2 * Math.PI * RDS_SUBCARRIER_HZ / sampleRate;
 
+    // Build NCO cosine table
+    this.ncoTableScale = this.ncoTableSize / (2 * Math.PI);
+    this.ncoCosTable = new Float32Array(this.ncoTableSize);
+    for (let i = 0; i < this.ncoTableSize; i++) {
+      this.ncoCosTable[i] = Math.cos((2 * Math.PI * i) / this.ncoTableSize);
+    }
+
     this.DECIMATE = 10;
     this.decimatedRate = sampleRate / this.DECIMATE;
 
@@ -531,10 +545,11 @@ export class RdsDecoder {
     let filtered = this.bpf1.process(composite);
     filtered = this.bpf2.process(filtered);
 
-    const cosN = Math.cos(this.ncoPhase);
-    const iRaw = filtered * cosN;
+    // NCO table lookup replaces Math.cos(ncoPhase) — 240,000 calls/sec eliminated
+    const idx = ((this.ncoPhase * this.ncoTableScale + 0.5) | 0) & this.ncoTableMask;
+    const iRaw = filtered * this.ncoCosTable[idx];
     this.ncoPhase += this.ncoPhaseInc;
-    if (this.ncoPhase > 2 * Math.PI) this.ncoPhase -= 2 * Math.PI;
+    if (this.ncoPhase > 6.283185307179586) this.ncoPhase -= 6.283185307179586;
 
     this.decimateCounter++;
     if (this.decimateCounter < this.DECIMATE) return;

@@ -2,15 +2,108 @@
 // node-sdr — Server-Side FFT Processor
 // ============================================================
 // Converts raw IQ data from rtl_sdr into FFT magnitude (dB) arrays.
-// Uses fft.js (indutny) — radix-4, fastest pure JS FFT.
+// Uses a Float32Array-native radix-2 DIT FFT — all typed arrays,
+// no plain number[] intermediaries, V8 can optimize/JIT the hot loops.
 //
 // IQ data from rtl_sdr: unsigned 8-bit interleaved [I0,Q0,I1,Q1,...]
 // Output: Float32Array of dB magnitude values per FFT bin.
 // ============================================================
 
-// @ts-ignore — fft.js has no type declarations
-import FFT from 'fft.js';
 import { logger } from './logger.js';
+
+// ---------------------------------------------------------------------------
+// Float32Array-native radix-2 Cooley-Tukey FFT (in-place, DIT)
+// ---------------------------------------------------------------------------
+// Layout: interleaved [re0, im0, re1, im1, ...] in a single Float32Array.
+// Size must be a power of 2. No plain number[] — V8 can use typed-array
+// fast paths on the inner loop.
+// ---------------------------------------------------------------------------
+
+function fftBitReversal(n: number): Uint32Array {
+  const rev = new Uint32Array(n);
+  let bits = 0;
+  let tmp = n >> 1;
+  while (tmp) { bits++; tmp >>= 1; }
+  for (let i = 0; i < n; i++) {
+    let r = 0;
+    let x = i;
+    for (let b = 0; b < bits; b++) { r = (r << 1) | (x & 1); x >>= 1; }
+    rev[i] = r;
+  }
+  return rev;
+}
+
+/**
+ * Pre-computed twiddle factors and bit-reversal table for one FFT size.
+ * Allocated once per FftProcessor instance.
+ */
+class FftContext {
+  readonly n: number;
+  readonly rev: Uint32Array;
+  /** Twiddle cosines: cos(-2π k/N) for k=0..N/2-1 */
+  readonly twCos: Float32Array;
+  /** Twiddle sines: sin(-2π k/N) for k=0..N/2-1 */
+  readonly twSin: Float32Array;
+  /** Working buffer: interleaved re/im Float32 */
+  readonly buf: Float32Array;
+
+  constructor(n: number) {
+    this.n = n;
+    this.rev = fftBitReversal(n);
+    this.twCos = new Float32Array(n >> 1);
+    this.twSin = new Float32Array(n >> 1);
+    for (let k = 0; k < (n >> 1); k++) {
+      const angle = (-2 * Math.PI * k) / n;
+      this.twCos[k] = Math.cos(angle);
+      this.twSin[k] = Math.sin(angle);
+    }
+    this.buf = new Float32Array(n * 2);
+  }
+
+  /**
+   * Forward FFT.  Input is written into buf by the caller (re/im interleaved).
+   * Result is left in buf in-place.
+   */
+  transform(): void {
+    const n = this.n;
+    const buf = this.buf;
+    const rev = this.rev;
+    const twCos = this.twCos;
+    const twSin = this.twSin;
+
+    // Bit-reversal permutation
+    for (let i = 0; i < n; i++) {
+      const j = rev[i];
+      if (j > i) {
+        const ri = i * 2;
+        const rj = j * 2;
+        let tmp = buf[ri];   buf[ri]   = buf[rj];   buf[rj]   = tmp;
+        tmp     = buf[ri+1]; buf[ri+1] = buf[rj+1]; buf[rj+1] = tmp;
+      }
+    }
+
+    // Cooley-Tukey butterfly stages
+    for (let len = 2; len <= n; len <<= 1) {
+      const half = len >> 1;
+      const step = n / len; // twiddle index stride
+      for (let i = 0; i < n; i += len) {
+        for (let k = 0; k < half; k++) {
+          const u = (i + k) * 2;
+          const v = (i + k + half) * 2;
+          const tw = k * step;
+          const wr = twCos[tw];
+          const wi = twSin[tw];
+          const vRe = buf[v] * wr - buf[v+1] * wi;
+          const vIm = buf[v] * wi + buf[v+1] * wr;
+          buf[v]   = buf[u]   - vRe;
+          buf[v+1] = buf[u+1] - vIm;
+          buf[u]   = buf[u]   + vRe;
+          buf[u+1] = buf[u+1] + vIm;
+        }
+      }
+    }
+  }
+}
 
 export interface FftProcessorOptions {
   /** FFT size (power of 2) */
@@ -26,16 +119,11 @@ export interface FftProcessorOptions {
 }
 
 export class FftProcessor {
-  private fft: any;
+  private ctx: FftContext;
   private fftSize: number;
   private windowFunc: Float32Array;
   private averagedMagnitudes: Float32Array | null = null;
   private readonly averaging: number;
-
-  // Reusable buffers to avoid GC pressure
-  private complexInput: number[];
-  private complexOutput: number[];
-  private iqBuffer: Float32Array;
 
   // Pre-allocated magnitude scratch buffer — reused every processOneFrame call
   private magnitudesBuffer: Float32Array;
@@ -52,24 +140,25 @@ export class FftProcessor {
   private targetFps: number;
   private minFrameInterval: number;
   private lastEmitTime = 0;
-  private pendingFrame: Float32Array | null = null;
+  // Pre-allocated pending frame buffer — avoids new Float32Array(fftSize) at 30fps.
+  // framesAccumulated === 0 means the buffer is empty/unused for the current interval.
+  private pendingFrame: Float32Array;
   private framesAccumulated = 0;
 
   constructor(private options: FftProcessorOptions) {
     this.fftSize = options.fftSize;
     this.averaging = options.averaging;
-    this.fft = new FFT(this.fftSize);
-    this.complexInput = this.fft.createComplexArray();
-    this.complexOutput = this.fft.createComplexArray();
-    this.iqBuffer = new Float32Array(this.fftSize * 2);
+    this.ctx = new FftContext(this.fftSize);
     this.windowFunc = this.createWindow(options.window ?? 'blackman-harris');
     this.samplesNeeded = this.fftSize * 2;
     this.normalizationDb = this.computeNormalization();
     this.targetFps = options.targetFps ?? 30;
     this.minFrameInterval = this.targetFps > 0 ? 1000 / this.targetFps : 0;
 
-    // Pre-allocate magnitude scratch buffer and ring buffer (4 frames of headroom)
+    // Pre-allocate magnitude scratch buffer, ring buffer (4 frames of headroom),
+    // and pending frame buffer (one per emit interval — no alloc at 30fps).
     this.magnitudesBuffer = new Float32Array(this.fftSize);
+    this.pendingFrame = new Float32Array(this.fftSize);
     this.iqRingBuf = Buffer.allocUnsafe(this.samplesNeeded * 4);
 
     logger.debug(
@@ -102,22 +191,22 @@ export class FftProcessor {
         continue;
       }
 
-      if (!this.pendingFrame) {
-        // First frame of interval: copy into pendingFrame (owned buffer)
-        this.pendingFrame = new Float32Array(frame);
+      if (this.framesAccumulated === 0) {
+        // First frame of interval: copy into pre-allocated pendingFrame — no alloc
+        this.pendingFrame.set(frame);
         this.framesAccumulated = 1;
       } else {
         // Incremental mean: avg += (new - avg) / count
         this.framesAccumulated++;
         const n = this.framesAccumulated;
+        const pf = this.pendingFrame;
         for (let i = 0; i < frame.length; i++) {
-          this.pendingFrame[i] += (frame[i] - this.pendingFrame[i]) / n;
+          pf[i] += (frame[i] - pf[i]) / n;
         }
       }
 
       if (now - this.lastEmitTime >= this.minFrameInterval) {
         emitted.push(this.pendingFrame);
-        this.pendingFrame = null;
         this.framesAccumulated = 0;
         this.lastEmitTime = now;
       }
@@ -135,27 +224,29 @@ export class FftProcessor {
   }
 
   private processOneFrame(rawIq: Buffer): Float32Array {
-    // Convert uint8 IQ to float [-1, +1] and apply window
-    for (let i = 0; i < this.fftSize; i++) {
-      const iVal = (rawIq[i * 2] - 127.5) / 127.5;
-      const qVal = (rawIq[i * 2 + 1] - 127.5) / 127.5;
-      const w = this.windowFunc[i];
-      this.complexInput[i * 2] = iVal * w;
-      this.complexInput[i * 2 + 1] = qVal * w;
+    const buf = this.ctx.buf;
+    const windowFunc = this.windowFunc;
+    const fftSize = this.fftSize;
+
+    // Convert uint8 IQ → float [-1, +1], apply window, write into typed Float32 buf
+    for (let i = 0; i < fftSize; i++) {
+      const w = windowFunc[i];
+      buf[i * 2]     = ((rawIq[i * 2]     - 127.5) / 127.5) * w; // re
+      buf[i * 2 + 1] = ((rawIq[i * 2 + 1] - 127.5) / 127.5) * w; // im
     }
 
-    this.fft.transform(this.complexOutput, this.complexInput);
+    this.ctx.transform();
 
     // Compute magnitude in dB into reusable scratch buffer — no allocation
     const magnitudes = this.magnitudesBuffer;
-    const half = this.fftSize / 2;
+    const half = fftSize >> 1;
 
-    for (let i = 0; i < this.fftSize; i++) {
-      const srcIdx = (i + half) % this.fftSize;
-      const re = this.complexOutput[srcIdx * 2];
-      const im = this.complexOutput[srcIdx * 2 + 1];
-      const mag = re * re + im * im;
-      magnitudes[i] = 10 * Math.log10(Math.max(mag, 1e-20)) - this.normalizationDb;
+    for (let i = 0; i < fftSize; i++) {
+      // FFT-shift: remap so DC is in the center
+      const srcIdx = (i + half) & (fftSize - 1);
+      const re = buf[srcIdx * 2];
+      const im = buf[srcIdx * 2 + 1];
+      magnitudes[i] = 10 * Math.log10(Math.max(re * re + im * im, 1e-20)) - this.normalizationDb;
     }
 
     // Apply exponential averaging
@@ -165,7 +256,7 @@ export class FftProcessor {
       } else {
         const a = this.averaging;
         const b = 1 - a;
-        for (let i = 0; i < this.fftSize; i++) {
+        for (let i = 0; i < fftSize; i++) {
           this.averagedMagnitudes[i] = a * this.averagedMagnitudes[i] + b * magnitudes[i];
         }
       }
@@ -241,25 +332,21 @@ export class FftProcessor {
   reset(): void {
     this.iqRingFill = 0;
     this.averagedMagnitudes = null;
-    this.pendingFrame = null;
     this.framesAccumulated = 0;
     this.lastEmitTime = 0;
   }
 
   resize(newFftSize: number): void {
     this.fftSize = newFftSize;
-    this.fft = new FFT(newFftSize);
-    this.complexInput = this.fft.createComplexArray();
-    this.complexOutput = this.fft.createComplexArray();
-    this.iqBuffer = new Float32Array(newFftSize * 2);
+    this.ctx = new FftContext(newFftSize);
     this.windowFunc = this.createWindow(this.options.window ?? 'blackman-harris');
     this.averagedMagnitudes = null;
     this.normalizationDb = this.computeNormalization();
     (this as any).samplesNeeded = newFftSize * 2;
     this.magnitudesBuffer = new Float32Array(newFftSize);
+    this.pendingFrame = new Float32Array(newFftSize);
     this.iqRingBuf = Buffer.allocUnsafe(newFftSize * 2 * 4);
     this.iqRingFill = 0;
-    this.pendingFrame = null;
     this.framesAccumulated = 0;
   }
 }
@@ -276,7 +363,7 @@ export class FftProcessor {
  * @returns Int16Array of interleaved I/Q sub-band samples
  */
 export function extractIqSubBand(
-  fftOutput: number[],
+  fftOutput: Float32Array,
   fftSize: number,
   sampleRate: number,
   centerOffsetHz: number,

@@ -216,10 +216,13 @@ export class SignalSimulator extends EventEmitter {
   private startTime = 0;
   // Pre-allocated chunk buffer — avoids Buffer.alloc (zero-fill) on every interval
   private chunkBuf: Buffer | null = null;
+  // Scratch for drift offsets — avoids new Float64Array every chunk
+  private freqOffsetsScratch: Float64Array;
 
   constructor(private options: SimulatorOptions) {
     super();
     this.phases = new Float64Array(options.signals.length);
+    this.freqOffsetsScratch = new Float64Array(options.signals.length);
   }
 
   /**
@@ -278,7 +281,7 @@ export class SignalSimulator extends EventEmitter {
     // Pre-compute per-signal drift offsets for this chunk (constant across all samples)
     const signals = this.options.signals;
     const numSignals = signals.length;
-    const freqOffsets = new Float64Array(numSignals);
+    const freqOffsets = this.freqOffsetsScratch;
     for (let sigIdx = 0; sigIdx < numSignals; sigIdx++) {
       const sig = signals[sigIdx];
       let freqOffset = sig.offsetHz;
@@ -288,6 +291,9 @@ export class SignalSimulator extends EventEmitter {
       }
       freqOffsets[sigIdx] = freqOffset;
     }
+
+    const sampleRate = this.options.sampleRate;
+    const noiseAmp = this.options.noiseFloor;
 
     for (let n = 0; n < numSamples; n++) {
       let iSum = 0;
@@ -302,12 +308,62 @@ export class SignalSimulator extends EventEmitter {
           if (pos >= sig.intermittent.onMs) continue;
         }
 
-        const normalizedFreq = freqOffsets[sigIdx] / this.options.sampleRate;
+        const normalizedFreq = freqOffsets[sigIdx] / sampleRate;
         let phase = this.phases[sigIdx];
+        const amp = sig.amplitude;
+        const t = this.sampleCounter + n;
 
-        const { i, q } = this.generateSignalSample(sig, normalizedFreq, phase, elapsed, n);
-        iSum += i;
-        qSum += q;
+        // Inline signal generation — no {i,q} object allocation
+        switch (sig.type) {
+          case 'wfm': {
+            const modFreq1 = 1000 / sampleRate;
+            const modFreq2 = 400 / sampleRate;
+            const deviation = 75000 / sampleRate;
+            const modulation = 0.7 * Math.sin(2 * Math.PI * modFreq1 * t)
+              + 0.3 * Math.sin(2 * Math.PI * modFreq2 * t);
+            const fmPhase = phase + deviation * modulation;
+            iSum += amp * Math.cos(fmPhase);
+            qSum += amp * Math.sin(fmPhase);
+            break;
+          }
+          case 'nfm': {
+            const modFreq = 800 / sampleRate;
+            const modFreq2 = 1200 / sampleRate;
+            const deviation = 5000 / sampleRate;
+            const voiceEnvelope = 0.5 + 0.5 * Math.sin(2 * Math.PI * (3 / sampleRate) * t);
+            const modulation = voiceEnvelope * (
+              0.6 * Math.sin(2 * Math.PI * modFreq * t) +
+              0.4 * Math.sin(2 * Math.PI * modFreq2 * t)
+            );
+            const fmPhase = phase + deviation * modulation;
+            iSum += amp * Math.cos(fmPhase);
+            qSum += amp * Math.sin(fmPhase);
+            break;
+          }
+          case 'am': {
+            const modFreq = 600 / sampleRate;
+            const envelope = 1 + 0.5 * Math.sin(2 * Math.PI * modFreq * t);
+            iSum += amp * envelope * Math.cos(phase);
+            qSum += amp * envelope * Math.sin(phase);
+            break;
+          }
+          case 'cw': {
+            const dotLength = 100;
+            const pattern = [1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0];
+            const patternIdx = Math.floor((elapsed / dotLength) % pattern.length);
+            if (pattern[patternIdx]) {
+              iSum += amp * Math.cos(phase);
+              qSum += amp * Math.sin(phase);
+            }
+            break;
+          }
+          case 'noise-burst': {
+            const burstAmp = amp * (0.5 + 0.5 * Math.random());
+            iSum += burstAmp * (Math.random() * 2 - 1);
+            qSum += burstAmp * (Math.random() * 2 - 1);
+            break;
+          }
+        }
 
         phase += 2 * Math.PI * normalizedFreq;
         if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
@@ -316,7 +372,6 @@ export class SignalSimulator extends EventEmitter {
       }
 
       // Gaussian noise via Box-Muller
-      const noiseAmp = this.options.noiseFloor;
       const u1 = Math.random() || 1e-10;
       const u2 = Math.random();
       const noiseMag = Math.sqrt(-2 * Math.log(u1)) * noiseAmp;
@@ -330,100 +385,6 @@ export class SignalSimulator extends EventEmitter {
     }
 
     return buf;
-  }
-
-  /**
-   * Generate one IQ sample for a specific signal type
-   */
-  private generateSignalSample(
-    sig: SimulatedSignal,
-    normalizedFreq: number,
-    phase: number,
-    elapsedMs: number,
-    sampleIdx: number,
-  ): { i: number; q: number } {
-    const amp = sig.amplitude;
-    const t = this.sampleCounter + sampleIdx;
-
-    switch (sig.type) {
-      case 'wfm': {
-        // FM broadcast: carrier + frequency modulation
-        // Simulate with a slowly varying modulation
-        const modFreq1 = 1000 / this.options.sampleRate; // 1kHz audio tone
-        const modFreq2 = 400 / this.options.sampleRate;  // 400Hz tone
-        const deviation = 75000 / this.options.sampleRate; // ±75kHz deviation
-
-        const modulation = 0.7 * Math.sin(2 * Math.PI * modFreq1 * t)
-          + 0.3 * Math.sin(2 * Math.PI * modFreq2 * t);
-
-        const fmPhase = phase + deviation * modulation;
-        return {
-          i: amp * Math.cos(fmPhase),
-          q: amp * Math.sin(fmPhase),
-        };
-      }
-
-      case 'nfm': {
-        // Narrowband FM: voice-like modulation
-        const modFreq = 800 / this.options.sampleRate;
-        const modFreq2 = 1200 / this.options.sampleRate;
-        const deviation = 5000 / this.options.sampleRate;
-
-        // Simulate voice-like amplitude variation
-        const voiceEnvelope = 0.5 + 0.5 * Math.sin(2 * Math.PI * (3 / this.options.sampleRate) * t);
-        const modulation = voiceEnvelope * (
-          0.6 * Math.sin(2 * Math.PI * modFreq * t) +
-          0.4 * Math.sin(2 * Math.PI * modFreq2 * t)
-        );
-
-        const fmPhase = phase + deviation * modulation;
-        return {
-          i: amp * Math.cos(fmPhase),
-          q: amp * Math.sin(fmPhase),
-        };
-      }
-
-      case 'am': {
-        // AM: carrier with amplitude modulation
-        const modFreq = 600 / this.options.sampleRate;
-        const modDepth = 0.5;
-        const envelope = 1 + modDepth * Math.sin(2 * Math.PI * modFreq * t);
-
-        return {
-          i: amp * envelope * Math.cos(phase),
-          q: amp * envelope * Math.sin(phase),
-        };
-      }
-
-      case 'cw': {
-        // CW: on/off keyed carrier (Morse-like pattern)
-        const dotLength = 100; // ms
-        const pattern = [1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0]; // SOS
-        const patternIdx = Math.floor((elapsedMs / dotLength) % pattern.length);
-        const keyState = pattern[patternIdx];
-
-        if (!keyState) {
-          return { i: 0, q: 0 };
-        }
-
-        return {
-          i: amp * Math.cos(phase),
-          q: amp * Math.sin(phase),
-        };
-      }
-
-      case 'noise-burst': {
-        // Burst of wideband noise
-        const burstAmp = amp * (0.5 + 0.5 * Math.random());
-        return {
-          i: burstAmp * (Math.random() * 2 - 1),
-          q: burstAmp * (Math.random() * 2 - 1),
-        };
-      }
-
-      default:
-        return { i: 0, q: 0 };
-    }
   }
 
   get isRunning(): boolean {

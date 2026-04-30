@@ -151,6 +151,9 @@ export class AudioEngine {
 
           // Underrun detection
           this.underruns = 0;
+          // Consecutive underrun counter — only reset playing after 3 in a row
+          // to avoid a 150ms silence gap from a single late IQ chunk
+          this.consecutiveUnderruns = 0;
 
           this.port.onmessage = (e) => {
             if (e.data === 'reset') {
@@ -159,6 +162,7 @@ export class AudioEngine {
               this.readPos = 0;
               this.buffered = 0;
               this.playing = false;
+              this.consecutiveUnderruns = 0;
               return;
             }
 
@@ -217,10 +221,19 @@ export class AudioEngine {
           if (this.buffered < len) {
             outL.fill(0);
             if (outR) outR.fill(0);
-            this.playing = false;
             this.underruns++;
+            this.consecutiveUnderruns++;
+            // Only drop back to re-fill mode after 3 consecutive underruns
+            // (i.e. ~8ms of silence). A single late IQ chunk must not cause
+            // a 150ms hard rebuffer — that produces the audible pop/click.
+            if (this.consecutiveUnderruns >= 3) {
+              this.playing = false;
+              this.consecutiveUnderruns = 0;
+            }
             return true;
           }
+          // Underrun resolved — reset counter
+          this.consecutiveUnderruns = 0;
 
           // Adaptive rate control: adjust consumption rate to keep buffer
           // near the target level. This prevents both underruns and overflow

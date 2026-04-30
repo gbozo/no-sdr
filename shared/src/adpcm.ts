@@ -42,22 +42,25 @@ export class ImaAdpcmEncoder {
   private stepIndex = 0;
 
   /**
-   * Encode Int16Array PCM → Uint8Array ADPCM.
-   * Output length = ceil(input.length / 2).
+   * Encode Int16Array PCM → ADPCM nibbles.
+   * If `out` is provided (must be length >= ceil(pcm.length/2)), writes into it
+   * and returns a subarray view — zero allocation on the hot path.
+   * If omitted, allocates a new Uint8Array (legacy behaviour).
    */
-  encode(pcm: Int16Array): Uint8Array {
+  encode(pcm: Int16Array, out?: Uint8Array): Uint8Array {
     const len = pcm.length;
-    const out = new Uint8Array(Math.ceil(len / 2));
+    const outLen = Math.ceil(len / 2);
+    const buf = out && out.length >= outLen ? out : new Uint8Array(outLen);
 
     for (let i = 0; i < len; i++) {
       const nibble = this.encodeNibble(pcm[i]);
       if (i & 1) {
-        out[i >> 1] |= (nibble << 4);
+        buf[i >> 1] |= (nibble << 4);
       } else {
-        out[i >> 1] = nibble & 0x0f;
+        buf[i >> 1] = nibble & 0x0f;
       }
     }
-    return out;
+    return out && out.length >= outLen ? buf.subarray(0, outLen) : buf;
   }
 
   /** Reset encoder state (call on stream start or reconnect) */
@@ -169,6 +172,10 @@ const _fftAdpcmMaxSamples = 65536 + FFT_ADPCM_PAD;
 const _fftAdpcmInt16Scratch = new Int16Array(_fftAdpcmMaxSamples);
 // ADPCM output: ceil((totalSamples)/2) bytes + 4-byte header
 const _fftAdpcmOutScratch = new Uint8Array(4 + Math.ceil(_fftAdpcmMaxSamples / 2));
+// Per-frame ADPCM raw bytes scratch (encoder output before header prepend)
+const _fftAdpcmEncodeScratch = new Uint8Array(Math.ceil(_fftAdpcmMaxSamples / 2));
+// Singleton encoder — reset per frame, never re-constructed
+const _fftAdpcmEncoder = new ImaAdpcmEncoder();
 
 export function encodeFftAdpcm(
   fftData: Float32Array,
@@ -191,8 +198,9 @@ export function encodeFftAdpcm(
     int16Buf[FFT_ADPCM_PAD + i] = Math.max(-32768, Math.min(32767, Math.round(fftData[i] * 100)));
   }
 
-  const encoder = new ImaAdpcmEncoder();
-  const adpcm = encoder.encode(int16Buf);
+  const encoder = _fftAdpcmEncoder;
+  encoder.reset();
+  const adpcm = encoder.encode(int16Buf, _fftAdpcmEncodeScratch);
 
   // Write into scratch result buffer if it fits
   const resultLen = 4 + adpcm.length;
