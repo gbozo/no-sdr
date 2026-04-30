@@ -35,12 +35,14 @@ type activeDongle struct {
 
 // clientPipeline holds per-client IQ extraction state.
 type clientPipeline struct {
-	extractor *dsp.IqExtractor
-	adpcmEnc  *codec.ImaAdpcmEncoder
-	accumBuf  []int16 // 20ms accumulation buffer
-	accumPos  int
-	chunkSize int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
-	dongleID  string // which dongle this client is subscribed to
+	extractor    *dsp.IqExtractor
+	adpcmEnc     *codec.ImaAdpcmEncoder
+	opusPipeline *OpusPipeline // non-nil for opus/opus-hq clients
+	accumBuf     []int16       // 20ms accumulation buffer
+	accumPos     int
+	chunkSize    int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
+	iqCodec      string // "adpcm", "opus", "opus-hq"
+	dongleID     string // which dongle this client is subscribed to
 }
 
 // NewManager creates a new dongle pipeline manager.
@@ -226,7 +228,20 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 			continue
 		}
 
-		// Accumulate into 20ms chunks
+		// Opus pipeline path: demod + encode → send Opus packets
+		if cp.opusPipeline != nil {
+			results := cp.opusPipeline.Process(subBand)
+			for _, r := range results {
+				msg := ws.PackAudioOpusMessage(r.Packet, uint16(r.Samples), uint8(r.Channels))
+				m.wsMgr.SendTo(clientID, msg)
+				if r.RdsData != nil {
+					m.wsMgr.SendTo(clientID, ws.PackRDSMessage(r.RdsData))
+				}
+			}
+			continue
+		}
+
+		// ADPCM path: accumulate into 20ms chunks
 		remaining := subBand
 		for len(remaining) > 0 {
 			space := cp.chunkSize - cp.accumPos
@@ -314,8 +329,7 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 	case "mode":
 		m.handleMode(clientID, cmd)
 	case "codec":
-		// Client state already updated by ws.Client.UpdateFromCommand()
-		// No additional action needed — next broadcast uses new codec
+		m.handleCodecChange(clientID, cmd)
 	}
 }
 
@@ -419,7 +433,105 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 		rate := outputRateForMode(cmd.Mode)
 		cp.extractor.SetOutputSampleRate(rate)
 		m.updateChunkSize(cp)
+
+		// Update opus pipeline demodulator if active
+		if cp.opusPipeline != nil {
+			if err := cp.opusPipeline.SetMode(cmd.Mode); err != nil {
+				m.logger.Error("failed to set opus pipeline mode",
+					"clientID", clientID, "mode", cmd.Mode, "error", err)
+			}
+		}
+
 		m.logger.Debug("client mode updated", "clientID", clientID, "mode", cmd.Mode, "outputRate", rate)
+	}
+}
+
+// handleCodecChange handles IQ codec switching between adpcm and opus.
+func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
+	// Client state is updated by ws.Client.UpdateFromCommand() first.
+	// Here we handle the pipeline switch.
+	if cmd.IqCodec == "" {
+		return
+	}
+
+	m.mu.Lock()
+	cp, ok := m.clientPipelines[clientID]
+	m.mu.Unlock()
+
+	if !ok || cp == nil {
+		return
+	}
+
+	oldCodec := cp.iqCodec
+	newCodec := cmd.IqCodec
+
+	// No change needed
+	if oldCodec == newCodec {
+		return
+	}
+
+	isOldOpus := oldCodec == "opus" || oldCodec == "opus-hq"
+	isNewOpus := newCodec == "opus" || newCodec == "opus-hq"
+
+	if !isOldOpus && isNewOpus {
+		// Switching from ADPCM to Opus: create OpusPipeline
+		client := m.wsMgr.GetClient(clientID)
+		mode := ""
+		if client != nil {
+			mode = client.Mode
+		}
+		if mode == "" {
+			mode = "nfm"
+		}
+
+		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
+			Mode:       mode,
+			SampleRate: cp.extractor.OutputSampleRate(),
+			Quality:    newCodec,
+		})
+		if err != nil {
+			m.logger.Error("failed to create opus pipeline on codec switch",
+				"clientID", clientID, "error", err)
+			return
+		}
+
+		m.mu.Lock()
+		cp.opusPipeline = pipeline
+		cp.iqCodec = newCodec
+		m.mu.Unlock()
+
+		m.logger.Info("switched to opus pipeline", "clientID", clientID, "codec", newCodec)
+
+	} else if isOldOpus && !isNewOpus {
+		// Switching from Opus to ADPCM: destroy OpusPipeline
+		m.mu.Lock()
+		if cp.opusPipeline != nil {
+			cp.opusPipeline.Close()
+			cp.opusPipeline = nil
+		}
+		cp.iqCodec = newCodec
+		// Reset ADPCM state
+		cp.adpcmEnc.Reset()
+		cp.accumPos = 0
+		m.mu.Unlock()
+
+		m.logger.Info("switched to adpcm pipeline", "clientID", clientID, "codec", newCodec)
+
+	} else if isOldOpus && isNewOpus && oldCodec != newCodec {
+		// Switching between opus and opus-hq: just update bitrate
+		m.mu.Lock()
+		if cp.opusPipeline != nil {
+			channels := cp.opusPipeline.Channels()
+			newBitrate := bitrateForQuality(newCodec, channels)
+			if err := cp.opusPipeline.encoder.SetBitrate(newBitrate); err != nil {
+				m.logger.Error("failed to update opus bitrate",
+					"clientID", clientID, "error", err)
+			}
+		}
+		cp.iqCodec = newCodec
+		m.mu.Unlock()
+
+		m.logger.Info("switched opus quality", "clientID", clientID, "codec", newCodec)
 	}
 }
 
@@ -480,13 +592,36 @@ func (m *Manager) createClientPipeline(clientID string) {
 	// 20ms chunk size: outputRate * 2 channels * 0.020 seconds
 	chunkSize := int(float64(ext.OutputSampleRate()) * 2.0 * 0.020)
 
+	// Determine IQ codec
+	iqCodec := client.IqCodec
+	if iqCodec == "" {
+		iqCodec = "adpcm"
+	}
+
 	cp := &clientPipeline{
 		extractor: ext,
 		adpcmEnc:  codec.NewImaAdpcmEncoder(),
 		accumBuf:  make([]int16, chunkSize),
 		accumPos:  0,
 		chunkSize: chunkSize,
+		iqCodec:   iqCodec,
 		dongleID:  dongleID,
+	}
+
+	// Create Opus pipeline if codec is opus or opus-hq
+	if iqCodec == "opus" || iqCodec == "opus-hq" {
+		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
+			Mode:       mode,
+			SampleRate: ext.OutputSampleRate(),
+			Quality:    iqCodec,
+		})
+		if err != nil {
+			m.logger.Error("failed to create opus pipeline, falling back to adpcm",
+				"clientID", clientID, "error", err)
+			cp.iqCodec = "adpcm"
+		} else {
+			cp.opusPipeline = pipeline
+		}
 	}
 
 	m.mu.Lock()
@@ -500,19 +635,24 @@ func (m *Manager) createClientPipeline(clientID string) {
 		"outputRate", ext.OutputSampleRate(),
 		"factor", ext.DecimationFactor(),
 		"chunkSize", chunkSize,
+		"iqCodec", cp.iqCodec,
 	)
 }
 
 // destroyClientPipeline removes and cleans up a client's IQ extraction pipeline.
 func (m *Manager) destroyClientPipeline(clientID string) {
 	m.mu.Lock()
-	_, ok := m.clientPipelines[clientID]
+	cp, ok := m.clientPipelines[clientID]
 	if ok {
 		delete(m.clientPipelines, clientID)
 	}
 	m.mu.Unlock()
 
 	if ok {
+		// Clean up opus pipeline resources
+		if cp.opusPipeline != nil {
+			cp.opusPipeline.Close()
+		}
 		m.logger.Info("destroyed client IQ pipeline", "clientID", clientID)
 	}
 }
