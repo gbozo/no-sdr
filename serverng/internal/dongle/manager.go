@@ -34,7 +34,8 @@ type activeDongle struct {
 	dongleCfg  *config.DongleConfig
 	source     Source // interface — DemoSource, RtlTcpSource, etc.
 	fftProc    *dsp.FftProcessor
-	deflateEnc *codec.FftDeflateEncoder
+	deflateEnc    *codec.FftDeflateEncoder
+	deflateFloorEnc *codec.FftDeflateEncoder
 	cancel     context.CancelFunc
 }
 
@@ -138,6 +139,7 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 
 	// Create deflate encoder (reusable, pools internal buffers)
 	deflateEnc := codec.NewFftDeflateEncoder(profile.FftSize)
+	deflateFloorEnc := codec.NewFftDeflateEncoder(profile.FftSize)
 
 	ctx, cancel := context.WithCancel(parentCtx)
 
@@ -154,7 +156,8 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 		dongleCfg:  dcfg,
 		source:     source,
 		fftProc:    fftProc,
-		deflateEnc: deflateEnc,
+		deflateEnc:      deflateEnc,
+		deflateFloorEnc: deflateFloorEnc,
 		cancel:     cancel,
 	}
 
@@ -344,6 +347,7 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 		m.mu.Lock()
 		d.fftProc = fftProc
 		d.deflateEnc = codec.NewFftDeflateEncoder(newProfile.FftSize)
+		d.deflateFloorEnc = codec.NewFftDeflateEncoder(newProfile.FftSize)
 		m.mu.Unlock()
 	}
 
@@ -493,6 +497,7 @@ func (m *Manager) broadcastFftFrame(d *activeDongle, fftFrame []float32) {
 
 	// Lazy-encoded messages per codec type
 	var deflateMsg []byte
+	var deflateFloorMsg []byte
 	var adpcmMsg []byte
 	var uint8Msg []byte
 
@@ -513,19 +518,30 @@ func (m *Manager) broadcastFftFrame(d *activeDongle, fftFrame []float32) {
 	for _, client := range clients {
 		var msg []byte
 		switch client.FftCodec {
-		case "deflate", "deflate-floor":
+		case "deflate":
 			if deflateMsg == nil {
 				payload, err := d.deflateEnc.EncodePayload(fftFrame, minDb, maxDb)
 				if err != nil {
 					m.logger.Error("deflate encode error", "error", err, "dongle", d.id)
 					continue
 				}
-				// Prepend type byte 0x0B
 				deflateMsg = make([]byte, 1+len(payload))
 				deflateMsg[0] = ws.MsgFFTDeflate
 				copy(deflateMsg[1:], payload)
 			}
 			msg = deflateMsg
+		case "deflate-floor":
+			if deflateFloorMsg == nil {
+				payload, err := d.deflateFloorEnc.EncodePayloadFloor(fftFrame, minDb, maxDb)
+				if err != nil {
+					m.logger.Error("deflate-floor encode error", "error", err, "dongle", d.id)
+					continue
+				}
+				deflateFloorMsg = make([]byte, 1+len(payload))
+				deflateFloorMsg[0] = ws.MsgFFTDeflate
+				copy(deflateFloorMsg[1:], payload)
+			}
+			msg = deflateFloorMsg
 		case "adpcm":
 			if adpcmMsg == nil {
 				adpcmMsg = ws.PackFFTAdpcmMessage(codec.EncodeFftAdpcm(fftFrame, minDb, maxDb))
