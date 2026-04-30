@@ -17,6 +17,11 @@ var startTime = time.Now()
 
 // NewRouter creates the chi router with all routes.
 func NewRouter(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string) http.Handler {
+	return NewRouterWithPath(wsMgr, cfg, logger, staticDir, "")
+}
+
+// NewRouterWithPath creates the chi router with all routes including admin config save support.
+func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string, cfgPath string) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -24,13 +29,42 @@ func NewRouter(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, stati
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 
-	// WebSocket upgrade
-	r.Get("/ws", wsMgr.HandleUpgrade)
+	// Rate limiter for WebSocket connections
+	wsRateLimiter := ws.NewRateLimiter(10)
+	wsMgr.SetRateLimiter(wsRateLimiter)
+
+	// WebSocket upgrade with rate limiting
+	r.Group(func(r chi.Router) {
+		r.Use(wsRateLimiter.Middleware)
+		r.Get("/ws", wsMgr.HandleUpgrade)
+	})
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/status", statusHandler(wsMgr))
 		r.Get("/dongles", donglesHandler(cfg, wsMgr))
+	})
+
+	// Admin routes
+	adminAuth := NewAdminAuth(cfg.Server.AdminPassword)
+	r.Route("/api/admin", func(r chi.Router) {
+		r.Post("/login", adminAuth.Login)
+		r.Post("/logout", adminAuth.Logout)
+		r.Get("/check", adminAuth.IsAuthenticated)
+
+		// Protected routes
+		r.Group(func(r chi.Router) {
+			r.Use(adminAuth.CheckAuth)
+			r.Get("/dongles", adminDonglesHandler(cfg, wsMgr))
+			r.Post("/dongles", createDongleHandler(cfg))
+			r.Put("/dongles/{id}", updateDongleHandler(cfg))
+			r.Delete("/dongles/{id}", deleteDongleHandler(cfg))
+			r.Post("/dongles/{id}/profiles", createProfileHandler(cfg))
+			r.Put("/dongles/{id}/profiles/{profileId}", updateProfileHandler(cfg))
+			r.Delete("/dongles/{id}/profiles/{profileId}", deleteProfileHandler(cfg))
+			r.Put("/dongles/{id}/profiles-order", reorderProfilesHandler(cfg))
+			r.Post("/config/save", saveConfigHandler(cfg, cfgPath))
+		})
 	})
 
 	// Health check

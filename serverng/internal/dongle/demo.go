@@ -160,6 +160,11 @@ func (d *DemoSource) generateChunk(samples int, rng *rand.Rand) []byte {
 	return buf
 }
 
+// Close is a no-op for the demo source (satisfies Source interface).
+func (d *DemoSource) Close() error {
+	return nil
+}
+
 // SampleRate returns the configured sample rate.
 func (d *DemoSource) SampleRate() int {
 	return d.sampleRate

@@ -14,10 +14,12 @@ import (
 // Manager handles WebSocket client connections and broadcasting.
 type Manager struct {
 	clients      map[string]*Client
+	clientIPs    map[string]string // clientID -> IP address
 	mu           sync.RWMutex
 	logger       *slog.Logger
 	onCommand    func(clientID string, cmd *ClientCommand)
 	onDisconnect func(clientID string)
+	rateLimiter  *RateLimiter
 }
 
 // NewManager creates a new WebSocket connection manager.
@@ -26,9 +28,17 @@ func NewManager(logger *slog.Logger) *Manager {
 		logger = slog.Default()
 	}
 	return &Manager{
-		clients: make(map[string]*Client),
-		logger:  logger,
+		clients:   make(map[string]*Client),
+		clientIPs: make(map[string]string),
+		logger:    logger,
 	}
+}
+
+// SetRateLimiter sets the rate limiter for tracking connection IPs.
+func (m *Manager) SetRateLimiter(rl *RateLimiter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rateLimiter = rl
 }
 
 // SetCommandHandler registers a callback for client commands.
@@ -63,6 +73,11 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	// connection outlives the HTTP request context.
 	ctx, cancel := context.WithCancel(context.Background())
 	client := newClient(clientID, conn, ctx, cancel)
+
+	// Track client IP for rate limiter release on disconnect
+	m.mu.Lock()
+	m.clientIPs[clientID] = r.RemoteAddr
+	m.mu.Unlock()
 
 	m.addClient(client)
 	m.logger.Info("client connected", "id", clientID, "remote", r.RemoteAddr)
@@ -152,16 +167,24 @@ func (m *Manager) addClient(c *Client) {
 func (m *Manager) removeClient(clientID string) {
 	m.mu.Lock()
 	client, ok := m.clients[clientID]
+	ip := m.clientIPs[clientID]
 	if ok {
 		delete(m.clients, clientID)
+		delete(m.clientIPs, clientID)
 	}
 	handler := m.onDisconnect
+	rl := m.rateLimiter
 	m.mu.Unlock()
 
 	if ok {
 		client.cancel()
 		client.conn.Close(websocket.StatusNormalClosure, "")
 		m.logger.Info("client disconnected", "id", clientID)
+
+		// Release rate limiter slot
+		if rl != nil && ip != "" {
+			rl.Release(ip)
+		}
 
 		if handler != nil {
 			handler(clientID)

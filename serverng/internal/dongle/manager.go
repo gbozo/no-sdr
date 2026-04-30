@@ -2,6 +2,7 @@ package dongle
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -27,7 +28,8 @@ type Manager struct {
 type activeDongle struct {
 	id         string
 	profile    *config.DongleProfile
-	source     *DemoSource
+	dongleCfg  *config.DongleConfig
+	source     Source // interface — DemoSource, RtlTcpSource, etc.
 	fftProc    *dsp.FftProcessor
 	deflateEnc *codec.FftDeflateEncoder
 	cancel     context.CancelFunc
@@ -94,6 +96,9 @@ func (m *Manager) Stop() {
 	for id, d := range m.dongles {
 		m.logger.Info("stopping dongle", "id", id)
 		d.cancel()
+		if d.source != nil {
+			d.source.Close()
+		}
 		delete(m.dongles, id)
 	}
 
@@ -131,16 +136,19 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 	// Create deflate encoder (reusable, pools internal buffers)
 	deflateEnc := codec.NewFftDeflateEncoder(profile.FftSize)
 
-	// Create demo source
-	source := NewDemoSource(DemoConfig{
-		SampleRate: sampleRate,
-	})
-
 	ctx, cancel := context.WithCancel(parentCtx)
+
+	// Create the appropriate source based on config
+	source, err := m.createSource(ctx, dcfg, profile)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("create source for dongle %s: %w", dcfg.ID, err)
+	}
 
 	ad := &activeDongle{
 		id:         dcfg.ID,
 		profile:    profile,
+		dongleCfg:  dcfg,
 		source:     source,
 		fftProc:    fftProc,
 		deflateEnc: deflateEnc,
@@ -154,6 +162,7 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 	m.logger.Info("starting dongle pipeline",
 		"id", dcfg.ID,
 		"profile", profile.ID,
+		"source", dcfg.Source.Type,
 		"sampleRate", sampleRate,
 		"fftSize", profile.FftSize,
 		"fftFps", profile.FftFps,
@@ -165,13 +174,216 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 	return nil
 }
 
+// createSource instantiates the appropriate IQ source based on config.
+func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, profile *config.DongleProfile) (Source, error) {
+	sourceType := dcfg.Source.Type
+	if sourceType == "" {
+		sourceType = "demo" // default to demo if not specified
+	}
+
+	sampleRate := profile.SampleRate
+	if sampleRate <= 0 {
+		sampleRate = dcfg.SampleRate
+	}
+	if sampleRate <= 0 {
+		sampleRate = 2400000
+	}
+
+	logger := m.logger.With("dongle", dcfg.ID, "source", sourceType)
+
+	switch sourceType {
+	case "demo":
+		return NewDemoSource(DemoConfig{SampleRate: sampleRate}), nil
+
+	case "rtl_tcp":
+		src := NewRtlTcpSource(RtlTcpConfig{
+			Host:   dcfg.Source.Host,
+			Port:   dcfg.Source.Port,
+			Logger: logger,
+		})
+		if err := src.Connect(ctx); err != nil {
+			return nil, fmt.Errorf("rtl_tcp connect: %w", err)
+		}
+		m.applyDongleSettings(src, dcfg, profile)
+		return src, nil
+
+	case "airspy_tcp":
+		src := NewAirspyTcpSource(RtlTcpConfig{
+			Host:   dcfg.Source.Host,
+			Port:   dcfg.Source.Port,
+			Logger: logger,
+		})
+		if err := src.Connect(ctx); err != nil {
+			return nil, fmt.Errorf("airspy_tcp connect: %w", err)
+		}
+		m.applyDongleSettings(src.RtlTcpSource, dcfg, profile)
+		return src, nil
+
+	case "hfp_tcp":
+		src := NewHfpTcpSource(RtlTcpConfig{
+			Host:   dcfg.Source.Host,
+			Port:   dcfg.Source.Port,
+			Logger: logger,
+		})
+		if err := src.Connect(ctx); err != nil {
+			return nil, fmt.Errorf("hfp_tcp connect: %w", err)
+		}
+		m.applyDongleSettings(src.RtlTcpSource, dcfg, profile)
+		return src, nil
+
+	case "rsp_tcp":
+		src := NewRspTcpSource(RtlTcpConfig{
+			Host:   dcfg.Source.Host,
+			Port:   dcfg.Source.Port,
+			Logger: logger,
+		})
+		if err := src.Connect(ctx); err != nil {
+			return nil, fmt.Errorf("rsp_tcp connect: %w", err)
+		}
+		m.applyDongleSettings(src.RtlTcpSource, dcfg, profile)
+		return src, nil
+
+	case "local":
+		src := NewRtlSdrSource(RtlSdrConfig{
+			DeviceIndex: dcfg.Source.DeviceIndex,
+			Logger:      logger,
+		})
+		if err := src.Open(); err != nil {
+			return nil, fmt.Errorf("local rtlsdr: %w", err)
+		}
+		return src, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported source type: %s", sourceType)
+	}
+}
+
+// applyDongleSettings sends initial configuration commands to an rtl_tcp-compatible source.
+func (m *Manager) applyDongleSettings(src *RtlTcpSource, dcfg *config.DongleConfig, profile *config.DongleProfile) {
+	src.SetFrequency(uint32(profile.CenterFrequency))
+	src.SetSampleRate(uint32(profile.SampleRate))
+
+	if dcfg.Gain > 0 {
+		src.SetGainMode(1) // manual gain
+		src.SetGain(uint32(dcfg.Gain * 10)) // tenths of dB
+	}
+	if dcfg.PPM != 0 {
+		src.SetFrequencyCorrection(uint32(dcfg.PPM))
+	}
+	if dcfg.DirectSampling > 0 {
+		src.SetDirectSampling(uint32(dcfg.DirectSampling))
+	}
+	if dcfg.BiasT {
+		src.SetBiasT(1)
+	}
+	if dcfg.DigitalAgc {
+		src.SetAgcMode(1)
+	}
+	if dcfg.OffsetTuning {
+		src.SetOffsetTuning(1)
+	}
+}
+
+// SwitchProfile switches the active profile on a running dongle.
+// If the source is CommandableSource, it sends new frequency/rate/gain commands.
+// Rebuilds the FFT processor if fftSize changed. Notifies all subscribed clients.
+func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
+	m.mu.Lock()
+	d, ok := m.dongles[dongleID]
+	m.mu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("dongle %s not found or not running", dongleID)
+	}
+
+	// Find the profile in the dongle config
+	var newProfile *config.DongleProfile
+	for i := range d.dongleCfg.Profiles {
+		if d.dongleCfg.Profiles[i].ID == profileID {
+			newProfile = &d.dongleCfg.Profiles[i]
+			break
+		}
+	}
+	if newProfile == nil {
+		return fmt.Errorf("profile %s not found in dongle %s", profileID, dongleID)
+	}
+
+	// If source supports commands, send new frequency/rate/gain
+	if cs, ok := d.source.(CommandableSource); ok {
+		cs.SetFrequency(uint32(newProfile.CenterFrequency))
+		if newProfile.SampleRate > 0 {
+			cs.SetSampleRate(uint32(newProfile.SampleRate))
+		}
+	}
+
+	// Rebuild FFT processor if fftSize changed
+	oldFftSize := d.profile.FftSize
+	if newProfile.FftSize != oldFftSize && newProfile.FftSize > 0 {
+		sampleRate := newProfile.SampleRate
+		if sampleRate <= 0 {
+			sampleRate = d.dongleCfg.SampleRate
+		}
+		if sampleRate <= 0 {
+			sampleRate = 2400000
+		}
+
+		fftProc, err := dsp.NewFftProcessor(dsp.FftProcessorConfig{
+			FftSize:    newProfile.FftSize,
+			SampleRate: sampleRate,
+			Window:     "blackman-harris",
+			Averaging:  0.5,
+			TargetFps:  newProfile.FftFps,
+		})
+		if err != nil {
+			return fmt.Errorf("rebuild FFT processor: %w", err)
+		}
+
+		m.mu.Lock()
+		d.fftProc = fftProc
+		d.deflateEnc = codec.NewFftDeflateEncoder(newProfile.FftSize)
+		m.mu.Unlock()
+	}
+
+	// Update the active profile
+	m.mu.Lock()
+	d.profile = newProfile
+	m.mu.Unlock()
+
+	// Notify all subscribed clients with new META message
+	clients := m.wsMgr.SubscribedClients(dongleID)
+	meta := &ws.ServerMeta{
+		CenterFrequency: float64(newProfile.CenterFrequency),
+		SampleRate:      newProfile.SampleRate,
+		FftSize:         newProfile.FftSize,
+		FftFps:          newProfile.FftFps,
+		Mode:            newProfile.Mode,
+		Bandwidth:       newProfile.Bandwidth,
+		DongleId:        dongleID,
+		ProfileId:       newProfile.ID,
+		TuneOffset:      newProfile.TuneOffset,
+		TuningStep:      newProfile.TuningStep,
+	}
+	metaMsg := ws.PackMetaMessage(meta)
+	for _, client := range clients {
+		m.wsMgr.SendTo(client.ID, metaMsg)
+	}
+
+	m.logger.Info("switched dongle profile",
+		"dongleID", dongleID,
+		"profileID", profileID,
+		"centerFreq", newProfile.CenterFrequency,
+	)
+
+	return nil
+}
+
 // runDongle is the main pipeline loop for a single dongle.
 // Runs in its own goroutine.
 func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
-	// IQ data channel from the demo source
+	// IQ data channel from the source
 	iqCh := make(chan []byte, 16)
 
-	// Start the demo source in its own goroutine
+	// Start the source in its own goroutine
 	go d.source.Run(ctx, iqCh)
 
 	for {
