@@ -359,6 +359,7 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 	// Notify all subscribed clients with new META message
 	clients := m.wsMgr.SubscribedClients(dongleID)
 	meta := &ws.ServerMeta{
+		Type:            "profile_changed",
 		CenterFrequency: float64(newProfile.CenterFrequency),
 		SampleRate:      newProfile.SampleRate,
 		FftSize:         newProfile.FftSize,
@@ -607,6 +608,7 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 	profile := d.profile
 
 	meta := &ws.ServerMeta{
+		Type:            "subscribed",
 		CenterFrequency: float64(profile.CenterFrequency),
 		SampleRate:      profile.SampleRate,
 		FftSize:         profile.FftSize,

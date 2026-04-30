@@ -31,6 +31,7 @@ const (
 
 // ServerMeta holds metadata sent to a connected client.
 type ServerMeta struct {
+	Type            string  `json:"type"`
 	CenterFrequency float64 `json:"centerFrequency"`
 	SampleRate      int     `json:"sampleRate"`
 	FftSize         int     `json:"fftSize"`
@@ -60,6 +61,25 @@ type ClientCommand struct {
 // PackMetaMessage packs a ServerMeta as a binary message: [0x03][UTF-8 JSON]
 func PackMetaMessage(meta *ServerMeta) []byte {
 	jsonBytes, _ := json.Marshal(meta)
+	buf := make([]byte, 1+len(jsonBytes))
+	buf[0] = MsgMeta
+	copy(buf[1:], jsonBytes)
+	return buf
+}
+
+// PackCodecStatusMessage sends codec fallback info to the client as META.
+// The client reads this as a meta message with type "codec_status".
+func PackCodecStatusMessage(status *CodecStatus) []byte {
+	msg := map[string]any{"type": "codec_status"}
+	if status.FftCodec != "" {
+		msg["fftCodec"] = status.FftCodec
+		msg["fftMsg"] = status.FftMsg
+	}
+	if status.IqCodec != "" {
+		msg["iqCodec"] = status.IqCodec
+		msg["iqMsg"] = status.IqMsg
+	}
+	jsonBytes, _ := json.Marshal(msg)
 	buf := make([]byte, 1+len(jsonBytes))
 	buf[0] = MsgMeta
 	copy(buf[1:], jsonBytes)

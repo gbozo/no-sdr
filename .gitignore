@@ -42,3 +42,4 @@ graphify-out/cost.json
 # Serena
 .serena/
 scripts/*.bin
+serverng/tmp/

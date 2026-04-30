@@ -36,14 +36,15 @@ type Client struct {
 }
 
 // newClient creates a new Client with the given connection and ID.
+// Codec defaults are empty — server uses "none" (uint8 FFT) until client sends preferences.
 func newClient(id string, conn *websocket.Conn, ctx context.Context, cancel context.CancelFunc) *Client {
 	return &Client{
 		ID:       id,
 		conn:     conn,
 		ctx:      ctx,
 		cancel:   cancel,
-		FftCodec: "deflate",
-		IqCodec:  "adpcm",
+		FftCodec: "",  // empty = "none" — client sends preferred codec after subscribe
+		IqCodec:  "",  // empty = "none" — client sends preferred codec after subscribe
 		writeCh:  make(chan []byte, DefaultWriteChSize),
 	}
 }
@@ -72,8 +73,17 @@ func (c *Client) Close() {
 	c.cancel()
 }
 
+// Supported codec values
+var validFftCodecs = map[string]bool{
+	"none": true, "adpcm": true, "deflate": true, "deflate-floor": true,
+}
+var validIqCodecs = map[string]bool{
+	"none": true, "adpcm": true, "opus": true, "opus-hq": true,
+}
+
 // UpdateFromCommand applies a client command to the client's state.
-func (c *Client) UpdateFromCommand(cmd *ClientCommand) {
+// Returns a codec_status message if codec was changed or rejected, nil otherwise.
+func (c *Client) UpdateFromCommand(cmd *ClientCommand) *CodecStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -91,15 +101,44 @@ func (c *Client) UpdateFromCommand(cmd *ClientCommand) {
 	case "bandwidth":
 		c.Bandwidth = cmd.Hz
 	case "codec":
+		var status *CodecStatus
 		if cmd.FftCodec != "" {
-			c.FftCodec = cmd.FftCodec
+			if validFftCodecs[cmd.FftCodec] {
+				c.FftCodec = cmd.FftCodec
+			} else {
+				// Unknown FFT codec — fallback to "none" (uint8 compressed)
+				c.FftCodec = "none"
+				status = &CodecStatus{
+					FftCodec: "none",
+					FftMsg:   "unsupported fftCodec '" + cmd.FftCodec + "', using 'none'",
+				}
+			}
 		}
 		if cmd.IqCodec != "" {
-			c.IqCodec = cmd.IqCodec
+			if validIqCodecs[cmd.IqCodec] {
+				c.IqCodec = cmd.IqCodec
+			} else {
+				c.IqCodec = "none"
+				if status == nil {
+					status = &CodecStatus{}
+				}
+				status.IqCodec = "none"
+				status.IqMsg = "unsupported iqCodec '" + cmd.IqCodec + "', using 'none'"
+			}
 		}
+		return status
 	case "audio_enabled":
 		if cmd.Enabled != nil {
 			c.AudioEnabled = *cmd.Enabled
 		}
 	}
+	return nil
+}
+
+// CodecStatus is sent back to the client when a codec is rejected or confirmed.
+type CodecStatus struct {
+	FftCodec string `json:"fftCodec,omitempty"`
+	FftMsg   string `json:"fftMsg,omitempty"`
+	IqCodec  string `json:"iqCodec,omitempty"`
+	IqMsg    string `json:"iqMsg,omitempty"`
 }

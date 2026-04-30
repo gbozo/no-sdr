@@ -219,7 +219,13 @@ func (m *Manager) readLoop(c *Client) {
 		}
 
 		// Update client state
-		c.UpdateFromCommand(cmd)
+		codecStatus := c.UpdateFromCommand(cmd)
+
+		// If codec was rejected, send status back to client
+		if codecStatus != nil {
+			statusMsg := PackCodecStatusMessage(codecStatus)
+			c.Send(statusMsg)
+		}
 
 		// Dispatch to external handler
 		m.mu.RLock()

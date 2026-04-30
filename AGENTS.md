@@ -91,9 +91,10 @@ Dev runs 3 processes: shared tsc watch, server tsx (port 3000), client vite (por
 
 ## Git Rules
 
-1. **Never commit/push** unless explicitly instructed
-2. **"Wrap up"** = update TODO.md + commit + push (no release)
-3. Commit format: `<type>(<scope>): <summary>` (feat/fix/refactor/chore/docs/test/perf)
+1. **Never commit or push** unless explicitly instructed in that message (e.g. "commit", "commit and push"). Working on code does NOT imply permission to commit.
+2. **"Wrap up"** is the only shorthand: update TODO.md with changes → `git commit` → `git push`. No release.
+3. **Never create a GitHub release** unless separately instructed.
+4. Commit format: `<type>(<scope>): <summary>` (feat/fix/refactor/chore/docs/test/perf)
 
 ## Known Issues
 

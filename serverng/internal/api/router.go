@@ -43,6 +43,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/status", statusHandler(wsMgr))
 		r.Get("/dongles", donglesHandler(cfg, wsMgr))
+		r.Get("/dongles/{id}/profiles", dongleProfilesHandler(cfg))
 	})
 
 	// Admin routes
@@ -155,6 +156,34 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// dongleProfilesHandler returns profiles for a specific dongle.
+func dongleProfilesHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dongleID := chi.URLParam(r, "id")
+		for _, d := range cfg.Dongles {
+			if d.ID == dongleID {
+				var profiles []profileResponse
+				for _, p := range d.Profiles {
+					profiles = append(profiles, profileResponse{
+						ID:              p.ID,
+						Name:            p.Name,
+						CenterFrequency: p.CenterFrequency,
+						SampleRate:      p.SampleRate,
+						Bandwidth:       p.Bandwidth,
+						Mode:            p.Mode,
+						Gain:            p.Gain,
+						FftSize:         p.FftSize,
+						FftFps:          p.FftFps,
+					})
+				}
+				writeJSON(w, http.StatusOK, profiles)
+				return
+			}
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dongle not found"})
+	}
 }
 
 // corsMiddleware adds CORS headers for development.
