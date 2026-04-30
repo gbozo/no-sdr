@@ -1,0 +1,291 @@
+package dsp
+
+import (
+	"errors"
+	"math"
+	"time"
+)
+
+// FftProcessorConfig configures the FFT processor pipeline.
+type FftProcessorConfig struct {
+	FftSize    int     // power of 2
+	SampleRate int     // dongle sample rate
+	Window     string  // "blackman-harris", "hann", "hamming"
+	Averaging  float32 // 0 = no averaging, 0.9 = heavy smoothing
+	TargetFps  int     // output frame rate cap (0 = unlimited). Typical: 30.
+}
+
+// FftProcessor accumulates raw uint8 IQ data, applies windowing + FFT,
+// computes magnitude in dB with averaging, and rate-caps output frames.
+type FftProcessor struct {
+	fftSize    int
+	sampleRate int
+	averaging  float32
+	targetFps  int
+	windowName string
+
+	// DSP core
+	fft       *FFT
+	window    []float32
+	normDbVal float32
+
+	// Pre-allocated work buffers (zero alloc in hot path)
+	complexBuf []float32 // interleaved complex input/output, length 2*fftSize
+	magBuf     []float32 // magnitude output, length fftSize
+	avgBuf     []float32 // exponential averaging state, length fftSize (nil if averaging==0)
+	avgInit    bool       // whether avgBuf has been initialized with first frame
+
+	// Ring buffer accumulator
+	ringBuf     []byte
+	ringFill    int
+	samplesNeed int // fftSize * 2 bytes
+
+	// Rate cap state
+	minInterval time.Duration
+	lastEmit    time.Time
+	pendingBuf  []float32 // accumulated frame for rate cap, length fftSize
+	pendingN    int       // number of frames accumulated into pendingBuf
+}
+
+// NewFftProcessor creates a new FFT processor with fully pre-allocated buffers.
+func NewFftProcessor(cfg FftProcessorConfig) (*FftProcessor, error) {
+	if cfg.FftSize < 4 || cfg.FftSize&(cfg.FftSize-1) != 0 {
+		return nil, errors.New("fft_processor: fftSize must be a power of 2 and >= 4")
+	}
+	if cfg.Window == "" {
+		cfg.Window = "blackman-harris"
+	}
+	if cfg.Averaging < 0 {
+		cfg.Averaging = 0
+	}
+	if cfg.Averaging > 1 {
+		cfg.Averaging = 1
+	}
+
+	fft, err := NewFFT(cfg.FftSize)
+	if err != nil {
+		return nil, err
+	}
+
+	win, err := NewWindow(cfg.Window, cfg.FftSize)
+	if err != nil {
+		return nil, err
+	}
+
+	p := &FftProcessor{
+		fftSize:    cfg.FftSize,
+		sampleRate: cfg.SampleRate,
+		averaging:  cfg.Averaging,
+		targetFps:  cfg.TargetFps,
+		windowName: cfg.Window,
+		fft:        fft,
+		window:     win,
+	}
+
+	p.normDbVal = p.computeNormalization()
+	p.samplesNeed = cfg.FftSize * 2
+
+	// Pre-allocate all buffers
+	p.complexBuf = make([]float32, 2*cfg.FftSize)
+	p.magBuf = make([]float32, cfg.FftSize)
+	p.ringBuf = make([]byte, cfg.FftSize*2*4) // 4 frames of headroom
+	p.ringFill = 0
+	p.pendingBuf = make([]float32, cfg.FftSize)
+	p.pendingN = 0
+
+	if cfg.Averaging > 0 {
+		p.avgBuf = make([]float32, cfg.FftSize)
+		p.avgInit = false
+	}
+
+	// Rate cap
+	if cfg.TargetFps > 0 {
+		p.minInterval = time.Second / time.Duration(cfg.TargetFps)
+	}
+
+	return p, nil
+}
+
+// ProcessIqData accepts raw uint8 IQ data (interleaved I,Q,I,Q...)
+// and returns zero or more FFT magnitude frames ([]float32 in dB, length = FftSize).
+// May return 0 frames if rate cap hasn't elapsed or insufficient data accumulated.
+// The returned slices are owned by the caller (copied from internal buffers).
+func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
+	// Append into ring buffer
+	needed := p.ringFill + len(data)
+	if needed > len(p.ringBuf) {
+		// Grow ring buffer (rare path)
+		newBuf := make([]byte, needed*2)
+		copy(newBuf, p.ringBuf[:p.ringFill])
+		p.ringBuf = newBuf
+	}
+	copy(p.ringBuf[p.ringFill:], data)
+	p.ringFill += len(data)
+
+	var emitted [][]float32
+	now := time.Now()
+
+	consumed := 0
+	for p.ringFill-consumed >= p.samplesNeed {
+		p.processOneFrame(p.ringBuf[consumed : consumed+p.samplesNeed])
+		consumed += p.samplesNeed
+
+		if p.minInterval <= 0 {
+			// No rate cap — emit every frame
+			frame := make([]float32, p.fftSize)
+			copy(frame, p.magBuf)
+			emitted = append(emitted, frame)
+			continue
+		}
+
+		// Rate-capped: accumulate into pending frame
+		if p.pendingN == 0 {
+			copy(p.pendingBuf, p.magBuf)
+			p.pendingN = 1
+		} else {
+			p.pendingN++
+			n := float32(p.pendingN)
+			for i := 0; i < p.fftSize; i++ {
+				p.pendingBuf[i] += (p.magBuf[i] - p.pendingBuf[i]) / n
+			}
+		}
+
+		if now.Sub(p.lastEmit) >= p.minInterval {
+			frame := make([]float32, p.fftSize)
+			copy(frame, p.pendingBuf)
+			emitted = append(emitted, frame)
+			p.pendingN = 0
+			p.lastEmit = now
+		}
+	}
+
+	// Compact ring buffer: move remainder to front
+	if consumed > 0 {
+		if consumed < p.ringFill {
+			copy(p.ringBuf, p.ringBuf[consumed:p.ringFill])
+		}
+		p.ringFill -= consumed
+	}
+
+	return emitted
+}
+
+// processOneFrame converts one FFT-sized chunk of uint8 IQ into magnitude dB.
+// Result is written into p.magBuf. Zero allocations.
+func (p *FftProcessor) processOneFrame(rawIq []byte) {
+	fftSize := p.fftSize
+	win := p.window
+	buf := p.complexBuf
+
+	// Convert uint8 IQ -> float32 [-1,+1] with windowing in one pass
+	for i := 0; i < fftSize; i++ {
+		w := win[i]
+		buf[i*2] = (float32(rawIq[i*2]) - 127.5) / 127.5 * w
+		buf[i*2+1] = (float32(rawIq[i*2+1]) - 127.5) / 127.5 * w
+	}
+
+	// In-place FFT
+	p.fft.Transform(buf)
+
+	// Compute magnitude in dB with FFT-shift (DC in center)
+	half := fftSize >> 1
+	normDb := p.normDbVal
+	mag := p.magBuf
+
+	for i := 0; i < fftSize; i++ {
+		srcIdx := (i + half) & (fftSize - 1)
+		re := buf[srcIdx*2]
+		im := buf[srcIdx*2+1]
+		power := re*re + im*im
+		if power < 1e-20 {
+			power = 1e-20
+		}
+		mag[i] = float32(10*math.Log10(float64(power))) - normDb
+	}
+
+	// Exponential averaging
+	if p.averaging > 0 {
+		if !p.avgInit {
+			copy(p.avgBuf, mag)
+			p.avgInit = true
+		} else {
+			a := p.averaging
+			b := 1 - a
+			avg := p.avgBuf
+			for i := 0; i < fftSize; i++ {
+				avg[i] = a*avg[i] + b*mag[i]
+			}
+		}
+		// Output the averaged magnitudes
+		copy(mag, p.avgBuf)
+	}
+}
+
+// Resize changes FFT size at runtime (used on profile switch).
+func (p *FftProcessor) Resize(newSize int) error {
+	if newSize < 4 || newSize&(newSize-1) != 0 {
+		return errors.New("fft_processor: newSize must be a power of 2 and >= 4")
+	}
+
+	fft, err := NewFFT(newSize)
+	if err != nil {
+		return err
+	}
+
+	win, err := NewWindow(p.windowName, newSize)
+	if err != nil {
+		return err
+	}
+
+	p.fftSize = newSize
+	p.fft = fft
+	p.window = win
+	p.samplesNeed = newSize * 2
+	p.normDbVal = p.computeNormalization()
+
+	// Re-allocate buffers
+	p.complexBuf = make([]float32, 2*newSize)
+	p.magBuf = make([]float32, newSize)
+	p.pendingBuf = make([]float32, newSize)
+	p.pendingN = 0
+	p.ringBuf = make([]byte, newSize*2*4)
+	p.ringFill = 0
+
+	if p.averaging > 0 {
+		p.avgBuf = make([]float32, newSize)
+		p.avgInit = false
+	} else {
+		p.avgBuf = nil
+		p.avgInit = false
+	}
+
+	return nil
+}
+
+// Reset clears averaging state and ring buffer.
+func (p *FftProcessor) Reset() {
+	p.ringFill = 0
+	p.pendingN = 0
+	p.lastEmit = time.Time{}
+	p.avgInit = false
+	if p.avgBuf != nil {
+		for i := range p.avgBuf {
+			p.avgBuf[i] = 0
+		}
+	}
+}
+
+// computeNormalization returns 20*log10(fftSize) + 20*log10(coherentGain)
+// where coherentGain = sum(window) / fftSize.
+func (p *FftProcessor) computeNormalization() float32 {
+	fftNorm := 20.0 * math.Log10(float64(p.fftSize))
+
+	var windowSum float64
+	for _, v := range p.window {
+		windowSum += float64(v)
+	}
+	coherentGain := windowSum / float64(p.fftSize)
+	windowCorrectionDb := 20.0 * math.Log10(coherentGain)
+
+	return float32(fftNorm + windowCorrectionDb)
+}
