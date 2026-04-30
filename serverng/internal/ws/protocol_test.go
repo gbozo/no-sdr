@@ -184,7 +184,7 @@ func TestPackIQMessage(t *testing.T) {
 
 func TestPackMetaMessage(t *testing.T) {
 	meta := &ServerMeta{
-		CenterFrequency: 100.5e6,
+		CenterFreq: 100.5e6,
 		SampleRate:      2400000,
 		FftSize:         4096,
 		FftFps:          30,
@@ -208,8 +208,8 @@ func TestPackMetaMessage(t *testing.T) {
 		t.Fatalf("failed to unmarshal meta JSON: %v", err)
 	}
 
-	if decoded.CenterFrequency != meta.CenterFrequency {
-		t.Errorf("CenterFrequency: expected %f, got %f", meta.CenterFrequency, decoded.CenterFrequency)
+	if decoded.CenterFreq != meta.CenterFreq {
+		t.Errorf("CenterFreq: expected %f, got %f", meta.CenterFreq, decoded.CenterFreq)
 	}
 	if decoded.DongleId != meta.DongleId {
 		t.Errorf("DongleId: expected %s, got %s", meta.DongleId, decoded.DongleId)

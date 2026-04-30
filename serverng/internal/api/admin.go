@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,7 +70,7 @@ func (a *AdminAuth) Login(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   int(a.maxAge.Seconds()),
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -96,30 +97,38 @@ func (a *AdminAuth) Logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// CheckAuth middleware validates session cookie.
+// CheckAuth middleware validates session cookie OR Bearer token (password).
 func (a *AdminAuth) CheckAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Try cookie first
 		cookie, err := r.Cookie(a.cookieName)
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
-			return
-		}
+		if err == nil {
+			a.mu.RLock()
+			expiry, ok := a.sessions[cookie.Value]
+			a.mu.RUnlock()
 
-		a.mu.RLock()
-		expiry, ok := a.sessions[cookie.Value]
-		a.mu.RUnlock()
-
-		if !ok || time.Now().After(expiry) {
+			if ok && time.Now().Before(expiry) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if ok {
 				a.mu.Lock()
 				delete(a.sessions, cookie.Value)
 				a.mu.Unlock()
 			}
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
-			return
 		}
 
-		next.ServeHTTP(w, r)
+		// Fall back to Authorization: Bearer <password>
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			token := strings.TrimPrefix(auth, "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(token), []byte(a.password)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
 	})
 }
 
@@ -127,7 +136,7 @@ func (a *AdminAuth) CheckAuth(next http.Handler) http.Handler {
 func (a *AdminAuth) IsAuthenticated(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(a.cookieName)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "authenticated": false})
 		return
 	}
 
@@ -136,11 +145,11 @@ func (a *AdminAuth) IsAuthenticated(w http.ResponseWriter, r *http.Request) {
 	a.mu.RUnlock()
 
 	if !ok || time.Now().After(expiry) {
-		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "authenticated": false})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authenticated": true})
 }
 
 // --- Admin dongle handlers ---
@@ -299,7 +308,76 @@ func deleteDongleHandler(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
+// ProfileSwitchFunc is called when admin switches a dongle profile via REST.
+// Set by dongle.Manager after creation.
+var ProfileSwitchFunc func(dongleID, profileID string) error
+
+// DongleStartFunc starts a dongle. Set by dongle.Manager.
+var DongleStartFunc func(dongleID string) error
+
+// DongleStopFunc stops a dongle. Set by dongle.Manager.
+var DongleStopFunc func(dongleID string) error
+
+// switchProfileHandler switches a dongle's active profile.
+// POST /api/admin/dongles/{id}/profile  body: {"profileId": "..."}
+func switchProfileHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dongleID := chi.URLParam(r, "id")
+		var body struct {
+			ProfileId string `json:"profileId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ProfileId == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "profileId required"})
+			return
+		}
+
+		if ProfileSwitchFunc == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "profile switching not available"})
+			return
+		}
+
+		if err := ProfileSwitchFunc(dongleID, body.ProfileId); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dongleId": dongleID, "profileId": body.ProfileId})
+	}
+}
+
 // createProfileHandler adds a profile to a dongle.
+// dongleStartHandler starts a dongle.
+func dongleStartHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dongleID := chi.URLParam(r, "id")
+		if DongleStartFunc == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "start not available"})
+			return
+		}
+		if err := DongleStartFunc(dongleID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dongleId": dongleID})
+	}
+}
+
+// dongleStopHandler stops a dongle.
+func dongleStopHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dongleID := chi.URLParam(r, "id")
+		if DongleStopFunc == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stop not available"})
+			return
+		}
+		if err := DongleStopFunc(dongleID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dongleId": dongleID})
+	}
+}
+
 func createProfileHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dongleID := chi.URLParam(r, "id")
@@ -442,5 +520,52 @@ func saveConfigHandler(cfg *config.Config, cfgPath string) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+	}
+}
+
+// serverConfigHandler returns the server configuration section.
+func serverConfigHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"port":          cfg.Server.Port,
+			"host":          cfg.Server.Host,
+			"callsign":      cfg.Server.Callsign,
+			"description":   cfg.Server.Description,
+			"location":      cfg.Server.Location,
+			"adminPassword": cfg.Server.AdminPassword,
+		})
+	}
+}
+
+// updateServerConfigHandler updates the server configuration section.
+func updateServerConfigHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Callsign    *string `json:"callsign"`
+			Description *string `json:"description"`
+			Location    *string `json:"location"`
+			Port        *int    `json:"port"`
+			Host        *string `json:"host"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if body.Callsign != nil {
+			cfg.Server.Callsign = *body.Callsign
+		}
+		if body.Description != nil {
+			cfg.Server.Description = *body.Description
+		}
+		if body.Location != nil {
+			cfg.Server.Location = *body.Location
+		}
+		if body.Port != nil {
+			cfg.Server.Port = *body.Port
+		}
+		if body.Host != nil {
+			cfg.Server.Host = *body.Host
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }

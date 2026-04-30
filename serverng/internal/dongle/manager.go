@@ -2,9 +2,13 @@ package dongle
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
@@ -89,6 +93,8 @@ func (m *Manager) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	// Start server stats broadcaster (CPU, memory, clients — every 2 seconds)
+	go m.statsLoop(ctx)
 	return nil
 }
 
@@ -110,6 +116,44 @@ func (m *Manager) Stop() {
 	for id := range m.clientPipelines {
 		delete(m.clientPipelines, id)
 	}
+}
+
+// StartDongleByID starts a specific dongle by its config ID.
+func (m *Manager) StartDongleByID(dongleID string) error {
+	// Check if already running
+	m.mu.Lock()
+	if _, ok := m.dongles[dongleID]; ok {
+		m.mu.Unlock()
+		return fmt.Errorf("dongle %s is already running", dongleID)
+	}
+	m.mu.Unlock()
+
+	// Find config
+	for i := range m.cfg.Dongles {
+		if m.cfg.Dongles[i].ID == dongleID {
+			return m.startDongle(context.Background(), &m.cfg.Dongles[i])
+		}
+	}
+	return fmt.Errorf("dongle %s not found in config", dongleID)
+}
+
+// StopDongleByID stops a specific running dongle.
+func (m *Manager) StopDongleByID(dongleID string) error {
+	m.mu.Lock()
+	d, ok := m.dongles[dongleID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("dongle %s is not running", dongleID)
+	}
+	d.cancel()
+	if d.source != nil {
+		d.source.Close()
+	}
+	delete(m.dongles, dongleID)
+	m.mu.Unlock()
+
+	m.logger.Info("dongle stopped by admin", "id", dongleID)
+	return nil
 }
 
 // startDongle creates and runs the pipeline for a single dongle.
@@ -358,18 +402,17 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 
 	// Notify all subscribed clients with new META message
 	clients := m.wsMgr.SubscribedClients(dongleID)
+	iqRate := outputRateForMode(newProfile.Mode)
 	meta := &ws.ServerMeta{
-		Type:            "profile_changed",
-		CenterFrequency: float64(newProfile.CenterFrequency),
-		SampleRate:      newProfile.SampleRate,
-		FftSize:         newProfile.FftSize,
-		FftFps:          newProfile.FftFps,
-		Mode:            newProfile.Mode,
-		Bandwidth:       newProfile.Bandwidth,
-		DongleId:        dongleID,
-		ProfileId:       newProfile.ID,
-		TuneOffset:      newProfile.TuneOffset,
-		TuningStep:      newProfile.TuningStep,
+		Type:         "profile_changed",
+		DongleId:     dongleID,
+		ProfileId:    newProfile.ID,
+		CenterFreq:  float64(newProfile.CenterFrequency),
+		SampleRate:   newProfile.SampleRate,
+		FftSize:      newProfile.FftSize,
+		IqSampleRate: iqRate,
+		Mode:         newProfile.Mode,
+		TuningStep:   newProfile.TuningStep,
 	}
 	metaMsg := ws.PackMetaMessage(meta)
 	for _, client := range clients {
@@ -566,6 +609,8 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 	switch cmd.Cmd {
 	case "subscribe":
 		m.handleSubscribe(clientID, cmd)
+	case "unsubscribe":
+		m.handleUnsubscribe(clientID)
 	case "audio_enabled":
 		m.handleAudioEnabled(clientID, cmd)
 	case "tune":
@@ -576,10 +621,89 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 		m.handleMode(clientID, cmd)
 	case "codec":
 		m.handleCodecChange(clientID, cmd)
+	case "stereo_enabled":
+		m.handleStereoEnabled(clientID, cmd)
+	case "admin_set_profile":
+		m.handleAdminSetProfile(clientID, cmd)
+	case "admin_auth":
+		m.handleAdminAuth(clientID, cmd)
+	case "request_history":
+		// TODO: send FFT history frames from FftHistoryBuffer
+	case "mute", "volume":
+		// Client-side only — acknowledged but no server action needed
+	case "set_pre_filter_nb", "set_pre_filter_nb_threshold":
+		// TODO: toggle per-client pre-filter noise blanker in IqExtractor
+	}
+}
+
+// handleAdminAuth validates admin password sent over WebSocket.
+func (m *Manager) handleAdminAuth(clientID string, cmd *ws.ClientCommand) {
+	if cmd.Password == m.cfg.Server.AdminPassword {
+		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{Type: "admin_auth_ok"}))
+	} else {
+		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
+			Type:    "error",
+			Message: "Invalid admin password",
+			Code:    "AUTH_FAILED",
+		}))
+	}
+}
+
+// handleAdminSetProfile switches a dongle to a different profile (admin command).
+func (m *Manager) handleAdminSetProfile(clientID string, cmd *ws.ClientCommand) {
+	if cmd.DongleId == "" || cmd.ProfileId == "" {
+		return
+	}
+	if err := m.SwitchProfile(cmd.DongleId, cmd.ProfileId); err != nil {
+		m.logger.Error("admin_set_profile failed", "error", err, "dongleId", cmd.DongleId, "profileId", cmd.ProfileId)
+		errMeta := &ws.ServerMeta{
+			Type:    "error",
+			Message: "Profile switch failed: " + err.Error(),
+			Code:    "PROFILE_SWITCH_FAILED",
+		}
+		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(errMeta))
+	}
+}
+
+// handleUnsubscribe removes a client's subscription.
+func (m *Manager) handleUnsubscribe(clientID string) {
+	client := m.wsMgr.GetClient(clientID)
+	if client == nil {
+		return
+	}
+	client.DongleID = ""
+	// Destroy any IQ pipeline for this client
+	m.mu.Lock()
+	if cp, ok := m.clientPipelines[clientID]; ok {
+		if cp.opusPipeline != nil {
+			cp.opusPipeline.Close()
+		}
+		delete(m.clientPipelines, clientID)
+	}
+	m.mu.Unlock()
+}
+
+// handleStereoEnabled toggles stereo encoding in the Opus pipeline.
+func (m *Manager) handleStereoEnabled(clientID string, cmd *ws.ClientCommand) {
+	if cmd.Enabled == nil {
+		return
+	}
+	m.mu.Lock()
+	cp, ok := m.clientPipelines[clientID]
+	m.mu.Unlock()
+	if !ok || cp.opusPipeline == nil {
+		return
+	}
+	// Update the Opus pipeline's stereo state
+	if *cmd.Enabled {
+		cp.opusPipeline.SetStereo(true)
+	} else {
+		cp.opusPipeline.SetStereo(false)
 	}
 }
 
 // handleSubscribe sends META message to client with profile info.
+// If profileId is specified and differs from active, switches the dongle to that profile.
 func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 	dongleID := cmd.DongleId
 	if dongleID == "" {
@@ -598,6 +722,25 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 		return
 	}
 
+	// If a specific profile was requested and differs from active, switch to it
+	if cmd.ProfileId != "" && cmd.ProfileId != d.profile.ID {
+		if err := m.SwitchProfile(dongleID, cmd.ProfileId); err != nil {
+			m.logger.Error("profile switch failed on subscribe", "error", err, "dongleId", dongleID, "profileId", cmd.ProfileId)
+			// Send error to client
+			errMeta := &ws.ServerMeta{
+				Type:    "error",
+				Message: "Profile switch failed: " + err.Error(),
+				Code:    "PROFILE_SWITCH_FAILED",
+			}
+			m.wsMgr.SendTo(clientID, ws.PackMetaMessage(errMeta))
+			return
+		}
+		// Re-fetch dongle state after switch
+		m.mu.Lock()
+		d = m.dongles[dongleID]
+		m.mu.Unlock()
+	}
+
 	// Update dongle ID in any existing client pipeline
 	m.mu.Lock()
 	if cp, exists := m.clientPipelines[clientID]; exists {
@@ -606,19 +749,18 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Unlock()
 
 	profile := d.profile
+	iqRate := outputRateForMode(profile.Mode)
 
 	meta := &ws.ServerMeta{
-		Type:            "subscribed",
-		CenterFrequency: float64(profile.CenterFrequency),
-		SampleRate:      profile.SampleRate,
-		FftSize:         profile.FftSize,
-		FftFps:          profile.FftFps,
-		Mode:            profile.Mode,
-		Bandwidth:       profile.Bandwidth,
-		DongleId:        dongleID,
-		ProfileId:       profile.ID,
-		TuneOffset:      profile.TuneOffset,
-		TuningStep:      profile.TuningStep,
+		Type:         "subscribed",
+		DongleId:     dongleID,
+		ProfileId:    profile.ID,
+		CenterFreq:  float64(profile.CenterFrequency),
+		SampleRate:   profile.SampleRate,
+		FftSize:      profile.FftSize,
+		IqSampleRate: iqRate,
+		Mode:         profile.Mode,
+		TuningStep:   profile.TuningStep,
 	}
 
 	m.wsMgr.SendTo(clientID, ws.PackMetaMessage(meta))
@@ -928,5 +1070,62 @@ func outputRateForMode(mode string) int {
 		return 12000
 	default:
 		return 48000
+	}
+}
+
+// statsLoop broadcasts server stats (CPU%, memory, client count) to all clients every 2 seconds.
+func (m *Manager) statsLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	var lastCPU int64
+	var lastTime time.Time
+
+	// Initialize
+	var ru syscall.Rusage
+	syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+	lastCPU = ru.Utime.Nano() + ru.Stime.Nano()
+	lastTime = time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// CPU usage
+			syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+			nowCPU := ru.Utime.Nano() + ru.Stime.Nano()
+			elapsed := time.Since(lastTime)
+			cpuDelta := nowCPU - lastCPU
+			// cpuPercent = (cpu ns used) / (wall ns elapsed) * 100
+			cpuPercent := 0
+			if elapsed.Nanoseconds() > 0 {
+				cpuPercent = int(cpuDelta * 100 / elapsed.Nanoseconds())
+			}
+			if cpuPercent > 100 {
+				cpuPercent = 100
+			}
+			lastCPU = nowCPU
+			lastTime = time.Now()
+
+			// Memory (RSS)
+			var memStats runtime.MemStats
+			runtime.ReadMemStats(&memStats)
+			memMb := int(memStats.Sys / 1_048_576)
+
+			// Broadcast to all connected clients
+			statsJSON, _ := json.Marshal(map[string]any{
+				"type":       "server_stats",
+				"cpuPercent": cpuPercent,
+				"memMb":      memMb,
+				"clients":    m.wsMgr.ClientCount(),
+			})
+			msg := make([]byte, 1+len(statsJSON))
+			msg[0] = ws.MsgMeta
+			copy(msg[1:], statsJSON)
+
+			// Send to all clients
+			m.wsMgr.BroadcastAll(msg)
+		}
 	}
 }

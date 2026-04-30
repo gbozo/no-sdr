@@ -52,6 +52,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		r.Post("/login", adminAuth.Login)
 		r.Post("/logout", adminAuth.Logout)
 		r.Get("/check", adminAuth.IsAuthenticated)
+		r.Get("/session", adminAuth.IsAuthenticated) // alias used by client
 
 		// Protected routes
 		r.Group(func(r chi.Router) {
@@ -60,11 +61,16 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 			r.Post("/dongles", createDongleHandler(cfg))
 			r.Put("/dongles/{id}", updateDongleHandler(cfg))
 			r.Delete("/dongles/{id}", deleteDongleHandler(cfg))
+			r.Post("/dongles/{id}/profile", switchProfileHandler(cfg))
+			r.Post("/dongles/{id}/start", dongleStartHandler())
+			r.Post("/dongles/{id}/stop", dongleStopHandler())
 			r.Post("/dongles/{id}/profiles", createProfileHandler(cfg))
 			r.Put("/dongles/{id}/profiles/{profileId}", updateProfileHandler(cfg))
 			r.Delete("/dongles/{id}/profiles/{profileId}", deleteProfileHandler(cfg))
 			r.Put("/dongles/{id}/profiles-order", reorderProfilesHandler(cfg))
-			r.Post("/config/save", saveConfigHandler(cfg, cfgPath))
+			r.Post("/save-config", saveConfigHandler(cfg, cfgPath))
+			r.Get("/server/config", serverConfigHandler(cfg))
+			r.Put("/server/config", updateServerConfigHandler(cfg))
 		})
 	})
 
@@ -94,25 +100,35 @@ func statusHandler(wsMgr *ws.Manager) http.HandlerFunc {
 
 // dongleResponse matches what the SolidJS client expects from GET /api/dongles.
 type dongleResponse struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Running         bool              `json:"running"`
-	Enabled         bool              `json:"enabled"`
-	ActiveProfileId string            `json:"activeProfileId"`
-	ClientCount     int               `json:"clientCount"`
-	Profiles        []profileResponse `json:"profiles"`
+	ID              string `json:"id"`
+	DeviceIndex     int    `json:"deviceIndex"`
+	Name            string `json:"name"`
+	Serial          string `json:"serial"`
+	Source          string `json:"source"`
+	ActiveProfileId string `json:"activeProfileId"`
+	PpmCorrection   int    `json:"ppmCorrection"`
+	Running         bool   `json:"running"`
+	ClientCount     int    `json:"clientCount"`
 }
 
 type profileResponse struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name"`
-	CenterFrequency int64   `json:"centerFrequency"`
-	SampleRate      int     `json:"sampleRate"`
-	Bandwidth       int     `json:"bandwidth"`
-	Mode            string  `json:"mode"`
-	Gain            float64 `json:"gain"`
-	FftSize         int     `json:"fftSize"`
-	FftFps          int     `json:"fftFps"`
+	ID                   string  `json:"id"`
+	Name                 string  `json:"name"`
+	CenterFrequency      int64   `json:"centerFrequency"`
+	SampleRate           int     `json:"sampleRate"`
+	FftSize              int     `json:"fftSize"`
+	FftFps               int     `json:"fftFps"`
+	DefaultMode          string  `json:"defaultMode"`
+	DefaultTuneOffset    int     `json:"defaultTuneOffset"`
+	DefaultBandwidth     int     `json:"defaultBandwidth"`
+	TuningStep           int     `json:"tuningStep,omitempty"`
+	Gain                 float64 `json:"gain"`
+	Description          string  `json:"description,omitempty"`
+	DirectSampling       int     `json:"directSampling,omitempty"`
+	PreFilterNb          bool    `json:"preFilterNb,omitempty"`
+	PreFilterNbThreshold int     `json:"preFilterNbThreshold,omitempty"`
+	Decoders             []any   `json:"decoders"`
+	DongleId             string  `json:"dongleId"`
 }
 
 // donglesHandler returns the list of configured dongles with runtime state.
@@ -121,29 +137,17 @@ func donglesHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 		var resp []dongleResponse
 		for _, d := range cfg.Dongles {
 			dr := dongleResponse{
-				ID:      d.ID,
-				Name:    d.Name,
-				Running: d.Enabled && d.AutoStart,
-				Enabled: d.Enabled,
+				ID:            d.ID,
+				DeviceIndex:   d.DeviceIndex,
+				Name:          d.Name,
+				Serial:        "",
+				Source:        d.Source.Type,
+				PpmCorrection: d.PPM,
+				Running:       d.Enabled && d.AutoStart,
+				ClientCount:   len(wsMgr.SubscribedClients(d.ID)),
 			}
 			if len(d.Profiles) > 0 {
 				dr.ActiveProfileId = d.Profiles[0].ID
-			}
-			// Count clients subscribed to this dongle
-			dr.ClientCount = len(wsMgr.SubscribedClients(d.ID))
-			// Add profiles
-			for _, p := range d.Profiles {
-				dr.Profiles = append(dr.Profiles, profileResponse{
-					ID:              p.ID,
-					Name:            p.Name,
-					CenterFrequency: p.CenterFrequency,
-					SampleRate:      p.SampleRate,
-					Bandwidth:       p.Bandwidth,
-					Mode:            p.Mode,
-					Gain:            p.Gain,
-					FftSize:         p.FftSize,
-					FftFps:          p.FftFps,
-				})
 			}
 			resp = append(resp, dr)
 		}
@@ -167,15 +171,23 @@ func dongleProfilesHandler(cfg *config.Config) http.HandlerFunc {
 				var profiles []profileResponse
 				for _, p := range d.Profiles {
 					profiles = append(profiles, profileResponse{
-						ID:              p.ID,
-						Name:            p.Name,
-						CenterFrequency: p.CenterFrequency,
-						SampleRate:      p.SampleRate,
-						Bandwidth:       p.Bandwidth,
-						Mode:            p.Mode,
-						Gain:            p.Gain,
-						FftSize:         p.FftSize,
-						FftFps:          p.FftFps,
+						ID:                   p.ID,
+						Name:                 p.Name,
+						CenterFrequency:      p.CenterFrequency,
+						SampleRate:           p.SampleRate,
+						FftSize:              p.FftSize,
+						FftFps:               p.FftFps,
+						DefaultMode:          p.Mode,
+						DefaultTuneOffset:    p.TuneOffset,
+						DefaultBandwidth:     p.Bandwidth,
+						TuningStep:           p.TuningStep,
+						Gain:                 p.Gain,
+						Description:          p.Description,
+						DirectSampling:       p.DirectSampling,
+						PreFilterNb:          p.PreFilterNb,
+						PreFilterNbThreshold: p.PreFilterNbThreshold,
+						Decoders:             []any{},
+						DongleId:             dongleID,
 					})
 				}
 				writeJSON(w, http.StatusOK, profiles)

@@ -13,6 +13,17 @@ import (
 	"github.com/coder/websocket"
 )
 
+// drainWelcome reads and discards the initial welcome message sent on connect.
+func drainWelcome(t *testing.T, conn *websocket.Conn, ctx context.Context) {
+	t.Helper()
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, _, err := conn.Read(readCtx)
+	if err != nil {
+		t.Fatalf("failed to drain welcome message: %v", err)
+	}
+}
+
 func TestManagerStartsEmpty(t *testing.T) {
 	mgr := NewManager(slog.Default())
 	if mgr.ClientCount() != 0 {
@@ -158,6 +169,7 @@ func TestBroadcastOnlyReachesSubscribedClients(t *testing.T) {
 	mgr := NewManager(slog.Default())
 	srv := setupTestServer(t, mgr)
 	defer srv.Close()
+	ctx := context.Background()
 
 	// Connect two clients
 	conn1 := dialWS(t, srv)
@@ -165,21 +177,16 @@ func TestBroadcastOnlyReachesSubscribedClients(t *testing.T) {
 	conn2 := dialWS(t, srv)
 	defer conn2.Close(websocket.StatusNormalClosure, "done")
 
-	// Wait for both to register
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if mgr.ClientCount() == 2 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if mgr.ClientCount() != 2 {
-		t.Fatalf("expected 2 clients, got %d", mgr.ClientCount())
-	}
+	// Drain welcome messages
+	drainWelcome(t, conn1, context.Background())
+	drainWelcome(t, conn2, context.Background())
 
-	// Subscribe client 1 to "dongle-a"
-	ctx := context.Background()
+	// Wait for clients to register
+	time.Sleep(50 * time.Millisecond)
+
+	// Subscribe client 1 to dongle-a
 	err := conn1.Write(ctx, websocket.MessageText, []byte(`{"cmd":"subscribe","dongleId":"dongle-a"}`))
+
 	if err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
@@ -227,6 +234,9 @@ func TestSendToSpecificClient(t *testing.T) {
 
 	conn := dialWS(t, srv)
 	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	// Drain welcome
+	drainWelcome(t, conn, context.Background())
 
 	// Wait for registration
 	deadline := time.Now().Add(2 * time.Second)
@@ -278,6 +288,10 @@ func TestSubscribedClients(t *testing.T) {
 	conn2 := dialWS(t, srv)
 	defer conn2.Close(websocket.StatusNormalClosure, "done")
 
+	// Drain welcome messages
+	drainWelcome(t, conn1, context.Background())
+	drainWelcome(t, conn2, context.Background())
+
 	// Wait for both
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -309,6 +323,9 @@ func TestShutdown(t *testing.T) {
 
 	conn := dialWS(t, srv)
 	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	// Drain welcome
+	drainWelcome(t, conn, context.Background())
 
 	// Wait for registration
 	deadline := time.Now().Add(2 * time.Second)

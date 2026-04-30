@@ -70,6 +70,11 @@ func main() {
 	// Create dongle manager and start pipelines.
 	dongleMgr := dongle.NewManager(cfg, wsMgr, logger)
 
+	// Register profile switch callback for REST API
+	api.ProfileSwitchFunc = dongleMgr.SwitchProfile
+	api.DongleStartFunc = dongleMgr.StartDongleByID
+	api.DongleStopFunc = dongleMgr.StopDongleByID
+
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

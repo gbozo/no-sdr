@@ -82,6 +82,14 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	m.addClient(client)
 	m.logger.Info("client connected", "id", clientID, "remote", r.RemoteAddr)
 
+	// Send welcome message (matches Node.js behavior)
+	welcome := PackMetaMessage(&ServerMeta{
+		Type:          "welcome",
+		ClientId:      clientID,
+		ServerVersion: "2.0.0",
+	})
+	client.Send(welcome)
+
 	// Start read and write goroutines
 	go m.readLoop(client)
 	go m.writeLoop(client)
@@ -96,6 +104,16 @@ func (m *Manager) Broadcast(dongleID string, msg []byte) {
 		if client.DongleID == dongleID {
 			client.Send(msg)
 		}
+	}
+}
+
+// BroadcastAll sends a binary message to ALL connected clients regardless of subscription.
+func (m *Manager) BroadcastAll(msg []byte) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, client := range m.clients {
+		client.Send(msg)
 	}
 }
 

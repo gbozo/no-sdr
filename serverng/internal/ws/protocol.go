@@ -31,17 +31,24 @@ const (
 
 // ServerMeta holds metadata sent to a connected client.
 type ServerMeta struct {
-	Type            string  `json:"type"`
-	CenterFrequency float64 `json:"centerFrequency"`
-	SampleRate      int     `json:"sampleRate"`
-	FftSize         int     `json:"fftSize"`
-	FftFps          int     `json:"fftFps"`
-	Mode            string  `json:"mode"`
-	Bandwidth       int     `json:"bandwidth"`
-	DongleId        string  `json:"dongleId"`
-	ProfileId       string  `json:"profileId"`
-	TuneOffset      int     `json:"tuneOffset"`
-	TuningStep      int     `json:"tuningStep,omitempty"`
+	Type         string  `json:"type"`
+	DongleId     string  `json:"dongleId,omitempty"`
+	ProfileId    string  `json:"profileId,omitempty"`
+	CenterFreq   float64 `json:"centerFreq,omitempty"`
+	SampleRate   int     `json:"sampleRate,omitempty"`
+	FftSize      int     `json:"fftSize,omitempty"`
+	FftFps       int     `json:"fftFps,omitempty"`
+	IqSampleRate int     `json:"iqSampleRate,omitempty"`
+	Mode         string  `json:"mode,omitempty"`
+	TuningStep   int     `json:"tuningStep,omitempty"`
+	Bandwidth    int     `json:"bandwidth,omitempty"`
+	TuneOffset   int     `json:"tuneOffset,omitempty"`
+	// Error fields
+	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
+	// Welcome fields
+	ClientId      string `json:"clientId,omitempty"`
+	ServerVersion string `json:"serverVersion,omitempty"`
 }
 
 // ClientCommand represents a parsed command from the client (JSON text).
@@ -56,6 +63,9 @@ type ClientCommand struct {
 	IqCodec       string `json:"iqCodec,omitempty"`
 	Enabled       *bool  `json:"enabled,omitempty"`
 	StereoEnabled *bool  `json:"stereoEnabled,omitempty"`
+	Password      string `json:"password,omitempty"`
+	Level         float64 `json:"level,omitempty"`
+	Muted         *bool  `json:"muted,omitempty"`
 }
 
 // PackMetaMessage packs a ServerMeta as a binary message: [0x03][UTF-8 JSON]

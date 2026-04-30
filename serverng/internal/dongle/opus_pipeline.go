@@ -214,6 +214,21 @@ func (p *OpusPipeline) SetMode(mode string) error {
 	return nil
 }
 
+// SetStereo enables or disables stereo encoding.
+func (p *OpusPipeline) SetStereo(stereo bool) {
+	newChannels := 1
+	if stereo {
+		newChannels = 2
+	}
+	if newChannels == p.channels {
+		return
+	}
+	p.channels = newChannels
+	if p.encoder != nil {
+		p.encoder.SetChannels(newChannels)
+	}
+}
+
 // Reset clears demodulator and encoder state.
 func (p *OpusPipeline) Reset() {
 	if p.demodulator != nil {
