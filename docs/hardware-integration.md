@@ -4,6 +4,38 @@
 
 This document tracks planned SDR hardware integrations, extended features, and protocol enhancements beyond the initial network-TCP (rtl_tcp-compatible) implementations.
 
+## Source Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ DongleManager                                                   │
+│                                                                  │
+│  source.type routing:                                            │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │  local   │  │  rtl_tcp  │  │   demo   │  │ CLI (future) │  │
+│  │ spawn    │  │ TCP client│  │ simulator│  │ spawn stdout │  │
+│  │ rtl_sdr  │  │ to remote │  │ fake IQ  │  │ hackrf/airspy│  │
+│  └────┬─────┘  └─────┬─────┘  └────┬─────┘  └──────┬───────┘  │
+│       │               │             │                │           │
+│       └───────────────┴──────┬──────┴────────────────┘           │
+│                              │                                    │
+│                              ▼                                    │
+│                   Buffer (uint8 IQ interleaved)                   │
+│                              │                                    │
+│                    ┌─────────┴─────────┐                         │
+│                    │                   │                          │
+│                    ▼                   ▼                          │
+│             FftProcessor        IqExtractor (per client)         │
+│             (shared FFT)        (NCO + filter + decimate)        │
+└────────────────────────────────────────────────────────────────┘
+
+Network-TCP variants (implemented):
+  rtl_tcp    — RTL-SDR via rtl_tcp server (12B header + 5-byte commands)
+  airspy_tcp — AirSpy Mini/R2 via airspy_tcp (same protocol, higher rates)
+  hfp_tcp   — AirSpy HF+ via hfp_tcp (same protocol, HF coverage)
+  rsp_tcp   — SDRplay RSP via rsp_tcp (extended commands: antenna, notch, LNA)
+```
+
 ## Implemented
 
 ### Network-TCP Sources (Phase 1)

@@ -1,0 +1,13 @@
+# Generated / bundled output
+client/dev-dist/
+node_modules/
+dist/
+
+# Graphify internal files
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
+
+# Non-project assets
+.serena/
+scripts/*.bin

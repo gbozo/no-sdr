@@ -1256,12 +1256,12 @@ location / {
 
 ## 14. Security
 
-### Current State (v0.2)
+### Current State (v1.2)
 
-- **Admin auth**: Simple plaintext password comparison via Bearer token. Suitable for trusted networks only.
+- **Admin auth**: Cookie-based sessions (httpOnly, 7-day expiry, per-boot secret). Password validated server-side.
+- **Rate limiting**: Max 10 WebSocket connections per IP. X-Forwarded-For aware for reverse-proxy deployments.
 - **No user auth**: All listeners are anonymous. The WebSocket endpoint is open.
 - **No encryption**: HTTP/WS only. Use a reverse proxy with TLS for public deployments.
-- **No rate limiting**: No protection against connection flooding.
 
 ### Recommendations for Production
 
@@ -1300,16 +1300,30 @@ location / {
 
 ## 16. Future Work
 
-### Planned Features
+### Performance
+
+- **Worker threads** — offload IQ extraction and Opus encode from the main event loop (per-client, embarrassingly parallel)
+- **Client-side noise floor** — move FFT noise floor EMA + clamping to client (eliminate server-side deflate-floor variant)
+- **Client-side RDS for Opus path** — decode RDS from Opus audio on client instead of server
+
+### Display & UI
 
 - **WebGL waterfall** — GPU-accelerated rendering for large FFT sizes and zoom
-- **IQ recording** — save raw IQ to SigMF format for offline analysis
-- **Frequency bookmarks** — save and recall frequency/mode/bandwidth presets
 - **Responsive mobile UI** — tablet and phone layouts
+- **Audio time-shift / seek-back** — ring buffer of demodulated audio synced to waterfall scrub position
+
+### Infrastructure
+
+- **IQ recording** — save raw IQ to SigMF format for offline analysis and playback
 - **User sessions** — optional authentication for persistent settings
-- **Multi-server** — aggregate multiple no-sdr instances behind a gateway
-- **Worker threads** — offload FFT and IQ extraction from the main event loop
-- **Spectral NR rework** — current Wiener filter has robotic artifacts; consider RNNoise (WASM), multi-band expander
+- **Multi-server aggregation** — combine multiple no-sdr instances behind a gateway
+
+### DSP
+
+- **Kaiser window + slow-scan integration** — configurable FFT window + multi-frame averaging for weak signal detection
+- **FM-IF spectral NR** — peak-bin FFT on IQ before FM demodulation (SDR++ approach)
+- **Adaptive L-R LPF for WFM** — frequency cutoff proportional to stereo blend factor
+- **MMSE-LSA spectral NR** — Ephraim-Malah decision-directed approach (replace legacy Wiener for AM/WFM)
 
 ### Potential Decoder Additions
 
@@ -1318,8 +1332,4 @@ location / {
 - NOAA APT satellite imagery
 - Meteor M2 LRPT
 - P25 / TETRA
-
-### Protocol Extensions
-
-- Bi-directional audio (TX support for licensed operators)
 - Waterfall history (seek-back in time)

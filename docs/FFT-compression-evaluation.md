@@ -1,70 +1,73 @@
 # FFT Compression Evaluation
 
-The FFT benchmark provides a performance comparison of various general-purpose and specialized compression algorithms applied to IQ (In-phase and Quadrature) samples.
+**Project:** no-sdr  
+**Status:** Complete — deflate (delta+zlib) selected as default codec
 
-## Table of Contents
-- [Overview](#overview)
-- [Benchmark Findings](#benchmark-findings)
-- [Proposed Additions](#proposed-additions)
-- [Visual Aids](#visual-aids)
-- [Glossary](#glossary)
-- [Recommendation](#recommendation)
+![FFT Compression Workflow](images/fft-compression-workflow.svg)
+![FFT Domain Lossless](images/fft-domain-lossless.svg)
 
-## Overview
-- In SDR, IQ samples are raw, high-bit-depth streams of complex numbers. Standard lossless compressors (e.g., ZLib, LZ4) often underperform on RF data due to noise-like characteristics.
+---
 
-## Benchmark Findings
-- Current Focus: Tests lossless and generic algorithms.
-- Pros: Establishes CPU overhead vs. compression ratio baseline. Fast compressors like LZ4 offer minimal compression; more advanced like Zstd/LZMA trade latency for better ratios.
-- Cons: Lacks context-aware or physics-aware compression; ignores correlations between I and Q and temporal waveform structure.
+## Implemented FFT Codec Pipeline
 
-## Proposed Additions
-### 1. Domain-Specific Lossless: Linear Predictive Coding (LPC)
-- Description: Exploit signal physics; store residuals (actual - predicted).
-- Why: Residuals have smaller dynamic range, enabling better entropy coding.
-
-### 2. Quantization & Bit-Reduction (Near-Lossless)
-- Bit-Grooming: Mask LSBs that are noise to increase run-lengths for compressors.
-- A-Law / μ-Law: Use logarithmic quantization to preserve small signals while reducing bit depth.
-
-### 3. Frequency-Domain Compression (Lossy but Effective)
-- FFT and discard bins below a dB threshold to store only spectral peaks, enabling high compression for sparse spectrums.
-
-### 4. Complex-Value Aware Transform (Wavelets)
-- Use a DWT designed for complex numbers to capture transients and carriers more effectively.
-
-### 5. Machine Learning Autoencoders
-- Train encoders/decoders for specific protocols to learn latent representations and improve compression.
-
-- ## Visual Aids
-- Inline Mermaid diagrams are provided below for quick reference.
-```mermaid
-graph TD
-  TimeDomain(Time Domain) --> FrequencyDomain(Frequency Domain)
-  FrequencyDomain --> Peaks(Threshold/Peaks)
+```
+FftProcessor.processIqData(rawIQ)
+    │
+    ▼ Float32Array (dB magnitudes, N bins)
+    │
+    ├─── compressFft() ─────────────────► Uint8 (quantize to 0-255)
+    │       │                               4:1 vs Float32
+    │       │
+    │       ├─── packCompressedFftMessage() ─► MSG_FFT_COMPRESSED (0x04)
+    │       │                                  [Int16 min, Int16 max, Uint8[N]]
+    │       │
+    │       ├─── delta-encode ──► deflateRaw(level 6) ──► MSG_FFT_DEFLATE (0x0B)
+    │       │                     [Int16 min, Int16 max, Uint32 N, deflate bytes]
+    │       │                     7.5–10:1 vs Float32 (LOSSLESS from Uint8 stage)
+    │       │
+    │       └─── noise floor EMA ──► clamp ──► delta ──► deflateRaw ──► deflate-floor variant
+    │
+    └─── encodeFftAdpcm() ──────────► IMA-ADPCM on Int16(dB×100)
+                                       ~8:1 vs Float32
+                                       MSG_FFT_ADPCM (0x08)
 ```
 
-## Contribute Visuals
-- Choose a diagram type (Mermaid inline or SVG image).
-- Place assets under docs/images or docs/visuals.
-- Update this document to reference the visuals and include Mermaid blocks as needed.
-- Open a PR with the visuals, including a short description of the diagram’s purpose.
-```mermaid
-flowchart LR
-  A[Time Domain] --> B[Frequency Domain]
-  B --> C[Threshold]
-  C --> D[Peaks]
-```
+## Codec Comparison (measured)
 
-## Glossary
-- IQ: In-phase and Quadrature components.
-- FFT: Fast Fourier Transform.
-- LPC: Linear Predictive Coding.
-- Bit-Grooming: Removing noisy LSBs to improve compression.
-- EVM: Error Vector Magnitude.
-- SNR: Signal-to-Noise Ratio.
+| Codec | Type | Ratio vs Float32 | Latency | Default |
+|-------|------|------------------|---------|---------|
+| `none` | Raw Uint8 | 4:1 | Negligible | No |
+| `adpcm` | Lossy | ~8:1 | ~0.2ms sync | No |
+| `deflate` | Lossless (from Uint8) | 7.5–10:1 | ~1ms async (libuv) | **Yes** |
+| `deflate-floor` | Lossless + noise floor | 7.5–10:1 | ~1ms async | No |
 
-## Recommendation
-- Extend the no-sdr benchmark with a Signal Quality Metrics section. Measure EVM or SNR degradation alongside compression ratio to assess signal integrity after compression.
+## Why Deflate Won
 
-(End of file)
+1. **Lossless at the Uint8 stage** — no additional quantization loss beyond the Float32→Uint8 mapping
+2. **Delta encoding exploits spectral coherence** — adjacent FFT bins differ by small amounts, delta values cluster near zero, ideal for deflate
+3. **Async via libuv thread pool** — zlib deflateRaw runs off the Node.js event loop (no CPU blocking)
+4. **Better ratio than ADPCM** — 7.5–10:1 vs ~8:1, without the lossy step-size drift artifacts
+
+## Why ADPCM is Still Offered
+
+- Deterministic latency (sync, no thread pool contention)
+- Lower CPU on very constrained servers
+- Decode is simpler on client (no inflate)
+
+## Client-Side Decode
+
+All FFT decompression runs in a dedicated Web Worker (`fft-decode.worker.ts`):
+- `MSG_FFT_DEFLATE` → `fflate.inflateSync()` → delta-decode → Uint8→Float32 expand
+- `MSG_FFT_ADPCM` → `decodeFftAdpcm()` → Float32
+- `MSG_FFT_COMPRESSED` → Uint8→Float32 expand (header min/max)
+
+Zero decode work on the main thread.
+
+## Benchmark Script
+
+`scripts/benchmark-fft-compression.ts` — tests ADPCM encode/decode round-trip, Uint8 quantization accuracy, and throughput. Run with `npx tsx scripts/benchmark-fft-compression.ts`.
+
+## Future Considerations
+
+- **Kaiser window + slow-scan integration** — multi-frame FFT averaging before compression would further reduce delta variance and improve deflate ratio
+- **WebCodecs API** — if browsers expose hardware deflate, client decode could be offloaded to GPU

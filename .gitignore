@@ -31,6 +31,14 @@ logs/
 .cache/
 .parcel-cache/
 
+# PWA dev-time generated (vite-plugin-pwa)
+client/dev-dist/
+
+# Graphify
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
+
 # Serena
 .serena/
 scripts/*.bin
