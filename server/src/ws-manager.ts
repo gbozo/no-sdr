@@ -308,7 +308,7 @@ export class WebSocketManager {
     });
   }
 
-  private async _handleIqDataAsync(dongleId: string, rawData: Buffer): Promise<void> {
+  private async _handleIqDataAsync(dongleId: string, data: Buffer): Promise<void> {
     const processor = this.fftProcessors.get(dongleId);
     if (!processor) {
       if (this.iqCount++ % 100 === 0) {
@@ -317,10 +317,10 @@ export class WebSocketManager {
       return;
     }
 
-    // Defensive copy — Node.js stream internals reuse the underlying buffer
-    // for the next read. Any await below yields the event loop, which would
-    // let the next chunk overwrite `rawData` before the IQ extractor runs.
-    const data = Buffer.from(rawData);
+    // NOTE: No Buffer.from() copy needed here. Both IQ extraction (below) and
+    // FFT processIqData() (which copies into its ring buffer) run synchronously
+    // before the first await. The data is fully consumed before the event loop
+    // yields, so Node.js stream buffer reuse cannot corrupt it.
 
     // Swap I/Q channels if the active profile requests it (fixes inverted spectrum)
     const profile = this.dongleManager.getActiveProfile(dongleId);
