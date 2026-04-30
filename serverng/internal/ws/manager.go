@@ -13,10 +13,11 @@ import (
 
 // Manager handles WebSocket client connections and broadcasting.
 type Manager struct {
-	clients   map[string]*Client
-	mu        sync.RWMutex
-	logger    *slog.Logger
-	onCommand func(clientID string, cmd *ClientCommand)
+	clients      map[string]*Client
+	mu           sync.RWMutex
+	logger       *slog.Logger
+	onCommand    func(clientID string, cmd *ClientCommand)
+	onDisconnect func(clientID string)
 }
 
 // NewManager creates a new WebSocket connection manager.
@@ -36,6 +37,14 @@ func (m *Manager) SetCommandHandler(fn func(clientID string, cmd *ClientCommand)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onCommand = fn
+}
+
+// SetDisconnectHandler registers a callback invoked when a client disconnects.
+// The handler is called after the client is removed from the client map.
+func (m *Manager) SetDisconnectHandler(fn func(clientID string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDisconnect = fn
 }
 
 // HandleUpgrade is the HTTP handler for WebSocket upgrade requests.
@@ -146,12 +155,17 @@ func (m *Manager) removeClient(clientID string) {
 	if ok {
 		delete(m.clients, clientID)
 	}
+	handler := m.onDisconnect
 	m.mu.Unlock()
 
 	if ok {
 		client.cancel()
 		client.conn.Close(websocket.StatusNormalClosure, "")
 		m.logger.Info("client disconnected", "id", clientID)
+
+		if handler != nil {
+			handler(clientID)
+		}
 	}
 }
 

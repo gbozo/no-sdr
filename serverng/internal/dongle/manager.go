@@ -17,7 +17,11 @@ type Manager struct {
 	wsMgr   *ws.Manager
 	logger  *slog.Logger
 	dongles map[string]*activeDongle
-	mu      sync.Mutex
+
+	// Per-client IQ extraction pipelines
+	clientPipelines map[string]*clientPipeline
+
+	mu sync.Mutex
 }
 
 type activeDongle struct {
@@ -29,20 +33,33 @@ type activeDongle struct {
 	cancel     context.CancelFunc
 }
 
+// clientPipeline holds per-client IQ extraction state.
+type clientPipeline struct {
+	extractor *dsp.IqExtractor
+	adpcmEnc  *codec.ImaAdpcmEncoder
+	accumBuf  []int16 // 20ms accumulation buffer
+	accumPos  int
+	chunkSize int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
+	dongleID  string // which dongle this client is subscribed to
+}
+
 // NewManager creates a new dongle pipeline manager.
 func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	m := &Manager{
-		cfg:     cfg,
-		wsMgr:   wsMgr,
-		logger:  logger,
-		dongles: make(map[string]*activeDongle),
+		cfg:             cfg,
+		wsMgr:           wsMgr,
+		logger:          logger,
+		dongles:         make(map[string]*activeDongle),
+		clientPipelines: make(map[string]*clientPipeline),
 	}
 
 	// Register command handler for subscribe/codec messages
 	m.wsMgr.SetCommandHandler(m.handleCommand)
+	// Register disconnect handler for client pipeline cleanup
+	m.wsMgr.SetDisconnectHandler(m.handleDisconnect)
 
 	return m
 }
@@ -76,6 +93,11 @@ func (m *Manager) Stop() {
 		m.logger.Info("stopping dongle", "id", id)
 		d.cancel()
 		delete(m.dongles, id)
+	}
+
+	// Clean up all client pipelines
+	for id := range m.clientPipelines {
+		delete(m.clientPipelines, id)
 	}
 }
 
@@ -159,12 +181,70 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 			if !ok {
 				return
 			}
+
+			// Per-client IQ extraction — runs BEFORE FFT
+			m.processClientIQ(d.id, iqChunk)
+
 			// Feed IQ data to FFT processor
 			frames := d.fftProc.ProcessIqData(iqChunk)
 
 			// Broadcast each emitted FFT frame
 			for _, frame := range frames {
 				m.broadcastFftFrame(d, frame)
+			}
+		}
+	}
+}
+
+// processClientIQ extracts sub-band IQ for each client with an active pipeline
+// subscribed to the given dongle.
+func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
+	m.mu.Lock()
+	// Collect pipelines for this dongle (snapshot under lock)
+	type cpEntry struct {
+		clientID string
+		cp       *clientPipeline
+	}
+	var entries []cpEntry
+	for clientID, cp := range m.clientPipelines {
+		if cp.dongleID == dongleID {
+			entries = append(entries, cpEntry{clientID, cp})
+		}
+	}
+	m.mu.Unlock()
+
+	if len(entries) == 0 {
+		return
+	}
+
+	for _, entry := range entries {
+		cp := entry.cp
+		clientID := entry.clientID
+
+		subBand := cp.extractor.Process(iqChunk)
+		if subBand == nil {
+			continue
+		}
+
+		// Accumulate into 20ms chunks
+		remaining := subBand
+		for len(remaining) > 0 {
+			space := cp.chunkSize - cp.accumPos
+			toCopy := space
+			if toCopy > len(remaining) {
+				toCopy = len(remaining)
+			}
+			copy(cp.accumBuf[cp.accumPos:], remaining[:toCopy])
+			cp.accumPos += toCopy
+			remaining = remaining[toCopy:]
+
+			if cp.accumPos >= cp.chunkSize {
+				// Full 20ms chunk — encode and send
+				encoded := cp.adpcmEnc.Encode(cp.accumBuf[:cp.chunkSize])
+				// sampleCount = chunkSize / 2 because interleaved I,Q pairs
+				msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize/2))
+				m.wsMgr.SendTo(clientID, msg)
+				cp.accumPos = 0
 			}
 		}
 	}
@@ -225,6 +305,14 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 	switch cmd.Cmd {
 	case "subscribe":
 		m.handleSubscribe(clientID, cmd)
+	case "audio_enabled":
+		m.handleAudioEnabled(clientID, cmd)
+	case "tune":
+		m.handleTune(clientID, cmd)
+	case "bandwidth":
+		m.handleBandwidth(clientID, cmd)
+	case "mode":
+		m.handleMode(clientID, cmd)
 	case "codec":
 		// Client state already updated by ws.Client.UpdateFromCommand()
 		// No additional action needed — next broadcast uses new codec
@@ -250,6 +338,13 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 		return
 	}
 
+	// Update dongle ID in any existing client pipeline
+	m.mu.Lock()
+	if cp, exists := m.clientPipelines[clientID]; exists {
+		cp.dongleID = dongleID
+	}
+	m.mu.Unlock()
+
 	profile := d.profile
 
 	meta := &ws.ServerMeta{
@@ -273,4 +368,178 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 		"profileId", profile.ID,
 		"centerFreq", profile.CenterFrequency,
 	)
+}
+
+// handleAudioEnabled creates or destroys client IQ extraction pipeline.
+func (m *Manager) handleAudioEnabled(clientID string, cmd *ws.ClientCommand) {
+	if cmd.Enabled == nil {
+		return
+	}
+
+	if *cmd.Enabled {
+		m.createClientPipeline(clientID)
+	} else {
+		m.destroyClientPipeline(clientID)
+	}
+}
+
+// handleTune updates the client's IQ extractor NCO offset.
+func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
+	m.mu.Lock()
+	cp, ok := m.clientPipelines[clientID]
+	m.mu.Unlock()
+
+	if ok && cp.extractor != nil {
+		cp.extractor.SetTuneOffset(cmd.Offset)
+		m.logger.Debug("client tune offset updated", "clientID", clientID, "offset", cmd.Offset)
+	}
+}
+
+// handleBandwidth updates the client's IQ extractor output rate.
+func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
+	m.mu.Lock()
+	cp, ok := m.clientPipelines[clientID]
+	m.mu.Unlock()
+
+	if ok && cp.extractor != nil {
+		cp.extractor.SetOutputSampleRate(cmd.Hz)
+		// Update accumulation buffer for new rate
+		m.updateChunkSize(cp)
+		m.logger.Debug("client bandwidth updated", "clientID", clientID, "hz", cmd.Hz)
+	}
+}
+
+// handleMode updates output rate based on demodulation mode.
+func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
+	m.mu.Lock()
+	cp, ok := m.clientPipelines[clientID]
+	m.mu.Unlock()
+
+	if ok && cp.extractor != nil {
+		rate := outputRateForMode(cmd.Mode)
+		cp.extractor.SetOutputSampleRate(rate)
+		m.updateChunkSize(cp)
+		m.logger.Debug("client mode updated", "clientID", clientID, "mode", cmd.Mode, "outputRate", rate)
+	}
+}
+
+// handleDisconnect cleans up client pipeline when client disconnects.
+func (m *Manager) handleDisconnect(clientID string) {
+	m.destroyClientPipeline(clientID)
+}
+
+// createClientPipeline creates an IQ extraction pipeline for a client.
+func (m *Manager) createClientPipeline(clientID string) {
+	client := m.wsMgr.GetClient(clientID)
+	if client == nil {
+		return
+	}
+
+	dongleID := client.DongleID
+	m.mu.Lock()
+	d, ok := m.dongles[dongleID]
+	m.mu.Unlock()
+
+	if !ok {
+		m.logger.Warn("cannot create pipeline: client not subscribed to a dongle",
+			"clientID", clientID, "dongleID", dongleID)
+		return
+	}
+
+	// Determine output rate from client mode
+	mode := client.Mode
+	if mode == "" {
+		mode = d.profile.Mode
+	}
+	outputRate := outputRateForMode(mode)
+
+	// Determine tune offset
+	tuneOffset := client.TuneOffset
+	if tuneOffset == 0 {
+		tuneOffset = d.profile.TuneOffset
+	}
+
+	// Get input sample rate
+	inputRate := d.profile.SampleRate
+	if inputRate <= 0 {
+		inputRate = 2400000
+	}
+
+	ext, err := dsp.NewIqExtractor(dsp.IqExtractorConfig{
+		InputSampleRate:  inputRate,
+		OutputSampleRate: outputRate,
+		TuneOffset:       tuneOffset,
+		Logger:           m.logger.With("clientID", clientID),
+	})
+	if err != nil {
+		m.logger.Error("failed to create IQ extractor",
+			"clientID", clientID, "error", err)
+		return
+	}
+
+	// 20ms chunk size: outputRate * 2 channels * 0.020 seconds
+	chunkSize := int(float64(ext.OutputSampleRate()) * 2.0 * 0.020)
+
+	cp := &clientPipeline{
+		extractor: ext,
+		adpcmEnc:  codec.NewImaAdpcmEncoder(),
+		accumBuf:  make([]int16, chunkSize),
+		accumPos:  0,
+		chunkSize: chunkSize,
+		dongleID:  dongleID,
+	}
+
+	m.mu.Lock()
+	m.clientPipelines[clientID] = cp
+	m.mu.Unlock()
+
+	m.logger.Info("created client IQ pipeline",
+		"clientID", clientID,
+		"dongleID", dongleID,
+		"inputRate", inputRate,
+		"outputRate", ext.OutputSampleRate(),
+		"factor", ext.DecimationFactor(),
+		"chunkSize", chunkSize,
+	)
+}
+
+// destroyClientPipeline removes and cleans up a client's IQ extraction pipeline.
+func (m *Manager) destroyClientPipeline(clientID string) {
+	m.mu.Lock()
+	_, ok := m.clientPipelines[clientID]
+	if ok {
+		delete(m.clientPipelines, clientID)
+	}
+	m.mu.Unlock()
+
+	if ok {
+		m.logger.Info("destroyed client IQ pipeline", "clientID", clientID)
+	}
+}
+
+// updateChunkSize recalculates the 20ms accumulation buffer size after rate change.
+func (m *Manager) updateChunkSize(cp *clientPipeline) {
+	newSize := int(float64(cp.extractor.OutputSampleRate()) * 2.0 * 0.020)
+	if newSize != cp.chunkSize {
+		cp.chunkSize = newSize
+		cp.accumBuf = make([]int16, newSize)
+		cp.accumPos = 0
+		cp.adpcmEnc.Reset()
+	}
+}
+
+// outputRateForMode returns the appropriate output sample rate for a demodulation mode.
+func outputRateForMode(mode string) int {
+	switch mode {
+	case "wfm":
+		return 240000
+	case "nfm", "am", "am-stereo":
+		return 48000
+	case "usb", "lsb", "sam":
+		return 24000
+	case "cw":
+		return 12000
+	default:
+		return 48000
+	}
 }
