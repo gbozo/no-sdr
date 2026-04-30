@@ -1,6 +1,6 @@
 {
   "name": "no-sdr",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Multi-user WebSDR server for RTL-SDR dongles — real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
   "license": "MIT",
@@ -11,17 +11,28 @@
     "client"
   ],
   "scripts": {
-    "dev": "npm run build --workspace=shared && concurrently --raw -k \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
-    "dev:demo": "npm run build --workspace=shared && concurrently --raw -k \"npm run dev:demo --workspace=server\" \"npm run dev --workspace=client\"",
-    "dev:server": "npm run dev --workspace=server",
+    "dev": "npm run build --workspace=shared && npm run build:client && concurrently --raw -k \"npm run dev:go\" \"npm run dev --workspace=client\"",
+    "dev:demo": "npm run build --workspace=shared && npm run build:client && concurrently --raw -k \"npm run dev:go:demo\" \"npm run dev --workspace=client\"",
+    "dev:go": "cd serverng && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml go run ./cmd/serverng",
+    "dev:go:demo": "cd serverng && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml NODE_SDR_DEMO=1 go run ./cmd/serverng",
     "dev:client": "npm run dev --workspace=client",
-    "build": "npm run build --workspace=shared && npm run build --workspace=client && npm run build --workspace=server",
+    "dev:legacy": "npm run build --workspace=shared && concurrently --raw -k \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
+    "dev:legacy:demo": "npm run build --workspace=shared && concurrently --raw -k \"npm run dev:demo --workspace=server\" \"npm run dev --workspace=client\"",
+    "dev:legacy:server": "npm run dev --workspace=server",
+    "build": "npm run build --workspace=shared && npm run build:client && npm run build:go",
     "build:client": "npm run build --workspace=client",
-    "build:server": "npm run build --workspace=server",
-    "start": "npm run start --workspace=server",
-    "start:demo": "cross-env NODE_SDR_DEMO=1 npm run start --workspace=server",
-    "clean": "rimraf shared/dist server/dist client/dist node_modules/.cache shared/tsconfig.tsbuildinfo server/tsconfig.tsbuildinfo",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "build:go": "cd serverng && go build -ldflags=\"-s -w\" -o bin/serverng ./cmd/serverng",
+    "build:go:all": "cd serverng && make build-all",
+    "build:legacy": "npm run build --workspace=shared && npm run build --workspace=client && npm run build --workspace=server",
+    "build:legacy:server": "npm run build --workspace=server",
+    "start": "cd serverng && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml ./bin/serverng",
+    "start:demo": "cd serverng && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml NODE_SDR_DEMO=1 ./bin/serverng",
+    "start:legacy": "npm run start --workspace=server",
+    "start:legacy:demo": "cross-env NODE_SDR_DEMO=1 npm run start --workspace=server",
+    "clean": "rimraf shared/dist server/dist client/dist serverng/bin node_modules/.cache shared/tsconfig.tsbuildinfo server/tsconfig.tsbuildinfo",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:go": "cd serverng && go test ./...",
+    "bench:go": "cd serverng && go test -bench=. -benchmem ./internal/dsp/ ./internal/demod/ ./internal/codec/"
   },
   "engines": {
     "node": ">=22.0.0"
