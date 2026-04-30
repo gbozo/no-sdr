@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,12 +18,26 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
 )
 
+// version is set by ldflags at build time.
+var version = "dev"
+
 func main() {
+	// --version flag
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("serverng", version)
+		os.Exit(0)
+	}
+
 	// Setup structured logger.
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	logger.Info("starting serverng", "version", version)
 
 	// Determine config path.
 	cfgPath := os.Getenv("CONFIG_PATH")
@@ -66,7 +81,7 @@ func main() {
 	}
 
 	// Create chi router with all routes.
-	router := api.NewRouter(wsMgr, cfg, logger, staticDir)
+	router := api.NewRouterWithPath(wsMgr, cfg, logger, staticDir, cfgPath)
 
 	// Setup HTTP server.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -90,20 +105,25 @@ func main() {
 	<-ctx.Done()
 	logger.Info("shutting down gracefully...")
 
-	// Stop dongle pipelines.
+	// 1. Stop accepting new connections (server shutdown starts)
+	// 2. Drain WebSocket connections (5 second window)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+
+	// Stop dongle pipelines first (stops IQ data flow)
 	dongleMgr.Stop()
 
-	// Shut down WebSocket connections.
-	wsMgr.Shutdown(ctx)
+	// Drain WebSocket connections
+	wsMgr.Shutdown(drainCtx)
 
-	// Shut down HTTP server.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Shut down HTTP server (stops accepting, waits for in-flight)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown error", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("server stopped")
+	logger.Info("server stopped", "version", version)
 }
