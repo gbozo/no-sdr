@@ -1,63 +1,58 @@
 # ============================================
-# node-sdr — Docker Build
+# node-sdr — Docker Build (Go backend, v2+)
 # ============================================
-# Multi-stage build: build client + server, then slim runtime.
-# Use with docker-compose.yml for USB passthrough.
+# Stage 1: build the SolidJS client with Node.js
+# Stage 2: compile the Go binary
+# Stage 3: minimal Alpine runtime image
 # ============================================
 
-FROM node:22-slim AS builder
+# ---- Client Build ----
+FROM node:22-slim AS client-builder
 
 WORKDIR /app
 
-# Copy workspace config
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/
-COPY server/package.json server/
 COPY client/package.json client/
 
-# Install all deps
-RUN npm ci
+RUN npm ci --workspace=shared --workspace=client
 
-# Copy source
 COPY tsconfig.base.json ./
 COPY shared/ shared/
-COPY server/ server/
 COPY client/ client/
 
-# Build everything
-RUN npm run build
+RUN npm run build --workspace=shared && npm run build --workspace=client
 
-# Prune dev dependencies in-place for the runtime stage
-RUN npm prune --omit=dev
+# ---- Go Build ----
+FROM golang:1.23-alpine AS go-builder
 
-# ---- Runtime Stage ----
-FROM node:22-slim AS runtime
+WORKDIR /app/serverng
 
-# Install rtl-sdr tools
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      rtl-sdr \
-      librtlsdr-dev \
-      dump1090-mutability \
-      multimon-ng \
-    && rm -rf /var/lib/apt/lists/*
+COPY serverng/go.mod serverng/go.sum ./
+RUN go mod download
+
+COPY serverng/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /serverng ./cmd/serverng
+
+# ---- Runtime ----
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
-# Copy built artifacts and pruned node_modules
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/node_modules/ node_modules/
-COPY --from=builder /app/shared/package.json shared/
-COPY --from=builder /app/shared/dist/ shared/dist/
-COPY --from=builder /app/server/package.json server/
-COPY --from=builder /app/server/dist/ server/dist/
-COPY --from=builder /app/client/dist/ client/dist/
+# Go binary
+COPY --from=go-builder /serverng /app/serverng
 
-# Copy default config
-COPY config/ config/
+# Built client static files
+COPY --from=client-builder /app/client/dist /app/static
+
+# Default config (can be overridden by volume mount)
+COPY config/ /app/config/
 
 EXPOSE 3000
 
-ENV NODE_ENV=production
+ENV STATIC_DIR=/app/static
+ENV CONFIG_PATH=/app/config/config.yaml
 
-CMD ["node", "server/dist/index.js"]
+ENTRYPOINT ["/app/serverng"]

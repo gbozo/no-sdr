@@ -1,5 +1,5 @@
 # ============================================
-# node-sdr — Docker Compose
+# node-sdr — Docker Compose (Go backend, v2+)
 # ============================================
 # USB passthrough required for RTL-SDR access.
 # On Linux: --device /dev/bus/usb
@@ -21,7 +21,6 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     restart: unless-stopped
     environment:
-      - NODE_ENV=production
       - LOG_LEVEL=info
     # Required for USB access on Linux
     privileged: true
