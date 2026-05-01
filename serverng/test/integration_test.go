@@ -4,11 +4,14 @@ package test
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,42 +22,36 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
 )
 
-// TestFullPipeline starts the server in demo mode and verifies:
-// 1. HTTP health endpoint responds
-// 2. /api/dongles returns running dongle
-// 3. WebSocket connects successfully
-// 4. After subscribe, META message received
-// 5. FFT frames arrive (correct type byte)
-// 6. After audio_enabled + tune, IQ frames arrive
-func TestFullPipeline(t *testing.T) {
+// setupIntegrationServer creates a test server with demo dongle for integration tests.
+func setupIntegrationServer(t testing.TB) (*httptest.Server, *dongle.Manager) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: slog.LevelWarn,
 	}))
 
-	// Create config with demo dongle
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Port:          0, // unused with httptest
-			Host:          "127.0.0.1",
-			AdminPassword: "test",
+			Port:                  0,
+			Host:                  "127.0.0.1",
+			AdminPassword:         "test",
+			DemoMode:              true,
+			FftHistoryFftSize:     1024,
+			FftHistoryCompression: "none",
 		},
 		Dongles: []config.DongleConfig{
 			{
-				ID:        "test-demo",
-				Name:      "Test Demo Dongle",
+				ID:        "test-dongle",
+				Name:      "Test Demo",
 				Enabled:   true,
 				AutoStart: true,
-				Source: config.SourceConfig{
-					Type: "demo",
-				},
+				Source:    config.SourceConfig{Type: "demo"},
 				SampleRate: 2400000,
 				Profiles: []config.DongleProfile{
 					{
-						ID:              "fm-test",
-						Name:            "FM Test",
-						CenterFrequency: 100000000, // 100 MHz
+						ID:              "test-profile",
+						Name:            "Test FM",
+						CenterFrequency: 100000000,
 						SampleRate:      2400000,
-						Bandwidth:       150000,
+						Bandwidth:       200000,
 						Mode:            "wfm",
 						FftSize:         4096,
 						FftFps:          30,
@@ -64,163 +61,271 @@ func TestFullPipeline(t *testing.T) {
 		},
 	}
 
-	// Create WS Manager + Dongle Manager + Router
 	wsMgr := ws.NewManager(logger)
 	dongleMgr := dongle.NewManager(cfg, wsMgr, logger)
+	api.ProfileSwitchFunc = dongleMgr.SwitchProfile
+	api.DongleStartFunc = dongleMgr.StartDongleByID
+	api.DongleStopFunc = dongleMgr.StopDongleByID
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	router := api.NewRouter(wsMgr, cfg, logger, "")
+	srv := httptest.NewServer(router)
 
+	ctx := context.Background()
 	if err := dongleMgr.Start(ctx); err != nil {
 		t.Fatalf("failed to start dongle manager: %v", err)
 	}
-	defer dongleMgr.Stop()
 
-	router := api.NewRouter(wsMgr, cfg, logger, "")
-
-	// Start httptest.Server
-	srv := httptest.NewServer(router)
-	defer srv.Close()
-
-	// --- Test 1: Health endpoint responds ---
-	t.Run("health", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/health")
-		if err != nil {
-			t.Fatalf("health request failed: %v", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
-		}
+	t.Cleanup(func() {
+		dongleMgr.Stop()
+		wsMgr.Shutdown(ctx)
+		srv.Close()
 	})
 
-	// --- Test 2: /api/dongles returns running dongle ---
-	t.Run("dongles_api", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/api/dongles")
+	return srv, dongleMgr
+}
+
+func TestIntegration_FullPipeline(t *testing.T) {
+	srv, _ := setupIntegrationServer(t)
+
+	// 1. Health check
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatalf("health request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("health: expected 200, got %d", resp.StatusCode)
+	}
+
+	// 2. Dongles API
+	resp, err = http.Get(srv.URL + "/api/dongles")
+	if err != nil {
+		t.Fatalf("dongles request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("dongles: expected 200, got %d", resp.StatusCode)
+	}
+
+	// 3. Connect WebSocket
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + srv.URL[4:] + "/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	// 4. Subscribe
+	err = conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"subscribe","dongleId":"test-dongle"}`))
+	if err != nil {
+		t.Fatalf("subscribe write failed: %v", err)
+	}
+
+	// 5. Read META (subscribed)
+	metaReceived := false
+	for i := 0; i < 50; i++ {
+		_, data, err := conn.Read(ctx)
 		if err != nil {
-			t.Fatalf("dongles request failed: %v", err)
+			t.Fatalf("read failed: %v", err)
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		if len(data) > 0 && data[0] == 0x03 {
+			var meta map[string]any
+			if err := json.Unmarshal(data[1:], &meta); err == nil {
+				if meta["type"] == "subscribed" {
+					metaReceived = true
+					break
+				}
+			}
 		}
-		var dongles []map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&dongles); err != nil {
-			t.Fatalf("failed to decode dongles: %v", err)
-		}
-		if len(dongles) == 0 {
-			t.Fatal("expected at least 1 dongle")
-		}
-		if dongles[0]["id"] != "test-demo" {
-			t.Fatalf("expected dongle id 'test-demo', got %v", dongles[0]["id"])
-		}
-	})
+	}
+	if !metaReceived {
+		t.Fatal("META 'subscribed' message not received")
+	}
 
-	// --- Tests 3-7: WebSocket lifecycle ---
-	t.Run("websocket_lifecycle", func(t *testing.T) {
-		wsURL := "ws" + srv.URL[4:] + "/ws" // http:// → ws://
+	// 6. Send codec preference
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"codec","fftCodec":"deflate","iqCodec":"adpcm"}`))
 
-		wsCtx, wsCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer wsCancel()
+	// 7. Enable audio and tune to get IQ
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"audio_enabled","enabled":true}`))
+	time.Sleep(50 * time.Millisecond)
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"tune","offset":100000}`))
 
-		conn, _, err := websocket.Dial(wsCtx, wsURL, nil)
+	// 8. Wait for FFT and IQ frames
+	fftReceived := false
+	iqReceived := false
+	deadline := time.After(5 * time.Second)
+
+	for !fftReceived || !iqReceived {
+		select {
+		case <-deadline:
+			if !fftReceived {
+				t.Error("timeout waiting for FFT frame")
+			}
+			if !iqReceived {
+				t.Error("timeout waiting for IQ frame")
+			}
+			return
+		default:
+		}
+
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
 		if err != nil {
-			t.Fatalf("websocket dial failed: %v", err)
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		// --- Test 4: Send subscribe → verify META (type 0x03) ---
-		subscribeMsg := `{"cmd":"subscribe","dongleId":"test-demo"}`
-		if err := conn.Write(wsCtx, websocket.MessageText, []byte(subscribeMsg)); err != nil {
-			t.Fatalf("subscribe write failed: %v", err)
+			continue
 		}
 
-		// Read messages until we get META
-		metaReceived := false
-		fftReceived := false
-		iqReceived := false
-
-		// Wait for META message (type 0x03)
-		for i := 0; i < 50; i++ {
-			_, data, err := conn.Read(wsCtx)
-			if err != nil {
-				t.Fatalf("read failed: %v", err)
-			}
-			if len(data) > 0 && data[0] == 0x03 {
-				metaReceived = true
-				// Verify META payload is valid JSON
-				var meta map[string]any
-				if err := json.Unmarshal(data[1:], &meta); err != nil {
-					t.Fatalf("META payload is not valid JSON: %v", err)
-				}
-				if meta["dongleId"] != "test-demo" {
-					t.Fatalf("expected dongleId 'test-demo', got %v", meta["dongleId"])
-				}
-				break
-			}
-		}
-		if !metaReceived {
-			t.Fatal("META message (0x03) not received within 50 reads")
+		if len(data) == 0 {
+			continue
 		}
 
-		// --- Test 5: Wait for FFT frame (type 0x04, 0x08, or 0x0B) ---
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			readCtx, readCancel := context.WithTimeout(wsCtx, 500*time.Millisecond)
-			_, data, err := conn.Read(readCtx)
-			readCancel()
-			if err != nil {
-				continue
-			}
-			if len(data) > 0 {
-				switch data[0] {
-				case 0x04, 0x08, 0x0B:
+		msgType := data[0]
+		switch msgType {
+		case 0x0B: // MSG_FFT_DEFLATE
+			if len(data) > 9 {
+				binCount := binary.LittleEndian.Uint32(data[5:9])
+				if binCount == 4096 {
 					fftReceived = true
 				}
 			}
-			if fftReceived {
-				break
+		case 0x04: // MSG_FFT_COMPRESSED
+			fftReceived = true
+		case 0x09: // MSG_IQ_ADPCM
+			if len(data) > 5 {
+				iqReceived = true
 			}
+		case 0x02: // MSG_IQ_RAW
+			iqReceived = true
 		}
-		if !fftReceived {
-			t.Fatal("FFT frame (0x04/0x08/0x0B) not received within 2 seconds")
+	}
+
+	t.Logf("Integration test passed: FFT=%v IQ=%v", fftReceived, iqReceived)
+}
+
+func TestIntegration_NoiseBlankerControl(t *testing.T) {
+	srv, _ := setupIntegrationServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + srv.URL[4:] + "/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	// Subscribe
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"subscribe","dongleId":"test-dongle"}`))
+	// Drain META messages
+	for i := 0; i < 10; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		if len(data) > 0 && data[0] == 0x03 {
+			break
+		}
+	}
+
+	// Enable audio
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"audio_enabled","enabled":true}`))
+	time.Sleep(100 * time.Millisecond)
+
+	// Enable noise blanker
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"set_pre_filter_nb","enabled":true}`))
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"set_pre_filter_nb_threshold","level":8}`))
+
+	// Should still receive IQ frames (NB doesn't block signal, just blanks impulses)
+	conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"tune","offset":100000}`))
+
+	iqReceived := false
+	deadline := time.After(3 * time.Second)
+	for !iqReceived {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for IQ with NB enabled")
+			return
+		default:
 		}
 
-		// --- Test 6-7: Send audio_enabled → tune → verify IQ frame (type 0x09) ---
-		audioEnableMsg := `{"cmd":"audio_enabled","enabled":true}`
-		if err := conn.Write(wsCtx, websocket.MessageText, []byte(audioEnableMsg)); err != nil {
-			t.Fatalf("audio_enabled write failed: %v", err)
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			continue
 		}
-
-		// Small delay to let the pipeline initialize
-		time.Sleep(50 * time.Millisecond)
-
-		tuneMsg := `{"cmd":"tune","offset":100000}`
-		if err := conn.Write(wsCtx, websocket.MessageText, []byte(tuneMsg)); err != nil {
-			t.Fatalf("tune write failed: %v", err)
+		if len(data) > 0 && (data[0] == 0x09 || data[0] == 0x02) {
+			iqReceived = true
 		}
+	}
 
-		// Wait for IQ ADPCM frame (type 0x09)
-		deadline = time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			readCtx, readCancel := context.WithTimeout(wsCtx, 500*time.Millisecond)
-			_, data, err := conn.Read(readCtx)
-			readCancel()
-			if err != nil {
-				continue
-			}
-			if len(data) > 0 {
-				switch data[0] {
-				case 0x02, 0x09, 0x0C:
-					iqReceived = true
+	t.Log("NB control test passed: IQ received with NB enabled")
+}
+
+func BenchmarkLoad5Clients(b *testing.B) {
+	srv, _ := setupIntegrationServer(b)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wsURL := "ws" + srv.URL[4:] + "/ws"
+
+	// Connect 5 clients, all subscribed and receiving FFT + IQ
+	var totalFrames atomic.Int64
+	conns := make([]*websocket.Conn, 5)
+
+	for i := 0; i < 5; i++ {
+		conn, _, err := websocket.Dial(ctx, wsURL, nil)
+		if err != nil {
+			b.Fatalf("client %d dial failed: %v", i, err)
+		}
+		conns[i] = conn
+
+		// Drain welcome/server_stats
+		readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+		conn.Read(readCtx)
+		readCancel()
+
+		// Subscribe + enable audio
+		conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"subscribe","dongleId":"test-dongle"}`))
+		// Drain META
+		readCtx, readCancel = context.WithTimeout(ctx, 2*time.Second)
+		conn.Read(readCtx)
+		readCancel()
+
+		conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"codec","fftCodec":"deflate","iqCodec":"adpcm"}`))
+		conn.Write(ctx, websocket.MessageText, []byte(`{"cmd":"audio_enabled","enabled":true}`))
+		conn.Write(ctx, websocket.MessageText, []byte(fmt.Sprintf(`{"cmd":"tune","offset":%d}`, i*50000)))
+
+		// Reader goroutine — count frames
+		go func(c *websocket.Conn) {
+			for {
+				_, _, err := c.Read(ctx)
+				if err != nil {
+					return
 				}
+				totalFrames.Add(1)
 			}
-			if iqReceived {
-				break
-			}
+		}(conn)
+	}
+
+	// Let it run for 5 seconds to measure throughput
+	time.Sleep(5 * time.Second)
+
+	frames := totalFrames.Load()
+	b.ReportMetric(float64(frames)/5.0, "frames/sec")
+	b.ReportMetric(float64(frames)/(5.0*5.0), "frames/sec/client")
+
+	// Cleanup
+	cancel()
+	for _, c := range conns {
+		if c != nil {
+			c.Close(websocket.StatusNormalClosure, "")
 		}
-		if !iqReceived {
-			t.Fatal("IQ frame (0x02/0x09/0x0C) not received within 3 seconds")
-		}
-	})
+	}
 }

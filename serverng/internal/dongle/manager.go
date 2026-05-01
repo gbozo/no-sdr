@@ -1,7 +1,10 @@
 package dongle
 
 import (
+	"bytes"
+	"compress/flate"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,9 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gbozo/no-sdr/serverng/internal/codec"
+	codecPkg "github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 	"github.com/gbozo/no-sdr/serverng/internal/dsp"
+	"github.com/gbozo/no-sdr/serverng/internal/history"
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
 )
 
@@ -38,21 +42,24 @@ type activeDongle struct {
 	dongleCfg  *config.DongleConfig
 	source     Source // interface — DemoSource, RtlTcpSource, etc.
 	fftProc    *dsp.FftProcessor
-	deflateEnc    *codec.FftDeflateEncoder
-	deflateFloorEnc *codec.FftDeflateEncoder
+	deflateEnc    *codecPkg.FftDeflateEncoder
+	deflateFloorEnc *codecPkg.FftDeflateEncoder
+	fftHistory *history.FftBuffer
 	cancel     context.CancelFunc
 }
 
 // clientPipeline holds per-client IQ extraction state.
 type clientPipeline struct {
 	extractor    *dsp.IqExtractor
-	adpcmEnc     *codec.ImaAdpcmEncoder
+	adpcmEnc     *codecPkg.ImaAdpcmEncoder
 	opusPipeline *OpusPipeline // non-nil for opus/opus-hq clients
 	accumBuf     []int16       // 20ms accumulation buffer
 	accumPos     int
 	chunkSize    int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
 	iqCodec      string // "adpcm", "opus", "opus-hq"
 	dongleID     string // which dongle this client is subscribed to
+	nbEnabled    bool
+	nbThreshold  float32 // multiplier (default 10.0)
 }
 
 // NewManager creates a new dongle pipeline manager.
@@ -182,8 +189,8 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 	}
 
 	// Create deflate encoder (reusable, pools internal buffers)
-	deflateEnc := codec.NewFftDeflateEncoder(profile.FftSize)
-	deflateFloorEnc := codec.NewFftDeflateEncoder(profile.FftSize)
+	deflateEnc := codecPkg.NewFftDeflateEncoder(profile.FftSize)
+	deflateFloorEnc := codecPkg.NewFftDeflateEncoder(profile.FftSize)
 
 	ctx, cancel := context.WithCancel(parentCtx)
 
@@ -202,6 +209,7 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 		fftProc:    fftProc,
 		deflateEnc:      deflateEnc,
 		deflateFloorEnc: deflateFloorEnc,
+		fftHistory: history.NewFftBuffer(1024),
 		cancel:     cancel,
 	}
 
@@ -229,6 +237,10 @@ func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, p
 	sourceType := dcfg.Source.Type
 	if sourceType == "" {
 		sourceType = "demo" // default to demo if not specified
+	}
+	// Server-level demoMode overrides all source types
+	if m.cfg.Server.DemoMode {
+		sourceType = "demo"
 	}
 
 	sampleRate := profile.SampleRate
@@ -310,27 +322,52 @@ func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, p
 
 // applyDongleSettings sends initial configuration commands to an rtl_tcp-compatible source.
 func (m *Manager) applyDongleSettings(src *RtlTcpSource, dcfg *config.DongleConfig, profile *config.DongleProfile) {
-	src.SetFrequency(uint32(profile.CenterFrequency))
-	src.SetSampleRate(uint32(profile.SampleRate))
+	// Frequency: center + oscillator offset (compensates LO error)
+	freq := uint32(profile.CenterFrequency + int64(profile.OscillatorOffset))
+	src.SetFrequency(freq)
 
-	if dcfg.Gain > 0 {
-		src.SetGainMode(1) // manual gain
-		src.SetGain(uint32(dcfg.Gain * 10)) // tenths of dB
+	if profile.SampleRate > 0 {
+		src.SetSampleRate(uint32(profile.SampleRate))
 	}
+
+	// Gain: profile-level overrides dongle-level
+	if profile.Gain > 0 {
+		src.SetGainMode(1) // manual gain
+		src.SetGain(uint32(profile.Gain * 10)) // tenths of dB
+	} else if dcfg.Gain > 0 {
+		src.SetGainMode(1)
+		src.SetGain(uint32(dcfg.Gain * 10))
+	}
+
 	if dcfg.PPM != 0 {
 		src.SetFrequencyCorrection(uint32(dcfg.PPM))
 	}
-	if dcfg.DirectSampling > 0 {
-		src.SetDirectSampling(uint32(dcfg.DirectSampling))
+
+	// Direct sampling: profile overrides dongle (always send, even 0 to disable)
+	ds := dcfg.DirectSampling
+	if profile.DirectSampling != 0 {
+		ds = profile.DirectSampling
 	}
+	src.SetDirectSampling(uint32(ds))
+
+	// Bias-T: always send (0 to disable, 1 to enable)
 	if dcfg.BiasT {
 		src.SetBiasT(1)
+	} else {
+		src.SetBiasT(0)
 	}
+
 	if dcfg.DigitalAgc {
 		src.SetAgcMode(1)
+	} else {
+		src.SetAgcMode(0)
 	}
+
+	// Offset tuning: always send
 	if dcfg.OffsetTuning {
 		src.SetOffsetTuning(1)
+	} else {
+		src.SetOffsetTuning(0)
 	}
 }
 
@@ -360,9 +397,34 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 
 	// If source supports commands, send new frequency/rate/gain
 	if cs, ok := d.source.(CommandableSource); ok {
-		cs.SetFrequency(uint32(newProfile.CenterFrequency))
+		// Frequency + oscillator offset
+		freq := uint32(newProfile.CenterFrequency + int64(newProfile.OscillatorOffset))
+		cs.SetFrequency(freq)
 		if newProfile.SampleRate > 0 {
 			cs.SetSampleRate(uint32(newProfile.SampleRate))
+		}
+		// Per-profile gain (overrides dongle-level)
+		if newProfile.Gain > 0 {
+			cs.SetGainMode(1)
+			cs.SetGain(uint32(newProfile.Gain * 10))
+		}
+		// Per-profile direct sampling (always send, even 0)
+		ds := d.dongleCfg.DirectSampling
+		if newProfile.DirectSampling != 0 {
+			ds = newProfile.DirectSampling
+		}
+		cs.SetDirectSampling(uint32(ds))
+		// Bias-T always sent (so switching from HF profile to VHF disables it)
+		if d.dongleCfg.BiasT {
+			cs.SetBiasT(1)
+		} else {
+			cs.SetBiasT(0)
+		}
+		// Offset tuning always sent
+		if d.dongleCfg.OffsetTuning {
+			cs.SetOffsetTuning(1)
+		} else {
+			cs.SetOffsetTuning(0)
 		}
 	}
 
@@ -390,8 +452,8 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 
 		m.mu.Lock()
 		d.fftProc = fftProc
-		d.deflateEnc = codec.NewFftDeflateEncoder(newProfile.FftSize)
-		d.deflateFloorEnc = codec.NewFftDeflateEncoder(newProfile.FftSize)
+		d.deflateEnc = codecPkg.NewFftDeflateEncoder(newProfile.FftSize)
+		d.deflateFloorEnc = codecPkg.NewFftDeflateEncoder(newProfile.FftSize)
 		m.mu.Unlock()
 	}
 
@@ -447,6 +509,13 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 				return
 			}
 
+			// Swap I/Q channels if profile requests it (fixes inverted spectrum)
+			if d.profile.SwapIQ {
+				for i := 0; i < len(iqChunk)-1; i += 2 {
+					iqChunk[i], iqChunk[i+1] = iqChunk[i+1], iqChunk[i]
+				}
+			}
+
 			// Per-client IQ extraction — runs BEFORE FFT
 			m.processClientIQ(d.id, iqChunk)
 
@@ -455,6 +524,7 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 
 			// Broadcast each emitted FFT frame
 			for _, frame := range frames {
+				d.fftHistory.Push(frame)
 				m.broadcastFftFrame(d, frame)
 			}
 		}
@@ -529,7 +599,7 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 }
 
 // broadcastFftFrame encodes and sends an FFT frame to all subscribed clients,
-// using each client's preferred codec. Encoding is done lazily per codec type.
+// using each client's preferred codecPkg. Encoding is done lazily per codec type.
 func (m *Manager) broadcastFftFrame(d *activeDongle, fftFrame []float32) {
 	clients := m.wsMgr.SubscribedClients(d.id)
 	if len(clients) == 0 {
@@ -588,12 +658,12 @@ func (m *Manager) broadcastFftFrame(d *activeDongle, fftFrame []float32) {
 			msg = deflateFloorMsg
 		case "adpcm":
 			if adpcmMsg == nil {
-				adpcmMsg = ws.PackFFTAdpcmMessage(codec.EncodeFftAdpcm(fftFrame, minDb, maxDb))
+				adpcmMsg = ws.PackFFTAdpcmMessage(codecPkg.EncodeFftAdpcm(fftFrame, minDb, maxDb))
 			}
 			msg = adpcmMsg
 		default: // "none" or empty
 			if uint8Msg == nil {
-				uint8Msg = ws.PackFFTCompressedMessage(codec.CompressFft(fftFrame, minDb, maxDb), int16(minDb), int16(maxDb))
+				uint8Msg = ws.PackFFTCompressedMessage(codecPkg.CompressFft(fftFrame, minDb, maxDb), int16(minDb), int16(maxDb))
 			}
 			msg = uint8Msg
 		}
@@ -628,11 +698,13 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 	case "admin_auth":
 		m.handleAdminAuth(clientID, cmd)
 	case "request_history":
-		// TODO: send FFT history frames from FftHistoryBuffer
+		m.handleRequestHistory(clientID)
 	case "mute", "volume":
 		// Client-side only — acknowledged but no server action needed
-	case "set_pre_filter_nb", "set_pre_filter_nb_threshold":
-		// TODO: toggle per-client pre-filter noise blanker in IqExtractor
+	case "set_pre_filter_nb":
+		m.handleSetPreFilterNb(clientID, cmd)
+	case "set_pre_filter_nb_threshold":
+		m.handleSetPreFilterNbThreshold(clientID, cmd)
 	}
 }
 
@@ -663,6 +735,155 @@ func (m *Manager) handleAdminSetProfile(clientID string, cmd *ws.ClientCommand) 
 		}
 		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(errMeta))
 	}
+}
+
+// handleRequestHistory sends buffered FFT history frames to the requesting client.
+func (m *Manager) handleRequestHistory(clientID string) {
+	client := m.wsMgr.GetClient(clientID)
+	if client == nil {
+		return
+	}
+
+	m.mu.Lock()
+	d, ok := m.dongles[client.DongleID]
+	m.mu.Unlock()
+	if !ok || d.fftHistory == nil {
+		return
+	}
+
+	frames := d.fftHistory.GetRange()
+	if len(frames) == 0 {
+		return
+	}
+
+	binCount := len(frames[0])
+	minDb := int16(-130)
+	maxDb := int16(0)
+	dbRange := float32(maxDb - minDb)
+
+	// Determine history bin count from config (may downsample)
+	historyBins := m.cfg.Server.FftHistoryFftSize
+	if historyBins <= 0 || historyBins >= binCount {
+		historyBins = binCount // no downsampling needed
+	}
+
+	// Quantize all frames to uint8, with optional downsampling
+	frameCount := len(frames)
+	allBins := make([]byte, frameCount*historyBins)
+	for i, frame := range frames {
+		if historyBins == binCount {
+			// No downsampling — direct quantize
+			for j, val := range frame {
+				normalized := (val - float32(minDb)) / dbRange
+				if normalized < 0 {
+					normalized = 0
+				} else if normalized > 1 {
+					normalized = 1
+				}
+				allBins[i*historyBins+j] = byte(normalized * 255)
+			}
+		} else {
+			// Downsample: each history bin = max of mapped source bins
+			ratio := float64(binCount) / float64(historyBins)
+			for j := 0; j < historyBins; j++ {
+				lo := int(float64(j) * ratio)
+				hi := int(float64(j+1) * ratio)
+				if hi > binCount {
+					hi = binCount
+				}
+				maxVal := frame[lo]
+				for k := lo + 1; k < hi; k++ {
+					if frame[k] > maxVal {
+						maxVal = frame[k]
+					}
+				}
+				normalized := (maxVal - float32(minDb)) / dbRange
+				if normalized < 0 {
+					normalized = 0
+				} else if normalized > 1 {
+					normalized = 1
+				}
+				allBins[i*historyBins+j] = byte(normalized * 255)
+			}
+		}
+	}
+
+	// Apply compression based on config
+	compression := m.cfg.Server.FftHistoryCompression
+	if compression == "" {
+		compression = "deflate"
+	}
+
+	var codec byte
+	var payload []byte
+
+	switch compression {
+	case "deflate":
+		codec = 1
+		// Delta-encode the entire flat uint8 array, then deflate
+		total := len(allBins)
+		delta := make([]byte, total)
+		delta[0] = allBins[0]
+		for i := 1; i < total; i++ {
+			delta[i] = allBins[i] - allBins[i-1]
+		}
+		var buf bytes.Buffer
+		w, _ := flate.NewWriter(&buf, 6)
+		w.Write(delta)
+		w.Close()
+		payload = buf.Bytes()
+	case "adpcm":
+		codec = 2
+		// Convert uint8 back to float32 for ADPCM encoder
+		total := len(allBins)
+		float32Buf := make([]float32, total)
+		for i, b := range allBins {
+			float32Buf[i] = float32(minDb) + (float32(b)/255)*dbRange
+		}
+		payload = codecPkg.EncodeFftAdpcm(float32Buf, float32(minDb), float32(maxDb))
+	default: // "none"
+		codec = 0
+		payload = allBins
+	}
+
+	// Pack: [type][Uint16 frames][Uint32 bins][Int16 min][Int16 max][Uint8 codec][data]
+	header := make([]byte, 1+2+4+2+2+1)
+	header[0] = ws.MsgFFTHistory
+	binary.LittleEndian.PutUint16(header[1:3], uint16(frameCount))
+	binary.LittleEndian.PutUint32(header[3:7], uint32(historyBins))
+	binary.LittleEndian.PutUint16(header[7:9], uint16(minDb))
+	binary.LittleEndian.PutUint16(header[9:11], uint16(maxDb))
+	header[11] = codec
+
+	msg := make([]byte, len(header)+len(payload))
+	copy(msg, header)
+	copy(msg[len(header):], payload)
+
+	m.wsMgr.SendTo(clientID, msg)
+}
+
+// handleSetPreFilterNb toggles the per-client pre-filter noise blanker.
+func (m *Manager) handleSetPreFilterNb(clientID string, cmd *ws.ClientCommand) {
+	m.mu.Lock()
+	if cp, ok := m.clientPipelines[clientID]; ok {
+		if cmd.Enabled != nil {
+			cp.nbEnabled = *cmd.Enabled
+			cp.extractor.SetNbEnabled(*cmd.Enabled)
+		}
+	}
+	m.mu.Unlock()
+}
+
+// handleSetPreFilterNbThreshold sets the noise blanker threshold multiplier.
+func (m *Manager) handleSetPreFilterNbThreshold(clientID string, cmd *ws.ClientCommand) {
+	m.mu.Lock()
+	if cp, ok := m.clientPipelines[clientID]; ok {
+		if cmd.Level > 0 {
+			cp.nbThreshold = float32(cmd.Level)
+			cp.extractor.SetNbThreshold(float32(cmd.Level))
+		}
+	}
+	m.mu.Unlock()
 }
 
 // handleUnsubscribe removes a client's subscription.
@@ -988,13 +1209,25 @@ func (m *Manager) createClientPipeline(clientID string) {
 	}
 
 	cp := &clientPipeline{
-		extractor: ext,
-		adpcmEnc:  codec.NewImaAdpcmEncoder(),
-		accumBuf:  make([]int16, chunkSize),
-		accumPos:  0,
-		chunkSize: chunkSize,
-		iqCodec:   iqCodec,
-		dongleID:  dongleID,
+		extractor:   ext,
+		adpcmEnc:    codecPkg.NewImaAdpcmEncoder(),
+		accumBuf:    make([]int16, chunkSize),
+		accumPos:    0,
+		chunkSize:   chunkSize,
+		iqCodec:     iqCodec,
+		dongleID:    dongleID,
+		nbEnabled:   false,
+		nbThreshold: 10.0,
+	}
+
+	// Apply profile-level NB defaults to the extractor
+	if d.profile.PreFilterNb {
+		cp.nbEnabled = true
+		cp.extractor.SetNbEnabled(true)
+	}
+	if d.profile.PreFilterNbThreshold > 0 {
+		cp.nbThreshold = float32(d.profile.PreFilterNbThreshold)
+		cp.extractor.SetNbThreshold(float32(d.profile.PreFilterNbThreshold))
 	}
 
 	// Create Opus pipeline if codec is opus or opus-hq

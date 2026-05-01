@@ -15,12 +15,14 @@ type IqExtractorConfig struct {
 }
 
 // IqExtractor extracts a narrow sub-band from wideband IQ data.
-// Pipeline: uint8→complex64 → NCO shift → Butterworth LPF → Decimate → scale to Int16
+// Pipeline: uint8→complex64 → NoiseBlanker → NCO shift → Butterworth LPF → Decimate → scale to Int16
 type IqExtractor struct {
 	nco      *NCOBlock
 	filter   *ButterworthBlock
 	decimate *DecimateBlock
 	pipeline *Pipeline
+
+	noiseBlanker *NoiseBlanker // optional pre-filter NB
 
 	inputRate  int
 	outputRate int
@@ -68,14 +70,15 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 	}
 
 	e := &IqExtractor{
-		nco:        nco,
-		filter:     filter,
-		decimate:   decimate,
-		pipeline:   pipeline,
-		inputRate:  cfg.InputSampleRate,
-		outputRate: actualOutputRate,
-		factor:     factor,
-		logger:     logger,
+		nco:          nco,
+		filter:       filter,
+		decimate:     decimate,
+		pipeline:     pipeline,
+		noiseBlanker: NewNoiseBlanker(10.0),
+		inputRate:    cfg.InputSampleRate,
+		outputRate:   actualOutputRate,
+		factor:       factor,
+		logger:       logger,
 	}
 
 	return e, nil
@@ -103,6 +106,9 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 		qVal := (float32(rawIQ[i*2+1]) - 127.5) / 127.5
 		e.complexIn[i] = complex(iVal, qVal)
 	}
+
+	// Apply pre-filter noise blanker (if enabled)
+	e.noiseBlanker.Process(e.complexIn[:numSamples])
 
 	// Run through pipeline: NCO → Butterworth → Decimate
 	out := e.pipeline.Process(e.complexIn)
@@ -167,7 +173,17 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 // Reset clears all filter state.
 func (e *IqExtractor) Reset() {
 	e.pipeline.Reset()
+	e.noiseBlanker.Reset()
 }
+
+// SetNbEnabled enables or disables the pre-filter noise blanker.
+func (e *IqExtractor) SetNbEnabled(enabled bool) { e.noiseBlanker.SetEnabled(enabled) }
+
+// SetNbThreshold sets the noise blanker impulse threshold multiplier.
+func (e *IqExtractor) SetNbThreshold(t float32) { e.noiseBlanker.SetThreshold(t) }
+
+// NbEnabled returns whether the noise blanker is currently enabled.
+func (e *IqExtractor) NbEnabled() bool { return e.noiseBlanker.IsEnabled() }
 
 // OutputSampleRate returns the current output rate.
 func (e *IqExtractor) OutputSampleRate() int {
