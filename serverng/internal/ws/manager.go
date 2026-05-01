@@ -101,7 +101,7 @@ func (m *Manager) Broadcast(dongleID string, msg []byte) {
 	defer m.mu.RUnlock()
 
 	for _, client := range m.clients {
-		if client.DongleID == dongleID {
+		if client.SubscribedTo() == dongleID {
 			client.Send(msg)
 		}
 	}
@@ -142,7 +142,7 @@ func (m *Manager) SubscribedClients(dongleID string) []*Client {
 
 	var result []*Client
 	for _, client := range m.clients {
-		if client.DongleID == dongleID {
+		if client.SubscribedTo() == dongleID {
 			result = append(result, client)
 		}
 	}

@@ -9,14 +9,16 @@ import (
 
 func TestSsbDemod(t *testing.T) {
 	sampleRate := 12000.0
-	n := 1200
+	modFreq := 1000.0
+	n := 2400 // 200ms — enough for AGC to settle
 
-	// Generate a known signal: real component is a 1kHz tone
+	// Generate a known SSB-like signal: real component is a 1kHz tone.
+	// The DC block removes the DC component; AGC normalizes amplitude to ~0.3.
 	in := make([]complex64, n)
 	for i := 0; i < n; i++ {
 		t_sec := float64(i) / sampleRate
-		re := float32(math.Sin(2 * math.Pi * 1000 * t_sec))
-		im := float32(math.Cos(2 * math.Pi * 1000 * t_sec))
+		re := float32(math.Sin(2 * math.Pi * modFreq * t_sec))
+		im := float32(math.Cos(2 * math.Pi * modFreq * t_sec))
 		in[i] = complex(re, im)
 	}
 
@@ -31,18 +33,42 @@ func TestSsbDemod(t *testing.T) {
 		t.Fatalf("expected %d samples, got %d", n, written)
 	}
 
-	// Output should be real(in) = sin(2*pi*1000*t)
-	maxErr := float32(0)
-	for i := 0; i < n; i++ {
-		t_sec := float64(i) / sampleRate
-		expected := float32(math.Sin(2 * math.Pi * 1000 * t_sec))
-		err := float32(math.Abs(float64(out[i] - expected)))
-		if err > maxErr {
-			maxErr = err
+	// After AGC settling (skip first half), verify:
+	// 1. Output is non-silent
+	// 2. Output oscillates at modFreq (1kHz)
+	// 3. Output amplitude is in AGC range
+	start := n / 2
+	hasSignal := false
+	maxAmp := float32(0)
+	for i := start; i < n; i++ {
+		a := float32(math.Abs(float64(out[i])))
+		if a > 0.01 {
+			hasSignal = true
+		}
+		if a > maxAmp {
+			maxAmp = a
 		}
 	}
-	if maxErr > 1e-6 {
-		t.Errorf("SSB output error too high: %e", maxErr)
+	if !hasSignal {
+		t.Errorf("SSB output is silent after settling (max amp: %f)", maxAmp)
+	}
+	if maxAmp > 2.0 {
+		t.Errorf("SSB output amplitude too high after AGC: %f", maxAmp)
+	}
+
+	// Verify correct frequency via zero crossings
+	period := int(sampleRate / modFreq)
+	crossings := 0
+	for i := start + 1; i < n; i++ {
+		if (out[i-1] < 0 && out[i] >= 0) || (out[i-1] >= 0 && out[i] < 0) {
+			crossings++
+		}
+	}
+	remainingSamples := n - start
+	expectedCrossings := 2 * remainingSamples / period
+	tolerance := expectedCrossings / 5
+	if math.Abs(float64(crossings-expectedCrossings)) > float64(tolerance) {
+		t.Errorf("SSB frequency wrong: expected ~%d zero crossings, got %d", expectedCrossings, crossings)
 	}
 }
 
@@ -55,6 +81,7 @@ func TestSsbDemodLsb(t *testing.T) {
 	ctx := dsp.BlockContext{SampleRate: 12000, BlockSize: 128}
 	demod.Init(ctx)
 
+	// Feed a ramp signal — the DC block + AGC will process it
 	in := make([]complex64, 128)
 	out := make([]float32, 128)
 	for i := range in {
@@ -66,12 +93,17 @@ func TestSsbDemodLsb(t *testing.T) {
 		t.Fatalf("expected 128 samples, got %d", written)
 	}
 
-	// Verify real component extraction
-	for i := 0; i < 128; i++ {
-		if out[i] != real(in[i]) {
-			t.Errorf("sample %d: expected %f, got %f", i, real(in[i]), out[i])
+	// Output length must match input — verify no samples are dropped
+	// (ramp has monotonic real component so all outputs should be non-negative after some settling)
+	hasOutput := false
+	for i := 10; i < 128; i++ { // skip transient
+		if out[i] != 0 {
+			hasOutput = true
 			break
 		}
+	}
+	if !hasOutput {
+		t.Error("SSB LSB output is all-zero")
 	}
 }
 

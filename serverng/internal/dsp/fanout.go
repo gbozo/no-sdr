@@ -9,10 +9,11 @@ import (
 // Each reader has an independent cursor. Slow readers skip forward.
 // Uses ring buffer semantics: one writer (dongle goroutine), N readers (client goroutines).
 type FanOut struct {
+	mu       sync.RWMutex // protects buf; write=Write, read=Read
 	buf      []byte
 	size     int
 	writePos atomic.Int64
-	mu       sync.Mutex
+	readerMu sync.Mutex // protects readers slice
 	readers  []*FanOutReader
 }
 
@@ -49,7 +50,8 @@ func (f *FanOut) Write(data []byte) {
 	writePos := f.writePos.Load()
 	start := int(writePos % int64(f.size))
 
-	// Copy data into ring buffer (may wrap around).
+	// Exclusive write lock while copying into the ring buffer.
+	f.mu.Lock()
 	if start+len(data) <= f.size {
 		copy(f.buf[start:], data)
 	} else {
@@ -57,6 +59,7 @@ func (f *FanOut) Write(data []byte) {
 		copy(f.buf[start:], data[:firstPart])
 		copy(f.buf[0:], data[firstPart:])
 	}
+	f.mu.Unlock()
 
 	f.writePos.Add(int64(len(data)))
 }
@@ -67,16 +70,16 @@ func (f *FanOut) NewReader() *FanOutReader {
 		fanout:  f,
 		readPos: f.writePos.Load(),
 	}
-	f.mu.Lock()
+	f.readerMu.Lock()
 	f.readers = append(f.readers, r)
-	f.mu.Unlock()
+	f.readerMu.Unlock()
 	return r
 }
 
 // RemoveReader removes a reader from the fan-out.
 func (f *FanOut) RemoveReader(r *FanOutReader) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.readerMu.Lock()
+	defer f.readerMu.Unlock()
 	for i, reader := range f.readers {
 		if reader == r {
 			f.readers = append(f.readers[:i], f.readers[i+1:]...)
@@ -113,7 +116,8 @@ func (r *FanOutReader) Read(dst []byte) int {
 
 	start := int(r.readPos % int64(f.size))
 
-	// Copy from ring buffer (may wrap around).
+	// Shared read lock while copying from the ring buffer.
+	f.mu.RLock()
 	if start+toRead <= f.size {
 		copy(dst[:toRead], f.buf[start:start+toRead])
 	} else {
@@ -121,6 +125,7 @@ func (r *FanOutReader) Read(dst []byte) int {
 		copy(dst[:firstPart], f.buf[start:])
 		copy(dst[firstPart:toRead], f.buf[0:])
 	}
+	f.mu.RUnlock()
 
 	r.readPos += int64(toRead)
 	return toRead

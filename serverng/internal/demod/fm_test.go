@@ -29,7 +29,9 @@ func TestFmMonoDemod(t *testing.T) {
 	// Generate FM signal (carrier at 0 Hz since it's already baseband)
 	signal := generateFmSignal(n, sampleRate, 0, modFreq, deviation)
 
-	demod := NewFmMonoDemod(50e-6)
+	// Use the explicit deviation constructor — the test signal uses 75kHz deviation
+	// (standard WFM), so the demod must match to get ±1 normalized output.
+	demod := NewFmMonoDemodWithDeviation(50e-6, deviation)
 	ctx := dsp.BlockContext{SampleRate: sampleRate, BlockSize: n}
 	if err := demod.Init(ctx); err != nil {
 		t.Fatalf("Init failed: %v", err)
@@ -101,7 +103,7 @@ func TestFmMonoReset(t *testing.T) {
 
 func TestFmStereoPilotDetection(t *testing.T) {
 	sampleRate := 240000.0
-	n := 48000 // 200ms
+	n := 48000 // 200ms @ 240kHz
 
 	// Generate composite stereo signal with 19kHz pilot
 	composite := make([]complex64, n)
@@ -121,10 +123,14 @@ func TestFmStereoPilotDetection(t *testing.T) {
 		t.Fatalf("Init failed: %v", err)
 	}
 
-	out := make([]float32, 2*n)
+	// FmStereoDemod now decimates 240k→48k inside the demod (factor 5).
+	// Output is interleaved L,R at 48kHz: n/5 frames × 2 channels = n*2/5 samples.
+	decimFactor := int(math.Round(sampleRate / 48000.0))
+	expectedSamples := (n / decimFactor) * 2
+	out := make([]float32, n*2) // generous buffer
 	written := demod.Process(composite, out)
-	if written != 2*n {
-		t.Fatalf("expected %d samples, got %d", 2*n, written)
+	if written != expectedSamples {
+		t.Fatalf("expected %d samples (decimated to 48kHz stereo), got %d", expectedSamples, written)
 	}
 
 	// Blend factor should be a value between 0 and 1
@@ -136,7 +142,7 @@ func TestFmStereoPilotDetection(t *testing.T) {
 
 func TestFmStereoOutputInterleaved(t *testing.T) {
 	sampleRate := 240000.0
-	n := 4800
+	n := 4800 // input samples @ 240kHz
 
 	in := make([]complex64, n)
 	for i := range in {
@@ -148,10 +154,17 @@ func TestFmStereoOutputInterleaved(t *testing.T) {
 	ctx := dsp.BlockContext{SampleRate: sampleRate, BlockSize: n}
 	demod.Init(ctx)
 
-	out := make([]float32, 2*n)
+	// Output is interleaved L,R decimated to 48kHz: n/5 frames × 2 = n*2/5 samples.
+	decimFactor := int(math.Round(sampleRate / 48000.0))
+	expectedSamples := (n / decimFactor) * 2
+	out := make([]float32, n*2) // generous buffer
 	written := demod.Process(in, out)
-	if written != 2*n {
-		t.Errorf("expected %d interleaved samples, got %d", 2*n, written)
+	if written != expectedSamples {
+		t.Errorf("expected %d interleaved samples (decimated to 48kHz), got %d", expectedSamples, written)
+	}
+	// Verify output is interleaved pairs (even count)
+	if written%2 != 0 {
+		t.Errorf("output sample count should be even (L,R pairs), got %d", written)
 	}
 }
 

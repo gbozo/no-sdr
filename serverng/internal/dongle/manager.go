@@ -50,9 +50,12 @@ type activeDongle struct {
 
 // clientPipeline holds per-client IQ extraction state.
 type clientPipeline struct {
+	// pmu protects opusPipeline field only — used by both the hot path
+	// goroutine (processClientIQ) and command handler goroutines.
+	pmu          sync.Mutex
 	extractor    *dsp.IqExtractor
 	adpcmEnc     *codecPkg.ImaAdpcmEncoder
-	opusPipeline *OpusPipeline // non-nil for opus/opus-hq clients
+	opusPipeline *OpusPipeline // non-nil for opus/opus-hq clients; guarded by pmu
 	accumBuf     []int16       // 20ms accumulation buffer
 	accumPos     int
 	chunkSize    int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
@@ -577,8 +580,12 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 		}
 
 		// Opus pipeline path: demod + encode → send Opus packets
-		if cp.opusPipeline != nil {
-			results := cp.opusPipeline.Process(subBand)
+		// pmu guards opusPipeline against concurrent codec switch commands.
+		cp.pmu.Lock()
+		opus := cp.opusPipeline
+		cp.pmu.Unlock()
+		if opus != nil {
+			results := opus.Process(subBand)
 			for _, r := range results {
 				msg := ws.PackAudioOpusMessage(r.Packet, uint16(r.Samples), uint8(r.Channels))
 				m.wsMgr.SendTo(clientID, msg)
@@ -915,15 +922,27 @@ func (m *Manager) handleUnsubscribe(clientID string) {
 		return
 	}
 	client.DongleID = ""
-	// Destroy any IQ pipeline for this client
+	// Remove the pipeline from the map so the hot path won't pick it up in
+	// future snapshots, then close it outside the map lock.
 	m.mu.Lock()
-	if cp, ok := m.clientPipelines[clientID]; ok {
-		if cp.opusPipeline != nil {
-			cp.opusPipeline.Close()
-		}
+	cp, ok := m.clientPipelines[clientID]
+	if ok {
 		delete(m.clientPipelines, clientID)
 	}
 	m.mu.Unlock()
+
+	if ok && cp != nil {
+		// Swap opusPipeline to nil under pmu so any concurrent Process() call
+		// that grabbed the pointer from a previous snapshot finishes safely,
+		// but future callers see nil.
+		cp.pmu.Lock()
+		pipeline := cp.opusPipeline
+		cp.opusPipeline = nil
+		cp.pmu.Unlock()
+		if pipeline != nil {
+			pipeline.Close()
+		}
+	}
 }
 
 // handleStereoEnabled toggles stereo encoding in the Opus pipeline.
@@ -934,15 +953,15 @@ func (m *Manager) handleStereoEnabled(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
 	cp, ok := m.clientPipelines[clientID]
 	m.mu.Unlock()
-	if !ok || cp.opusPipeline == nil {
+	if !ok {
 		return
 	}
-	// Update the Opus pipeline's stereo state
-	if *cmd.Enabled {
-		cp.opusPipeline.SetStereo(true)
-	} else {
-		cp.opusPipeline.SetStereo(false)
+	// pmu guards opusPipeline against concurrent Process() calls in the hot path.
+	cp.pmu.Lock()
+	if cp.opusPipeline != nil {
+		cp.opusPipeline.SetStereo(*cmd.Enabled)
 	}
+	cp.pmu.Unlock()
 }
 
 // handleSubscribe sends META message to client with profile info.
@@ -1030,6 +1049,9 @@ func (m *Manager) handleAudioEnabled(clientID string, cmd *ws.ClientCommand) {
 }
 
 // handleTune updates the client's IQ extractor NCO offset.
+// Mirrors Node.js behaviour: resets filter state + accumulator on retune to
+// avoid IIR transients and stale ADPCM predictor state bleeding into the new
+// frequency.
 func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
 	cp, ok := m.clientPipelines[clientID]
@@ -1037,6 +1059,15 @@ func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 
 	if ok && cp.extractor != nil {
 		cp.extractor.SetTuneOffset(cmd.Offset)
+		// Reset IIR filter state — old state from the previous frequency will
+		// produce a transient glitch at the new centre frequency.
+		cp.extractor.Reset()
+		// Reset accumulator and ADPCM encoder so the 20ms chunk boundary is
+		// clean and the differential predictor starts from a known state.
+		cp.accumPos = 0
+		if cp.adpcmEnc != nil {
+			cp.adpcmEnc.Reset()
+		}
 		m.logger.Debug("client tune offset updated", "clientID", clientID, "offset", cmd.Offset)
 	}
 }
@@ -1067,18 +1098,19 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 		cp.extractor.SetOutputSampleRate(rate)
 		m.updateChunkSize(cp)
 
-		// Update opus pipeline demodulator if active
+		// Update opus pipeline demodulator if active.
+		// pmu guards opusPipeline against concurrent hot-path reads.
+		cp.pmu.Lock()
 		if cp.opusPipeline != nil {
+			// UpdateSampleRate recalculates decimFactor and upsampleRatio
+			// internally — do not manually override them afterwards.
 			cp.opusPipeline.UpdateSampleRate(rate)
-			cp.opusPipeline.decimFactor = 1
-			if rate > 48000 {
-				cp.opusPipeline.decimFactor = rate / 48000
-			}
 			if err := cp.opusPipeline.SetMode(cmd.Mode); err != nil {
 				m.logger.Error("failed to set opus pipeline mode",
 					"clientID", clientID, "mode", cmd.Mode, "error", err)
 			}
 		}
+		cp.pmu.Unlock()
 
 		// Reset accumulator on mode change
 		cp.accumPos = 0
@@ -1126,7 +1158,18 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 			mode = client.Mode
 		}
 		if mode == "" {
-			mode = "nfm"
+			// Fall back to the profile default, not a hard-coded "nfm".
+			// This matches createClientPipeline() behaviour and ensures WFM profiles
+			// get the correct demodulator when the user switches codec without ever
+			// sending a mode command.
+			m.mu.Lock()
+			if d, ok := m.dongles[cp.dongleID]; ok {
+				mode = d.profile.Mode
+			}
+			m.mu.Unlock()
+		}
+		if mode == "" {
+			mode = "nfm" // ultimate fallback if dongle is gone
 		}
 
 		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
@@ -1140,31 +1183,35 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 			return
 		}
 
-		m.mu.Lock()
+		// Reset the extractor to clear any stale IIR state before feeding Opus pipeline.
+		cp.extractor.Reset()
+
+		cp.pmu.Lock()
 		cp.opusPipeline = pipeline
 		cp.iqCodec = newCodec
-		m.mu.Unlock()
+		cp.pmu.Unlock()
 
 		m.logger.Info("switched to opus pipeline", "clientID", clientID, "codec", newCodec)
 
 	} else if isOldOpus && !isNewOpus {
 		// Switching from Opus to IQ (none/adpcm): destroy OpusPipeline
 		// IQ extractor rate is unchanged — it's always mode-based
-		m.mu.Lock()
-		if cp.opusPipeline != nil {
-			cp.opusPipeline.Close()
-			cp.opusPipeline = nil
-		}
+		cp.pmu.Lock()
+		old := cp.opusPipeline
+		cp.opusPipeline = nil
 		cp.iqCodec = newCodec
+		cp.pmu.Unlock()
+		if old != nil {
+			old.Close()
+		}
 		cp.adpcmEnc.Reset()
 		cp.accumPos = 0
-		m.mu.Unlock()
 
 		m.logger.Info("switched from opus to IQ codec", "clientID", clientID, "codec", newCodec)
 
 	} else if isOldOpus && isNewOpus && oldCodec != newCodec {
 		// Switching between opus and opus-hq: just update bitrate
-		m.mu.Lock()
+		cp.pmu.Lock()
 		if cp.opusPipeline != nil {
 			channels := cp.opusPipeline.Channels()
 			newBitrate := bitrateForQuality(newCodec, channels)
@@ -1174,7 +1221,7 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 			}
 		}
 		cp.iqCodec = newCodec
-		m.mu.Unlock()
+		cp.pmu.Unlock()
 
 		m.logger.Info("switched opus quality", "clientID", clientID, "codec", newCodec)
 
@@ -1182,9 +1229,9 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 		// Switching between none and adpcm (both non-opus)
 		m.mu.Lock()
 		cp.iqCodec = newCodec
+		m.mu.Unlock()
 		cp.adpcmEnc.Reset()
 		cp.accumPos = 0
-		m.mu.Unlock()
 
 		m.logger.Info("switched IQ codec", "clientID", clientID, "from", oldCodec, "to", newCodec)
 	}
@@ -1315,10 +1362,14 @@ func (m *Manager) destroyClientPipeline(clientID string) {
 	}
 	m.mu.Unlock()
 
-	if ok {
-		// Clean up opus pipeline resources
-		if cp.opusPipeline != nil {
-			cp.opusPipeline.Close()
+	if ok && cp != nil {
+		// Swap opusPipeline to nil under pmu before closing (mirrors handleUnsubscribe).
+		cp.pmu.Lock()
+		pipeline := cp.opusPipeline
+		cp.opusPipeline = nil
+		cp.pmu.Unlock()
+		if pipeline != nil {
+			pipeline.Close()
 		}
 		m.logger.Info("destroyed client IQ pipeline", "clientID", clientID)
 	}

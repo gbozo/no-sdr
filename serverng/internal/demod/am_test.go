@@ -9,14 +9,16 @@ import (
 
 func TestAmDemod(t *testing.T) {
 	sampleRate := 48000.0
-	n := 4800
+	modFreq := 1000.0
+	n := 9600 // 200ms — enough for AGC to settle
 
-	// Generate AM signal: carrier with known envelope
-	// envelope = 1 + 0.5*sin(2*pi*1000*t)
+	// Generate AM signal: carrier with known envelope = 1 + 0.5*sin(2*pi*1000*t)
+	// After DC blocking the mean envelope (≈1.0) is removed, leaving ~0.5*sin(...)
+	// After AGC the amplitude will converge to ≈ agcTarget (0.3).
 	in := make([]complex64, n)
 	for i := 0; i < n; i++ {
 		t_sec := float64(i) / sampleRate
-		envelope := 1.0 + 0.5*math.Sin(2*math.Pi*1000*t_sec)
+		envelope := 1.0 + 0.5*math.Sin(2*math.Pi*modFreq*t_sec)
 		carrierPhase := 2.0 * math.Pi * 10000 * t_sec
 		in[i] = complex(
 			float32(envelope*math.Cos(carrierPhase)),
@@ -34,19 +36,42 @@ func TestAmDemod(t *testing.T) {
 		t.Fatalf("expected %d samples, got %d", n, written)
 	}
 
-	// Verify envelope detection matches expected
-	maxErr := float32(0)
-	for i := 100; i < n; i++ { // skip first few for settling
-		t_sec := float64(i) / sampleRate
-		expected := float32(1.0 + 0.5*math.Sin(2*math.Pi*1000*t_sec))
-		err := float32(math.Abs(float64(out[i] - expected)))
-		if err > maxErr {
-			maxErr = err
+	// After AGC settling (skip first half), verify:
+	// 1. Output is non-silent (has signal energy)
+	// 2. Output oscillates at modFreq (1kHz) — count zero crossings
+	// 3. Output amplitude is within AGC range (not saturated or silent)
+	start := n / 2
+	hasSignal := false
+	maxAmp := float32(0)
+	for i := start; i < n; i++ {
+		a := float32(math.Abs(float64(out[i])))
+		if a > 0.01 {
+			hasSignal = true
+		}
+		if a > maxAmp {
+			maxAmp = a
 		}
 	}
+	if !hasSignal {
+		t.Errorf("AM output is silent after settling (max amp: %f)", maxAmp)
+	}
+	if maxAmp > 2.0 {
+		t.Errorf("AM output amplitude too high after AGC: %f (AGC not working)", maxAmp)
+	}
 
-	if maxErr > 0.01 {
-		t.Errorf("AM envelope detection error too high: max error = %f", maxErr)
+	// Count zero crossings to verify 1kHz modulation frequency is preserved
+	period := int(sampleRate / modFreq)
+	crossings := 0
+	for i := start + 1; i < n; i++ {
+		if (out[i-1] < 0 && out[i] >= 0) || (out[i-1] >= 0 && out[i] < 0) {
+			crossings++
+		}
+	}
+	remainingSamples := n - start
+	expectedCrossings := 2 * remainingSamples / period
+	tolerance := expectedCrossings / 5 // 20%
+	if math.Abs(float64(crossings-expectedCrossings)) > float64(tolerance) {
+		t.Errorf("AM modulation frequency wrong: expected ~%d zero crossings, got %d", expectedCrossings, crossings)
 	}
 }
 

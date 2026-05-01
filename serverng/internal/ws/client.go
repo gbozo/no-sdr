@@ -74,6 +74,14 @@ func (c *Client) Close() {
 	c.cancel()
 }
 
+// SubscribedTo returns the dongle ID this client is subscribed to.
+// Safe to call concurrently (protected by mu).
+func (c *Client) SubscribedTo() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.DongleID
+}
+
 // Supported codec values
 var validFftCodecs = map[string]bool{
 	"none": true, "adpcm": true, "deflate": true, "deflate-floor": true,
