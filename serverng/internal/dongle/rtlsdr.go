@@ -175,11 +175,7 @@ func (r *RtlSdrSource) SetGainMode(manual bool) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	mode := 0
-	if manual {
-		mode = 1
-	}
-	return r.device.SetTunerGainMode(mode)
+	return r.device.SetTunerGainMode(manual)
 }
 
 // SetDirectSampling sets direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC).
@@ -187,7 +183,7 @@ func (r *RtlSdrSource) SetDirectSampling(mode int) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	return r.device.SetDirectSampling(mode)
+	return r.device.SetDirectSampling(rtl.SamplingMode(mode))
 }
 
 // SetBiasT enables or disables the bias-T voltage on the antenna port.
@@ -195,11 +191,7 @@ func (r *RtlSdrSource) SetBiasT(enabled bool) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	val := 0
-	if enabled {
-		val = 1
-	}
-	return r.device.SetBiasTee(val)
+	return r.device.SetBiasTee(enabled)
 }
 
 // SetAgc enables or disables the RTL2832U internal AGC.
@@ -207,9 +199,5 @@ func (r *RtlSdrSource) SetAgc(enabled bool) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	val := 0
-	if enabled {
-		val = 1
-	}
-	return r.device.SetAgcMode(val)
+	return r.device.SetAgcMode(enabled)
 }
