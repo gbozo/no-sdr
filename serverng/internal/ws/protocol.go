@@ -47,8 +47,10 @@ type ServerMeta struct {
 	Message string `json:"message,omitempty"`
 	Code    string `json:"code,omitempty"`
 	// Welcome fields
-	ClientId      string `json:"clientId,omitempty"`
-	ServerVersion string `json:"serverVersion,omitempty"`
+	ClientId         string   `json:"clientId,omitempty"`
+	ServerVersion    string   `json:"serverVersion,omitempty"`
+	AllowedFftCodecs []string `json:"allowedFftCodecs,omitempty"`
+	AllowedIqCodecs  []string `json:"allowedIqCodecs,omitempty"`
 }
 
 // ClientCommand represents a parsed command from the client (JSON text).

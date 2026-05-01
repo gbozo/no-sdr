@@ -10,6 +10,36 @@ import (
 	rtl "github.com/jpoirier/gortlsdr"
 )
 
+// LocalDeviceInfo describes a locally-attached RTL-SDR dongle.
+type LocalDeviceInfo struct {
+	Index   int    `json:"index"`
+	Name    string `json:"name"`
+	Serial  string `json:"serial"`
+	Product string `json:"product"`
+	Manufact string `json:"manufact"`
+}
+
+// EnumerateLocalDevices returns info about every RTL-SDR visible to librtlsdr.
+// Returns an empty slice (not an error) when no devices are found.
+func EnumerateLocalDevices() []LocalDeviceInfo {
+	count := rtl.GetDeviceCount()
+	out := make([]LocalDeviceInfo, 0, count)
+	for i := 0; i < count; i++ {
+		manufact, product, serial, err := rtl.GetDeviceUsbStrings(i)
+		if err != nil {
+			manufact, product, serial = "", "", ""
+		}
+		out = append(out, LocalDeviceInfo{
+			Index:    i,
+			Name:     rtl.GetDeviceName(i),
+			Serial:   serial,
+			Product:  product,
+			Manufact: manufact,
+		})
+	}
+	return out
+}
+
 // RtlSdrSource reads IQ directly from a local USB RTL-SDR dongle.
 // Build with: go build -tags rtlsdr
 type RtlSdrSource struct {
@@ -20,8 +50,11 @@ type RtlSdrSource struct {
 
 // RtlSdrConfig configures a local RTL-SDR source.
 type RtlSdrConfig struct {
+	// DeviceIndex is used when Serial is empty.
 	DeviceIndex int
-	Logger      *slog.Logger
+	// Serial selects the dongle by EEPROM serial string; takes precedence over DeviceIndex.
+	Serial string
+	Logger *slog.Logger
 }
 
 // NewRtlSdrSource creates a new local RTL-SDR source.
@@ -29,8 +62,17 @@ func NewRtlSdrSource(cfg RtlSdrConfig) *RtlSdrSource {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	idx := cfg.DeviceIndex
+	if cfg.Serial != "" {
+		if resolved, err := rtl.GetIndexBySerial(cfg.Serial); err == nil {
+			idx = resolved
+		} else {
+			cfg.Logger.Warn("rtlsdr: serial not found, falling back to device index",
+				"serial", cfg.Serial, "fallback", cfg.DeviceIndex, "error", err)
+		}
+	}
 	return &RtlSdrSource{
-		deviceIdx: cfg.DeviceIndex,
+		deviceIdx: idx,
 		logger:    cfg.Logger,
 	}
 }

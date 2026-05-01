@@ -30,65 +30,77 @@ type Config struct {
 
 // ServerConfig holds HTTP server and admin settings.
 type ServerConfig struct {
-	Port                  int    `yaml:"port"`
-	Host                  string `yaml:"host"`
-	AdminPassword         string `yaml:"adminPassword"`
-	Callsign              string `yaml:"callsign"`
-	Description           string `yaml:"description"`
-	Location              string `yaml:"location"`
-	DemoMode              bool   `yaml:"demoMode"`
-	FftHistoryFftSize     int    `yaml:"fftHistoryFftSize"`
-	FftHistoryCompression string `yaml:"fftHistoryCompression"`
+	Port                  int      `yaml:"port"                  json:"port"`
+	Host                  string   `yaml:"host"                  json:"host"`
+	AdminPassword         string   `yaml:"adminPassword"         json:"adminPassword"`
+	Callsign              string   `yaml:"callsign"              json:"callsign"`
+	Description           string   `yaml:"description"           json:"description"`
+	Location              string   `yaml:"location"              json:"location"`
+	DemoMode              bool     `yaml:"demoMode"              json:"demoMode"`
+	FftHistoryFftSize     int      `yaml:"fftHistoryFftSize"     json:"fftHistoryFftSize"`
+	FftHistoryCompression string   `yaml:"fftHistoryCompression" json:"fftHistoryCompression"`
+	// AllowedFftCodecs lists the FFT codecs the server will accept from clients.
+	// Defaults to all supported codecs. Admin can restrict or re-enable at runtime.
+	AllowedFftCodecs []string `yaml:"allowedFftCodecs" json:"allowedFftCodecs"`
+	// AllowedIqCodecs lists the IQ/audio codecs the server will accept.
+	// Opus variants are automatically removed if the binary was built without libopus.
+	AllowedIqCodecs []string `yaml:"allowedIqCodecs" json:"allowedIqCodecs"`
 }
 
 // DongleConfig describes an SDR dongle and its profiles.
 type DongleConfig struct {
-	ID             string         `yaml:"id"`
-	Name           string         `yaml:"name"`
-	Enabled        bool           `yaml:"enabled"`
-	AutoStart      bool           `yaml:"autoStart"`
-	Source         SourceConfig   `yaml:"source"`
-	SampleRate     int            `yaml:"sampleRate"`
-	Gain           float64        `yaml:"gain"`
-	PPM            int            `yaml:"ppmCorrection"`
-	DeviceIndex    int            `yaml:"deviceIndex"`
-	DirectSampling int            `yaml:"directSampling"`
-	BiasT          bool           `yaml:"biasT"`
-	DigitalAgc     bool           `yaml:"digitalAgc"`
-	OffsetTuning   bool           `yaml:"offsetTuning"`
-	Profiles       []DongleProfile `yaml:"profiles"`
+	ID             string          `yaml:"id"             json:"id"`
+	Name           string          `yaml:"name"           json:"name"`
+	Enabled        bool            `yaml:"enabled"        json:"enabled"`
+	AutoStart      bool            `yaml:"autoStart"      json:"autoStart"`
+	Source         SourceConfig    `yaml:"source"         json:"source"`
+	SampleRate     int             `yaml:"sampleRate"     json:"sampleRate"`
+	Gain           float64         `yaml:"gain"           json:"gain"`
+	PPM            int             `yaml:"ppmCorrection"  json:"ppmCorrection"`
+	DeviceIndex    int             `yaml:"deviceIndex"    json:"deviceIndex"`
+	DirectSampling int             `yaml:"directSampling" json:"directSampling"`
+	BiasT          bool            `yaml:"biasT"          json:"biasT"`
+	DigitalAgc     bool            `yaml:"digitalAgc"     json:"digitalAgc"`
+	OffsetTuning   bool            `yaml:"offsetTuning"   json:"offsetTuning"`
+	Profiles       []DongleProfile `yaml:"profiles"       json:"profiles"`
 }
 
 // SourceConfig describes how to connect to the SDR hardware.
 type SourceConfig struct {
-	Type        string   `yaml:"type"`
-	Host        string   `yaml:"host"`
-	Port        int      `yaml:"port"`
-	DeviceIndex int      `yaml:"deviceIndex"`
-	Binary      string   `yaml:"binary"`
-	ExtraArgs   []string `yaml:"extraArgs"`
+	Type        string   `yaml:"type"        json:"type"`
+	Host        string   `yaml:"host"        json:"host"`
+	Port        int      `yaml:"port"        json:"port"`
+	DeviceIndex int      `yaml:"deviceIndex" json:"deviceIndex"`
+	// Serial is the EEPROM serial string of the local RTL-SDR dongle.
+	// When set, the server resolves the device index at startup via librtlsdr
+	// so that a specific stick is always opened regardless of USB enumeration order.
+	// Takes precedence over DeviceIndex when both are set.
+	Serial      string   `yaml:"serial"      json:"serial"`
+	Binary      string   `yaml:"binary"      json:"binary"`
+	ExtraArgs   []string `yaml:"extraArgs"   json:"extraArgs"`
+	SpawnRtlTcp bool     `yaml:"spawnRtlTcp" json:"spawnRtlTcp"`
 }
 
 // DongleProfile is a frequency/mode preset for a dongle.
 type DongleProfile struct {
-	ID                    string  `yaml:"id"`
-	Name                  string  `yaml:"name"`
-	CenterFrequency       int64   `yaml:"centerFrequency"`
-	SampleRate            int     `yaml:"sampleRate"`
-	Bandwidth             int     `yaml:"defaultBandwidth"`
-	Mode                  string  `yaml:"defaultMode"`
-	Gain                  float64 `yaml:"gain"`
-	FftSize               int     `yaml:"fftSize"`
-	FftFps                int     `yaml:"fftFps"`
-	TuneOffset            int     `yaml:"defaultTuneOffset"`
-	TuningStep            int     `yaml:"tuningStep"`
-	SwapIQ                bool    `yaml:"swapIQ"`
-	OscillatorOffset      int     `yaml:"oscillatorOffset"`
-	DirectSampling        int     `yaml:"directSampling"`
-	Description           string  `yaml:"description"`
-	DongleID              string  `yaml:"dongleId"`
-	PreFilterNb           bool    `yaml:"preFilterNb"`
-	PreFilterNbThreshold  int     `yaml:"preFilterNbThreshold"`
+	ID                   string  `yaml:"id"                   json:"id"`
+	Name                 string  `yaml:"name"                 json:"name"`
+	CenterFrequency      int64   `yaml:"centerFrequency"      json:"centerFrequency"`
+	SampleRate           int     `yaml:"sampleRate"           json:"sampleRate"`
+	Bandwidth            int     `yaml:"defaultBandwidth"     json:"bandwidth"`
+	Mode                 string  `yaml:"defaultMode"          json:"mode"`
+	Gain                 float64 `yaml:"gain"                 json:"gain"`
+	FftSize              int     `yaml:"fftSize"              json:"fftSize"`
+	FftFps               int     `yaml:"fftFps"               json:"fftFps"`
+	TuneOffset           int     `yaml:"defaultTuneOffset"    json:"tuneOffset"`
+	TuningStep           int     `yaml:"tuningStep"           json:"tuningStep"`
+	SwapIQ               bool    `yaml:"swapIQ"               json:"swapIQ"`
+	OscillatorOffset     int     `yaml:"oscillatorOffset"     json:"oscillatorOffset"`
+	DirectSampling       int     `yaml:"directSampling"       json:"directSampling"`
+	Description          string  `yaml:"description"          json:"description"`
+	DongleID             string  `yaml:"dongleId"             json:"dongleId"`
+	PreFilterNb          bool    `yaml:"preFilterNb"          json:"preFilterNb"`
+	PreFilterNbThreshold int     `yaml:"preFilterNbThreshold" json:"preFilterNbThreshold"`
 }
 
 // Load reads the config file at path and returns a validated Config.
@@ -119,12 +131,24 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// DefaultFftCodecs lists all FFT codecs supported by the server.
+var DefaultFftCodecs = []string{"none", "adpcm", "deflate", "deflate-floor"}
+
+// DefaultIqCodecs lists all IQ/audio codecs supported by the server.
+var DefaultIqCodecs = []string{"none", "adpcm", "opus", "opus-hq"}
+
 func applyDefaults(cfg *Config) {
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 3000
 	}
 	if cfg.Server.Host == "" {
 		cfg.Server.Host = "0.0.0.0"
+	}
+	if len(cfg.Server.AllowedFftCodecs) == 0 {
+		cfg.Server.AllowedFftCodecs = append([]string(nil), DefaultFftCodecs...)
+	}
+	if len(cfg.Server.AllowedIqCodecs) == 0 {
+		cfg.Server.AllowedIqCodecs = append([]string(nil), DefaultIqCodecs...)
 	}
 	// Dongles default to enabled + autoStart (matches Node.js behavior)
 	for i := range cfg.Dongles {

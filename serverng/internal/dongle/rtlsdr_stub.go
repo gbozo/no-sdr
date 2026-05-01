@@ -8,12 +8,25 @@ import (
 	"log/slog"
 )
 
+// LocalDeviceInfo describes a locally-attached RTL-SDR dongle.
+type LocalDeviceInfo struct {
+	Index    int    `json:"index"`
+	Name     string `json:"name"`
+	Serial   string `json:"serial"`
+	Product  string `json:"product"`
+	Manufact string `json:"manufact"`
+}
+
+// EnumerateLocalDevices returns an empty slice when rtlsdr support is not compiled in.
+func EnumerateLocalDevices() []LocalDeviceInfo { return nil }
+
 // RtlSdrSource is a stub when compiled without the rtlsdr build tag.
 type RtlSdrSource struct{}
 
 // RtlSdrConfig configures a local RTL-SDR source.
 type RtlSdrConfig struct {
 	DeviceIndex int
+	Serial      string
 	Logger      *slog.Logger
 }
 

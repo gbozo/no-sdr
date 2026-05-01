@@ -40,3 +40,6 @@ func (e *OpusEncoder) Reset() {}
 
 // Close is a no-op stub.
 func (e *OpusEncoder) Close() {}
+
+// OpusAvailable reports whether Opus encoding is compiled in.
+func OpusAvailable() bool { return false }

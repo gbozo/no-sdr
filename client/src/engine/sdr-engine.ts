@@ -46,6 +46,7 @@ import { HangAgc, AGC_PRESETS } from './agc.js';
 import { RumbleFilter, AutoNotch, HiBlendFilter } from './audio-filters.js';
 import { store } from '../store/index.js';
 import type { Bookmark } from '../store/index.js';
+import { ALL_FFT_CODECS, ALL_IQ_CODECS } from '../store/index.js';
 
 export class SdrEngine {
   private ws: WebSocket | null = null;
@@ -873,6 +874,9 @@ export class SdrEngine {
     switch (meta.type) {
       case 'welcome':
         store.setClientId(meta.clientId);
+        // Update available codecs from server capabilities
+        store.setAvailableFftCodecs(meta.allowedFftCodecs ?? ALL_FFT_CODECS);
+        store.setAvailableIqCodecs(meta.allowedIqCodecs ?? ALL_IQ_CODECS);
         break;
 
       case 'subscribed': {

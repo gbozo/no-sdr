@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"os/exec"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -262,12 +265,20 @@ func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, p
 		return NewDemoSource(DemoConfig{SampleRate: sampleRate}), nil
 
 	case "rtl_tcp":
+		var spawnedCmd *exec.Cmd
+		if dcfg.Source.SpawnRtlTcp {
+			spawnedCmd = m.spawnRtlTcp(ctx, dcfg)
+		}
 		src := NewRtlTcpSource(RtlTcpConfig{
-			Host:   dcfg.Source.Host,
-			Port:   dcfg.Source.Port,
-			Logger: logger,
+			Host:       dcfg.Source.Host,
+			Port:       dcfg.Source.Port,
+			SpawnedCmd: spawnedCmd,
+			Logger:     logger,
 		})
 		if err := src.Connect(ctx); err != nil {
+			if spawnedCmd != nil {
+				spawnedCmd.Process.Kill() //nolint:errcheck
+			}
 			return nil, fmt.Errorf("rtl_tcp connect: %w", err)
 		}
 		m.applyDongleSettings(src, dcfg, profile)
@@ -312,6 +323,7 @@ func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, p
 	case "local":
 		src := NewRtlSdrSource(RtlSdrConfig{
 			DeviceIndex: dcfg.Source.DeviceIndex,
+			Serial:      dcfg.Source.Serial,
 			Logger:      logger,
 		})
 		if err := src.Open(); err != nil {
@@ -324,9 +336,64 @@ func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, p
 	}
 }
 
+// spawnRtlTcp spawns an rtl_tcp process for the given dongle config.
+// It waits up to 2 seconds for the process to open its TCP port before returning.
+// Returns the running *exec.Cmd, or nil if spawn fails (error is logged but not fatal).
+func (m *Manager) spawnRtlTcp(ctx context.Context, dcfg *config.DongleConfig) *exec.Cmd {
+	binary := dcfg.Source.Binary
+	if binary == "" {
+		binary = "rtl_tcp"
+	}
+
+	host := dcfg.Source.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := dcfg.Source.Port
+	if port <= 0 {
+		port = 1234
+	}
+
+	args := []string{
+		"-a", host,
+		"-p", strconv.Itoa(port),
+		"-d", strconv.Itoa(dcfg.Source.DeviceIndex),
+	}
+	args = append(args, dcfg.Source.ExtraArgs...)
+
+	cmd := exec.CommandContext(ctx, binary, args...)
+	m.logger.Info("spawning rtl_tcp", "binary", binary, "args", args)
+
+	if err := cmd.Start(); err != nil {
+		m.logger.Error("failed to spawn rtl_tcp", "error", err)
+		return nil
+	}
+
+	// Poll for TCP port to open — rtl_tcp typically takes < 500ms.
+	addr := fmt.Sprintf("%s:%d", host, port)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			m.logger.Info("rtl_tcp ready", "addr", addr, "pid", cmd.Process.Pid)
+			return cmd
+		}
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	m.logger.Warn("rtl_tcp spawn timeout — port not ready, proceeding anyway",
+		"addr", addr, "pid", cmd.Process.Pid)
+	return cmd
+}
+
 // applyDongleSettings sends initial configuration commands to an rtl_tcp-compatible source.
-func (m *Manager) applyDongleSettings(src *RtlTcpSource, dcfg *config.DongleConfig, profile *config.DongleProfile) {
-	// Frequency: center + oscillator offset (compensates LO error)
+func (m *Manager) applyDongleSettings(src *RtlTcpSource, dcfg *config.DongleConfig, profile *config.DongleProfile) {	// Frequency: center + oscillator offset (compensates LO error)
 	freq := uint32(profile.CenterFrequency + int64(profile.OscillatorOffset))
 	src.SetFrequency(freq)
 

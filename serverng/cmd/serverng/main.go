@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gbozo/no-sdr/serverng/internal/api"
+	"github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 	"github.com/gbozo/no-sdr/serverng/internal/dongle"
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
@@ -58,6 +59,22 @@ func main() {
 		"dongles", len(cfg.Dongles),
 	)
 
+	// Strip Opus codecs if libopus is not compiled in.
+	if !codec.OpusAvailable() {
+		filtered := cfg.Server.AllowedIqCodecs[:0]
+		for _, c := range cfg.Server.AllowedIqCodecs {
+			if c != "opus" && c != "opus-hq" {
+				filtered = append(filtered, c)
+			}
+		}
+		cfg.Server.AllowedIqCodecs = filtered
+		logger.Warn("opus not compiled in — opus/opus-hq removed from allowed IQ codecs")
+	}
+	logger.Info("allowed codecs",
+		"fft", cfg.Server.AllowedFftCodecs,
+		"iq", cfg.Server.AllowedIqCodecs,
+	)
+
 	// Determine static files directory.
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir == "" {
@@ -66,6 +83,7 @@ func main() {
 
 	// Create WebSocket manager.
 	wsMgr := ws.NewManager(logger)
+	wsMgr.SetAllowedCodecs(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
 
 	// Create dongle manager and start pipelines.
 	dongleMgr := dongle.NewManager(cfg, wsMgr, logger)
@@ -74,6 +92,15 @@ func main() {
 	api.ProfileSwitchFunc = dongleMgr.SwitchProfile
 	api.DongleStartFunc = dongleMgr.StartDongleByID
 	api.DongleStopFunc = dongleMgr.StopDongleByID
+	api.SetAllowedCodecsFunc = wsMgr.SetAllowedCodecs
+	api.EnumerateLocalDevicesFunc = func() []any {
+		devs := dongle.EnumerateLocalDevices()
+		out := make([]any, len(devs))
+		for i, d := range devs {
+			out[i] = d
+		}
+		return out
+	}
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

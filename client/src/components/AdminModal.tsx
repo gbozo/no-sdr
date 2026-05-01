@@ -541,6 +541,20 @@ const ReceiversTab: Component<{
   const [dongleForm, setDongleForm] = createSignal<any>({});
   const [profileForm, setProfileForm] = createSignal<any>({});
   const [profileDirty, setProfileDirty] = createSignal(false);
+  const [localDevices, setLocalDevices] = createSignal<any[]>([]);
+
+  const scanLocalDevices = async () => {
+    try {
+      const res = await fetch(`/api/admin/devices`, {
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(props.password() ? { 'Authorization': `Bearer ${props.password()}` } : {}),
+        },
+      });
+      if (res.ok) setLocalDevices(await res.json());
+    } catch { /* silently ignore — no hardware present */ }
+  };
 
   // Auto-select first profile when dongle changes
   createEffect(() => {
@@ -563,6 +577,8 @@ const ReceiversTab: Component<{
           sourceType: d.source?.type || 'local',
           host: d.source?.host || '',
           port: d.source?.port || 1234,
+          spawnRtlTcp: d.source?.spawnRtlTcp || false,
+          serial: d.source?.serial || '',
           ppmCorrection: d.ppmCorrection || 0,
           deviceIndex: d.deviceIndex || 0,
           biasT: d.biasT || false,
@@ -573,6 +589,7 @@ const ReceiversTab: Component<{
           enabled: d.enabled !== false,
         });
         setEditingDongle(true);
+        if (d.source?.type === 'local' || !d.source?.type) scanLocalDevices();
         props.onEditNewDongleHandled?.();
       }
     }
@@ -600,6 +617,8 @@ const ReceiversTab: Component<{
         sourceType: d.source?.type || 'local',
         host: d.source?.host || '',
         port: d.source?.port || 1234,
+        spawnRtlTcp: d.source?.spawnRtlTcp || false,
+        serial: d.source?.serial || '',
         ppmCorrection: d.ppmCorrection || 0,
         deviceIndex: d.deviceIndex || 0,
         biasT: d.biasT || false,
@@ -610,6 +629,7 @@ const ReceiversTab: Component<{
         enabled: d.enabled !== false,
       });
       setEditingDongle(true);
+      if (d.source?.type === 'local' || !d.source?.type) scanLocalDevices();
     }
   };
 
@@ -622,6 +642,9 @@ const ReceiversTab: Component<{
           type: dongleForm().sourceType,
           ...(dongleForm().host ? { host: dongleForm().host } : {}),
           ...(dongleForm().port ? { port: dongleForm().port } : {}),
+          ...(dongleForm().spawnRtlTcp ? { spawnRtlTcp: true } : {}),
+          ...(dongleForm().serial ? { serial: dongleForm().serial } : {}),
+          deviceIndex: dongleForm().deviceIndex || 0,
         },
         deviceIndex: dongleForm().deviceIndex,
         ppmCorrection: dongleForm().ppmCorrection,
@@ -765,12 +788,54 @@ const ReceiversTab: Component<{
                 </Show>
 
                 <div class="grid grid-cols-3 gap-3">
-                  <div>
-                    <label class="block text-[9px] font-mono text-text-dim mb-0.5">Device Index</label>
-                    <input type="number" min="0" value={dongleForm().deviceIndex || 0} onInput={(e) => setDongleForm({...dongleForm(), deviceIndex: parseInt(e.currentTarget.value) || 0})}
-                      class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
-                  </div>
-                  <div>
+                  <Show when={dongleForm().sourceType === 'local' || !dongleForm().sourceType}>
+                    <div class="col-span-3">
+                      <div class="flex items-center justify-between mb-0.5">
+                        <label class="text-[9px] font-mono text-text-dim">USB Device</label>
+                        <button class="text-[8px] font-mono text-cyan hover:text-cyan/80 transition-colors"
+                          onClick={scanLocalDevices}>Scan</button>
+                      </div>
+                      <Show when={localDevices().length > 0} fallback={
+                        <div class="flex gap-2">
+                          <input type="number" min="0" value={dongleForm().deviceIndex || 0}
+                            onInput={(e) => setDongleForm({...dongleForm(), deviceIndex: parseInt(e.currentTarget.value) || 0})}
+                            placeholder="Index"
+                            class="w-20 bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                          <input type="text" value={dongleForm().serial || ''}
+                            onInput={(e) => setDongleForm({...dongleForm(), serial: e.currentTarget.value})}
+                            placeholder="Serial (optional)"
+                            class="flex-1 bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                        </div>
+                      }>
+                        <select
+                          value={dongleForm().serial || String(dongleForm().deviceIndex || 0)}
+                          onChange={(e) => {
+                            const val = e.currentTarget.value;
+                            const dev = localDevices().find((d: any) => d.serial === val || String(d.index) === val);
+                            if (dev) {
+                              setDongleForm({...dongleForm(), deviceIndex: dev.index, serial: dev.serial || ''});
+                            }
+                          }}
+                          class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
+                          <For each={localDevices()}>
+                            {(dev: any) => (
+                              <option value={dev.serial || String(dev.index)}>
+                                #{dev.index} — {dev.name}{dev.serial ? ` [${dev.serial}]` : ''}
+                              </option>
+                            )}
+                          </For>
+                        </select>
+                      </Show>
+                    </div>
+                  </Show>
+                  <Show when={dongleForm().sourceType !== 'local' && dongleForm().sourceType}>
+                    <div>
+                      <label class="block text-[9px] font-mono text-text-dim mb-0.5">Device Index</label>
+                      <input type="number" min="0" value={dongleForm().deviceIndex || 0} onInput={(e) => setDongleForm({...dongleForm(), deviceIndex: parseInt(e.currentTarget.value) || 0})}
+                        class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
+                    </div>
+                  </Show>
+                  <div class={dongleForm().sourceType === 'local' || !dongleForm().sourceType ? '' : 'col-start-2'}>
                     <label class="block text-[9px] font-mono text-text-dim mb-0.5">PPM Correction</label>
                     <input type="number" step="0.1" value={dongleForm().ppmCorrection || 0} onInput={(e) => setDongleForm({...dongleForm(), ppmCorrection: parseFloat(e.currentTarget.value) || 0})}
                       class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
@@ -807,6 +872,12 @@ const ReceiversTab: Component<{
                     <input type="checkbox" checked={dongleForm().offsetTuning || false} onChange={(e) => setDongleForm({...dongleForm(), offsetTuning: e.currentTarget.checked})} class="accent-cyan" />
                     Offset Tuning
                   </label>
+                  <Show when={dongleForm().sourceType === 'rtl_tcp'}>
+                    <label class="flex items-center gap-1.5 text-[9px] font-mono text-text-secondary">
+                      <input type="checkbox" checked={dongleForm().spawnRtlTcp || false} onChange={(e) => setDongleForm({...dongleForm(), spawnRtlTcp: e.currentTarget.checked})} class="accent-cyan" />
+                      Spawn rtl_tcp
+                    </label>
+                  </Show>
                 </div>
 
                 <div class="flex items-center justify-between">
@@ -1174,6 +1245,10 @@ const ServerTab: Component<{ password: () => string }> = (props) => {
   const [saving, setSaving] = createSignal(false);
   const [saved, setSaved] = createSignal(false);
 
+  // Allowed codec selections (from server config)
+  const [allowedFftCodecs, setAllowedFftCodecs] = createSignal<string[]>(['none', 'adpcm', 'deflate', 'deflate-floor']);
+  const [allowedIqCodecs, setAllowedIqCodecs] = createSignal<string[]>(['none', 'adpcm', 'opus', 'opus-hq']);
+
   const authHeaders = () => ({
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${props.password()}`,
@@ -1194,6 +1269,12 @@ const ServerTab: Component<{ password: () => string }> = (props) => {
         setLocation(data.location ?? '');
         setFftHistoryFftSize(data.fftHistoryFftSize ?? 8192);
         setFftHistoryCompression(data.fftHistoryCompression ?? 'deflate');
+        if (Array.isArray(data.allowedFftCodecs) && data.allowedFftCodecs.length > 0) {
+          setAllowedFftCodecs(data.allowedFftCodecs);
+        }
+        if (Array.isArray(data.allowedIqCodecs) && data.allowedIqCodecs.length > 0) {
+          setAllowedIqCodecs(data.allowedIqCodecs);
+        }
       }
     } catch { /* ignore */ }
   };
@@ -1220,6 +1301,8 @@ const ServerTab: Component<{ password: () => string }> = (props) => {
           location: location(),
           fftHistoryFftSize: fftHistoryFftSize(),
           fftHistoryCompression: fftHistoryCompression(),
+          allowedFftCodecs: allowedFftCodecs(),
+          allowedIqCodecs: allowedIqCodecs(),
         }),
       });
       if (res.ok) {
@@ -1397,6 +1480,67 @@ const ServerTab: Component<{ password: () => string }> = (props) => {
             <label for="demoMode" class="text-[10px] font-mono text-text-secondary">
               Demo Mode (simulated signals, no hardware)
             </label>
+          </div>
+        </div>
+      </div>
+
+      {/* Codecs Section */}
+      <div>
+        <h3 class="text-[10px] font-mono text-text-secondary uppercase tracking-wider mb-3 border-b border-border pb-1">
+          Allowed Codecs
+        </h3>
+        <p class="text-[8px] font-mono text-text-muted mb-3">
+          Uncheck to disable a codec for all clients. Opus requires libopus — if not compiled in, it is unavailable regardless.
+        </p>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <p class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">FFT</p>
+            <div class="space-y-1.5">
+              {(['none', 'adpcm', 'deflate', 'deflate-floor'] as const).map(codec => (
+                <div class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id={`fft-codec-${codec}`}
+                    checked={allowedFftCodecs().includes(codec)}
+                    onChange={(e) => {
+                      const next = e.currentTarget.checked
+                        ? [...allowedFftCodecs(), codec]
+                        : allowedFftCodecs().filter(c => c !== codec);
+                      // Always keep at least 'none'
+                      setAllowedFftCodecs(next.length > 0 ? next : ['none']);
+                    }}
+                    class="accent-cyan"
+                  />
+                  <label for={`fft-codec-${codec}`} class="text-[10px] font-mono text-text-secondary capitalize">
+                    {codec}
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-2">IQ / Audio</p>
+            <div class="space-y-1.5">
+              {(['none', 'adpcm', 'opus', 'opus-hq'] as const).map(codec => (
+                <div class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id={`iq-codec-${codec}`}
+                    checked={allowedIqCodecs().includes(codec)}
+                    onChange={(e) => {
+                      const next = e.currentTarget.checked
+                        ? [...allowedIqCodecs(), codec]
+                        : allowedIqCodecs().filter(c => c !== codec);
+                      setAllowedIqCodecs(next.length > 0 ? next : ['none']);
+                    }}
+                    class="accent-cyan"
+                  />
+                  <label for={`iq-codec-${codec}`} class="text-[10px] font-mono text-text-secondary capitalize">
+                    {codec}
+                  </label>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

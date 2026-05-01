@@ -318,6 +318,30 @@ var DongleStartFunc func(dongleID string) error
 // DongleStopFunc stops a dongle. Set by dongle.Manager.
 var DongleStopFunc func(dongleID string) error
 
+// EnumerateLocalDevicesFunc returns info about locally-attached RTL-SDR USB devices.
+// Set by main.go; nil when rtlsdr support is not compiled in.
+var EnumerateLocalDevicesFunc func() []any
+
+// SetAllowedCodecsFunc updates the WS manager's allowed codec sets at runtime.
+// Set by main.go so the admin handler can propagate changes without a restart.
+var SetAllowedCodecsFunc func(fft, iq []string)
+
+// localDevicesHandler returns a JSON array of locally-detected RTL-SDR dongles.
+// GET /api/admin/devices
+func localDevicesHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if EnumerateLocalDevicesFunc == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		devs := EnumerateLocalDevicesFunc()
+		if devs == nil {
+			devs = []any{}
+		}
+		writeJSON(w, http.StatusOK, devs)
+	}
+}
+
 // switchProfileHandler switches a dongle's active profile.
 // POST /api/admin/dongles/{id}/profile  body: {"profileId": "..."}
 func switchProfileHandler(cfg *config.Config) http.HandlerFunc {
@@ -527,12 +551,14 @@ func saveConfigHandler(cfg *config.Config, cfgPath string) http.HandlerFunc {
 func serverConfigHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"port":          cfg.Server.Port,
-			"host":          cfg.Server.Host,
-			"callsign":      cfg.Server.Callsign,
-			"description":   cfg.Server.Description,
-			"location":      cfg.Server.Location,
-			"adminPassword": cfg.Server.AdminPassword,
+			"port":             cfg.Server.Port,
+			"host":             cfg.Server.Host,
+			"callsign":         cfg.Server.Callsign,
+			"description":      cfg.Server.Description,
+			"location":         cfg.Server.Location,
+			"adminPassword":    cfg.Server.AdminPassword,
+			"allowedFftCodecs": cfg.Server.AllowedFftCodecs,
+			"allowedIqCodecs":  cfg.Server.AllowedIqCodecs,
 		})
 	}
 }
@@ -541,11 +567,13 @@ func serverConfigHandler(cfg *config.Config) http.HandlerFunc {
 func updateServerConfigHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Callsign    *string `json:"callsign"`
-			Description *string `json:"description"`
-			Location    *string `json:"location"`
-			Port        *int    `json:"port"`
-			Host        *string `json:"host"`
+			Callsign         *string  `json:"callsign"`
+			Description      *string  `json:"description"`
+			Location         *string  `json:"location"`
+			Port             *int     `json:"port"`
+			Host             *string  `json:"host"`
+			AllowedFftCodecs []string `json:"allowedFftCodecs"`
+			AllowedIqCodecs  []string `json:"allowedIqCodecs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -565,6 +593,18 @@ func updateServerConfigHandler(cfg *config.Config) http.HandlerFunc {
 		}
 		if body.Host != nil {
 			cfg.Server.Host = *body.Host
+		}
+		if body.AllowedFftCodecs != nil {
+			cfg.Server.AllowedFftCodecs = body.AllowedFftCodecs
+			if SetAllowedCodecsFunc != nil {
+				SetAllowedCodecsFunc(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
+			}
+		}
+		if body.AllowedIqCodecs != nil {
+			cfg.Server.AllowedIqCodecs = body.AllowedIqCodecs
+			if SetAllowedCodecsFunc != nil {
+				SetAllowedCodecsFunc(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}

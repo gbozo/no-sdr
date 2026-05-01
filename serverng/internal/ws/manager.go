@@ -20,6 +20,7 @@ type Manager struct {
 	onCommand    func(clientID string, cmd *ClientCommand)
 	onDisconnect func(clientID string)
 	rateLimiter  *RateLimiter
+	allowed      AllowedCodecs
 }
 
 // NewManager creates a new WebSocket connection manager.
@@ -31,7 +32,24 @@ func NewManager(logger *slog.Logger) *Manager {
 		clients:   make(map[string]*Client),
 		clientIPs: make(map[string]string),
 		logger:    logger,
+		allowed:   defaultAllowedCodecs,
 	}
+}
+
+// SetAllowedCodecs replaces the server's allowed codec sets.
+// Must be called before any clients connect.
+func (m *Manager) SetAllowedCodecs(fft, iq []string) {
+	fftMap := make(map[string]bool, len(fft))
+	for _, c := range fft {
+		fftMap[c] = true
+	}
+	iqMap := make(map[string]bool, len(iq))
+	for _, c := range iq {
+		iqMap[c] = true
+	}
+	m.mu.Lock()
+	m.allowed = AllowedCodecs{Fft: fftMap, Iq: iqMap}
+	m.mu.Unlock()
 }
 
 // SetRateLimiter sets the rate limiter for tracking connection IPs.
@@ -82,11 +100,23 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	m.addClient(client)
 	m.logger.Info("client connected", "id", clientID, "remote", r.RemoteAddr)
 
-	// Send welcome message (matches Node.js behavior)
+	// Send welcome message with server capabilities
+	m.mu.RLock()
+	allowedFft := make([]string, 0, len(m.allowed.Fft))
+	for k := range m.allowed.Fft {
+		allowedFft = append(allowedFft, k)
+	}
+	allowedIq := make([]string, 0, len(m.allowed.Iq))
+	for k := range m.allowed.Iq {
+		allowedIq = append(allowedIq, k)
+	}
+	m.mu.RUnlock()
 	welcome := PackMetaMessage(&ServerMeta{
-		Type:          "welcome",
-		ClientId:      clientID,
-		ServerVersion: "2.0.0",
+		Type:             "welcome",
+		ClientId:         clientID,
+		ServerVersion:    "2.0.0",
+		AllowedFftCodecs: allowedFft,
+		AllowedIqCodecs:  allowedIq,
 	})
 	client.Send(welcome)
 
@@ -237,7 +267,10 @@ func (m *Manager) readLoop(c *Client) {
 		}
 
 		// Update client state
-		codecStatus := c.UpdateFromCommand(cmd)
+		m.mu.RLock()
+		allowed := m.allowed
+		m.mu.RUnlock()
+		codecStatus := c.UpdateFromCommand(cmd, &allowed)
 
 		// If codec was rejected, send status back to client
 		if codecStatus != nil {

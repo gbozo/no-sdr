@@ -7,7 +7,7 @@ import { store } from '../store/index.js';
 import type { Bookmark } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 import { DEMOD_MODES } from '@node-sdr/shared';
-import type { CodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '@node-sdr/shared';
+import type { CodecType, FftCodecType, IqCodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '@node-sdr/shared';
 import { getPaletteNames } from '../engine/palettes.js';
 
 const ControlPanel: Component = () => {
@@ -1820,19 +1820,23 @@ const SMeter: Component = () => {
 
 // ---- Codec Settings ----
 const CodecSettings: Component = () => {
-  const fftCodecs: { value: CodecType; label: string }[] = [
+  const allFftCodecs: { value: FftCodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
     { value: 'deflate', label: 'Deflate' },
     { value: 'deflate-floor', label: 'DeflateFl' },
   ];
 
-  const iqCodecs: { value: CodecType; label: string }[] = [
+  const allIqCodecs: { value: IqCodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
     { value: 'opus', label: 'Opus' },
     { value: 'opus-hq', label: 'Opus HQ' },
   ];
+
+  // Filter to only codecs the server reports as available
+  const fftCodecs = () => allFftCodecs.filter(c => store.availableFftCodecs().includes(c.value));
+  const iqCodecs = () => allIqCodecs.filter(c => store.availableIqCodecs().includes(c.value));
 
   // Format bytes/sec into human-readable string
   const formatRate = (bytes: number) => {
@@ -1903,7 +1907,7 @@ const CodecSettings: Component = () => {
             </span>
           </div>
           <div class="flex gap-2">
-            <For each={fftCodecs}>
+            <For each={fftCodecs()}>
               {(c) => (
                 <button
                   class={`mil-btn flex-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
@@ -1928,7 +1932,7 @@ const CodecSettings: Component = () => {
             </span>
           </div>
           <div class="flex gap-2">
-            <For each={iqCodecs}>
+            <For each={iqCodecs()}>
               {(c) => (
                 <button
                   class={`mil-btn flex-1 ${store.iqCodec() === c.value ? 'active' : ''}`}

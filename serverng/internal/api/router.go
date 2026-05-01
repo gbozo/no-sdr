@@ -44,6 +44,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		r.Get("/status", statusHandler(wsMgr))
 		r.Get("/dongles", donglesHandler(cfg, wsMgr))
 		r.Get("/dongles/{id}/profiles", dongleProfilesHandler(cfg))
+		r.Get("/capabilities", capabilitiesHandler(cfg))
 	})
 
 	// Admin routes
@@ -57,6 +58,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		// Protected routes
 		r.Group(func(r chi.Router) {
 			r.Use(adminAuth.CheckAuth)
+			r.Get("/devices", localDevicesHandler())
 			r.Get("/dongles", adminDonglesHandler(cfg, wsMgr))
 			r.Post("/dongles", createDongleHandler(cfg))
 			r.Put("/dongles/{id}", updateDongleHandler(cfg))
@@ -83,6 +85,17 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 	}
 
 	return r
+}
+
+// capabilitiesHandler returns the server's codec capabilities (no auth required).
+// GET /api/capabilities
+func capabilitiesHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allowedFftCodecs": cfg.Server.AllowedFftCodecs,
+			"allowedIqCodecs":  cfg.Server.AllowedIqCodecs,
+		})
+	}
 }
 
 // statusHandler returns server status information.

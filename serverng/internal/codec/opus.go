@@ -186,3 +186,6 @@ func (e *OpusEncoder) Close() {
 	e.outBuf = nil
 	e.pcmPos = 0
 }
+
+// OpusAvailable reports whether Opus encoding is compiled in.
+func OpusAvailable() bool { return true }

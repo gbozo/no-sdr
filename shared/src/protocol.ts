@@ -102,7 +102,7 @@ export type ClientCommand =
 // ---- Server Meta Messages ----
 
 export type ServerMeta =
-  | { type: 'welcome'; clientId: string; serverVersion: string }
+  | { type: 'welcome'; clientId: string; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[] }
   | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number }
   | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number }
   | { type: 'dongle_status'; dongleId: string; running: boolean; clientCount: number }

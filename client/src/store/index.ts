@@ -17,6 +17,10 @@ import type {
   DongleProfile,
 } from '@node-sdr/shared';
 
+// All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
+const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate', 'deflate-floor'];
+const ALL_IQ_CODECS: IqCodecType[] = ['none', 'adpcm', 'opus', 'opus-hq'];
+
 // ---- Bookmark type ----
 export interface Bookmark {
   id: string;
@@ -151,6 +155,11 @@ function createStore() {
   const [fftCodec, setFftCodec] = persist<FftCodecType>('codec.fft', 'deflate-floor');
   const [iqCodec, setIqCodec] = persist<IqCodecType>('codec.iq', 'opus');
 
+  // ---- Available Codecs (from server 'welcome' message) ----
+  // Initialized to all codecs; restricted by server on connect.
+  const [availableFftCodecs, setAvailableFftCodecs] = createSignal<FftCodecType[]>(ALL_FFT_CODECS);
+  const [availableIqCodecs, setAvailableIqCodecs] = createSignal<IqCodecType[]>(ALL_IQ_CODECS);
+
   // ---- Bandwidth / Throughput Metrics ----
   const [fftRate, setFftRate] = createSignal(0);         // FFT frames/sec
   const [iqRate, setIqRate] = createSignal(0);           // IQ samples/sec
@@ -265,6 +274,10 @@ function createStore() {
     fftCodec, setFftCodec,
     iqCodec, setIqCodec,
 
+    // Available Codecs (server-reported)
+    availableFftCodecs, setAvailableFftCodecs,
+    availableIqCodecs, setAvailableIqCodecs,
+
     // Bandwidth / Throughput
     fftRate, setFftRate,
     iqRate, setIqRate,
@@ -293,3 +306,4 @@ function createStore() {
 
 // Create a singleton store
 export const store = createRoot(createStore);
+export { ALL_FFT_CODECS, ALL_IQ_CODECS };

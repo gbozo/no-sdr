@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os/exec"
 	"sync"
 	"time"
 )
@@ -18,6 +19,9 @@ type RtlTcpSource struct {
 	conn       net.Conn
 	logger     *slog.Logger
 	dongleInfo RtlDongleInfo
+	// spawnedCmd is non-nil when the server spawned the rtl_tcp process.
+	// It is killed on Close().
+	spawnedCmd *exec.Cmd
 	mu         sync.Mutex
 }
 
@@ -30,9 +34,12 @@ type RtlDongleInfo struct {
 
 // RtlTcpConfig configures an rtl_tcp client connection.
 type RtlTcpConfig struct {
-	Host   string
-	Port   int
-	Logger *slog.Logger
+	Host       string
+	Port       int
+	// SpawnedCmd is the already-started rtl_tcp process. When non-nil,
+	// Close() will kill the process after closing the TCP connection.
+	SpawnedCmd *exec.Cmd
+	Logger     *slog.Logger
 }
 
 // NewRtlTcpSource creates a new rtl_tcp source client.
@@ -47,9 +54,10 @@ func NewRtlTcpSource(cfg RtlTcpConfig) *RtlTcpSource {
 		cfg.Host = "127.0.0.1"
 	}
 	return &RtlTcpSource{
-		host:   cfg.Host,
-		port:   cfg.Port,
-		logger: cfg.Logger,
+		host:       cfg.Host,
+		port:       cfg.Port,
+		spawnedCmd: cfg.SpawnedCmd,
+		logger:     cfg.Logger,
 	}
 }
 
@@ -154,17 +162,28 @@ func (r *RtlTcpSource) Run(ctx context.Context, out chan<- []byte) {
 	}
 }
 
-// Close disconnects from the server.
+// Close disconnects from the server and, if the rtl_tcp process was spawned
+// by this server, kills it.
 func (r *RtlTcpSource) Close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.conn == nil {
-		return nil
-	}
-	err := r.conn.Close()
+	conn := r.conn
 	r.conn = nil
-	return err
+	cmd := r.spawnedCmd
+	r.spawnedCmd = nil
+	r.mu.Unlock()
+
+	var connErr error
+	if conn != nil {
+		connErr = conn.Close()
+	}
+
+	if cmd != nil && cmd.Process != nil {
+		r.logger.Info("killing spawned rtl_tcp process", "pid", cmd.Process.Pid)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+
+	return connErr
 }
 
 // DongleInfo returns the header info received on connect.

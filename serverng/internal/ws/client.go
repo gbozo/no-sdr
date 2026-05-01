@@ -82,17 +82,23 @@ func (c *Client) SubscribedTo() string {
 	return c.DongleID
 }
 
-// Supported codec values
-var validFftCodecs = map[string]bool{
-	"none": true, "adpcm": true, "deflate": true, "deflate-floor": true,
+// AllowedCodecs holds the codec sets the server will accept from clients.
+// Set once at startup by the Manager; safe to read concurrently (never mutated after init).
+type AllowedCodecs struct {
+	Fft map[string]bool
+	Iq  map[string]bool
 }
-var validIqCodecs = map[string]bool{
-	"none": true, "adpcm": true, "opus": true, "opus-hq": true,
+
+// defaultAllowedCodecs is used in tests and when no config is provided.
+var defaultAllowedCodecs = AllowedCodecs{
+	Fft: map[string]bool{"none": true, "adpcm": true, "deflate": true, "deflate-floor": true},
+	Iq:  map[string]bool{"none": true, "adpcm": true, "opus": true, "opus-hq": true},
 }
 
 // UpdateFromCommand applies a client command to the client's state.
-// Returns a codec_status message if codec was changed or rejected, nil otherwise.
-func (c *Client) UpdateFromCommand(cmd *ClientCommand) *CodecStatus {
+// allowed must not be nil; use defaultAllowedCodecs in tests.
+// Returns a codec_status message if a codec was rejected, nil otherwise.
+func (c *Client) UpdateFromCommand(cmd *ClientCommand, allowed *AllowedCodecs) *CodecStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -112,19 +118,19 @@ func (c *Client) UpdateFromCommand(cmd *ClientCommand) *CodecStatus {
 	case "codec":
 		var status *CodecStatus
 		if cmd.FftCodec != "" {
-			if validFftCodecs[cmd.FftCodec] {
+			if allowed.Fft[cmd.FftCodec] {
 				c.FftCodec = cmd.FftCodec
 			} else {
-				// Unknown FFT codec — fallback to "none" (uint8 compressed)
+				// Unknown or disabled FFT codec — fallback to "none"
 				c.FftCodec = "none"
 				status = &CodecStatus{
 					FftCodec: "none",
-					FftMsg:   "unsupported fftCodec '" + cmd.FftCodec + "', using 'none'",
+					FftMsg:   "codec '" + cmd.FftCodec + "' not available on this server, using 'none'",
 				}
 			}
 		}
 		if cmd.IqCodec != "" {
-			if validIqCodecs[cmd.IqCodec] {
+			if allowed.Iq[cmd.IqCodec] {
 				c.IqCodec = cmd.IqCodec
 			} else {
 				c.IqCodec = "none"
@@ -132,7 +138,7 @@ func (c *Client) UpdateFromCommand(cmd *ClientCommand) *CodecStatus {
 					status = &CodecStatus{}
 				}
 				status.IqCodec = "none"
-				status.IqMsg = "unsupported iqCodec '" + cmd.IqCodec + "', using 'none'"
+				status.IqMsg = "codec '" + cmd.IqCodec + "' not available on this server, using 'none'"
 			}
 		}
 		return status
