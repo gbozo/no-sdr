@@ -9,8 +9,9 @@ import (
 
 const (
 	// DefaultWriteChSize is the buffered channel capacity for write messages.
-	// Sized for ~8 FFT frames of backpressure tolerance before dropping.
-	DefaultWriteChSize = 8
+	// Must accommodate FFT (up to 30fps) + IQ (50fps) + META + stats.
+	// At 80 msg/sec, 128 slots gives ~1.5s of buffering before drop.
+	DefaultWriteChSize = 128
 )
 
 // Client represents a connected WebSocket client.

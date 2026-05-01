@@ -149,12 +149,12 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 	e.factor = factor
 	e.outputRate = actualRate
 
-	// Update filter cutoff
+	// Update filter cutoff and RESET state (old state corrupts new response)
 	e.filter.SetCutoff(float64(actualRate) / 2.0)
+	e.filter.Reset()
 
 	// Update decimation factor — need to rebuild the decimate block
 	e.decimate = NewDecimateBlock(factor)
-	// Re-initialize with the filter's output rate (same as input rate since filter doesn't change rate)
 	_ = e.decimate.Init(BlockContext{SampleRate: float64(e.inputRate)})
 
 	// Rebuild pipeline with new decimation factor

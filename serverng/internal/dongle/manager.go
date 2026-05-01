@@ -56,10 +56,11 @@ type clientPipeline struct {
 	accumBuf     []int16       // 20ms accumulation buffer
 	accumPos     int
 	chunkSize    int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
-	iqCodec      string // "adpcm", "opus", "opus-hq"
+	iqCodec      string // "none", "adpcm", "opus", "opus-hq"
 	dongleID     string // which dongle this client is subscribed to
 	nbEnabled    bool
 	nbThreshold  float32 // multiplier (default 10.0)
+	iqChunkCount int64   // debug counter
 }
 
 // NewManager creates a new dongle pipeline manager.
@@ -561,6 +562,20 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 			continue
 		}
 
+		// Debug: log IQ flow every 500 chunks (~5s)
+		cp.iqChunkCount++
+		if cp.iqChunkCount%500 == 1 {
+			m.logger.Debug("IQ extraction",
+				"clientID", clientID,
+				"inputBytes", len(iqChunk),
+				"outputSamples", len(subBand),
+				"chunkSize", cp.chunkSize,
+				"accumPos", cp.accumPos,
+				"codec", cp.iqCodec,
+				"totalChunks", cp.iqChunkCount,
+			)
+		}
+
 		// Opus pipeline path: demod + encode → send Opus packets
 		if cp.opusPipeline != nil {
 			results := cp.opusPipeline.Process(subBand)
@@ -574,7 +589,7 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 			continue
 		}
 
-		// ADPCM path: accumulate into 20ms chunks
+		// IQ path: accumulate into 20ms chunks, then encode per codec preference
 		remaining := subBand
 		for len(remaining) > 0 {
 			space := cp.chunkSize - cp.accumPos
@@ -587,11 +602,18 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 			remaining = remaining[toCopy:]
 
 			if cp.accumPos >= cp.chunkSize {
-				// Full 20ms chunk — encode and send
-				encoded := cp.adpcmEnc.Encode(cp.accumBuf[:cp.chunkSize])
-				// sampleCount = chunkSize / 2 because interleaved I,Q pairs
-				msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize/2))
-				m.wsMgr.SendTo(clientID, msg)
+				// Full 20ms chunk — encode and send based on IQ codec
+				chunk := cp.accumBuf[:cp.chunkSize]
+				if cp.iqCodec == "adpcm" {
+					encoded := cp.adpcmEnc.Encode(chunk)
+					// sampleCount = total Int16 values (not IQ pairs)
+					msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize))
+					m.wsMgr.SendTo(clientID, msg)
+				} else {
+					// "none" — send raw Int16 IQ
+					msg := ws.PackIQMessage(chunk)
+					m.wsMgr.SendTo(clientID, msg)
+				}
 				cp.accumPos = 0
 			}
 		}
@@ -1040,16 +1062,28 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Unlock()
 
 	if ok && cp.extractor != nil {
+		// Always use mode-based rate (same IQ for both IQ-codec and Opus paths)
 		rate := outputRateForMode(cmd.Mode)
 		cp.extractor.SetOutputSampleRate(rate)
 		m.updateChunkSize(cp)
 
 		// Update opus pipeline demodulator if active
 		if cp.opusPipeline != nil {
+			cp.opusPipeline.UpdateSampleRate(rate)
+			cp.opusPipeline.decimFactor = 1
+			if rate > 48000 {
+				cp.opusPipeline.decimFactor = rate / 48000
+			}
 			if err := cp.opusPipeline.SetMode(cmd.Mode); err != nil {
 				m.logger.Error("failed to set opus pipeline mode",
 					"clientID", clientID, "mode", cmd.Mode, "error", err)
 			}
+		}
+
+		// Reset accumulator on mode change
+		cp.accumPos = 0
+		if cp.adpcmEnc != nil {
+			cp.adpcmEnc.Reset()
 		}
 
 		m.logger.Debug("client mode updated", "clientID", clientID, "mode", cmd.Mode, "outputRate", rate)
@@ -1084,7 +1118,8 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 	isNewOpus := newCodec == "opus" || newCodec == "opus-hq"
 
 	if !isOldOpus && isNewOpus {
-		// Switching from ADPCM to Opus: create OpusPipeline
+		// Switching from IQ to Opus: create OpusPipeline
+		// IQ extractor stays at its current rate — Opus pipeline handles rate internally
 		client := m.wsMgr.GetClient(clientID)
 		mode := ""
 		if client != nil {
@@ -1113,19 +1148,19 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 		m.logger.Info("switched to opus pipeline", "clientID", clientID, "codec", newCodec)
 
 	} else if isOldOpus && !isNewOpus {
-		// Switching from Opus to ADPCM: destroy OpusPipeline
+		// Switching from Opus to IQ (none/adpcm): destroy OpusPipeline
+		// IQ extractor rate is unchanged — it's always mode-based
 		m.mu.Lock()
 		if cp.opusPipeline != nil {
 			cp.opusPipeline.Close()
 			cp.opusPipeline = nil
 		}
 		cp.iqCodec = newCodec
-		// Reset ADPCM state
 		cp.adpcmEnc.Reset()
 		cp.accumPos = 0
 		m.mu.Unlock()
 
-		m.logger.Info("switched to adpcm pipeline", "clientID", clientID, "codec", newCodec)
+		m.logger.Info("switched from opus to IQ codec", "clientID", clientID, "codec", newCodec)
 
 	} else if isOldOpus && isNewOpus && oldCodec != newCodec {
 		// Switching between opus and opus-hq: just update bitrate
@@ -1142,6 +1177,16 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 		m.mu.Unlock()
 
 		m.logger.Info("switched opus quality", "clientID", clientID, "codec", newCodec)
+
+	} else {
+		// Switching between none and adpcm (both non-opus)
+		m.mu.Lock()
+		cp.iqCodec = newCodec
+		cp.adpcmEnc.Reset()
+		cp.accumPos = 0
+		m.mu.Unlock()
+
+		m.logger.Info("switched IQ codec", "clientID", clientID, "from", oldCodec, "to", newCodec)
 	}
 }
 
@@ -1168,12 +1213,18 @@ func (m *Manager) createClientPipeline(clientID string) {
 		return
 	}
 
-	// Determine output rate from client mode
+	// Determine output rate from client mode (same regardless of IQ codec)
 	mode := client.Mode
 	if mode == "" {
 		mode = d.profile.Mode
 	}
 	outputRate := outputRateForMode(mode)
+
+	// IQ codec determination
+	iqCodec := client.IqCodec
+	if iqCodec == "" {
+		iqCodec = "none"
+	}
 
 	// Determine tune offset
 	tuneOffset := client.TuneOffset
@@ -1202,12 +1253,6 @@ func (m *Manager) createClientPipeline(clientID string) {
 	// 20ms chunk size: outputRate * 2 channels * 0.020 seconds
 	chunkSize := int(float64(ext.OutputSampleRate()) * 2.0 * 0.020)
 
-	// Determine IQ codec
-	iqCodec := client.IqCodec
-	if iqCodec == "" {
-		iqCodec = "adpcm"
-	}
-
 	cp := &clientPipeline{
 		extractor:   ext,
 		adpcmEnc:    codecPkg.NewImaAdpcmEncoder(),
@@ -1234,7 +1279,7 @@ func (m *Manager) createClientPipeline(clientID string) {
 	if iqCodec == "opus" || iqCodec == "opus-hq" {
 		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
 			Mode:       mode,
-			SampleRate: ext.OutputSampleRate(),
+			SampleRate: outputRate, // same as IQ extractor output (mode-based: WFM=240k, NFM=48k)
 			Quality:    iqCodec,
 		})
 		if err != nil {
