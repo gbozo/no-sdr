@@ -60,7 +60,8 @@ RUN apk add --no-cache \
 
 # Copy the Osmocom rtl-sdr we just built
 COPY --from=rtlsdr-builder /usr/local/include/rtl-sdr*.h  /usr/local/include/
-COPY --from=rtlsdr-builder /usr/local/include/rtl_sdr_compat.h /usr/local/include/ 2>/dev/null || true
+RUN --mount=from=rtlsdr-builder,src=/usr/local/include,dst=/src/include \
+    cp /src/include/rtl_sdr_compat.h /usr/local/include/ 2>/dev/null || true
 COPY --from=rtlsdr-builder /usr/local/lib/librtlsdr*            /usr/local/lib/
 COPY --from=rtlsdr-builder /usr/local/lib/pkgconfig/librtlsdr.pc /usr/local/lib/pkgconfig/
 
