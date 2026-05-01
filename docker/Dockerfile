@@ -75,7 +75,7 @@ COPY serverng/ .
 RUN CGO_ENABLED=1 GOOS=linux \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     go build \
-        -tags 'opus rtlsdr' \
+        -tags 'opus rtlsdr nolibopusfile' \
         -ldflags="-s -w" \
         -o /serverng \
         ./cmd/serverng
