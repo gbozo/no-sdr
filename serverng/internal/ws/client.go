@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -33,40 +34,70 @@ type Client struct {
 	// Write channel with backpressure
 	writeCh chan []byte
 
+	// lastDrainAt is updated each time Send() successfully enqueues a message.
+	// The stale-client checker uses this to detect clients that have stopped
+	// draining their write channel (dead tab, frozen connection).
+	lastDrainAt time.Time
+	drainMu     sync.Mutex
+
 	mu sync.RWMutex
 }
 
-// newClient creates a new Client with the given connection and ID.
+// newClient creates a new Client with the given connection, ID, and write channel capacity.
 // Codec defaults are empty — server uses "none" (uint8 FFT) until client sends preferences.
-func newClient(id string, conn *websocket.Conn, ctx context.Context, cancel context.CancelFunc) *Client {
+func newClient(id string, conn *websocket.Conn, ctx context.Context, cancel context.CancelFunc, writeCap int) *Client {
+	if writeCap <= 0 {
+		writeCap = DefaultWriteChSize
+	}
 	return &Client{
-		ID:       id,
-		conn:     conn,
-		ctx:      ctx,
-		cancel:   cancel,
-		FftCodec: "",  // empty = "none" — client sends preferred codec after subscribe
-		IqCodec:  "",  // empty = "none" — client sends preferred codec after subscribe
-		writeCh:  make(chan []byte, DefaultWriteChSize),
+		ID:          id,
+		conn:        conn,
+		ctx:         ctx,
+		cancel:      cancel,
+		FftCodec:    "",  // empty = "none" — client sends preferred codec after subscribe
+		IqCodec:     "",  // empty = "none" — client sends preferred codec after subscribe
+		writeCh:     make(chan []byte, writeCap),
+		lastDrainAt: time.Now(),
 	}
 }
 
-// Send enqueues a message for writing with backpressure (drop-oldest on full).
+// Send enqueues a message for writing. If the channel is full the oldest
+// pending message is dropped to make room (backpressure: prefer fresh data).
+// lastDrainAt is updated on every successful enqueue; the manager's stale-
+// client checker uses this to detect clients that have stopped consuming.
 func (c *Client) Send(msg []byte) {
 	select {
 	case c.writeCh <- msg:
+		// Fast path — channel has room, update drain timestamp.
+		c.drainMu.Lock()
+		c.lastDrainAt = time.Now()
+		c.drainMu.Unlock()
 	default:
-		// Channel full — drop oldest, then enqueue new
+		// Channel full — drop the oldest message and enqueue the new one so
+		// that the client always sees the most recent data (waterfall/audio).
 		select {
 		case <-c.writeCh:
 		default:
 		}
-		// Non-blocking retry
 		select {
 		case c.writeCh <- msg:
 		default:
-			// Still full (unlikely race), drop this message
 		}
+		// Do NOT update lastDrainAt — the checker will detect persistent fullness.
 	}
+}
+
+// IsStale returns true if the write channel is at capacity AND the client has
+// not drained any message in the last `threshold` duration. This identifies
+// genuinely dead connections vs momentary congestion.
+func (c *Client) IsStale(threshold time.Duration) bool {
+	if len(c.writeCh) < cap(c.writeCh) {
+		return false // channel has room — client is draining normally
+	}
+	c.drainMu.Lock()
+	last := c.lastDrainAt
+	c.drainMu.Unlock()
+	return time.Since(last) > threshold
 }
 
 // Close cancels the client context, which triggers cleanup.

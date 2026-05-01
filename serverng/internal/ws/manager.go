@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -21,6 +22,15 @@ type Manager struct {
 	onDisconnect func(clientID string)
 	rateLimiter  *RateLimiter
 	allowed      AllowedCodecs
+
+	// maxFftFps is the highest FFT frame rate across all active profiles.
+	// Used to size the per-client write channel so that even at high fps
+	// a client gets ~3s of headroom before drop-oldest kicks in.
+	// Set via SetMaxFftFps() before clients connect.
+	maxFftFps int
+
+	// staleOnce ensures the stale-client checker is started exactly once.
+	staleOnce sync.Once
 }
 
 // NewManager creates a new WebSocket connection manager.
@@ -33,7 +43,33 @@ func NewManager(logger *slog.Logger) *Manager {
 		clientIPs: make(map[string]string),
 		logger:    logger,
 		allowed:   defaultAllowedCodecs,
+		maxFftFps: 30, // default; override with SetMaxFftFps
 	}
+}
+
+// SetMaxFftFps sets the maximum FFT frame rate across all active profiles.
+// This controls write-channel capacity: cap = fps*3 + 64 (3s of FFT + IQ/META slack).
+// Must be called before any clients connect.
+func (m *Manager) SetMaxFftFps(fps int) {
+	if fps <= 0 {
+		fps = 30
+	}
+	m.mu.Lock()
+	m.maxFftFps = fps
+	m.mu.Unlock()
+}
+
+// writeChanCap returns the write channel capacity for new clients.
+// Sized to hold 3 seconds of FFT frames + 64 slots for IQ/META/audio messages.
+func (m *Manager) writeChanCap() int {
+	m.mu.RLock()
+	fps := m.maxFftFps
+	m.mu.RUnlock()
+	cap := fps*3 + 64
+	if cap < DefaultWriteChSize {
+		cap = DefaultWriteChSize
+	}
+	return cap
 }
 
 // SetAllowedCodecs replaces the server's allowed codec sets.
@@ -90,7 +126,7 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	// Use a background context for the client lifecycle — the websocket
 	// connection outlives the HTTP request context.
 	ctx, cancel := context.WithCancel(context.Background())
-	client := newClient(clientID, conn, ctx, cancel)
+	client := newClient(clientID, conn, ctx, cancel, m.writeChanCap())
 
 	// Track client IP for rate limiter release on disconnect
 	m.mu.Lock()
@@ -99,6 +135,11 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	m.addClient(client)
 	m.logger.Info("client connected", "id", clientID, "remote", r.RemoteAddr)
+
+	// Start the stale-client checker the first time any client connects.
+	m.staleOnce.Do(func() {
+		go m.staleCheckerLoop(context.Background())
+	})
 
 	// Send welcome message with server capabilities
 	m.mu.RLock()
@@ -120,9 +161,10 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	})
 	client.Send(welcome)
 
-	// Start read and write goroutines
+	// Start read, write, and ping goroutines
 	go m.readLoop(client)
 	go m.writeLoop(client)
+	go m.pingLoop(client)
 }
 
 // Broadcast sends a binary message to all clients subscribed to a dongle.
@@ -299,6 +341,8 @@ func (m *Manager) readLoop(c *Client) {
 func (m *Manager) writeLoop(c *Client) {
 	defer m.removeClient(c.ID)
 
+	const writeTimeout = 10 * time.Second
+
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -307,13 +351,88 @@ func (m *Manager) writeLoop(c *Client) {
 			if !ok {
 				return
 			}
-			err := c.conn.Write(c.ctx, websocket.MessageBinary, msg)
+			writeCtx, cancel := context.WithTimeout(c.ctx, writeTimeout)
+			err := c.conn.Write(writeCtx, websocket.MessageBinary, msg)
+			cancel()
 			if err != nil {
 				m.logger.Debug("write error, disconnecting client",
 					"id", c.ID,
 					"error", err,
 				)
 				return
+			}
+		}
+	}
+}
+
+// pingLoop sends a WebSocket ping every 15 seconds.
+// If the client doesn't respond within 10 seconds, it is considered dead
+// and the context is cancelled, triggering cleanup via readLoop/writeLoop.
+func (m *Manager) pingLoop(c *Client) {
+	const pingInterval = 15 * time.Second
+	const pingTimeout = 10 * time.Second
+
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(c.ctx, pingTimeout)
+			err := c.conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				m.logger.Debug("ping failed, disconnecting client",
+					"id", c.ID,
+					"error", err,
+				)
+				// Cancel the client context — readLoop and writeLoop will exit
+				// and call removeClient/handleDisconnect.
+				c.cancel()
+				return
+			}
+		}
+	}
+}
+
+// staleCheckerLoop runs every 5 seconds and cancels clients whose write channel
+// has been persistently full. A client is considered stale when:
+//   - Its writeCh is at 100% capacity, AND
+//   - It has not drained a single message in the last 10 seconds.
+//
+// This is much more lenient than disconnecting on the first full-channel event,
+// allowing brief bursts (GC pauses, browser tab backgrounding) without dropping
+// valid waterfall clients.
+func (m *Manager) staleCheckerLoop(ctx context.Context) {
+	const checkInterval = 5 * time.Second
+	const staleThreshold = 10 * time.Second
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.mu.RLock()
+			var stale []*Client
+			for _, c := range m.clients {
+				if c.IsStale(staleThreshold) {
+					stale = append(stale, c)
+				}
+			}
+			m.mu.RUnlock()
+
+			for _, c := range stale {
+				m.logger.Info("stale client detected, disconnecting",
+					"id", c.ID,
+					"writeCh_len", len(c.writeCh),
+					"writeCh_cap", cap(c.writeCh),
+				)
+				c.cancel()
 			}
 		}
 	}

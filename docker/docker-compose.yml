@@ -24,6 +24,22 @@ services:
       - LOG_LEVEL=info
     # Required for USB access on Linux
     privileged: true
+    # ── Resource limits ─────────────────────────────────────────────────────
+    # Uncomment and adjust to constrain the container.
+    # cpus: fractional cores (0.5 = half a core, 2.0 = two cores)
+    # memory: hard limit — container is OOM-killed if exceeded
+    #   Typical usage: Go binary ~25MB + FFT history ~25MB + ~2MB per audio client
+    #   256M is comfortable for a few clients; raise if running many concurrent users
+    # memory_reservation: soft limit / scheduling hint (should be < memory)
+    # ────────────────────────────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"        # max CPU cores — adjust to your hardware
+          memory: 512M       # hard memory cap
+        reservations:
+          cpus: "0.5"        # guaranteed minimum
+          memory: 128M       # soft reservation
     labels:
       traefik.enable: "true"
 

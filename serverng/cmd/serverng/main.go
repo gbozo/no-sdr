@@ -85,6 +85,18 @@ func main() {
 	wsMgr := ws.NewManager(logger)
 	wsMgr.SetAllowedCodecs(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
 
+	// Size write channels to the highest FFT fps across all profiles so that
+	// even fast-update profiles get ~3s of headroom before drop-oldest fires.
+	maxFps := 30
+	for _, d := range cfg.Dongles {
+		for _, p := range d.Profiles {
+			if p.FftFps > maxFps {
+				maxFps = p.FftFps
+			}
+		}
+	}
+	wsMgr.SetMaxFftFps(maxFps)
+
 	// Create dongle manager and start pipelines.
 	dongleMgr := dongle.NewManager(cfg, wsMgr, logger)
 

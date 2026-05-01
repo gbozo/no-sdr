@@ -353,8 +353,48 @@ func TestShutdown(t *testing.T) {
 	}
 }
 
-func TestBackpressureDropsOldest(t *testing.T) {
-	// Unit test the backpressure behavior directly on a Client
+func TestBackpressureDropsOldestOnFull(t *testing.T) {
+	// Send() drops the oldest message when writeCh is full, keeping the newest.
+	// The client context must NOT be cancelled on overflow.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c := &Client{
+		ID:          "test",
+		ctx:         ctx,
+		cancel:      cancel,
+		writeCh:     make(chan []byte, 3), // small buffer for testing
+		lastDrainAt: time.Now(),
+	}
+
+	// Fill the channel with known payloads
+	c.Send([]byte{1})
+	c.Send([]byte{2})
+	c.Send([]byte{3})
+
+	// Overflow: oldest (1) should be dropped, new message (4) enqueued.
+	c.Send([]byte{4})
+
+	// Context must still be alive — backpressure should NOT disconnect.
+	select {
+	case <-ctx.Done():
+		t.Fatal("context cancelled unexpectedly on overflow")
+	default:
+	}
+
+	// Channel should contain 3 messages: {2, 3, 4}
+	if got := len(c.writeCh); got != 3 {
+		t.Fatalf("expected 3 messages after overflow, got %d", got)
+	}
+	msg1 := <-c.writeCh
+	msg2 := <-c.writeCh
+	msg3 := <-c.writeCh
+	if msg1[0] != 2 || msg2[0] != 3 || msg3[0] != 4 {
+		t.Fatalf("expected [2,3,4], got [%d,%d,%d]", msg1[0], msg2[0], msg3[0])
+	}
+}
+
+func TestIsStale(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -362,29 +402,31 @@ func TestBackpressureDropsOldest(t *testing.T) {
 		ID:      "test",
 		ctx:     ctx,
 		cancel:  cancel,
-		writeCh: make(chan []byte, 3), // small buffer for testing
+		writeCh: make(chan []byte, 3),
+		// lastDrainAt starts as zero — old enough to be stale
 	}
 
-	// Fill the channel
-	c.Send([]byte{1})
-	c.Send([]byte{2})
-	c.Send([]byte{3})
-
-	// Channel is full — next Send should drop oldest (1) and enqueue (4)
-	c.Send([]byte{4})
-
-	// Drain and check: should get 2, 3, 4 (1 was dropped)
-	msg1 := <-c.writeCh
-	msg2 := <-c.writeCh
-	msg3 := <-c.writeCh
-
-	if msg1[0] != 2 {
-		t.Fatalf("expected first message to be 2, got %d", msg1[0])
+	// Empty channel: IsStale must return false (client is draining).
+	if c.IsStale(1 * time.Second) {
+		t.Fatal("empty channel should not be stale")
 	}
-	if msg2[0] != 3 {
-		t.Fatalf("expected second message to be 3, got %d", msg2[0])
+
+	// Fill the channel fully.
+	c.writeCh <- []byte{1}
+	c.writeCh <- []byte{2}
+	c.writeCh <- []byte{3}
+
+	// lastDrainAt is zero (never set) — channel full + very old drain = stale.
+	if !c.IsStale(1 * time.Second) {
+		t.Fatal("full channel with zero lastDrainAt should be stale")
 	}
-	if msg3[0] != 4 {
-		t.Fatalf("expected third message to be 4, got %d", msg3[0])
+
+	// Update lastDrainAt to now — channel full but just recently active.
+	c.drainMu.Lock()
+	c.lastDrainAt = time.Now()
+	c.drainMu.Unlock()
+
+	if c.IsStale(1 * time.Second) {
+		t.Fatal("full channel with fresh lastDrainAt should not be stale")
 	}
 }
