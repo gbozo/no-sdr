@@ -84,3 +84,17 @@ func (b *FftBuffer) GetRange() [][]float32 {
 	}
 	return result
 }
+
+// Reset clears all frames from the buffer.
+// Call this when the FFT size changes (e.g. on profile switch) so stale
+// frames with a different bin count are never returned by GetRange.
+func (b *FftBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.writeIdx = 0
+	b.count = 0
+	// Zero out frame pointers to allow GC of old frame slices.
+	for i := range b.frames {
+		b.frames[i] = nil
+	}
+}

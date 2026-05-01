@@ -145,3 +145,20 @@ func (s *SamDemod) Reset() {
 func (s *SamDemod) IsLocked() bool {
 	return s.locked
 }
+
+// SetBandwidth adjusts the post-demod audio LPF cutoff.
+// Matches Node.js SamDemodulator.setBandwidth: cutoff = min(hz/2, 8000) Hz.
+func (s *SamDemod) SetBandwidth(hz float64) {
+	if hz <= 0 || s.sampleRate <= 0 {
+		return
+	}
+	cutoffHz := hz / 2.0
+	if cutoffHz > 8000 {
+		cutoffHz = 8000
+	}
+	if cutoffHz > s.sampleRate/2 {
+		cutoffHz = s.sampleRate / 2 * 0.9
+	}
+	s.lpAlpha = float32(1.0 - math.Exp(-2.0*math.Pi*cutoffHz/s.sampleRate))
+	s.lpState = 0 // reset to avoid transient
+}

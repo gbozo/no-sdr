@@ -464,6 +464,12 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 	// Update the active profile
 	m.mu.Lock()
 	d.profile = newProfile
+	// Clear FFT history — frames from the old profile have a different bin count
+	// and/or center frequency, so mixing them with new frames causes panics and
+	// visual artifacts in the client's history waterfall.
+	if d.fftHistory != nil {
+		d.fftHistory.Reset()
+	}
 	m.mu.Unlock()
 
 	// Notify all subscribed clients with new META message
@@ -796,10 +802,17 @@ func (m *Manager) handleRequestHistory(clientID string) {
 		historyBins = binCount // no downsampling needed
 	}
 
-	// Quantize all frames to uint8, with optional downsampling
+	// Quantize all frames to uint8, with optional downsampling.
+	// Guard: skip any frame whose length differs from binCount — this can happen
+	// during a race between profile switch (which resets history) and a concurrent
+	// Push of the first new frame, or if GetRange races with Reset.
 	frameCount := len(frames)
 	allBins := make([]byte, frameCount*historyBins)
 	for i, frame := range frames {
+		if len(frame) != binCount {
+			// Mixed-size frame from a profile switch — skip (leave row zeroed).
+			continue
+		}
 		if historyBins == binCount {
 			// No downsampling — direct quantize
 			for j, val := range frame {
@@ -1072,18 +1085,27 @@ func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 	}
 }
 
-// handleBandwidth updates the client's IQ extractor output rate.
+// handleBandwidth stores the client's audio filter bandwidth and forwards it
+// to the Opus pipeline demodulator for audio LPF control.
+// NOTE: bandwidth is the audio/RF filter width in Hz — it does NOT change the
+// IQ extractor sample rate (that is controlled solely by mode via handleMode).
 func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
 	cp, ok := m.clientPipelines[clientID]
 	m.mu.Unlock()
 
-	if ok && cp.extractor != nil {
-		cp.extractor.SetOutputSampleRate(cmd.Hz)
-		// Update accumulation buffer for new rate
-		m.updateChunkSize(cp)
-		m.logger.Debug("client bandwidth updated", "clientID", clientID, "hz", cmd.Hz)
+	if !ok || cp.extractor == nil {
+		return
 	}
+
+	// Forward bandwidth to Opus pipeline demodulator if active.
+	cp.pmu.Lock()
+	if cp.opusPipeline != nil {
+		cp.opusPipeline.SetBandwidth(cmd.Hz)
+	}
+	cp.pmu.Unlock()
+
+	m.logger.Debug("client bandwidth updated", "clientID", clientID, "hz", cmd.Hz)
 }
 
 // handleMode updates output rate based on demodulation mode.

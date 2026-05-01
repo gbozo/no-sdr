@@ -6,8 +6,8 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/dsp"
 )
 
-// AmDemod implements AM envelope detection with DC blocking and AGC.
-// Matches the Node.js AmMonoDemod behaviour: sqrt(I²+Q²) → DC block → AGC.
+// AmDemod implements AM envelope detection with DC blocking, AGC, and an optional audio LPF.
+// Matches the Node.js AmMonoDemod behaviour: sqrt(I²+Q²) → DC block → AGC → audio LPF.
 type AmDemod struct {
 	sampleRate float64
 
@@ -21,6 +21,11 @@ type AmDemod struct {
 	agcAttack float32
 	agcDecay  float32
 	agcMax    float32
+
+	// Audio LPF (post-AGC, bandwidth-limiting).
+	// Node.js AM.setBandwidth: cutoff = min(hz/2, 5000)
+	audioLpf        *simpleFir
+	audioLpfEnabled bool
 }
 
 func NewAmDemod() *AmDemod {
@@ -49,7 +54,6 @@ func (a *AmDemod) Process(in []complex64, out []float32) int {
 	if len(out) < n {
 		n = len(out)
 	}
-	const scale = float32(1.0 / 32768.0) // IQ was normalised to ±1 before this stage
 	target := a.agcTarget
 	attack := a.agcAttack
 	decay := a.agcDecay
@@ -90,6 +94,14 @@ func (a *AmDemod) Process(in []complex64, out []float32) int {
 	a.agcGain = gain
 	a.dcPrev = dcPrev
 	a.dcPrevOut = dcPrevOut
+
+	// Apply post-AGC audio LPF if enabled
+	if a.audioLpfEnabled && a.audioLpf != nil {
+		for i := 0; i < n; i++ {
+			out[i] = a.audioLpf.process(out[i])
+		}
+	}
+
 	return n
 }
 
@@ -97,4 +109,32 @@ func (a *AmDemod) Reset() {
 	a.dcPrev = 0
 	a.dcPrevOut = 0
 	a.agcGain = 1.0
+	if a.audioLpf != nil {
+		a.audioLpf.reset()
+	}
+}
+
+// SetBandwidth sets the post-AGC audio low-pass filter cutoff.
+// Matches Node.js AmMonoDemod.setBandwidth: cutoff = min(hz/2, 5000) Hz.
+func (a *AmDemod) SetBandwidth(hz float64) {
+	if hz <= 0 || a.sampleRate <= 0 {
+		a.audioLpfEnabled = false
+		return
+	}
+	cutoffHz := hz / 2.0
+	if cutoffHz > 5000 {
+		cutoffHz = 5000
+	}
+	norm := cutoffHz / a.sampleRate
+	if norm >= 0.5 {
+		a.audioLpfEnabled = false
+		return
+	}
+	if a.audioLpf == nil {
+		a.audioLpf = newSimpleFir(31, norm)
+	} else {
+		a.audioLpf.design(norm, 31)
+		a.audioLpf.reset()
+	}
+	a.audioLpfEnabled = true
 }

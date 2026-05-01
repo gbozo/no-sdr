@@ -47,6 +47,11 @@ type OpusPipeline struct {
 	upsampleAccum float64
 	lastSample    float32
 
+	// bandwidth stores the last bandwidth value set by the client (Hz).
+	// Persisted here so SetMode() can re-apply it when the demodulator is replaced.
+	// 0 means "not set" (no audio LPF applied).
+	bandwidth int
+
 	// stereoEnabled tracks the user's explicit stereo preference.
 	// true = auto (pilot-driven for WFM); false = force mono regardless of demod.
 	stereoEnabled bool
@@ -386,6 +391,14 @@ func (p *OpusPipeline) SetMode(mode string) error {
 
 	p.demodulator = newDemod
 	p.mode = mode
+
+	// Re-apply bandwidth if it was set before the mode change.
+	if p.bandwidth > 0 {
+		if bs, ok := p.demodulator.(bandwidthSetter); ok {
+			bs.SetBandwidth(float64(p.bandwidth))
+		}
+	}
+
 	return nil
 }
 
@@ -471,6 +484,22 @@ func (p *OpusPipeline) Mode() string {
 // Channels returns the current channel count.
 func (p *OpusPipeline) Channels() int {
 	return p.channels
+}
+
+// bandwidthSetter is an optional interface implemented by demodulators that
+// support audio bandwidth limiting.
+type bandwidthSetter interface {
+	SetBandwidth(hz float64)
+}
+
+// SetBandwidth forwards the bandwidth command to the demodulator if it supports it,
+// and stores the value so SetMode() can re-apply it when the demodulator is replaced.
+// Called from handleBandwidth under cp.pmu, so no additional lock needed here.
+func (p *OpusPipeline) SetBandwidth(hz int) {
+	p.bandwidth = hz
+	if bs, ok := p.demodulator.(bandwidthSetter); ok {
+		bs.SetBandwidth(float64(hz))
+	}
 }
 
 // createDemodBlock creates the appropriate demodulator for a given mode.

@@ -123,6 +123,9 @@ func TestCwDemod(t *testing.T) {
 	if err := demod.Init(ctx); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
+	// Set bandwidth wide enough to pass the 700 Hz BFO tone.
+	// Default CW bandwidth is 500 Hz which would attenuate 700 Hz.
+	demod.SetBandwidth(1500)
 
 	out := make([]float32, n)
 	written := demod.Process(in, out)

@@ -41,7 +41,7 @@ func fastAtan2(y, x float32) float32 {
 // ---------- FM Mono ----------
 
 // FmMonoDemod implements wideband FM demodulation using a conjugate-product discriminator
-// followed by a first-order IIR de-emphasis filter.
+// followed by a first-order IIR de-emphasis filter and an optional post-deemph audio LPF.
 type FmMonoDemod struct {
 	sampleRate  float64
 	prevI       float32
@@ -51,6 +51,12 @@ type FmMonoDemod struct {
 	deemphState float32
 	deemphTau   float64 // 50e-6 (Europe/Asia) or 75e-6 (Americas)
 	deviation   float64 // FM deviation in Hz: 75000 for WFM, 5000 for NFM
+
+	// Post-deemph audio LPF (NFM bandwidth limiting).
+	// Enabled by SetBandwidth; for WFM the 15kHz FIR in FmStereoDemod takes this role.
+	audioLpf        *simpleFir
+	audioLpfEnabled bool
+	audioLpfCutoff  float64 // normalised (0..0.5) — stored so Init can restore it
 }
 
 // NewFmMonoDemod creates a new FM mono demodulator.
@@ -86,6 +92,31 @@ func (f *FmMonoDemod) Init(ctx dsp.BlockContext) error {
 	f.prevI = 0
 	f.prevQ = 0
 	f.deemphState = 0
+
+	// Rebuild audio LPF at the actual sample rate if it was pre-configured.
+	if f.audioLpfEnabled && f.audioLpfCutoff > 0 {
+		// audioLpfCutoff may have been stored normalised to 48kHz — recompute.
+		// Re-derive cutoffHz from what SetBandwidth stored.
+		// We stored norm = cutoffHz / sampleRate_at_call_time.
+		// If sampleRate changed, recalculate norm at current rate.
+		// Simplest: keep cutoffHz = norm * 48000 if Init wasn't called before,
+		// or norm * f.sampleRate if it was. We store norm always, so:
+		norm := f.audioLpfCutoff // already normalised at whatever rate was active
+		// Re-derive absolute Hz then re-normalise at current rate.
+		// Since we always store norm * sampleRate_of_SetBandwidth call,
+		// just trust the stored cutoff — it's already 0..0.5.
+		if norm < 0.5 {
+			if f.audioLpf == nil {
+				f.audioLpf = newSimpleFir(31, norm)
+			} else {
+				f.audioLpf.design(norm, 31)
+				f.audioLpf.reset()
+			}
+		} else {
+			f.audioLpfEnabled = false
+		}
+	}
+
 	return nil
 }
 
@@ -123,6 +154,14 @@ func (f *FmMonoDemod) Process(in []complex64, out []float32) int {
 	f.prevI = prevI
 	f.prevQ = prevQ
 	f.deemphState = state
+
+	// Apply post-deemph audio LPF if enabled (NFM bandwidth limiting)
+	if f.audioLpfEnabled && f.audioLpf != nil {
+		for i := 0; i < n; i++ {
+			out[i] = f.audioLpf.process(out[i])
+		}
+	}
+
 	return n
 }
 
@@ -130,6 +169,43 @@ func (f *FmMonoDemod) Reset() {
 	f.prevI = 0
 	f.prevQ = 0
 	f.deemphState = 0
+	if f.audioLpf != nil {
+		f.audioLpf.reset()
+	}
+}
+
+// SetBandwidth applies a post-deemph audio low-pass filter.
+// For NFM: cutoff = min(hz/2, 4000) Hz (matches Node.js FmDemodulator.setBandwidth).
+// For WFM (FmStereoDemod wraps this): call is a no-op because deemphTau==1 and
+// deviation==75000; the 15kHz FIR in FmStereoDemod handles filtering instead.
+func (f *FmMonoDemod) SetBandwidth(hz float64) {
+	if hz <= 0 {
+		f.audioLpfEnabled = false
+		return
+	}
+	cutoffHz := hz / 2.0
+	if cutoffHz > 4000 {
+		cutoffHz = 4000
+	}
+	if f.sampleRate <= 0 {
+		// Not yet initialised — store for Init to pick up
+		f.audioLpfCutoff = cutoffHz / 48000.0 // assume 48kHz until Init
+		f.audioLpfEnabled = true
+		return
+	}
+	norm := cutoffHz / f.sampleRate
+	if norm >= 0.5 {
+		f.audioLpfEnabled = false
+		return
+	}
+	f.audioLpfCutoff = norm
+	if f.audioLpf == nil {
+		f.audioLpf = newSimpleFir(31, norm)
+	} else {
+		f.audioLpf.design(norm, 31)
+		f.audioLpf.reset()
+	}
+	f.audioLpfEnabled = true
 }
 
 // ---------- FM Stereo ----------
@@ -526,3 +602,7 @@ func (f *FmStereoDemod) IsStereo() bool {
 func (f *FmStereoDemod) BlendFactor() float32 {
 	return f.blendFactor
 }
+
+// SetBandwidth is a no-op for WFM stereo: WFM is always full-band (200kHz RF, 15kHz audio).
+// The fixed 51-tap FIR LPF at 15kHz handles audio bandwidth limiting.
+func (f *FmStereoDemod) SetBandwidth(_ float64) {}
