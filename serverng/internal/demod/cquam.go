@@ -6,6 +6,28 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/dsp"
 )
 
+// invSqrt32 computes an approximation of 1/sqrt(x) for float32.
+// Uses the classic bit-hack (Quake/Doom fast inverse square root) with one
+// Newton-Raphson refinement iteration, giving ~0.175% relative error.
+// This is sufficient for VCO phasor renormalization in the C-QUAM PLL —
+// the PLL corrects any residual magnitude error within a few samples.
+//
+// On modern amd64 this avoids SQRTSD+DIVSD in the per-sample hot path.
+// math.Float32bits/Float32frombits provide type-safe bit reinterpretation.
+func invSqrt32(x float32) float32 {
+	i := math.Float32bits(x)
+	i = 0x5f3759df - (i >> 1)
+	y := math.Float32frombits(i)
+	// One Newton-Raphson refinement: y = y * (1.5 - 0.5*x*y*y)
+	y = y * (1.5 - 0.5*x*y*y)
+	return y
+}
+
+// sqrtMag32 computes sqrt(re²+im²) for a complex64 sample.
+func sqrtMag32(re, im float32) float32 {
+	return float32(math.Sqrt(float64(re*re + im*im)))
+}
+
 // CquamDemod implements Motorola C-QUAM AM Stereo demodulation.
 // It uses a PLL for carrier recovery and Goertzel-based 25Hz pilot detection.
 // Output is interleaved L, R float32 samples.
@@ -107,13 +129,15 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 		newRe := vcoRe*cosD - vcoIm*sinD
 		newIm := vcoRe*sinD + vcoIm*cosD
 
-		// Normalize VCO magnitude to prevent drift
-		mag := float32(1.0 / math.Sqrt(float64(newRe*newRe+newIm*newIm)))
+		// Normalize VCO magnitude to prevent drift.
+		// invSqrt32 is faster than 1/math.Sqrt(float64(...)) — avoids SQRTSD+DIVSD.
+		// ~0.175% error is sufficient; PLL corrects residual within a few samples.
+		mag := invSqrt32(newRe*newRe + newIm*newIm)
 		vcoRe = newRe * mag
 		vcoIm = newIm * mag
 
 		// C-QUAM decode
-		envelope := float32(math.Sqrt(float64(inRe*inRe + inIm*inIm)))
+		envelope := sqrtMag32(inRe, inIm)
 		if envelope < 1e-10 {
 			envelope = 1e-10
 		}
@@ -134,9 +158,13 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 		gCount++
 
 		if gCount >= c.gBlockSize {
-			// Compute magnitude
+			// Compute magnitude from Goertzel power output.
+			// math.Abs guards against tiny negative values from float rounding.
 			power := gS1*gS1 + gS2*gS2 - c.gCoeff*gS1*gS2
-			pilotMag = float32(math.Sqrt(float64(math.Abs(float64(power))))) / float32(c.gBlockSize)
+			if power < 0 {
+				power = -power
+			}
+			pilotMag = float32(math.Sqrt(float64(power))) / float32(c.gBlockSize)
 			gS1 = 0
 			gS2 = 0
 			gCount = 0

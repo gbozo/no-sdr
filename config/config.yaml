@@ -59,6 +59,7 @@ dongles:
           dongleId: ""
           preFilterNb: true
           preFilterNbThreshold: 0
+          dcOffsetRemoval: null
         - id: profile-mootuxy2
           name: Aviation VHF
           centerFrequency: 127500000
@@ -75,6 +76,7 @@ dongles:
           directSampling: 0
           description: Airband 118–137 MHz — tower, approach, ATIS
           dongleId: ""
-          preFilterNb: false
+          preFilterNb: true
           preFilterNbThreshold: 0
+          dcOffsetRemoval: null
 bookmarks: []

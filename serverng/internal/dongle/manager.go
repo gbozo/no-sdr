@@ -1749,6 +1749,7 @@ func (m *Manager) createClientPipeline(clientID string) {
 		InputSampleRate:  inputRate,
 		OutputSampleRate: outputRate,
 		TuneOffset:       tuneOffset,
+		DCOffsetRemoval:  d.profile.DCOffsetRemoval == nil || *d.profile.DCOffsetRemoval,
 		Logger:           m.logger.With("clientID", clientID),
 	})
 	if err != nil {

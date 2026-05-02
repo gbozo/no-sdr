@@ -147,8 +147,8 @@ func TestNoiseBlanker_Reset(t *testing.T) {
 
 	// Reset clears state
 	nb.Reset()
-	if nb.avgMag != 0 {
-		t.Errorf("expected avgMag 0 after reset, got %f", nb.avgMag)
+	if nb.avgMagSq != 0 {
+		t.Errorf("expected avgMagSq 0 after reset, got %f", nb.avgMagSq)
 	}
 	if nb.blankCount != 0 {
 		t.Errorf("expected blankCount 0 after reset, got %d", nb.blankCount)

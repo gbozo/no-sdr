@@ -139,6 +139,10 @@ type DongleProfile struct {
 	DongleID             string  `yaml:"dongleId"             json:"dongleId"`
 	PreFilterNb          bool    `yaml:"preFilterNb"          json:"preFilterNb"`
 	PreFilterNbThreshold int     `yaml:"preFilterNbThreshold" json:"preFilterNbThreshold"`
+	// DCOffsetRemoval enables the IIR high-pass DC offset blocker on raw IQ input.
+	// Removes the center-frequency DC spike common on RTL-SDR hardware. Default: true.
+	// Use a pointer so YAML explicit false is preserved (zero-value bool is ambiguous).
+	DCOffsetRemoval      *bool   `yaml:"dcOffsetRemoval"      json:"dcOffsetRemoval"`
 }
 
 // Load reads the config file at path and returns a validated Config.
@@ -243,6 +247,11 @@ func applyProfileDefaults(cfg *Config) {
 			}
 			if p.Mode == "" {
 				p.Mode = "wfm"
+			}
+			// DCOffsetRemoval defaults to true when not explicitly set in YAML.
+			if p.DCOffsetRemoval == nil {
+				t := true
+				p.DCOffsetRemoval = &t
 			}
 		}
 	}

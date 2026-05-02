@@ -42,6 +42,7 @@ export interface DongleProfile {
   dongleId: string;
   preFilterNb: boolean;
   preFilterNbThreshold: number;
+  dcOffsetRemoval?: boolean;
 }
 
 export interface DongleConfig {

@@ -11,11 +11,12 @@ type IqExtractorConfig struct {
 	InputSampleRate  int          // dongle rate (e.g., 2400000)
 	OutputSampleRate int          // desired rate (e.g., 48000 for NFM, 240000 for WFM)
 	TuneOffset       int          // Hz offset from center frequency
+	DCOffsetRemoval  bool         // enable IIR DC blocker on raw IQ (default: true)
 	Logger           *slog.Logger // optional
 }
 
 // IqExtractor extracts a narrow sub-band from wideband IQ data.
-// Pipeline: uint8→complex64 → NoiseBlanker → NCO shift → Butterworth LPF → Decimate → scale to Int16
+// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Butterworth LPF → Decimate → scale to Int16
 type IqExtractor struct {
 	nco      *NCOBlock
 	filter   *ButterworthBlock
@@ -23,6 +24,7 @@ type IqExtractor struct {
 	pipeline *Pipeline
 
 	noiseBlanker *NoiseBlanker // optional pre-filter NB
+	dcBlocker    *DCBlocker    // optional IQ DC offset removal
 
 	inputRate  int
 	outputRate int
@@ -75,6 +77,7 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 		decimate:     decimate,
 		pipeline:     pipeline,
 		noiseBlanker: NewNoiseBlanker(10.0),
+		dcBlocker:    NewDCBlocker(float64(cfg.InputSampleRate), 1.0, cfg.DCOffsetRemoval),
 		inputRate:    cfg.InputSampleRate,
 		outputRate:   actualOutputRate,
 		factor:       factor,
@@ -106,6 +109,9 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 		qVal := (float32(rawIQ[i*2+1]) - 127.5) / 127.5
 		e.complexIn[i] = complex(iVal, qVal)
 	}
+
+	// Apply DC offset blocker (if enabled) — before NCO to remove ADC/mixer DC bias
+	e.dcBlocker.Process(e.complexIn[:numSamples])
 
 	// Apply pre-filter noise blanker (if enabled)
 	e.noiseBlanker.Process(e.complexIn[:numSamples])
@@ -174,6 +180,7 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 func (e *IqExtractor) Reset() {
 	e.pipeline.Reset()
 	e.noiseBlanker.Reset()
+	e.dcBlocker.Reset()
 }
 
 // SetNbEnabled enables or disables the pre-filter noise blanker.
@@ -184,6 +191,12 @@ func (e *IqExtractor) SetNbThreshold(t float32) { e.noiseBlanker.SetThreshold(t)
 
 // NbEnabled returns whether the noise blanker is currently enabled.
 func (e *IqExtractor) NbEnabled() bool { return e.noiseBlanker.IsEnabled() }
+
+// SetDCOffsetRemoval enables or disables the IQ DC offset blocker at runtime.
+func (e *IqExtractor) SetDCOffsetRemoval(enabled bool) { e.dcBlocker.SetEnabled(enabled) }
+
+// DCOffsetRemovalEnabled reports whether the DC offset blocker is active.
+func (e *IqExtractor) DCOffsetRemovalEnabled() bool { return e.dcBlocker.IsEnabled() }
 
 // OutputSampleRate returns the current output rate.
 func (e *IqExtractor) OutputSampleRate() int {

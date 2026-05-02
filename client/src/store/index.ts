@@ -142,7 +142,6 @@ function createStore() {
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [decoderPanelOpen, setDecoderPanelOpen] = createSignal(false);
   const [isAdmin, setIsAdmin] = createSignal(false);
-  const [adminModalOpen, setAdminModalOpen] = createSignal(false);
   const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
   const [meterStyle, setMeterStyle] = persist<'bar' | 'needle'>('meterStyle', 'needle');
   const [audioSpectrumVisible, setAudioSpectrumVisible] = persist<boolean>('audioSpectrumVisible', true);
@@ -282,7 +281,6 @@ function createStore() {
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,
-    adminModalOpen, setAdminModalOpen,
     adminSection, setAdminSection,
     meterStyle, setMeterStyle,
     audioSpectrumVisible, setAudioSpectrumVisible,

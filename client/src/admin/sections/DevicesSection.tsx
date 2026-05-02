@@ -718,6 +718,7 @@ const ProfileEditor: Component<{
         <div class="flex flex-wrap gap-3 pt-3 border-t border-border/30">
           <ToggleChip label="Swap I/Q" value={local().swapIQ ?? false} onChange={(v) => update('swapIQ', v)} />
           <ToggleChip label="Pre-filter NB" value={local().preFilterNb ?? false} onChange={(v) => update('preFilterNb', v)} />
+          <ToggleChip label="DC Offset Removal" value={local().dcOffsetRemoval ?? true} onChange={(v) => update('dcOffsetRemoval', v)} />
         </div>
 
         <Show when={local().preFilterNb}>
