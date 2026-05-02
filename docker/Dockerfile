@@ -13,16 +13,16 @@ FROM node:22-slim AS client-builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-COPY shared/package.json shared/
+
 COPY client/package.json client/
 
-RUN npm ci --workspace=shared --workspace=client
+RUN npm ci --workspace=client
 
 COPY tsconfig.base.json ./
-COPY shared/ shared/
+
 COPY client/ client/
 
-RUN npm run build --workspace=shared && npm run build --workspace=client
+RUN npm run build --workspace=client
 
 # ---- RTL-SDR Build (Osmocom) ----
 FROM alpine:3.20 AS rtlsdr-builder

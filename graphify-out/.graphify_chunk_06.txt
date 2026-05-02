@@ -1,0 +1,11 @@
+/Users/I570173/Documents/Source/node-sdr/serverng/internal/config/config_test.go
+/Users/I570173/Documents/Source/node-sdr/serverng/internal/history/fft_buffer.go
+/Users/I570173/Documents/Source/node-sdr/serverng/internal/history/fft_buffer_test.go
+/Users/I570173/Documents/Source/node-sdr/serverng/TASKS.md
+/Users/I570173/Documents/Source/node-sdr/serverng/PLAN.md
+/Users/I570173/Documents/Source/node-sdr/screenshots/no-sdr.jpeg
+/Users/I570173/Documents/Source/node-sdr/screenshots/no-sdr-compression.jpeg
+/Users/I570173/Documents/Source/node-sdr/client/src/store/index.ts
+/Users/I570173/Documents/Source/node-sdr/serverng/cmd/serverng/main.go
+/Users/I570173/Documents/Source/node-sdr/serverng/test/integration_test.go
+/Users/I570173/Documents/Source/node-sdr/client/public/favicon.svg
