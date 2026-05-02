@@ -15,7 +15,9 @@ import type {
   UITheme,
   DongleInfo,
   DongleProfile,
-} from '@node-sdr/shared';
+  PushDongleInfo,
+  PushServerConfig,
+} from '~/shared';
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
 const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate', 'deflate-floor'];
@@ -52,12 +54,30 @@ function createStore() {
   const [connected, setConnected] = createSignal(false);
   const [clientId, setClientId] = createSignal('');
 
+  // ---- Persistent local client ID (survives page refresh) ----
+  const generateLocalId = (): string => {
+    const chars = 'abcdef0123456789';
+    let id = '';
+    for (let i = 0; i < 8; i++) id += chars[Math.floor(Math.random() * chars.length)];
+    return id;
+  };
+  const [localClientId] = persist<string>('clientId', generateLocalId());
+
   // ---- Dongle / Profile ----
   const [dongles, setDongles] = createSignal<DongleInfo[]>([]);
   const [activeDongleId, setActiveDongleId] = createSignal('');
   const [activeProfile, setActiveProfile] = createSignal<DongleProfile | null>(null);
   const [activeProfileId, setActiveProfileId] = createSignal('');
   const [profiles, setProfiles] = createSignal<DongleProfile[]>([]);
+
+  // ---- Push-based dongle state (from WS notifications) ----
+  const [pushDongles, setPushDongles] = createSignal<PushDongleInfo[]>([]);
+  const [pushServerConfig, setPushServerConfig] = createSignal<PushServerConfig | null>(null);
+  const [configVersion, setConfigVersion] = createSignal(0);
+  // Connection state: 'connecting' | 'connected' | 'disconnected' | 'unconfigured'
+  const [connectionState, setConnectionState] = createSignal<'connecting' | 'connected' | 'disconnected' | 'unconfigured'>('disconnected');
+  // Reconnect attempt counter (0 = not reconnecting, >0 = attempt N of max)
+  const [reconnectAttempt, setReconnectAttempt] = createSignal(0);
 
   // ---- Tuning ----
   const [centerFrequency, setCenterFrequency] = createSignal(100_000_000);
@@ -188,6 +208,7 @@ function createStore() {
     // Connection
     connected, setConnected,
     clientId, setClientId,
+    localClientId,
 
     // Dongle / Profile
     dongles, setDongles,
@@ -195,6 +216,13 @@ function createStore() {
     activeProfile, setActiveProfile,
     activeProfileId, setActiveProfileId,
     profiles, setProfiles,
+
+    // Push-based state
+    pushDongles, setPushDongles,
+    pushServerConfig, setPushServerConfig,
+    configVersion, setConfigVersion,
+    connectionState, setConnectionState,
+    reconnectAttempt, setReconnectAttempt,
 
     // Tuning
     centerFrequency, setCenterFrequency,

@@ -571,6 +571,25 @@
       0 0 12px rgba(74,163,255,0.5),
       inset 0 1px 1px rgba(255,255,255,0.3);
   }
+
+  /* ---- Admin form input ---- */
+  .admin-input {
+    padding: 0.375rem 0.75rem;
+    background: var(--color-sdr-base);
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--color-text-primary);
+    transition: border-color 150ms;
+  }
+  .admin-input:focus {
+    outline: none;
+    border-color: var(--sdr-accent);
+  }
+  .admin-input::placeholder {
+    color: var(--color-text-dim);
+  }
 }
 
 /* ---- Global Styles ---- */

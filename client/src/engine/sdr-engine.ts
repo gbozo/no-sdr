@@ -30,7 +30,7 @@ import {
   type ClientCommand,
   type CodecType,
   type DemodMode,
-} from '@node-sdr/shared';
+} from '~/shared';
 import { inflateSync } from 'fflate';
 import { OpusDecoder } from 'opus-decoder';
 import { SpectrumRenderer } from './spectrum.js';
@@ -58,6 +58,7 @@ export class SdrEngine {
   private audio: AudioEngine;
   private demodulator: Demodulator;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private stateSyncFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
@@ -348,6 +349,7 @@ export class SdrEngine {
   connect(): void {
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
+    store.setConnectionState('connecting');
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${location.host}/ws`;
 
@@ -356,11 +358,18 @@ export class SdrEngine {
 
     this.ws.onopen = () => {
       store.setConnected(true);
+      store.setConnectionState('connected');
       this.reconnectAttempts = 0;
+      store.setReconnectAttempt(0);
       console.log('[SDR] WebSocket connected');
 
-      // Auto-subscribe to first dongle if available
-      this.fetchDongles();
+      // state_sync message from server will provide dongles list (no REST fetch needed)
+      // Fallback: fetch dongles if state_sync doesn't arrive within 2s
+      this.stateSyncFallbackTimer = setTimeout(() => {
+        if (store.pushDongles().length === 0 && store.dongles().length === 0) {
+          this.fetchDongles();
+        }
+      }, 2000);
     };
 
     this.ws.onmessage = (event) => {
@@ -379,7 +388,12 @@ export class SdrEngine {
 
     this.ws.onclose = () => {
       store.setConnected(false);
+      store.setConnectionState('disconnected');
       console.log('[SDR] WebSocket disconnected');
+      if (this.stateSyncFallbackTimer) {
+        clearTimeout(this.stateSyncFallbackTimer);
+        this.stateSyncFallbackTimer = null;
+      }
       this.scheduleReconnect();
     };
 
@@ -392,11 +406,13 @@ export class SdrEngine {
     if (this.destroyed) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('[SDR] Max reconnect attempts reached');
+      store.setConnectionState('disconnected');
       return;
     }
 
     const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 30000);
     this.reconnectAttempts++;
+    store.setReconnectAttempt(this.reconnectAttempts);
 
     this.reconnectTimer = setTimeout(() => {
       console.log(`[SDR] Reconnecting (attempt ${this.reconnectAttempts})...`);
@@ -1029,6 +1045,237 @@ export class SdrEngine {
         store.setServerCpu(meta.cpuPercent);
         store.setServerMem(meta.memMb);
         store.setServerClients(meta.clients);
+        break;
+
+      // ---- Config push notifications (Phase 13: reactive state from WS) ----
+
+      case 'state_sync': {
+        // Cancel fallback fetch since state_sync arrived
+        if (this.stateSyncFallbackTimer) {
+          clearTimeout(this.stateSyncFallbackTimer);
+          this.stateSyncFallbackTimer = null;
+        }
+
+        store.setPushDongles(meta.dongles);
+        if (meta.server) store.setPushServerConfig(meta.server);
+        if (meta.version) store.setConfigVersion(meta.version);
+
+        // Convert push dongles to the legacy DongleInfo format for backward compatibility
+        const legacyDongles = meta.dongles.map(d => ({
+          id: d.id,
+          name: d.name,
+          deviceIndex: 0,
+          serial: '',
+          source: d.sourceType as any,
+          activeProfileId: d.activeProfile || null,
+          ppmCorrection: 0,
+          running: d.state.status === 'running',
+          clientCount: 0,
+          sampleRate: d.sampleRate,
+        }));
+        store.setDongles(legacyDongles);
+
+        // If no dongles are configured, set connection state to unconfigured
+        if (meta.dongles.length === 0) {
+          store.setConnectionState('unconfigured');
+        } else {
+          store.setConnectionState('connected');
+        }
+
+        // Auto-subscribe if we don't have an active subscription yet
+        if (!store.activeDongleId()) {
+          const running = meta.dongles.find(d => d.state.status === 'running');
+          if (running) {
+            this.subscribe(running.id);
+          }
+        }
+        break;
+      }
+
+      case 'dongle_added': {
+        const current = store.pushDongles();
+        store.setPushDongles([...current, meta.dongle]);
+        // Update legacy signal too
+        store.setDongles([...store.dongles(), {
+          id: meta.dongle.id,
+          name: meta.dongle.name,
+          deviceIndex: 0,
+          serial: '',
+          source: meta.dongle.sourceType as any,
+          activeProfileId: meta.dongle.activeProfile || null,
+          ppmCorrection: 0,
+          running: meta.dongle.state.status === 'running',
+          clientCount: 0,
+          sampleRate: meta.dongle.sampleRate,
+        }]);
+        if (meta.version) store.setConfigVersion(meta.version);
+        // If was unconfigured, now we have at least one dongle
+        if (store.connectionState() === 'unconfigured') {
+          store.setConnectionState('connected');
+        }
+        break;
+      }
+
+      case 'dongle_updated': {
+        store.setPushDongles(
+          store.pushDongles().map(d => d.id === meta.dongleId ? meta.dongle : d)
+        );
+        store.setDongles(
+          store.dongles().map(d => d.id === meta.dongleId ? {
+            ...d,
+            name: meta.dongle.name,
+            source: meta.dongle.sourceType as any,
+            running: meta.dongle.state.status === 'running',
+            sampleRate: meta.dongle.sampleRate,
+            activeProfileId: meta.dongle.activeProfile || null,
+          } : d)
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        break;
+      }
+
+      case 'dongle_removed': {
+        store.setPushDongles(
+          store.pushDongles().filter(d => d.id !== meta.dongleId)
+        );
+        store.setDongles(
+          store.dongles().filter(d => d.id !== meta.dongleId)
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        // If we were subscribed to the removed dongle, try another
+        if (store.activeDongleId() === meta.dongleId) {
+          store.setActiveDongleId('');
+          const remaining = store.pushDongles();
+          const running = remaining.find(d => d.state.status === 'running');
+          if (running) {
+            this.subscribe(running.id);
+          } else if (remaining.length === 0) {
+            store.setConnectionState('unconfigured');
+          }
+        }
+        break;
+      }
+
+      case 'dongle_started': {
+        store.setPushDongles(
+          store.pushDongles().map(d => d.id === meta.dongleId ? { ...d, state: meta.state } : d)
+        );
+        store.setDongles(
+          store.dongles().map(d => d.id === meta.dongleId ? { ...d, running: true } : d)
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        // Auto-subscribe if we have no active subscription
+        if (!store.activeDongleId()) {
+          this.subscribe(meta.dongleId);
+        }
+        break;
+      }
+
+      case 'dongle_stopped': {
+        store.setPushDongles(
+          store.pushDongles().map(d => d.id === meta.dongleId ? { ...d, state: meta.state } : d)
+        );
+        store.setDongles(
+          store.dongles().map(d => d.id === meta.dongleId ? { ...d, running: false } : d)
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        // If we were subscribed to this dongle, try switching
+        if (store.activeDongleId() === meta.dongleId) {
+          store.setActiveDongleId('');
+          const running = store.pushDongles().find(d => d.state.status === 'running' && d.id !== meta.dongleId);
+          if (running) {
+            this.subscribe(running.id);
+          }
+        }
+        break;
+      }
+
+      case 'dongle_error': {
+        store.setPushDongles(
+          store.pushDongles().map(d => d.id === meta.dongleId ? { ...d, state: meta.state } : d)
+        );
+        store.setDongles(
+          store.dongles().map(d => d.id === meta.dongleId ? { ...d, running: false } : d)
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        console.warn(`[SDR] Dongle ${meta.dongleId} error: ${meta.error}`);
+        break;
+      }
+
+      case 'profile_added': {
+        store.setPushDongles(
+          store.pushDongles().map(d => {
+            if (d.id !== meta.dongleId) return d;
+            return { ...d, profiles: [...d.profiles, meta.profile] };
+          })
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        break;
+      }
+
+      case 'profile_updated': {
+        store.setPushDongles(
+          store.pushDongles().map(d => {
+            if (d.id !== meta.dongleId) return d;
+            return {
+              ...d,
+              profiles: d.profiles.map(p => p.id === meta.profileId ? meta.profile : p),
+            };
+          })
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        break;
+      }
+
+      case 'profile_removed': {
+        store.setPushDongles(
+          store.pushDongles().map(d => {
+            if (d.id !== meta.dongleId) return d;
+            return { ...d, profiles: d.profiles.filter(p => p.id !== meta.profileId) };
+          })
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        break;
+      }
+
+      case 'profiles_reordered': {
+        store.setPushDongles(
+          store.pushDongles().map(d => {
+            if (d.id !== meta.dongleId) return d;
+            return { ...d, profiles: meta.profiles };
+          })
+        );
+        if (meta.version) store.setConfigVersion(meta.version);
+        break;
+      }
+
+      case 'server_config_updated':
+        store.setPushServerConfig(meta.server);
+        if (meta.version) store.setConfigVersion(meta.version);
+        break;
+
+      case 'config_saved':
+        if (meta.version) store.setConfigVersion(meta.version);
+        console.log('[SDR] Config saved (version:', meta.version, ')');
+        break;
+
+      case 'dongle_disconnected':
+        console.warn(`[SDR] Dongle disconnected: ${meta.dongleId} (${meta.reason})`);
+        // If we were subscribed to this dongle, clear subscription state
+        if (store.activeDongleId() === meta.dongleId) {
+          store.setActiveDongleId('');
+          // Try to resubscribe to another running dongle
+          const running = store.pushDongles().find(d => d.state.status === 'running' && d.id !== meta.dongleId);
+          if (running) {
+            this.subscribe(running.id);
+          }
+        }
+        break;
+
+      case 'codec_status':
+        if (!meta.accepted) {
+          console.warn(`[SDR] Codec ${meta.codec} rejected: ${meta.reason}`);
+        }
         break;
     }
   }

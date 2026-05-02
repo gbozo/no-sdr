@@ -4,7 +4,7 @@
 
 import { Component, createMemo, For, Show, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
-import { formatFrequencyDotted } from '@node-sdr/shared';
+import { formatFrequencyDotted } from '~/shared';
 
 /** Common tuning step options in Hz */
 const TUNING_STEPS = [

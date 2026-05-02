@@ -5,7 +5,7 @@
 // Completely separate from UI themes.
 // ============================================================
 
-import type { WaterfallColorTheme } from '@node-sdr/shared';
+import type { WaterfallColorTheme } from '~/shared';
 
 export type PaletteEntry = [r: number, g: number, b: number];
 export type Palette = PaletteEntry[];

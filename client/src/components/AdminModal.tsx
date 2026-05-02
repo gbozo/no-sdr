@@ -3,7 +3,7 @@
 // ============================================================
 
 import { Component, Show, For, createSignal, createEffect } from 'solid-js';
-import { PROFILE_PRESETS, PRESET_CATEGORIES } from '@node-sdr/shared';
+import { PROFILE_PRESETS, PRESET_CATEGORIES } from '~/shared';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 

@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@node-sdr/shared": "*",
+    "@solidjs/router": "^0.16.1",
     "fflate": "^0.8.2",
     "opus-decoder": "^0.7.11",
     "solid-js": "^1.9.5",

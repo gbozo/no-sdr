@@ -6,16 +6,15 @@
   "license": "MIT",
   "type": "module",
   "workspaces": [
-    "shared",
     "client"
   ],
   "scripts": {
-    "dev": "npm run build --workspace=shared && concurrently --raw -k \"npm run dev:go\" \"npm run dev --workspace=client\"",
-    "dev:demo": "npm run build --workspace=shared && concurrently --raw -k \"npm run dev:go:demo\" \"npm run dev --workspace=client\"",
+    "dev": "concurrently --raw -k \"npm run dev:go\" \"npm run dev --workspace=client\"",
+    "dev:demo": "concurrently --raw -k \"npm run dev:go:demo\" \"npm run dev --workspace=client\"",
     "dev:go": "cd serverng && PATH=\"$PATH:$HOME/go/bin\" air",
     "dev:go:demo": "cd serverng && PATH=\"$PATH:$HOME/go/bin\" NODE_SDR_DEMO=1 air",
     "dev:client": "npm run dev --workspace=client",
-    "build": "npm run build --workspace=shared && npm run build:client && npm run build:go",
+    "build": "npm run build:client && npm run build:go",
     "build:client": "npm run build --workspace=client",
     "build:go": "cd serverng && CGO_ENABLED=0 go build -ldflags=\"-s -w\" -o bin/serverng ./cmd/serverng",
     "build:go:opus": "cd serverng && go build -tags opus -ldflags=\"-s -w\" -o bin/serverng ./cmd/serverng",
@@ -23,7 +22,7 @@
     "build:go:all": "cd serverng && make build-all",
     "start": "cd serverng && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml ./bin/serverng",
     "start:demo": "cd serverng && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml NODE_SDR_DEMO=1 ./bin/serverng",
-    "clean": "rimraf shared/dist client/dist serverng/bin node_modules/.cache shared/tsconfig.tsbuildinfo",
+    "clean": "rimraf client/dist serverng/bin node_modules/.cache",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test:go": "cd serverng && go test ./...",
     "bench:go": "cd serverng && go test -bench=. -benchmem ./internal/dsp/ ./internal/demod/ ./internal/codec/"

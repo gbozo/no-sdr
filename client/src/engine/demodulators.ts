@@ -10,7 +10,7 @@
 // process that data entirely in the browser.
 // ============================================================
 
-import type { DemodMode } from '@node-sdr/shared';
+import type { DemodMode } from '~/shared';
 import { RdsDecoder } from './rds-decoder.js';
 import type { RdsData } from './rds-decoder.js';
 

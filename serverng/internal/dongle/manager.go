@@ -23,6 +23,25 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
 )
 
+// DongleStatus represents the lifecycle state of a dongle.
+type DongleStatus string
+
+const (
+	DongleStatusStopped  DongleStatus = "stopped"
+	DongleStatusStarting DongleStatus = "starting"
+	DongleStatusRunning  DongleStatus = "running"
+	DongleStatusRetrying DongleStatus = "retrying"
+	DongleStatusError    DongleStatus = "error"
+)
+
+// DongleState holds the current status and retry information for a dongle.
+type DongleState struct {
+	Status     DongleStatus `json:"status"`
+	RetryCount int          `json:"retryCount,omitempty"`
+	MaxRetries int          `json:"maxRetries,omitempty"`
+	LastError  string       `json:"lastError,omitempty"`
+}
+
 // Manager manages dongle sources and FFT broadcast pipelines.
 type Manager struct {
 	cfg     *config.Config
@@ -30,8 +49,15 @@ type Manager struct {
 	logger  *slog.Logger
 	dongles map[string]*activeDongle
 
+	// Per-dongle lifecycle state (includes non-running dongles)
+	dongleStates map[string]*DongleState
+
 	// Per-client IQ extraction pipelines
 	clientPipelines map[string]*clientPipeline
+
+	// getVersion returns the current config version for notifications.
+	// Set by main.go after config version is created.
+	getVersion func() uint64
 
 	// Debug counter for periodic logging
 	fftFrameCount int64
@@ -69,6 +95,19 @@ type clientPipeline struct {
 	iqChunkCount int64   // debug counter
 }
 
+// maxRetries is the number of retry attempts for dongle initialization.
+const maxRetries = 5
+
+// retryBackoff returns the backoff duration for the given attempt (0-indexed).
+// Sequence: 1s, 2s, 4s, 8s, 16s.
+func retryBackoff(attempt int) time.Duration {
+	d := time.Second << uint(attempt)
+	if d > 16*time.Second {
+		d = 16 * time.Second
+	}
+	return d
+}
+
 // NewManager creates a new dongle pipeline manager.
 func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Manager {
 	if logger == nil {
@@ -79,18 +118,42 @@ func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Man
 		wsMgr:           wsMgr,
 		logger:          logger,
 		dongles:         make(map[string]*activeDongle),
+		dongleStates:    make(map[string]*DongleState),
 		clientPipelines: make(map[string]*clientPipeline),
+	}
+
+	// Initialize state for all configured dongles.
+	for _, d := range cfg.Dongles {
+		m.dongleStates[d.ID] = &DongleState{Status: DongleStatusStopped}
 	}
 
 	// Register command handler for subscribe/codec messages
 	m.wsMgr.SetCommandHandler(m.handleCommand)
 	// Register disconnect handler for client pipeline cleanup
 	m.wsMgr.SetDisconnectHandler(m.handleDisconnect)
+	// Register connect handler to send state_sync on new connections
+	m.wsMgr.SetConnectHandler(m.SendStateSync)
 
 	return m
 }
 
+// SetVersionFunc sets the function used to get the current config version.
+// Called by main.go after the config version counter is created.
+func (m *Manager) SetVersionFunc(fn func() uint64) {
+	m.getVersion = fn
+}
+
+// currentVersion returns the current config version, or 0 if not set.
+func (m *Manager) currentVersion() uint64 {
+	if m.getVersion == nil {
+		return 0
+	}
+	return m.getVersion()
+}
+
 // Start starts all enabled dongles with autoStart=true.
+// Failing dongles are retried up to maxRetries times with exponential backoff.
+// The server continues even if some dongles fail to start.
 func (m *Manager) Start(ctx context.Context) error {
 	for i := range m.cfg.Dongles {
 		dcfg := &m.cfg.Dongles[i]
@@ -102,14 +165,88 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.logger.Warn("dongle has no profiles, skipping", "id", dcfg.ID)
 			continue
 		}
-		if err := m.startDongle(ctx, dcfg); err != nil {
-			m.logger.Error("failed to start dongle", "id", dcfg.ID, "error", err)
-			return err
+		if err := m.startDongleWithRetry(ctx, dcfg); err != nil {
+			// Log the failure but continue — do not kill the server
+			m.logger.Error("dongle failed after all retries, skipping",
+				"id", dcfg.ID,
+				"error", err,
+				"retries", maxRetries,
+			)
 		}
 	}
 	// Start server stats broadcaster (CPU, memory, clients — every 2 seconds)
 	go m.statsLoop(ctx)
 	return nil
+}
+
+// startDongleWithRetry attempts to start a dongle up to maxRetries times
+// with exponential backoff. Updates dongle state throughout the process.
+func (m *Manager) startDongleWithRetry(ctx context.Context, dcfg *config.DongleConfig) error {
+	m.mu.Lock()
+	state, ok := m.dongleStates[dcfg.ID]
+	if !ok {
+		state = &DongleState{}
+		m.dongleStates[dcfg.ID] = state
+	}
+	state.Status = DongleStatusStarting
+	state.RetryCount = 0
+	state.MaxRetries = maxRetries
+	state.LastError = ""
+	m.mu.Unlock()
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			m.mu.Lock()
+			state.Status = DongleStatusRetrying
+			state.RetryCount = attempt
+			m.mu.Unlock()
+
+			backoff := retryBackoff(attempt - 1)
+			m.logger.Info("retrying dongle start",
+				"id", dcfg.ID,
+				"attempt", attempt+1,
+				"maxRetries", maxRetries,
+				"backoff", backoff,
+			)
+
+			select {
+			case <-ctx.Done():
+				m.mu.Lock()
+				state.Status = DongleStatusStopped
+				m.mu.Unlock()
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		err := m.startDongle(ctx, dcfg)
+		if err == nil {
+			m.mu.Lock()
+			state.Status = DongleStatusRunning
+			state.RetryCount = 0
+			state.LastError = ""
+			m.mu.Unlock()
+			return nil
+		}
+
+		lastErr = err
+		m.logger.Warn("dongle start attempt failed",
+			"id", dcfg.ID,
+			"attempt", attempt+1,
+			"maxRetries", maxRetries,
+			"error", err,
+		)
+	}
+
+	// All retries exhausted
+	m.mu.Lock()
+	state.Status = DongleStatusError
+	state.RetryCount = maxRetries
+	state.LastError = lastErr.Error()
+	m.mu.Unlock()
+
+	return fmt.Errorf("dongle %s: all %d attempts failed: %w", dcfg.ID, maxRetries, lastErr)
 }
 
 // Stop stops all running dongles.
@@ -132,7 +269,7 @@ func (m *Manager) Stop() {
 	}
 }
 
-// StartDongleByID starts a specific dongle by its config ID.
+// StartDongleByID starts a specific dongle by its config ID with retry logic.
 func (m *Manager) StartDongleByID(dongleID string) error {
 	// Check if already running
 	m.mu.Lock()
@@ -145,13 +282,14 @@ func (m *Manager) StartDongleByID(dongleID string) error {
 	// Find config
 	for i := range m.cfg.Dongles {
 		if m.cfg.Dongles[i].ID == dongleID {
-			return m.startDongle(context.Background(), &m.cfg.Dongles[i])
+			return m.startDongleWithRetry(context.Background(), &m.cfg.Dongles[i])
 		}
 	}
 	return fmt.Errorf("dongle %s not found in config", dongleID)
 }
 
 // StopDongleByID stops a specific running dongle.
+// Subscribed clients are unsubscribed and notified.
 func (m *Manager) StopDongleByID(dongleID string) error {
 	m.mu.Lock()
 	d, ok := m.dongles[dongleID]
@@ -164,10 +302,210 @@ func (m *Manager) StopDongleByID(dongleID string) error {
 		d.source.Close()
 	}
 	delete(m.dongles, dongleID)
+
+	// Clean up client pipelines for this dongle
+	for clientID, cp := range m.clientPipelines {
+		if cp.dongleID == dongleID {
+			cp.pmu.Lock()
+			if cp.opusPipeline != nil {
+				cp.opusPipeline.Close()
+				cp.opusPipeline = nil
+			}
+			cp.pmu.Unlock()
+			delete(m.clientPipelines, clientID)
+		}
+	}
+
+	// Update state
+	if state, ok := m.dongleStates[dongleID]; ok {
+		state.Status = DongleStatusStopped
+		state.RetryCount = 0
+		state.LastError = ""
+	}
 	m.mu.Unlock()
+
+	// Unsubscribe WS clients from this dongle
+	m.wsMgr.UnsubscribeFromDongle(dongleID, "dongle stopped")
 
 	m.logger.Info("dongle stopped by admin", "id", dongleID)
 	return nil
+}
+
+// ReinitDongle stops and restarts a running dongle after hardware config changes.
+// All subscribed clients are unsubscribed and notified — they must re-subscribe.
+// If the dongle was not running, it simply starts it with retry logic.
+func (m *Manager) ReinitDongle(dongleID string) error {
+	// Find config
+	var dcfg *config.DongleConfig
+	for i := range m.cfg.Dongles {
+		if m.cfg.Dongles[i].ID == dongleID {
+			dcfg = &m.cfg.Dongles[i]
+			break
+		}
+	}
+	if dcfg == nil {
+		return fmt.Errorf("dongle %s not found in config", dongleID)
+	}
+
+	// Unsubscribe all clients from this dongle
+	affected := m.wsMgr.UnsubscribeFromDongle(dongleID, "dongle reinitialising")
+	if len(affected) > 0 {
+		m.logger.Info("unsubscribed clients for dongle reinit",
+			"dongle", dongleID,
+			"clients", len(affected),
+		)
+	}
+
+	// Clean up client pipelines for affected clients
+	m.mu.Lock()
+	for _, clientID := range affected {
+		if cp, ok := m.clientPipelines[clientID]; ok {
+			cp.pmu.Lock()
+			if cp.opusPipeline != nil {
+				cp.opusPipeline.Close()
+				cp.opusPipeline = nil
+			}
+			cp.pmu.Unlock()
+			delete(m.clientPipelines, clientID)
+		}
+	}
+
+	// Stop existing dongle if running
+	if d, ok := m.dongles[dongleID]; ok {
+		d.cancel()
+		if d.source != nil {
+			d.source.Close()
+		}
+		delete(m.dongles, dongleID)
+		m.logger.Info("dongle stopped for reinit", "id", dongleID)
+	}
+	m.mu.Unlock()
+
+	// Check preconditions
+	if !dcfg.Enabled {
+		m.mu.Lock()
+		if state, ok := m.dongleStates[dongleID]; ok {
+			state.Status = DongleStatusStopped
+			state.LastError = ""
+		}
+		m.mu.Unlock()
+		m.logger.Info("dongle disabled, skipping reinit start", "id", dongleID)
+		return nil
+	}
+	if len(dcfg.Profiles) == 0 {
+		m.mu.Lock()
+		if state, ok := m.dongleStates[dongleID]; ok {
+			state.Status = DongleStatusStopped
+			state.LastError = "no profiles configured"
+		}
+		m.mu.Unlock()
+		m.logger.Warn("dongle has no profiles, cannot reinit", "id", dongleID)
+		return nil
+	}
+
+	// Start with retry
+	return m.startDongleWithRetry(context.Background(), dcfg)
+}
+
+// HandleProfileRemoved handles cascading effects when a profile is deleted.
+// If the deleted profile was the active profile on a running dongle, it switches
+// to the next available profile. If no profiles remain, the dongle is stopped.
+func (m *Manager) HandleProfileRemoved(dongleID, profileID string) {
+	m.mu.Lock()
+	d, running := m.dongles[dongleID]
+	m.mu.Unlock()
+
+	if !running {
+		return // Dongle not running, no cascade needed
+	}
+
+	// Check if the removed profile was the active one
+	if d.profile == nil || d.profile.ID != profileID {
+		return // Not the active profile, no effect
+	}
+
+	// Find the dongle config to check remaining profiles
+	var dcfg *config.DongleConfig
+	for i := range m.cfg.Dongles {
+		if m.cfg.Dongles[i].ID == dongleID {
+			dcfg = &m.cfg.Dongles[i]
+			break
+		}
+	}
+	if dcfg == nil {
+		return
+	}
+
+	if len(dcfg.Profiles) == 0 {
+		// No profiles left — stop the dongle
+		m.logger.Warn("active profile deleted and no profiles remain, stopping dongle",
+			"dongle", dongleID,
+			"deletedProfile", profileID,
+		)
+		if err := m.StopDongleByID(dongleID); err != nil {
+			m.logger.Error("failed to stop dongle after profile removal", "id", dongleID, "error", err)
+		}
+		return
+	}
+
+	// Switch to the first remaining profile
+	newProfile := dcfg.Profiles[0]
+	m.logger.Info("active profile deleted, switching to next available",
+		"dongle", dongleID,
+		"deletedProfile", profileID,
+		"newProfile", newProfile.ID,
+	)
+	if err := m.SwitchProfile(dongleID, newProfile.ID); err != nil {
+		m.logger.Error("failed to switch profile after deletion",
+			"dongle", dongleID,
+			"error", err,
+		)
+	}
+}
+
+// needsReinit compares old and new dongle configs to determine if the dongle
+// needs to be fully reinitialized (hardware-level changes).
+func needsReinit(old, new *config.DongleConfig) bool {
+	// Source type changed
+	if old.Source.Type != new.Source.Type {
+		return true
+	}
+	// Source connection params changed
+	if old.Source.Host != new.Source.Host || old.Source.Port != new.Source.Port {
+		return true
+	}
+	if old.Source.DeviceIndex != new.Source.DeviceIndex || old.Source.Serial != new.Source.Serial {
+		return true
+	}
+	if old.Source.Binary != new.Source.Binary || old.Source.SpawnRtlTcp != new.Source.SpawnRtlTcp {
+		return true
+	}
+	// Top-level sample rate changed (affects the source)
+	if old.SampleRate != new.SampleRate {
+		return true
+	}
+	return false
+}
+
+// GetDongleState returns the current lifecycle state for a dongle.
+func (m *Manager) GetDongleState(dongleID string) DongleState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state, ok := m.dongleStates[dongleID]; ok {
+		return *state
+	}
+	return DongleState{Status: DongleStatusStopped}
+}
+
+// GetAllDongleStates returns the lifecycle state for all configured dongles.
+func (m *Manager) GetAllDongleStates() map[string]DongleState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	states := make(map[string]DongleState, len(m.dongleStates))
+	for id, state := range m.dongleStates {
+		states[id] = *state
+	}
+	return states
 }
 
 // startDongle creates and runs the pipeline for a single dongle.
@@ -209,19 +547,25 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 	}
 
 	ad := &activeDongle{
-		id:         dcfg.ID,
-		profile:    profile,
-		dongleCfg:  dcfg,
-		source:     source,
-		fftProc:    fftProc,
+		id:              dcfg.ID,
+		profile:         profile,
+		dongleCfg:       dcfg,
+		source:          source,
+		fftProc:         fftProc,
 		deflateEnc:      deflateEnc,
 		deflateFloorEnc: deflateFloorEnc,
-		fftHistory: history.NewFftBuffer(1024),
-		cancel:     cancel,
+		fftHistory:      history.NewFftBuffer(1024),
+		cancel:          cancel,
 	}
 
 	m.mu.Lock()
 	m.dongles[dcfg.ID] = ad
+	// Update state to running
+	if state, ok := m.dongleStates[dcfg.ID]; ok {
+		state.Status = DongleStatusRunning
+		state.LastError = ""
+		state.RetryCount = 0
+	}
 	m.mu.Unlock()
 
 	m.logger.Info("starting dongle pipeline",

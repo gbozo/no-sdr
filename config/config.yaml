@@ -1,110 +1,80 @@
-# ============================================================
-# node-sdr Configuration
-# ============================================================
-# Dongle profiles define frequency/sample rate/demod presets.
-# When an admin switches a dongle's profile, all connected
-# clients on that dongle are switched automatically.
-#
-# Source types:
-#   local   - spawn rtl_sdr as child process (default)
-#   rtl_tcp - connect to remote rtl_tcp server via TCP
-#   demo    - use built-in signal simulator
-# ============================================================
-
 server:
-  host: 0.0.0.0
-  port: 3000
-  adminPassword: admin
-  demoMode: false
-  callsign: ''
-  description: ''
-  location: ''
-  fftHistoryFftSize: 4096
-  fftHistoryCompression: deflate
+    port: 3000
+    host: 0.0.0.0
+    adminPassword: admin
+    callsign: ""
+    description: ""
+    location: ""
+    demoMode: false
+    fftHistoryFftSize: 2048
+    fftHistoryCompression: deflate
+    allowedFftCodecs:
+        - none
+        - adpcm
+        - deflate
+        - deflate-floor
+    allowedIqCodecs:
+        - none
+        - adpcm
+        - opus
+        - opus-hq
 dongles:
-  - id: dongle-remote
-    deviceIndex: 0
-    name: Remote RTL-SDR (rtl_tcp)
-    ppmCorrection: 0
-    source:
-      type: rtl_tcp
-      host: 192.168.1.3
-      port: 1234
-    profiles:
-      - id: fm-broadcast
-        name: FM Broadcast
-        centerFrequency: 100000000
-        sampleRate: 2400000
-        fftSize: 2048
-        fftFps: 8
-        defaultMode: wfm
-        defaultTuneOffset: 0
-        defaultBandwidth: 200000
-        tuningStep: 10000
-        gain: 23
-        description: FM broadcast band — 87.5 to 108 MHz
-        directSampling: 0
-        preFilterNb: true
-        preFilterNbThreshold: 50
-        decoders: []
-        dongleId: dongle-remote
-      - id: aviation
-        name: Aviation VHF
-        centerFrequency: 125000000
-        sampleRate: 2400000
-        fftSize: 8192
-        fftFps: 12
-        defaultMode: am
-        defaultTuneOffset: 0
-        defaultBandwidth: 8330
-        gain: 23
-        description: Aviation communications — 118 to 137 MHz
-        decoders: []
-        dongleId: dongle-remote
-        tuningStep: 500
-      - id: two-meter
-        name: 2m Amateur
-        centerFrequency: 146000000
-        sampleRate: 2400000
-        fftSize: 8192
-        fftFps: 12
-        defaultMode: am
-        defaultTuneOffset: 0
-        defaultBandwidth: 12500
-        gain: 23
-        description: Amateur 2m band — 144 to 148 MHz
-        decoders: []
-        dongleId: dongle-remote
-      - id: mw-broadcast
-        name: MW Broadcast
-        centerFrequency: 1500000
-        sampleRate: 2400000
-        fftSize: 4096
-        fftFps: 8
-        defaultMode: am
-        defaultTuneOffset: 485000
-        defaultBandwidth: 10000
-        gain: 20
-        description: MW broadcast band — 530 to 1700 kHz (direct sampling required)
-        directSampling: 2
-        decoders: []
-        dongleId: dongle-remote
-      - id: profile-1777493231538
-        name: ADS-B (1090 MHz)
-        centerFrequency: 1090000000
-        sampleRate: 2400000
-        fftSize: 4096
-        fftFps: 10
-        defaultMode: nfm
-        defaultTuneOffset: 0
-        defaultBandwidth: 2000000
-        gain: 23
-        description: Aircraft transponder 1090 MHz
-        decoders: []
-        dongleId: dongle-remote
-    enabled: true
-    autoStart: true
-    directSampling: 0
-    biasT: false
-    digitalAgc: true
-    offsetTuning: false
+    - id: dongle-mooroo30
+      name: Remote-GBserv
+      enabled: true
+      autoStart: true
+      source:
+        type: rtl_tcp
+        host: 192.168.1.3
+        port: 1234
+        deviceIndex: 0
+        serial: ""
+        binary: ""
+        extraArgs: []
+        spawnRtlTcp: false
+      sampleRate: 2400000
+      gain: 0
+      ppmCorrection: 0
+      deviceIndex: 0
+      directSampling: 0
+      biasT: false
+      digitalAgc: true
+      offsetTuning: false
+      profiles:
+        - id: profile-moorpqzg
+          name: FM Broadcast
+          centerFrequency: 100000000
+          sampleRate: 2400000
+          defaultBandwidth: 200000
+          defaultMode: wfm
+          gain: 23
+          fftSize: 8192
+          fftFps: 12
+          defaultTuneOffset: 0
+          tuningStep: 1000
+          swapIQ: false
+          oscillatorOffset: 0
+          directSampling: 0
+          description: FM radio 87.5–108 MHz (stereo, RDS)
+          dongleId: ""
+          preFilterNb: true
+          preFilterNbThreshold: 0
+        - id: profile-mootuxy2
+          name: Aviation VHF
+          centerFrequency: 127500000
+          sampleRate: 2400000
+          defaultBandwidth: 8330
+          defaultMode: am
+          gain: 40
+          fftSize: 8192
+          fftFps: 25
+          defaultTuneOffset: 0
+          tuningStep: 1000
+          swapIQ: false
+          oscillatorOffset: 0
+          directSampling: 0
+          description: Airband 118–137 MHz — tower, approach, ATIS
+          dongleId: ""
+          preFilterNb: false
+          preFilterNbThreshold: 0
+bookmarks: []

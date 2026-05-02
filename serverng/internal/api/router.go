@@ -17,11 +17,11 @@ var startTime = time.Now()
 
 // NewRouter creates the chi router with all routes.
 func NewRouter(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string) http.Handler {
-	return NewRouterWithPath(wsMgr, cfg, logger, staticDir, "")
+	return NewRouterWithPath(wsMgr, cfg, logger, staticDir, "", nil)
 }
 
 // NewRouterWithPath creates the chi router with all routes including admin config save support.
-func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string, cfgPath string) http.Handler {
+func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string, cfgPath string, cfgVersion *config.ConfigVersion) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -45,6 +45,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		r.Get("/dongles", donglesHandler(cfg, wsMgr))
 		r.Get("/dongles/{id}/profiles", dongleProfilesHandler(cfg))
 		r.Get("/capabilities", capabilitiesHandler(cfg))
+		r.Get("/bookmarks", bookmarksHandler(cfg)) // public read-only
 	})
 
 	// Admin routes
@@ -58,21 +59,27 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		// Protected routes
 		r.Group(func(r chi.Router) {
 			r.Use(adminAuth.CheckAuth)
+			r.Get("/system-info", systemInfoHandler(cfg, wsMgr))
+			r.Get("/clients", clientsHandler(wsMgr))
 			r.Get("/devices", localDevicesHandler())
 			r.Get("/dongles", adminDonglesHandler(cfg, wsMgr))
-			r.Post("/dongles", createDongleHandler(cfg))
-			r.Put("/dongles/{id}", updateDongleHandler(cfg))
-			r.Delete("/dongles/{id}", deleteDongleHandler(cfg))
+			r.Post("/dongles", createDongleHandler(cfg, cfgVersion))
+			r.Put("/dongles/{id}", updateDongleHandler(cfg, cfgVersion))
+			r.Delete("/dongles/{id}", deleteDongleHandler(cfg, cfgVersion))
 			r.Post("/dongles/{id}/profile", switchProfileHandler(cfg))
 			r.Post("/dongles/{id}/start", dongleStartHandler())
 			r.Post("/dongles/{id}/stop", dongleStopHandler())
-			r.Post("/dongles/{id}/profiles", createProfileHandler(cfg))
-			r.Put("/dongles/{id}/profiles/{profileId}", updateProfileHandler(cfg))
-			r.Delete("/dongles/{id}/profiles/{profileId}", deleteProfileHandler(cfg))
-			r.Put("/dongles/{id}/profiles-order", reorderProfilesHandler(cfg))
-			r.Post("/save-config", saveConfigHandler(cfg, cfgPath))
-			r.Get("/server/config", serverConfigHandler(cfg))
-			r.Put("/server/config", updateServerConfigHandler(cfg))
+			r.Post("/dongles/{id}/profiles", createProfileHandler(cfg, cfgVersion))
+			r.Put("/dongles/{id}/profiles/{profileId}", updateProfileHandler(cfg, cfgVersion))
+			r.Delete("/dongles/{id}/profiles/{profileId}", deleteProfileHandler(cfg, cfgVersion))
+			r.Put("/dongles/{id}/profiles-order", reorderProfilesHandler(cfg, cfgVersion))
+			r.Get("/bookmarks", bookmarksHandler(cfg))
+			r.Post("/bookmarks", createBookmarkHandler(cfg, cfgVersion))
+			r.Put("/bookmarks/{id}", updateBookmarkHandler(cfg, cfgVersion))
+			r.Delete("/bookmarks/{id}", deleteBookmarkHandler(cfg, cfgVersion))
+			r.Post("/save-config", saveConfigHandler(cfg, cfgPath, cfgVersion))
+			r.Get("/server/config", serverConfigHandler(cfg, cfgVersion))
+			r.Put("/server/config", updateServerConfigHandler(cfg, cfgVersion))
 		})
 	})
 

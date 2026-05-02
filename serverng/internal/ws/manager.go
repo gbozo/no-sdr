@@ -20,6 +20,7 @@ type Manager struct {
 	logger       *slog.Logger
 	onCommand    func(clientID string, cmd *ClientCommand)
 	onDisconnect func(clientID string)
+	onConnect    func(clientID string)
 	rateLimiter  *RateLimiter
 	allowed      AllowedCodecs
 
@@ -111,6 +112,14 @@ func (m *Manager) SetDisconnectHandler(fn func(clientID string)) {
 	m.onDisconnect = fn
 }
 
+// SetConnectHandler registers a callback invoked after a new client connects
+// and receives its welcome message. Used by dongle manager to send state_sync.
+func (m *Manager) SetConnectHandler(fn func(clientID string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onConnect = fn
+}
+
 // HandleUpgrade is the HTTP handler for WebSocket upgrade requests.
 // Use with chi: r.Get("/ws", mgr.HandleUpgrade)
 func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +169,11 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		AllowedIqCodecs:  allowedIq,
 	})
 	client.Send(welcome)
+
+	// Fire connect handler (dongle manager uses this to send state_sync)
+	if m.onConnect != nil {
+		m.onConnect(clientID)
+	}
 
 	// Start read, write, and ping goroutines
 	go m.readLoop(client)
@@ -219,6 +233,35 @@ func (m *Manager) SubscribedClients(dongleID string) []*Client {
 		}
 	}
 	return result
+}
+
+// UnsubscribeFromDongle unsubscribes all clients from a specific dongle and sends
+// them a META message informing them the dongle is being reinitialised.
+// Returns the list of affected client IDs.
+func (m *Manager) UnsubscribeFromDongle(dongleID string, reason string) []string {
+	m.mu.RLock()
+	var affected []*Client
+	for _, client := range m.clients {
+		if client.SubscribedTo() == dongleID {
+			affected = append(affected, client)
+		}
+	}
+	m.mu.RUnlock()
+
+	var ids []string
+	for _, client := range affected {
+		client.Unsubscribe()
+		ids = append(ids, client.ID)
+
+		// Send dongle_disconnected META to inform the client
+		meta := PackMetaMessage(&ServerMeta{
+			Type:     "dongle_disconnected",
+			DongleId: dongleID,
+			Message:  reason,
+		})
+		client.Send(meta)
+	}
+	return ids
 }
 
 // GetClient returns a client by ID, or nil if not found.
@@ -454,4 +497,44 @@ func (m *Manager) SendJSON(clientID string, v any) error {
 	}
 
 	return client.conn.Write(client.ctx, websocket.MessageText, data)
+}
+
+// ClientInfo holds a snapshot of client state for the admin API.
+type ClientInfo struct {
+	ID           string    `json:"id"`
+	IP           string    `json:"ip"`
+	DongleID     string    `json:"dongleId"`
+	FftCodec     string    `json:"fftCodec"`
+	IqCodec      string    `json:"iqCodec"`
+	Mode         string    `json:"mode"`
+	TuneOffset   int       `json:"tuneOffset"`
+	Bandwidth    int       `json:"bandwidth"`
+	AudioEnabled bool      `json:"audioEnabled"`
+	ConnectedAt  time.Time `json:"connectedAt"`
+}
+
+// GetAllClients returns a snapshot of all connected clients for admin monitoring.
+func (m *Manager) GetAllClients() []ClientInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]ClientInfo, 0, len(m.clients))
+	for _, c := range m.clients {
+		c.mu.RLock()
+		info := ClientInfo{
+			ID:           c.ID,
+			IP:           m.clientIPs[c.ID],
+			DongleID:     c.DongleID,
+			FftCodec:     c.FftCodec,
+			IqCodec:      c.IqCodec,
+			Mode:         c.Mode,
+			TuneOffset:   c.TuneOffset,
+			Bandwidth:    c.Bandwidth,
+			AudioEnabled: c.AudioEnabled,
+			ConnectedAt:  c.ConnectedAt,
+		}
+		c.mu.RUnlock()
+		result = append(result, info)
+	}
+	return result
 }

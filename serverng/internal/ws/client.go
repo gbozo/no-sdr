@@ -31,6 +31,9 @@ type Client struct {
 	TuneOffset   int
 	Bandwidth    int
 
+	// ConnectedAt records when the client connected.
+	ConnectedAt time.Time
+
 	// Write channel with backpressure
 	writeCh chan []byte
 
@@ -56,6 +59,7 @@ func newClient(id string, conn *websocket.Conn, ctx context.Context, cancel cont
 		cancel:      cancel,
 		FftCodec:    "",  // empty = "none" — client sends preferred codec after subscribe
 		IqCodec:     "",  // empty = "none" — client sends preferred codec after subscribe
+		ConnectedAt: time.Now(),
 		writeCh:     make(chan []byte, writeCap),
 		lastDrainAt: time.Now(),
 	}
@@ -111,6 +115,14 @@ func (c *Client) SubscribedTo() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.DongleID
+}
+
+// Unsubscribe clears the client's dongle subscription.
+// Used when a dongle is reinitialised or removed to force clients to re-negotiate.
+func (c *Client) Unsubscribe() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.DongleID = ""
 }
 
 // AllowedCodecs holds the codec sets the server will accept from clients.

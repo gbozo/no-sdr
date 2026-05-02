@@ -7,10 +7,10 @@
     "jsxImportSource": "solid-js",
     "noEmit": true,
     "rootDir": "src",
-    "types": ["vite/client", "vite-plugin-pwa/client"]
+    "types": ["vite/client", "vite-plugin-pwa/client"],
+    "paths": {
+      "~/*": ["./src/*"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "references": [
-    { "path": "../shared" }
-  ]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

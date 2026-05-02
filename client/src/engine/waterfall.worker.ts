@@ -31,7 +31,7 @@
 //   { type: 'seek-offset', offset: number }     — freeze/unfreeze live updates
 // ============================================================
 
-import type { WaterfallColorTheme } from '@node-sdr/shared';
+import type { WaterfallColorTheme } from '~/shared';
 
 // ---- Inline palette (no DOM import needed) ----
 

@@ -2,17 +2,34 @@
 // node-sdr — Main App Layout
 // ============================================================
 
-import { Component, onMount, onCleanup, Show, createSignal, For, createMemo } from 'solid-js';
+import { Component, onMount, onCleanup, Show, createSignal, For, createMemo, createEffect } from 'solid-js';
+import { useNavigate } from '@solidjs/router';
 import { store } from './store/index.js';
 import { engine } from './engine/sdr-engine.js';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
 import FrequencyDisplay from './components/FrequencyDisplay.js';
 import ControlPanel from './components/ControlPanel.js';
-import AdminModal from './components/AdminModal.js';
+import ConnectionOverlay from './components/ConnectionOverlay.js';
 
 const App: Component = () => {
+  const navigate = useNavigate();
   const [installPrompt, setInstallPrompt] = createSignal<any>(null);
   const [installed, setInstalled] = createSignal(false);
+  const [reconnectedFlash, setReconnectedFlash] = createSignal(false);
+
+  // Flash "Reconnected" briefly when coming back online after a disconnect
+  let wasDisconnected = false;
+  createEffect(() => {
+    const state = store.connectionState();
+    if (state === 'disconnected' || state === 'connecting') {
+      if (store.reconnectAttempt() > 0) wasDisconnected = true;
+    }
+    if (state === 'connected' && wasDisconnected) {
+      wasDisconnected = false;
+      setReconnectedFlash(true);
+      setTimeout(() => setReconnectedFlash(false), 3000);
+    }
+  });
 
   // Expose engine globally for frequency display component
   (globalThis as any).__sdrEngine = engine;
@@ -113,9 +130,18 @@ const App: Component = () => {
 
           {/* Connection indicator */}
           <div class="flex items-center gap-1.5">
-            <div class={`w-1.5 h-1.5 rounded-full ${store.connected() ? 'bg-status-online animate-pulse-glow' : 'bg-status-error'}`} />
+            <div class={`w-1.5 h-1.5 rounded-full ${
+              store.connectionState() === 'connected' ? 'bg-status-online animate-pulse-glow' :
+              store.connectionState() === 'connecting' ? 'bg-amber animate-pulse' :
+              store.connectionState() === 'unconfigured' ? 'bg-amber' :
+              'bg-status-error'
+            }`} />
             <span class="text-[9px] font-mono text-text-dim">
-              {store.connected() ? 'Online' : 'Offline'}
+              {reconnectedFlash() ? 'Reconnected' :
+               store.connectionState() === 'connected' ? 'Online' :
+               store.connectionState() === 'connecting' ? 'Connecting...' :
+               store.connectionState() === 'unconfigured' ? 'No Receivers' :
+               'Offline'}
             </span>
           </div>
         </div>
@@ -145,7 +171,7 @@ const App: Component = () => {
           class="ml-4 p-1.5 border border-border rounded-sm
                  text-text-dim hover:text-amber hover:border-amber
                  transition-colors"
-          onClick={() => store.setAdminModalOpen(true)}
+          onClick={() => navigate('/admin')}
           title="Admin Settings"
         >
           <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
@@ -156,7 +182,10 @@ const App: Component = () => {
       </header>
 
       {/* Main Content */}
-      <div class="flex-1 flex min-h-0">
+      <div class="flex-1 flex min-h-0 relative">
+        {/* Connection state overlay */}
+        <ConnectionOverlay />
+
         {/* Sidebar */}
         <Show when={store.sidebarOpen()}>
           <aside class="w-[300px] bg-sdr-surface border-r border-border overflow-y-auto shrink-0">
@@ -199,6 +228,11 @@ const App: Component = () => {
           </Show>
           <div class="flex-1" />
 
+          {/* Client ID */}
+          <span class="border-r border-border pr-4">
+            ID: <span class="text-text-secondary">{store.localClientId()}</span>
+          </span>
+
           {/* Bandwidth Meter with sparkline */}
           <BandwidthMeter />
 
@@ -210,9 +244,6 @@ const App: Component = () => {
           </Show>
         </div>
       </footer>
-
-      {/* Admin Modal */}
-      <AdminModal />
     </div>
   );
 };

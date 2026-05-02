@@ -104,6 +104,8 @@ func main() {
 	api.ProfileSwitchFunc = dongleMgr.SwitchProfile
 	api.DongleStartFunc = dongleMgr.StartDongleByID
 	api.DongleStopFunc = dongleMgr.StopDongleByID
+	api.DongleReinitFunc = dongleMgr.ReinitDongle
+	api.HandleProfileRemovedFunc = dongleMgr.HandleProfileRemoved
 	api.SetAllowedCodecsFunc = wsMgr.SetAllowedCodecs
 	api.EnumerateLocalDevicesFunc = func() []any {
 		devs := dongle.EnumerateLocalDevices()
@@ -114,18 +116,44 @@ func main() {
 		return out
 	}
 
+	// Wire config push notifications (Phase 3: real-time config push)
+	api.NotifyDongleAddedFunc = dongleMgr.NotifyDongleAdded
+	api.NotifyDongleUpdatedFunc = dongleMgr.NotifyDongleUpdated
+	api.NotifyDongleRemovedFunc = dongleMgr.NotifyDongleRemoved
+	api.NotifyDongleStartedFunc = dongleMgr.NotifyDongleStarted
+	api.NotifyDongleStoppedFunc = dongleMgr.NotifyDongleStopped
+	api.NotifyProfileAddedFunc = dongleMgr.NotifyProfileAdded
+	api.NotifyProfileUpdatedFunc = dongleMgr.NotifyProfileUpdated
+	api.NotifyProfileRemovedFunc = dongleMgr.NotifyProfileRemoved
+	api.NotifyProfilesReorderedFunc = dongleMgr.NotifyProfilesReordered
+	api.NotifyServerConfigUpdatedFunc = dongleMgr.NotifyServerConfigUpdated
+	api.NotifyConfigSavedFunc = dongleMgr.NotifyConfigSaved
+
+	// Config version counter for optimistic concurrency (Phase 2)
+	cfgVersion := config.NewConfigVersion()
+	api.GetConfigVersionFunc = cfgVersion.Get
+	api.Version = version
+	api.GetDongleStatesFunc = func() map[string]any {
+		states := dongleMgr.GetAllDongleStates()
+		result := make(map[string]any, len(states))
+		for id, state := range states {
+			result[id] = state
+		}
+		return result
+	}
+	dongleMgr.SetVersionFunc(cfgVersion.Get)
+
 	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start all enabled dongles.
+	// Start all enabled dongles (non-fatal — server continues even if dongles fail).
 	if err := dongleMgr.Start(ctx); err != nil {
-		logger.Error("failed to start dongle manager", "error", err)
-		os.Exit(1)
+		logger.Error("dongle manager start error (server will continue)", "error", err)
 	}
 
 	// Create chi router with all routes.
-	router := api.NewRouterWithPath(wsMgr, cfg, logger, staticDir, cfgPath)
+	router := api.NewRouterWithPath(wsMgr, cfg, logger, staticDir, cfgPath, cfgVersion)
 
 	// Setup HTTP server.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

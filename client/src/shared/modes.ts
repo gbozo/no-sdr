@@ -2,7 +2,7 @@
 // node-sdr — Demodulation & Digital Mode Definitions
 // ============================================================
 
-import type { DemodMode, DigitalMode } from './types.js';
+import type { DemodMode, DigitalMode } from './types';
 
 // ---- Analog Demodulation Mode Info ----
 

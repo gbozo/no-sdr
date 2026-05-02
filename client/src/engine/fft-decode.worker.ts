@@ -15,7 +15,7 @@
 // ============================================================
 
 import { inflateSync } from 'fflate';
-import { decodeFftAdpcm } from '@node-sdr/shared';
+import { decodeFftAdpcm } from '~/shared';
 
 // Keep numeric constants local — avoids importing the full shared bundle
 const MSG_FFT           = 0x01;

@@ -5,9 +5,36 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
+
+// ConfigVersion tracks the in-memory config revision number.
+// It increments on every mutation (dongle/profile/server CRUD).
+// Used for optimistic concurrency: clients send the version they loaded,
+// and the server rejects saves if the version has advanced (409 Conflict).
+type ConfigVersion struct {
+	v atomic.Uint64
+}
+
+// NewConfigVersion creates a new version counter starting at 1.
+func NewConfigVersion() *ConfigVersion {
+	cv := &ConfigVersion{}
+	cv.v.Store(1)
+	return cv
+}
+
+// Get returns the current version number.
+func (cv *ConfigVersion) Get() uint64 {
+	return cv.v.Load()
+}
+
+// Increment bumps the version and returns the new value.
+func (cv *ConfigVersion) Increment() uint64 {
+	return cv.v.Add(1)
+}
 
 // Valid demodulation modes.
 var validModes = map[string]bool{
@@ -24,8 +51,19 @@ var validModes = map[string]bool{
 
 // Config is the top-level configuration.
 type Config struct {
-	Server  ServerConfig   `yaml:"server"`
-	Dongles []DongleConfig `yaml:"dongles"`
+	Server    ServerConfig   `yaml:"server"`
+	Dongles   []DongleConfig `yaml:"dongles"`
+	Bookmarks []Bookmark     `yaml:"bookmarks"`
+}
+
+// Bookmark is a user-defined frequency/mode preset for quick navigation.
+type Bookmark struct {
+	ID          string `yaml:"id"          json:"id"`
+	Name        string `yaml:"name"        json:"name"`
+	Frequency   int64  `yaml:"frequency"   json:"frequency"`
+	Mode        string `yaml:"mode"        json:"mode"`
+	Bandwidth   int    `yaml:"bandwidth"   json:"bandwidth,omitempty"`
+	Description string `yaml:"description" json:"description,omitempty"`
 }
 
 // ServerConfig holds HTTP server and admin settings.
@@ -104,7 +142,7 @@ type DongleProfile struct {
 }
 
 // Load reads the config file at path and returns a validated Config.
-// If the file does not exist, returns a Config with defaults and empty dongles.
+// If the file does not exist, creates a default config file and returns it.
 func Load(path string) (*Config, error) {
 	cfg := &Config{}
 	applyDefaults(cfg)
@@ -112,6 +150,11 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// First boot: write default config to disk so admin can edit it
+			if writeErr := writeDefaultConfig(path, cfg); writeErr != nil {
+				// Non-fatal: log but continue with in-memory defaults
+				fmt.Fprintf(os.Stderr, "config: warning: could not write default config to %s: %v\n", path, writeErr)
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("config: read file: %w", err)
@@ -129,6 +172,34 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// writeDefaultConfig writes a minimal default config file to disk.
+func writeDefaultConfig(path string, cfg *Config) error {
+	// Ensure the directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	// Set a default admin password for first boot
+	if cfg.Server.AdminPassword == "" {
+		cfg.Server.AdminPassword = "admin"
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal default config: %w", err)
+	}
+
+	header := []byte("# node-sdr configuration (auto-generated on first boot)\n# See AGENTS.md for configuration reference.\n\n")
+	content := append(header, data...)
+
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+
+	return nil
 }
 
 // DefaultFftCodecs lists all FFT codecs supported by the server.

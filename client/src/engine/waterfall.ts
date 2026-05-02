@@ -5,7 +5,7 @@
 // ============================================================
 
 import { getPalette, type Palette, type PaletteEntry } from './palettes.js';
-import type { WaterfallColorTheme } from '@node-sdr/shared';
+import type { WaterfallColorTheme } from '~/shared';
 
 export class WaterfallRenderer {
   private ctx: CanvasRenderingContext2D;

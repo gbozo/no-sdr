@@ -101,6 +101,59 @@ export type ClientCommand =
 
 // ---- Server Meta Messages ----
 
+/** Dongle lifecycle status (mirrors Go DongleStatus) */
+export type DongleStatus = 'stopped' | 'starting' | 'running' | 'retrying' | 'error';
+
+/** Dongle lifecycle state (mirrors Go DongleState) */
+export interface DongleState {
+  status: DongleStatus;
+  retryCount?: number;
+  maxRetries?: number;
+  lastError?: string;
+}
+
+/** Public dongle info from config push notifications */
+export interface PushDongleInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  sourceType: string;
+  sampleRate: number;
+  profiles: PushDongleProfile[];
+  state: DongleState;
+  activeProfile?: string;
+}
+
+/** Profile info as sent in push notifications (matches Go config.DongleProfile JSON) */
+export interface PushDongleProfile {
+  id: string;
+  name: string;
+  centerFrequency: number;
+  sampleRate: number;
+  fftSize: number;
+  fftFps: number;
+  mode: string;
+  bandwidth: number;
+  tuneOffset: number;
+  tuningStep: number;
+  gain: number;
+  description: string;
+  dongleId: string;
+  swapIQ?: boolean;
+  oscillatorOffset?: number;
+  directSampling?: number;
+  preFilterNb?: boolean;
+  preFilterNbThreshold?: number;
+}
+
+/** Server config info from push notifications */
+export interface PushServerConfig {
+  callsign: string;
+  description: string;
+  location: string;
+  demoMode: boolean;
+}
+
 export type ServerMeta =
   | { type: 'welcome'; clientId: string; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[] }
   | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number }
@@ -109,7 +162,23 @@ export type ServerMeta =
   | { type: 'error'; message: string; code?: string }
   | { type: 'admin_auth_ok' }
   | { type: 'decoder_data'; decoderType: string; data: unknown }
-  | { type: 'server_stats'; cpuPercent: number; memMb: number; clients: number };
+  | { type: 'server_stats'; cpuPercent: number; memMb: number; clients: number }
+  // Config push notifications (from Phase 3 backend)
+  | { type: 'state_sync'; dongles: PushDongleInfo[]; server?: PushServerConfig; version?: number }
+  | { type: 'dongle_added'; dongleId: string; dongle: PushDongleInfo; version?: number }
+  | { type: 'dongle_updated'; dongleId: string; dongle: PushDongleInfo; version?: number }
+  | { type: 'dongle_removed'; dongleId: string; version?: number }
+  | { type: 'dongle_started'; dongleId: string; state: DongleState; version?: number }
+  | { type: 'dongle_stopped'; dongleId: string; state: DongleState; version?: number }
+  | { type: 'dongle_error'; dongleId: string; error: string; state: DongleState; version?: number }
+  | { type: 'profile_added'; dongleId: string; profileId: string; profile: PushDongleProfile; version?: number }
+  | { type: 'profile_updated'; dongleId: string; profileId: string; profile: PushDongleProfile; version?: number }
+  | { type: 'profile_removed'; dongleId: string; profileId: string; version?: number }
+  | { type: 'profiles_reordered'; dongleId: string; profiles: PushDongleProfile[]; version?: number }
+  | { type: 'server_config_updated'; server: PushServerConfig; version?: number }
+  | { type: 'config_saved'; version?: number }
+  | { type: 'dongle_disconnected'; dongleId: string; reason: string }
+  | { type: 'codec_status'; codec: string; accepted: boolean; reason?: string };
 
 // ---- Binary Message Helpers ----
 

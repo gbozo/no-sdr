@@ -6,8 +6,8 @@ import { Component, For, Show, createSignal, createResource, onMount, onCleanup,
 import { store } from '../store/index.js';
 import type { Bookmark } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
-import { DEMOD_MODES } from '@node-sdr/shared';
-import type { CodecType, FftCodecType, IqCodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '@node-sdr/shared';
+import { DEMOD_MODES } from '~/shared';
+import type { CodecType, FftCodecType, IqCodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '~/shared';
 import { getPaletteNames } from '../engine/palettes.js';
 
 const ControlPanel: Component = () => {
@@ -36,9 +36,6 @@ const ControlPanel: Component = () => {
 
       {/* Frequency Bookmarks */}
       <Bookmarks />
-
-      {/* Connection Status */}
-      <ConnectionStatus />
     </div>
   );
 };
@@ -262,7 +259,27 @@ const DongleProfileSelector: Component = () => {
   onCleanup(() => document.removeEventListener('mousedown', handleClickOutside));
 
   return (
-    <Show when={store.dongles().length > 0}>
+    <Show when={store.dongles().length > 0} fallback={
+      <div class="sdr-panel">
+        <div class="px-3 py-3 flex items-center gap-2">
+          <svg class="w-3.5 h-3.5 text-text-muted shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M2 5h12v9H2z" stroke-linejoin="round"/>
+            <circle cx="5.5" cy="9.5" r="2"/>
+            <path d="M9 8h3M9 11h3"/>
+            <path d="M4 5L11 2" stroke-linecap="round"/>
+          </svg>
+          <span class="text-[10px] font-mono text-text-dim">
+            {store.connectionState() === 'unconfigured'
+              ? 'No receivers configured'
+              : store.connectionState() === 'connecting'
+              ? 'Connecting...'
+              : store.connectionState() === 'disconnected'
+              ? 'Disconnected'
+              : 'Waiting for data...'}
+          </span>
+        </div>
+      </div>
+    }>
       <div class="sdr-panel relative" ref={containerRef}>
         {/* Trigger button */}
         <button
@@ -376,11 +393,9 @@ const DongleProfileSelector: Component = () => {
                     <Show when={d().source}>
                       <span class="text-[8px] font-mono text-text-dim uppercase">{d().source}</span>
                     </Show>
-                    <Show when={d().clientCount > 0}>
-                      <span class="ml-auto text-[8px] font-mono text-text-dim">
-                        {d().clientCount} user{d().clientCount > 1 ? 's' : ''}
-                      </span>
-                    </Show>
+                    <span class="ml-auto text-[8px] font-mono text-text-dim">
+                      {(store.sampleRate() / 1e6).toFixed(2)} MSPS
+                    </span>
                   </div>
                 )}
               </Show>
@@ -1038,7 +1053,7 @@ const WaterfallSettings: Component = () => {
         <span>Waterfall</span>
         <Show when={!open()}>
           <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
-            {store.waterfallTheme()} · {store.waterfallAutoRange() ? 'auto' : `${store.waterfallMin()}/${store.waterfallMax()} dB`}
+            {store.waterfallTheme()} · FFT {store.fftSize()} · {store.waterfallAutoRange() ? 'auto' : `${store.waterfallMin()}/${store.waterfallMax()} dB`}
           </span>
         </Show>
         <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
@@ -1150,6 +1165,12 @@ const WaterfallSettings: Component = () => {
         <div class="text-[8px] font-mono text-text-dim text-center">
           Range: {store.waterfallMin()} to {store.waterfallMax()} dB
           ({store.waterfallMax() - store.waterfallMin()} dB span)
+        </div>
+
+        {/* FFT Info */}
+        <div class="mt-2 pt-2 border-t border-border/40 flex justify-between items-center">
+          <span class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">FFT Size</span>
+          <span class="text-[9px] font-mono text-text-dim">{store.fftSize()} bins</span>
         </div>
 
         {/* Gamma / contrast */}
@@ -2106,49 +2127,6 @@ const Bookmarks: Component = () => {
 };
 
 // ---- Connection Status ----
-const ConnectionStatus: Component = () => {
-  const [open, setOpen] = createSignal(true);
-
-  return (
-    <div class="sdr-panel">
-      <div
-        class={`sdr-panel-header collapsible ${open() ? '' : 'collapsed'}`}
-        onClick={() => setOpen(o => !o)}
-      >
-        <span>Status</span>
-        <Show when={!open()}>
-          <span class={`ml-auto text-[9px] font-mono normal-case tracking-normal font-normal ${store.connected() ? 'text-status-online' : 'text-status-error'}`}>
-            {store.connected() ? 'Connected' : 'Disconnected'}
-          </span>
-        </Show>
-        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
-      </div>
-      <Show when={open()}>
-        <div class="p-3 space-y-1 text-[9px] font-mono">
-        <div class="flex justify-between">
-          <span class="text-text-secondary">Connection</span>
-          <span class={store.connected() ? 'text-status-online' : 'text-status-error'}>
-            {store.connected() ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-        <div class="flex justify-between">
-          <span class="text-text-secondary">Client ID</span>
-          <span class="text-text-dim">{store.clientId() || '—'}</span>
-        </div>
-        <div class="flex justify-between">
-          <span class="text-text-secondary">Sample Rate</span>
-          <span class="text-text-dim">{(store.sampleRate() / 1e6).toFixed(2)} MSPS</span>
-        </div>
-        <div class="flex justify-between">
-          <span class="text-text-secondary">FFT Size</span>
-          <span class="text-text-dim">{store.fftSize()}</span>
-        </div>
-      </div>
-      </Show>
-    </div>
-  );
-};
-
 // ---- Dongle Selector ----
 // ---- Admin Panel ----
 const AdminPanel: Component = () => {
