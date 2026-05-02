@@ -6,8 +6,14 @@ import { Component, createSignal, onMount, onCleanup, For, Show } from 'solid-js
 
 interface ClientInfo {
   id: string;
+  persistentId: string;
+  connIndex: number;
   ip: string;
   dongleId: string;
+  dongleName?: string;
+  profileId: string;
+  profileName?: string;
+  centerFrequency?: number;
   fftCodec: string;
   iqCodec: string;
   mode: string;
@@ -41,6 +47,13 @@ function formatDuration(isoOrSecs: string | number): string {
   return `${secs}s`;
 }
 
+function formatFrequency(hz: number): string {
+  if (hz >= 1_000_000_000) return `${(hz / 1_000_000_000).toFixed(3)} GHz`;
+  if (hz >= 1_000_000) return `${(hz / 1_000_000).toFixed(3)} MHz`;
+  if (hz >= 1_000) return `${(hz / 1_000).toFixed(1)} kHz`;
+  return `${hz} Hz`;
+}
+
 // ---- Sub-components ----
 
 const StatCard: Component<{ label: string; value: string; sub?: string }> = (props) => (
@@ -58,16 +71,38 @@ const ClientRow: Component<{ client: ClientInfo }> = (props) => (
     {/* Status LED */}
     <div class="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
 
+    {/* Client ID (persistent, 8 chars + conn index) */}
+    <div class="w-20 shrink-0">
+      <span class="text-[9px] font-mono text-text-dim">
+        {props.client.persistentId?.slice(0, 8) || props.client.id.slice(0, 8)}
+        <Show when={props.client.connIndex > 0}>
+          <span class="text-text-dim/50">:{props.client.connIndex}</span>
+        </Show>
+      </span>
+    </div>
+
     {/* IP */}
-    <div class="w-28 shrink-0">
+    <div class="w-24 shrink-0">
       <span class="text-[10px] font-mono text-text-primary">{props.client.ip}</span>
     </div>
 
-    {/* Dongle */}
-    <div class="w-24 shrink-0">
-      <span class="text-[9px] font-mono text-text-dim">
-        {props.client.dongleId || '—'}
-      </span>
+    {/* Dongle + Profile + Frequency */}
+    <div class="w-44 shrink-0">
+      <Show when={props.client.dongleName || props.client.dongleId} fallback={
+        <span class="text-[9px] font-mono text-text-dim/40">—</span>
+      }>
+        <div class="text-[9px] font-mono text-text-primary truncate">
+          {props.client.dongleName || props.client.dongleId}
+        </div>
+        <Show when={props.client.profileName || props.client.centerFrequency}>
+          <div class="text-[8px] font-mono text-accent/80 truncate">
+            {props.client.profileName || props.client.profileId}
+            <Show when={props.client.centerFrequency}>
+              {' '}<span class="text-text-dim">@ {formatFrequency(props.client.centerFrequency!)}</span>
+            </Show>
+          </div>
+        </Show>
+      </Show>
     </div>
 
     {/* Mode */}
@@ -78,7 +113,7 @@ const ClientRow: Component<{ client: ClientInfo }> = (props) => (
     </div>
 
     {/* Codecs */}
-    <div class="flex-1 flex gap-1.5">
+    <div class="flex-1 flex gap-1.5 flex-wrap">
       <Show when={props.client.fftCodec}>
         <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
           fft:{props.client.fftCodec}
@@ -144,7 +179,7 @@ const MonitorSection: Component = () => {
   });
 
   return (
-    <div class="max-w-3xl">
+    <div class="max-w-4xl">
       <div class="flex items-center justify-between mb-4">
         <div>
           <h2 class="text-sm font-mono uppercase tracking-wider text-text-primary mb-0.5">System Monitor</h2>
@@ -202,8 +237,9 @@ const MonitorSection: Component = () => {
           <Show when={clients().length > 0}>
             <div class="flex items-center gap-2 px-2 py-1 text-[8px] font-mono uppercase tracking-wider text-text-dim/50">
               <div class="w-1.5 shrink-0" />
-              <div class="w-28 shrink-0">IP</div>
-              <div class="w-24 shrink-0">Dongle</div>
+              <div class="w-20 shrink-0">Client</div>
+              <div class="w-24 shrink-0">IP</div>
+              <div class="w-44 shrink-0">Receiver / Profile</div>
               <div class="w-10 shrink-0">Mode</div>
               <div class="flex-1">Codecs</div>
               <div class="w-16 shrink-0 text-right">Duration</div>

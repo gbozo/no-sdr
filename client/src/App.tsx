@@ -228,10 +228,15 @@ const App: Component = () => {
           </Show>
           <div class="flex-1" />
 
-          {/* Client ID */}
-          <span class="border-r border-border pr-4">
-            ID: <span class="text-text-secondary">{store.localClientId()}</span>
-          </span>
+          {/* Client ID (persistent UUID, first 8 chars) + connection index */}
+          <Show when={store.localClientId()}>
+            <span class="border-r border-border pr-4">
+              ID: <span class="text-text-secondary">{store.localClientId().slice(0, 8)}</span>
+              <Show when={store.connIndex() > 0}>
+                <span class="text-text-dim">:{store.connIndex()}</span>
+              </Show>
+            </span>
+          </Show>
 
           {/* Bandwidth Meter with sparkline */}
           <BandwidthMeter />

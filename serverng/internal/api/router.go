@@ -60,7 +60,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		r.Group(func(r chi.Router) {
 			r.Use(adminAuth.CheckAuth)
 			r.Get("/system-info", systemInfoHandler(cfg, wsMgr))
-			r.Get("/clients", clientsHandler(wsMgr))
+			r.Get("/clients", clientsHandler(cfg, wsMgr))
 			r.Get("/devices", localDevicesHandler())
 			r.Get("/dongles", adminDonglesHandler(cfg, wsMgr))
 			r.Post("/dongles", createDongleHandler(cfg, cfgVersion))

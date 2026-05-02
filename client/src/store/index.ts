@@ -54,14 +54,11 @@ function createStore() {
   const [connected, setConnected] = createSignal(false);
   const [clientId, setClientId] = createSignal('');
 
-  // ---- Persistent local client ID (survives page refresh) ----
-  const generateLocalId = (): string => {
-    const chars = 'abcdef0123456789';
-    let id = '';
-    for (let i = 0; i < 8; i++) id += chars[Math.floor(Math.random() * chars.length)];
-    return id;
-  };
-  const [localClientId] = persist<string>('clientId', generateLocalId());
+  // ---- Persistent client ID (server-assigned UUID, survives page refresh) ----
+  // Empty string means "no ID yet" — server will generate one on first connect.
+  const [localClientId, setLocalClientId] = persist<string>('clientId', '');
+  // Connection index — identifies this tab among multiple connections for same UUID
+  const [connIndex, setConnIndex] = createSignal(0);
 
   // ---- Dongle / Profile ----
   const [dongles, setDongles] = createSignal<DongleInfo[]>([]);
@@ -208,7 +205,8 @@ function createStore() {
     // Connection
     connected, setConnected,
     clientId, setClientId,
-    localClientId,
+    localClientId, setLocalClientId,
+    connIndex, setConnIndex,
 
     // Dongle / Profile
     dongles, setDongles,

@@ -58,7 +58,6 @@ export class SdrEngine {
   private audio: AudioEngine;
   private demodulator: Demodulator;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private stateSyncFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
@@ -351,7 +350,8 @@ export class SdrEngine {
 
     store.setConnectionState('connecting');
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws`;
+    const clientId = store.localClientId();
+    const wsUrl = `${protocol}//${location.host}/ws${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`;
 
     this.ws = new WebSocket(wsUrl);
     this.ws.binaryType = 'arraybuffer';
@@ -362,14 +362,7 @@ export class SdrEngine {
       this.reconnectAttempts = 0;
       store.setReconnectAttempt(0);
       console.log('[SDR] WebSocket connected');
-
-      // state_sync message from server will provide dongles list (no REST fetch needed)
-      // Fallback: fetch dongles if state_sync doesn't arrive within 2s
-      this.stateSyncFallbackTimer = setTimeout(() => {
-        if (store.pushDongles().length === 0 && store.dongles().length === 0) {
-          this.fetchDongles();
-        }
-      }, 2000);
+      // state_sync from server provides the full dongle list — no REST fallback needed
     };
 
     this.ws.onmessage = (event) => {
@@ -390,10 +383,6 @@ export class SdrEngine {
       store.setConnected(false);
       store.setConnectionState('disconnected');
       console.log('[SDR] WebSocket disconnected');
-      if (this.stateSyncFallbackTimer) {
-        clearTimeout(this.stateSyncFallbackTimer);
-        this.stateSyncFallbackTimer = null;
-      }
       this.scheduleReconnect();
     };
 
@@ -890,6 +879,14 @@ export class SdrEngine {
     switch (meta.type) {
       case 'welcome':
         store.setClientId(meta.clientId);
+        // Server is the authority on client ID — store whatever it sends
+        if (meta.clientId && meta.clientId !== store.localClientId()) {
+          store.setLocalClientId(meta.clientId);
+        }
+        // Store connection index (multi-tab identifier)
+        if (meta.connIndex) {
+          store.setConnIndex(meta.connIndex);
+        }
         // Update available codecs from server capabilities
         store.setAvailableFftCodecs(meta.allowedFftCodecs ?? ALL_FFT_CODECS);
         store.setAvailableIqCodecs(meta.allowedIqCodecs ?? ALL_IQ_CODECS);
@@ -1050,12 +1047,6 @@ export class SdrEngine {
       // ---- Config push notifications (Phase 13: reactive state from WS) ----
 
       case 'state_sync': {
-        // Cancel fallback fetch since state_sync arrived
-        if (this.stateSyncFallbackTimer) {
-          clearTimeout(this.stateSyncFallbackTimer);
-          this.stateSyncFallbackTimer = null;
-        }
-
         store.setPushDongles(meta.dongles);
         if (meta.server) store.setPushServerConfig(meta.server);
         if (meta.version) store.setConfigVersion(meta.version);
@@ -1277,25 +1268,6 @@ export class SdrEngine {
           console.warn(`[SDR] Codec ${meta.codec} rejected: ${meta.reason}`);
         }
         break;
-    }
-  }
-
-  /**
-   * Fetch available dongles via REST API
-   */
-  async fetchDongles(): Promise<void> {
-    try {
-      const res = await fetch('/api/dongles');
-      const dongles = await res.json();
-      store.setDongles(dongles);
-
-      // Auto-subscribe to first running dongle
-      const running = dongles.find((d: any) => d.running);
-      if (running) {
-        this.subscribe(running.id);
-      }
-    } catch (err) {
-      console.error('[SDR] Failed to fetch dongles:', err);
     }
   }
 

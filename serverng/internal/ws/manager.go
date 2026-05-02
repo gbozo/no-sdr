@@ -120,6 +120,20 @@ func (m *Manager) SetConnectHandler(fn func(clientID string)) {
 	m.onConnect = fn
 }
 
+// SetClientProfileID sets the active profile ID on a connected client.
+// Called by the dongle manager when a client subscribes or when the profile changes.
+func (m *Manager) SetClientProfileID(clientID, profileID string) {
+	m.mu.RLock()
+	client, ok := m.clients[clientID]
+	m.mu.RUnlock()
+	if !ok {
+		return
+	}
+	client.mu.Lock()
+	client.ProfileID = profileID
+	client.mu.Unlock()
+}
+
 // HandleUpgrade is the HTTP handler for WebSocket upgrade requests.
 // Use with chi: r.Get("/ws", mgr.HandleUpgrade)
 func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
@@ -131,26 +145,38 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := uuid.New().String()
+	// Internal connection ID (ephemeral, for routing within this process)
+	connID := uuid.New().String()
+
+	// Persistent client ID — stable across reconnects.
+	// Client sends it as ?clientId= query param. Server validates and accepts or generates new.
+	persistentID := m.resolveClientID(r.URL.Query().Get("clientId"))
+
+	// Determine connection index for this persistent ID (multi-tab support)
+	connIndex := m.nextConnIndex(persistentID)
+
 	// Use a background context for the client lifecycle — the websocket
 	// connection outlives the HTTP request context.
 	ctx, cancel := context.WithCancel(context.Background())
-	client := newClient(clientID, conn, ctx, cancel, m.writeChanCap())
+	client := newClient(connID, conn, ctx, cancel, m.writeChanCap())
+	client.PersistentID = persistentID
+	client.ConnIndex = connIndex
+	client.RemoteAddr = r.RemoteAddr
 
 	// Track client IP for rate limiter release on disconnect
 	m.mu.Lock()
-	m.clientIPs[clientID] = r.RemoteAddr
+	m.clientIPs[connID] = r.RemoteAddr
 	m.mu.Unlock()
 
 	m.addClient(client)
-	m.logger.Info("client connected", "id", clientID, "remote", r.RemoteAddr)
+	m.logger.Info("client connected", "connId", connID, "persistentId", persistentID, "remote", r.RemoteAddr)
 
 	// Start the stale-client checker the first time any client connects.
 	m.staleOnce.Do(func() {
 		go m.staleCheckerLoop(context.Background())
 	})
 
-	// Send welcome message with server capabilities
+	// Send welcome message with server capabilities and the authoritative client ID
 	m.mu.RLock()
 	allowedFft := make([]string, 0, len(m.allowed.Fft))
 	for k := range m.allowed.Fft {
@@ -163,7 +189,8 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	m.mu.RUnlock()
 	welcome := PackMetaMessage(&ServerMeta{
 		Type:             "welcome",
-		ClientId:         clientID,
+		ClientId:         persistentID,
+		ConnIndex:        connIndex,
 		ServerVersion:    "2.0.0",
 		AllowedFftCodecs: allowedFft,
 		AllowedIqCodecs:  allowedIq,
@@ -172,13 +199,43 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	// Fire connect handler (dongle manager uses this to send state_sync)
 	if m.onConnect != nil {
-		m.onConnect(clientID)
+		m.onConnect(connID)
 	}
 
 	// Start read, write, and ping goroutines
 	go m.readLoop(client)
 	go m.writeLoop(client)
 	go m.pingLoop(client)
+}
+
+// resolveClientID validates a client-provided ID string.
+// Returns the same ID if it's a valid UUID, or generates a new UUID otherwise.
+func (m *Manager) resolveClientID(provided string) string {
+	if provided == "" {
+		return uuid.New().String()
+	}
+	// Validate: must be a valid UUID (parse accepts standard 36-char and other formats)
+	parsed, err := uuid.Parse(provided)
+	if err != nil {
+		m.logger.Warn("client sent invalid ID, generating new", "provided", provided)
+		return uuid.New().String()
+	}
+	return parsed.String()
+}
+
+// nextConnIndex returns the next connection index for a persistent client ID.
+// Counts existing connections with the same persistentID and returns max+1.
+func (m *Manager) nextConnIndex(persistentID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	maxIndex := 0
+	for _, c := range m.clients {
+		if c.PersistentID == persistentID && c.ConnIndex > maxIndex {
+			maxIndex = c.ConnIndex
+		}
+	}
+	return maxIndex + 1
 }
 
 // Broadcast sends a binary message to all clients subscribed to a dongle.
@@ -501,16 +558,20 @@ func (m *Manager) SendJSON(clientID string, v any) error {
 
 // ClientInfo holds a snapshot of client state for the admin API.
 type ClientInfo struct {
-	ID           string    `json:"id"`
-	IP           string    `json:"ip"`
-	DongleID     string    `json:"dongleId"`
-	FftCodec     string    `json:"fftCodec"`
-	IqCodec      string    `json:"iqCodec"`
-	Mode         string    `json:"mode"`
-	TuneOffset   int       `json:"tuneOffset"`
-	Bandwidth    int       `json:"bandwidth"`
-	AudioEnabled bool      `json:"audioEnabled"`
-	ConnectedAt  time.Time `json:"connectedAt"`
+	ID            string    `json:"id"`
+	PersistentID  string    `json:"persistentId"`
+	ConnIndex     int       `json:"connIndex"`
+	IP            string    `json:"ip"`
+	DongleID      string    `json:"dongleId"`
+	ProfileID     string    `json:"profileId"`
+	FftCodec      string    `json:"fftCodec"`
+	IqCodec       string    `json:"iqCodec"`
+	Mode          string    `json:"mode"`
+	TuneOffset    int       `json:"tuneOffset"`
+	Bandwidth     int       `json:"bandwidth"`
+	AudioEnabled  bool      `json:"audioEnabled"`
+	StereoEnabled bool      `json:"stereoEnabled"`
+	ConnectedAt   time.Time `json:"connectedAt"`
 }
 
 // GetAllClients returns a snapshot of all connected clients for admin monitoring.
@@ -522,16 +583,20 @@ func (m *Manager) GetAllClients() []ClientInfo {
 	for _, c := range m.clients {
 		c.mu.RLock()
 		info := ClientInfo{
-			ID:           c.ID,
-			IP:           m.clientIPs[c.ID],
-			DongleID:     c.DongleID,
-			FftCodec:     c.FftCodec,
-			IqCodec:      c.IqCodec,
-			Mode:         c.Mode,
-			TuneOffset:   c.TuneOffset,
-			Bandwidth:    c.Bandwidth,
-			AudioEnabled: c.AudioEnabled,
-			ConnectedAt:  c.ConnectedAt,
+			ID:            c.ID,
+			PersistentID:  c.PersistentID,
+			ConnIndex:     c.ConnIndex,
+			IP:            m.clientIPs[c.ID],
+			DongleID:      c.DongleID,
+			ProfileID:     c.ProfileID,
+			FftCodec:      c.FftCodec,
+			IqCodec:       c.IqCodec,
+			Mode:          c.Mode,
+			TuneOffset:    c.TuneOffset,
+			Bandwidth:     c.Bandwidth,
+			AudioEnabled:  c.AudioEnabled,
+			StereoEnabled: c.StereoEnabled,
+			ConnectedAt:   c.ConnectedAt,
 		}
 		c.mu.RUnlock()
 		result = append(result, info)

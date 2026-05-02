@@ -2207,8 +2207,7 @@ const AdminPanel: Component = () => {
         method: 'POST',
         headers: authHeaders(),
       });
-      // Refresh dongle list
-      engine.fetchDongles();
+      // State update arrives via WS push (dongle_started notification)
     } catch {
       setError('Failed to start dongle');
     }
@@ -2222,7 +2221,7 @@ const AdminPanel: Component = () => {
         method: 'POST',
         headers: authHeaders(),
       });
-      engine.fetchDongles();
+      // State update arrives via WS push (dongle_stopped notification)
     } catch {
       setError('Failed to stop dongle');
     }

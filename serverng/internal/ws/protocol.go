@@ -48,6 +48,7 @@ type ServerMeta struct {
 	Code    string `json:"code,omitempty"`
 	// Welcome fields
 	ClientId         string   `json:"clientId,omitempty"`
+	ConnIndex        int      `json:"connIndex,omitempty"`
 	ServerVersion    string   `json:"serverVersion,omitempty"`
 	AllowedFftCodecs []string `json:"allowedFftCodecs,omitempty"`
 	AllowedIqCodecs  []string `json:"allowedIqCodecs,omitempty"`

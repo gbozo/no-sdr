@@ -902,6 +902,8 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 	metaMsg := ws.PackMetaMessage(meta)
 	for _, client := range clients {
 		m.wsMgr.SendTo(client.ID, metaMsg)
+		// Update profile ID on each subscribed client
+		m.wsMgr.SetClientProfileID(client.ID, newProfile.ID)
 	}
 
 	m.logger.Info("switched dongle profile",
@@ -1472,6 +1474,9 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 	}
 
 	m.wsMgr.SendTo(clientID, ws.PackMetaMessage(meta))
+
+	// Update client state with the active profile ID
+	m.wsMgr.SetClientProfileID(clientID, profile.ID)
 
 	m.logger.Info("client subscribed",
 		"clientID", clientID,

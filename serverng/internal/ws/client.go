@@ -17,22 +17,29 @@ const (
 
 // Client represents a connected WebSocket client.
 type Client struct {
-	ID   string
-	conn *websocket.Conn
-	ctx  context.Context
-	cancel context.CancelFunc
+	ID           string // Internal connection ID (changes on each reconnect)
+	PersistentID string // Client-facing UUID (stable across reconnects, stored in browser localStorage)
+	ConnIndex    int    // Connection index for this persistent ID (1, 2, 3... for multi-tab)
+	conn         *websocket.Conn
+	ctx          context.Context
+	cancel       context.CancelFunc
 
 	// Subscription state — written only from the read goroutine.
-	DongleID     string
-	AudioEnabled bool
-	FftCodec     string // "none", "adpcm", "deflate"
-	IqCodec      string // "none", "adpcm", "opus", "opus-hq"
-	Mode         string
-	TuneOffset   int
-	Bandwidth    int
+	DongleID       string
+	ProfileID      string // Active profile ID on the subscribed dongle
+	AudioEnabled   bool
+	StereoEnabled  bool
+	FftCodec       string // "none", "adpcm", "deflate"
+	IqCodec        string // "none", "adpcm", "opus", "opus-hq"
+	Mode           string
+	TuneOffset     int
+	Bandwidth      int
 
 	// ConnectedAt records when the client connected.
 	ConnectedAt time.Time
+
+	// RemoteAddr is the client's IP address (for state tracking).
+	RemoteAddr string
 
 	// Write channel with backpressure
 	writeCh chan []byte
@@ -123,6 +130,7 @@ func (c *Client) Unsubscribe() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.DongleID = ""
+	c.ProfileID = ""
 }
 
 // AllowedCodecs holds the codec sets the server will accept from clients.
@@ -149,6 +157,13 @@ func (c *Client) UpdateFromCommand(cmd *ClientCommand, allowed *AllowedCodecs) *
 	case "subscribe":
 		if cmd.DongleId != "" {
 			c.DongleID = cmd.DongleId
+			// Reset per-subscription state — will be re-populated by subsequent commands
+			c.ProfileID = ""
+			c.AudioEnabled = false
+			c.StereoEnabled = false
+			c.Mode = ""
+			c.TuneOffset = 0
+			c.Bandwidth = 0
 		}
 	case "tune":
 		c.TuneOffset = cmd.Offset
@@ -188,6 +203,10 @@ func (c *Client) UpdateFromCommand(cmd *ClientCommand, allowed *AllowedCodecs) *
 	case "audio_enabled":
 		if cmd.Enabled != nil {
 			c.AudioEnabled = *cmd.Enabled
+		}
+	case "stereo_enabled":
+		if cmd.Enabled != nil {
+			c.StereoEnabled = *cmd.Enabled
 		}
 	}
 	return nil

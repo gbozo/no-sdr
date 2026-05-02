@@ -67,16 +67,19 @@ func systemInfoHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 
 // clientsHandler returns the list of connected WebSocket clients with their state.
 // GET /api/admin/clients
-func clientsHandler(wsMgr *ws.Manager) http.HandlerFunc {
+func clientsHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clients := wsMgr.GetAllClients()
 		resp := make([]map[string]any, 0, len(clients))
 
 		for _, info := range clients {
-			resp = append(resp, map[string]any{
+			entry := map[string]any{
 				"id":           info.ID,
+				"persistentId": info.PersistentID,
+				"connIndex":    info.ConnIndex,
 				"ip":           info.IP,
 				"dongleId":     info.DongleID,
+				"profileId":    info.ProfileID,
 				"fftCodec":     info.FftCodec,
 				"iqCodec":      info.IqCodec,
 				"mode":         info.Mode,
@@ -84,7 +87,29 @@ func clientsHandler(wsMgr *ws.Manager) http.HandlerFunc {
 				"bandwidth":    info.Bandwidth,
 				"audioEnabled": info.AudioEnabled,
 				"connectedAt":  info.ConnectedAt,
-			})
+			}
+
+			// Resolve dongle name and profile details from config
+			if info.DongleID != "" {
+				for i := range cfg.Dongles {
+					if cfg.Dongles[i].ID == info.DongleID {
+						entry["dongleName"] = cfg.Dongles[i].Name
+						// Resolve profile name and frequency
+						if info.ProfileID != "" {
+							for j := range cfg.Dongles[i].Profiles {
+								if cfg.Dongles[i].Profiles[j].ID == info.ProfileID {
+									entry["profileName"] = cfg.Dongles[i].Profiles[j].Name
+									entry["centerFrequency"] = cfg.Dongles[i].Profiles[j].CenterFrequency
+									break
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+
+			resp = append(resp, entry)
 		}
 
 		writeJSON(w, http.StatusOK, resp)
