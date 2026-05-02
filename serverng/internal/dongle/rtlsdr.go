@@ -163,41 +163,57 @@ func (r *RtlSdrSource) SetSampleRate(hz uint32) error {
 }
 
 // SetGain sets the tuner gain (in tenths of dB).
-func (r *RtlSdrSource) SetGain(tenthsDb int) error {
+func (r *RtlSdrSource) SetGain(tenthsDb uint32) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	return r.device.SetTunerGain(tenthsDb)
+	return r.device.SetTunerGain(int(tenthsDb))
 }
 
-// SetGainMode sets manual (true) or automatic (false) gain control.
-func (r *RtlSdrSource) SetGainMode(manual bool) error {
+// SetGainMode sets gain mode (0=auto, 1=manual).
+func (r *RtlSdrSource) SetGainMode(mode uint32) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	return r.device.SetTunerGainMode(manual)
+	return r.device.SetTunerGainMode(mode != 0)
 }
 
 // SetDirectSampling sets direct sampling mode (0=off, 1=I-ADC, 2=Q-ADC).
-func (r *RtlSdrSource) SetDirectSampling(mode int) error {
+func (r *RtlSdrSource) SetDirectSampling(mode uint32) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
 	return r.device.SetDirectSampling(rtl.SamplingMode(mode))
 }
 
-// SetBiasT enables or disables the bias-T voltage on the antenna port.
-func (r *RtlSdrSource) SetBiasT(enabled bool) error {
+// SetBiasT enables or disables the bias-T voltage on the antenna port (0=off, 1=on).
+func (r *RtlSdrSource) SetBiasT(enabled uint32) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	return r.device.SetBiasTee(enabled)
+	return r.device.SetBiasTee(enabled != 0)
 }
 
-// SetAgc enables or disables the RTL2832U internal AGC.
-func (r *RtlSdrSource) SetAgc(enabled bool) error {
+// SetAgcMode enables or disables the RTL2832U internal AGC (0=off, 1=on).
+func (r *RtlSdrSource) SetAgcMode(mode uint32) error {
 	if r.device == nil {
 		return fmt.Errorf("rtlsdr not open")
 	}
-	return r.device.SetAgcMode(enabled)
+	return r.device.SetAgcMode(mode != 0)
+}
+
+// SetOffsetTuning enables or disables offset tuning (0=off, 1=on).
+func (r *RtlSdrSource) SetOffsetTuning(mode uint32) error {
+	if r.device == nil {
+		return fmt.Errorf("rtlsdr not open")
+	}
+	return r.device.SetOffsetTuning(mode != 0)
+}
+
+// SetFrequencyCorrection sets PPM correction.
+func (r *RtlSdrSource) SetFrequencyCorrection(ppm uint32) error {
+	if r.device == nil {
+		return fmt.Errorf("rtlsdr not open")
+	}
+	return r.device.SetFreqCorrection(int(ppm))
 }

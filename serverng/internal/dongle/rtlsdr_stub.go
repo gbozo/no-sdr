@@ -51,16 +51,22 @@ func (r *RtlSdrSource) SetFrequency(hz uint32) error { return nil }
 func (r *RtlSdrSource) SetSampleRate(hz uint32) error { return nil }
 
 // SetGain is a no-op in the stub.
-func (r *RtlSdrSource) SetGain(tenthsDb int) error { return nil }
+func (r *RtlSdrSource) SetGain(tenthsDb uint32) error { return nil }
 
 // SetGainMode is a no-op in the stub.
-func (r *RtlSdrSource) SetGainMode(manual bool) error { return nil }
+func (r *RtlSdrSource) SetGainMode(mode uint32) error { return nil }
 
 // SetDirectSampling is a no-op in the stub.
-func (r *RtlSdrSource) SetDirectSampling(mode int) error { return nil }
+func (r *RtlSdrSource) SetDirectSampling(mode uint32) error { return nil }
 
 // SetBiasT is a no-op in the stub.
-func (r *RtlSdrSource) SetBiasT(enabled bool) error { return nil }
+func (r *RtlSdrSource) SetBiasT(enabled uint32) error { return nil }
 
-// SetAgc is a no-op in the stub.
-func (r *RtlSdrSource) SetAgc(enabled bool) error { return nil }
+// SetAgcMode is a no-op in the stub.
+func (r *RtlSdrSource) SetAgcMode(mode uint32) error { return nil }
+
+// SetOffsetTuning is a no-op in the stub.
+func (r *RtlSdrSource) SetOffsetTuning(mode uint32) error { return nil }
+
+// SetFrequencyCorrection is a no-op in the stub.
+func (r *RtlSdrSource) SetFrequencyCorrection(ppm uint32) error { return nil }

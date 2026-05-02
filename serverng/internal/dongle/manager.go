@@ -329,6 +329,7 @@ func (m *Manager) createSource(ctx context.Context, dcfg *config.DongleConfig, p
 		if err := src.Open(); err != nil {
 			return nil, fmt.Errorf("local rtlsdr: %w", err)
 		}
+		m.applyDongleSettings(src, dcfg, profile)
 		return src, nil
 
 	default:
@@ -392,8 +393,9 @@ func (m *Manager) spawnRtlTcp(ctx context.Context, dcfg *config.DongleConfig) *e
 	return cmd
 }
 
-// applyDongleSettings sends initial configuration commands to an rtl_tcp-compatible source.
-func (m *Manager) applyDongleSettings(src *RtlTcpSource, dcfg *config.DongleConfig, profile *config.DongleProfile) {	// Frequency: center + oscillator offset (compensates LO error)
+// applyDongleSettings sends initial configuration commands to any CommandableSource.
+func (m *Manager) applyDongleSettings(src CommandableSource, dcfg *config.DongleConfig, profile *config.DongleProfile) {
+	// Frequency: center + oscillator offset (compensates LO error)
 	freq := uint32(profile.CenterFrequency + int64(profile.OscillatorOffset))
 	src.SetFrequency(freq)
 
@@ -629,73 +631,93 @@ func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
 		return
 	}
 
+	// Single client — fast path, no goroutine overhead.
+	if len(entries) == 1 {
+		m.processOneClient(entries[0].clientID, entries[0].cp, iqChunk)
+		return
+	}
+
+	// Multiple clients — parallel extraction.
+	// Each clientPipeline owns all its mutable state (extractor, demod, accumBuf,
+	// adpcmEnc, opusPipeline) so concurrent processing is safe.
+	// iqChunk is read-only across all goroutines.
+	var wg sync.WaitGroup
+	wg.Add(len(entries))
 	for _, entry := range entries {
-		cp := entry.cp
-		clientID := entry.clientID
+		go func(clientID string, cp *clientPipeline) {
+			defer wg.Done()
+			m.processOneClient(clientID, cp, iqChunk)
+		}(entry.clientID, entry.cp)
+	}
+	wg.Wait()
+}
 
-		subBand := cp.extractor.Process(iqChunk)
-		if subBand == nil {
-			continue
+// processOneClient runs the full IQ extraction → demod/encode → send pipeline
+// for a single client. All mutable state lives on cp; iqChunk is read-only.
+// This function is safe to call concurrently for different clientPipelines.
+func (m *Manager) processOneClient(clientID string, cp *clientPipeline, iqChunk []byte) {
+	subBand := cp.extractor.Process(iqChunk)
+	if subBand == nil {
+		return
+	}
+
+	// Debug: log IQ flow every 500 chunks (~5s)
+	cp.iqChunkCount++
+	if cp.iqChunkCount%500 == 1 {
+		m.logger.Debug("IQ extraction",
+			"clientID", clientID,
+			"inputBytes", len(iqChunk),
+			"outputSamples", len(subBand),
+			"chunkSize", cp.chunkSize,
+			"accumPos", cp.accumPos,
+			"codec", cp.iqCodec,
+			"totalChunks", cp.iqChunkCount,
+		)
+	}
+
+	// Opus pipeline path: demod + encode → send Opus packets
+	// pmu guards opusPipeline against concurrent codec switch commands.
+	cp.pmu.Lock()
+	opus := cp.opusPipeline
+	cp.pmu.Unlock()
+	if opus != nil {
+		results := opus.Process(subBand)
+		for _, r := range results {
+			msg := ws.PackAudioOpusMessage(r.Packet, uint16(r.Samples), uint8(r.Channels))
+			m.wsMgr.SendTo(clientID, msg)
+			if r.RdsData != nil {
+				m.wsMgr.SendTo(clientID, ws.PackRDSMessage(r.RdsData))
+			}
 		}
+		return
+	}
 
-		// Debug: log IQ flow every 500 chunks (~5s)
-		cp.iqChunkCount++
-		if cp.iqChunkCount%500 == 1 {
-			m.logger.Debug("IQ extraction",
-				"clientID", clientID,
-				"inputBytes", len(iqChunk),
-				"outputSamples", len(subBand),
-				"chunkSize", cp.chunkSize,
-				"accumPos", cp.accumPos,
-				"codec", cp.iqCodec,
-				"totalChunks", cp.iqChunkCount,
-			)
+	// IQ path: accumulate into 20ms chunks, then encode per codec preference
+	remaining := subBand
+	for len(remaining) > 0 {
+		space := cp.chunkSize - cp.accumPos
+		toCopy := space
+		if toCopy > len(remaining) {
+			toCopy = len(remaining)
 		}
+		copy(cp.accumBuf[cp.accumPos:], remaining[:toCopy])
+		cp.accumPos += toCopy
+		remaining = remaining[toCopy:]
 
-		// Opus pipeline path: demod + encode → send Opus packets
-		// pmu guards opusPipeline against concurrent codec switch commands.
-		cp.pmu.Lock()
-		opus := cp.opusPipeline
-		cp.pmu.Unlock()
-		if opus != nil {
-			results := opus.Process(subBand)
-			for _, r := range results {
-				msg := ws.PackAudioOpusMessage(r.Packet, uint16(r.Samples), uint8(r.Channels))
+		if cp.accumPos >= cp.chunkSize {
+			// Full 20ms chunk — encode and send based on IQ codec
+			chunk := cp.accumBuf[:cp.chunkSize]
+			if cp.iqCodec == "adpcm" {
+				encoded := cp.adpcmEnc.Encode(chunk)
+				// sampleCount = total Int16 values (not IQ pairs)
+				msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize))
 				m.wsMgr.SendTo(clientID, msg)
-				if r.RdsData != nil {
-					m.wsMgr.SendTo(clientID, ws.PackRDSMessage(r.RdsData))
-				}
+			} else {
+				// "none" — send raw Int16 IQ
+				msg := ws.PackIQMessage(chunk)
+				m.wsMgr.SendTo(clientID, msg)
 			}
-			continue
-		}
-
-		// IQ path: accumulate into 20ms chunks, then encode per codec preference
-		remaining := subBand
-		for len(remaining) > 0 {
-			space := cp.chunkSize - cp.accumPos
-			toCopy := space
-			if toCopy > len(remaining) {
-				toCopy = len(remaining)
-			}
-			copy(cp.accumBuf[cp.accumPos:], remaining[:toCopy])
-			cp.accumPos += toCopy
-			remaining = remaining[toCopy:]
-
-			if cp.accumPos >= cp.chunkSize {
-				// Full 20ms chunk — encode and send based on IQ codec
-				chunk := cp.accumBuf[:cp.chunkSize]
-				if cp.iqCodec == "adpcm" {
-					encoded := cp.adpcmEnc.Encode(chunk)
-					// sampleCount = total Int16 values (not IQ pairs)
-					msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize))
-					m.wsMgr.SendTo(clientID, msg)
-				} else {
-					// "none" — send raw Int16 IQ
-					msg := ws.PackIQMessage(chunk)
-					m.wsMgr.SendTo(clientID, msg)
-				}
-				cp.accumPos = 0
-			}
+			cp.accumPos = 0
 		}
 	}
 }

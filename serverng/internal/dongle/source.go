@@ -31,4 +31,5 @@ var (
 	_ Source            = (*RspTcpSource)(nil)
 	_ Source            = (*RtlSdrSource)(nil)
 	_ CommandableSource = (*RtlTcpSource)(nil)
+	_ CommandableSource = (*RtlSdrSource)(nil)
 )

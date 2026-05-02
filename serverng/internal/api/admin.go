@@ -284,6 +284,11 @@ func updateDongleHandler(cfg *config.Config) http.HandlerFunc {
 		for i, d := range cfg.Dongles {
 			if d.ID == id {
 				updated.ID = id // Ensure ID cannot be changed
+				// Preserve existing profiles if the PUT body didn't include any
+				// (the edit form only sends dongle-level fields, not profiles).
+				if len(updated.Profiles) == 0 {
+					updated.Profiles = d.Profiles
+				}
 				cfg.Dongles[i] = updated
 				writeJSON(w, http.StatusOK, updated)
 				return
@@ -551,14 +556,17 @@ func saveConfigHandler(cfg *config.Config, cfgPath string) http.HandlerFunc {
 func serverConfigHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"port":             cfg.Server.Port,
-			"host":             cfg.Server.Host,
-			"callsign":         cfg.Server.Callsign,
-			"description":      cfg.Server.Description,
-			"location":         cfg.Server.Location,
-			"adminPassword":    cfg.Server.AdminPassword,
-			"allowedFftCodecs": cfg.Server.AllowedFftCodecs,
-			"allowedIqCodecs":  cfg.Server.AllowedIqCodecs,
+			"port":                  cfg.Server.Port,
+			"host":                  cfg.Server.Host,
+			"callsign":              cfg.Server.Callsign,
+			"description":           cfg.Server.Description,
+			"location":              cfg.Server.Location,
+			"adminPassword":         cfg.Server.AdminPassword,
+			"demoMode":              cfg.Server.DemoMode,
+			"fftHistoryFftSize":     cfg.Server.FftHistoryFftSize,
+			"fftHistoryCompression": cfg.Server.FftHistoryCompression,
+			"allowedFftCodecs":      cfg.Server.AllowedFftCodecs,
+			"allowedIqCodecs":       cfg.Server.AllowedIqCodecs,
 		})
 	}
 }
@@ -567,13 +575,17 @@ func serverConfigHandler(cfg *config.Config) http.HandlerFunc {
 func updateServerConfigHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Callsign         *string  `json:"callsign"`
-			Description      *string  `json:"description"`
-			Location         *string  `json:"location"`
-			Port             *int     `json:"port"`
-			Host             *string  `json:"host"`
-			AllowedFftCodecs []string `json:"allowedFftCodecs"`
-			AllowedIqCodecs  []string `json:"allowedIqCodecs"`
+			Callsign              *string  `json:"callsign"`
+			Description           *string  `json:"description"`
+			Location              *string  `json:"location"`
+			Port                  *int     `json:"port"`
+			Host                  *string  `json:"host"`
+			AdminPassword         *string  `json:"adminPassword"`
+			DemoMode              *bool    `json:"demoMode"`
+			FftHistoryFftSize     *int     `json:"fftHistoryFftSize"`
+			FftHistoryCompression *string  `json:"fftHistoryCompression"`
+			AllowedFftCodecs      []string `json:"allowedFftCodecs"`
+			AllowedIqCodecs       []string `json:"allowedIqCodecs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -593,6 +605,18 @@ func updateServerConfigHandler(cfg *config.Config) http.HandlerFunc {
 		}
 		if body.Host != nil {
 			cfg.Server.Host = *body.Host
+		}
+		if body.AdminPassword != nil {
+			cfg.Server.AdminPassword = *body.AdminPassword
+		}
+		if body.DemoMode != nil {
+			cfg.Server.DemoMode = *body.DemoMode
+		}
+		if body.FftHistoryFftSize != nil {
+			cfg.Server.FftHistoryFftSize = *body.FftHistoryFftSize
+		}
+		if body.FftHistoryCompression != nil {
+			cfg.Server.FftHistoryCompression = *body.FftHistoryCompression
 		}
 		if body.AllowedFftCodecs != nil {
 			cfg.Server.AllowedFftCodecs = body.AllowedFftCodecs

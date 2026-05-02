@@ -233,9 +233,9 @@ const AdminModal: Component = () => {
         sampleRate: 2_400_000,
         fftSize: 2048,
         fftFps: 30,
-        defaultMode: 'wfm',
-        defaultTuneOffset: 0,
-        defaultBandwidth: 200_000,
+        mode: 'wfm',
+        tuneOffset: 0,
+        bandwidth: 200_000,
         gain: null,
         description: '',
         decoders: [],
@@ -272,9 +272,9 @@ const AdminModal: Component = () => {
       sampleRate: preset.sampleRate,
       fftSize: preset.fftSize,
       fftFps: preset.fftFps,
-      defaultMode: preset.defaultMode,
-      defaultTuneOffset: preset.defaultTuneOffset,
-      defaultBandwidth: preset.defaultBandwidth,
+      mode: preset.mode ?? preset.defaultMode,
+      tuneOffset: preset.tuneOffset ?? preset.defaultTuneOffset ?? 0,
+      bandwidth: preset.bandwidth ?? preset.defaultBandwidth,
       gain: preset.gain,
       description: preset.description,
       directSampling: preset.directSampling ?? 0,
@@ -286,9 +286,9 @@ const AdminModal: Component = () => {
       sampleRate: 2400000,
       fftSize: 2048,
       fftFps: 30,
-      defaultMode: 'wfm',
-      defaultTuneOffset: 0,
-      defaultBandwidth: 200000,
+      mode: 'wfm',
+      tuneOffset: 0,
+      bandwidth: 200000,
       gain: null,
       description: '',
       decoders: [],
@@ -654,6 +654,8 @@ const ReceiversTab: Component<{
         offsetTuning: dongleForm().offsetTuning,
         autoStart: dongleForm().autoStart,
         enabled: dongleForm().enabled,
+        // Always include existing profiles so they are not wiped on save
+        profiles: d.profiles ?? [],
       });
       setEditingDongle(false);
     }
@@ -968,7 +970,7 @@ const ReceiversTab: Component<{
                     </div>
                     <div>
                       <label class="block text-[9px] font-mono text-text-dim mb-0.5">Default Mode</label>
-                      <select value={profileForm().defaultMode || 'nfm'} onChange={(e) => updateProfileField('defaultMode', e.currentTarget.value)}
+                      <select value={profileForm().mode || 'nfm'} onChange={(e) => updateProfileField('mode', e.currentTarget.value)}
                         class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none">
                         <option value="wfm">WFM (Wideband FM)</option>
                         <option value="nfm">NFM (Narrowband FM)</option>
@@ -1019,7 +1021,7 @@ const ReceiversTab: Component<{
                       </div>
                       <div>
                         <label class="block text-[9px] font-mono text-text-dim mb-0.5">Default Bandwidth (Hz)</label>
-                        <input type="number" value={profileForm().defaultBandwidth || 12500} onInput={(e) => updateProfileField('defaultBandwidth', parseInt(e.currentTarget.value) || 12500)}
+                        <input type="number" value={profileForm().bandwidth || 12500} onInput={(e) => updateProfileField('bandwidth', parseInt(e.currentTarget.value) || 12500)}
                           class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                       </div>
                       <div>
@@ -1093,7 +1095,7 @@ const ReceiversTab: Component<{
                       </div>
                       <div>
                         <label class="block text-[9px] font-mono text-text-dim mb-0.5">Tune Offset (Hz)</label>
-                        <input type="number" value={profileForm().defaultTuneOffset || 0} onInput={(e) => updateProfileField('defaultTuneOffset', parseInt(e.currentTarget.value) || 0)}
+                        <input type="number" value={profileForm().tuneOffset || 0} onInput={(e) => updateProfileField('tuneOffset', parseInt(e.currentTarget.value) || 0)}
                           class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1 text-[10px] font-mono text-text-primary focus:border-border-focus focus:outline-none" />
                       </div>
                     </div>
@@ -1289,6 +1291,7 @@ const ServerTab: Component<{ password: () => string }> = (props) => {
     setSaving(true);
     setSaved(false);
     try {
+      // 1. Update in-memory server config
       const res = await fetch('/api/admin/server/config', {
         method: 'PUT',
         headers: authHeaders(),
@@ -1305,10 +1308,18 @@ const ServerTab: Component<{ password: () => string }> = (props) => {
           allowedIqCodecs: allowedIqCodecs(),
         }),
       });
-      if (res.ok) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+      if (!res.ok) {
+        setSaving(false);
+        return;
       }
+      // 2. Flush to YAML on disk so changes survive restart
+      await fetch('/api/admin/save-config', {
+        method: 'POST',
+        headers: authHeaders(),
+        credentials: 'same-origin',
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     } catch { /* ignore */ }
     setSaving(false);
   };
