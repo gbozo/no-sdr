@@ -45,7 +45,7 @@
 ---
 
 <p align="center">
-  <img src="screenshots/no-sdr.jpeg" alt="no-sdr interface — waterfall, spectrum analyzer, and stereo FM with RDS" width="100%" />
+  <img src="screenshots/no(sdr).jpeg" alt="no-sdr interface — waterfall, spectrum analyzer, and stereo FM with RDS" width="100%" />
 </p>
 
 **no-sdr** turns cheap RTL-SDR USB dongles into a full-featured web-based radio receiver. Multiple users connect through their browser and independently tune, demodulate, and listen to signals — all sharing the same hardware. No plugins, no installs, just open a URL.
