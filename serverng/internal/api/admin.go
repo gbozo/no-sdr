@@ -783,7 +783,12 @@ func serverConfigHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 			"fftHistoryCompression": cfg.Server.FftHistoryCompression,
 			"allowedFftCodecs":      cfg.Server.AllowedFftCodecs,
 			"allowedIqCodecs":       cfg.Server.AllowedIqCodecs,
-			"version":               currentVer,
+			// Music identification API keys (never exposed in public meta, admin only)
+			"auddApiKey":           cfg.Server.AuddAPIKey,
+			"acrcloudHost":         cfg.Server.ACRCloudHost,
+			"acrcloudAccessKey":    cfg.Server.ACRCloudAccessKey,
+			"acrcloudAccessSecret": cfg.Server.ACRCloudAccessSecret,
+			"version":              currentVer,
 		})
 	}
 }
@@ -803,6 +808,11 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			FftHistoryCompression *string  `json:"fftHistoryCompression"`
 			AllowedFftCodecs      []string `json:"allowedFftCodecs"`
 			AllowedIqCodecs       []string `json:"allowedIqCodecs"`
+			// Music identification
+			AuddAPIKey           *string `json:"auddApiKey"`
+			ACRCloudHost         *string `json:"acrcloudHost"`
+			ACRCloudAccessKey    *string `json:"acrcloudAccessKey"`
+			ACRCloudAccessSecret *string `json:"acrcloudAccessSecret"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -846,6 +856,19 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			if SetAllowedCodecsFunc != nil {
 				SetAllowedCodecsFunc(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
 			}
+		}
+		// Music identification API keys
+		if body.AuddAPIKey != nil {
+			cfg.Server.AuddAPIKey = *body.AuddAPIKey
+		}
+		if body.ACRCloudHost != nil {
+			cfg.Server.ACRCloudHost = *body.ACRCloudHost
+		}
+		if body.ACRCloudAccessKey != nil {
+			cfg.Server.ACRCloudAccessKey = *body.ACRCloudAccessKey
+		}
+		if body.ACRCloudAccessSecret != nil {
+			cfg.Server.ACRCloudAccessSecret = *body.ACRCloudAccessSecret
 		}
 
 		// Bump config version

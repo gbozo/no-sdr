@@ -110,22 +110,27 @@ const FrequencyDisplay: Component = () => {
       <div class="sdr-scanlines" />
       <div class="sdr-dot-grid" />
 
-      {/* RDS station name — absolute top-right, purely decorative, never shifts layout */}
-      <Show when={store.rdsPs().trim()}>
-        <div class="absolute top-2 right-3 z-10 pointer-events-none select-none">
-          <span
-            class="font-mono text-[10px] tracking-[0.2em] uppercase"
-            style={{
-              color: 'var(--sdr-accent)',
-              opacity: '0.55',
-              'text-shadow': '0 0 6px var(--sdr-accent-dim)',
-              'letter-spacing': '0.18em',
-            }}
-          >
-            {store.rdsPs().trim()}
-          </span>
-        </div>
-      </Show>
+      {/* RDS info — absolute top-right, shows PS, RT, or PTY, whatever is available */}
+      {(() => {
+        const clean = (s: string) => s.replace(/[\x00-\x1f]/g, '').trim();
+        const label = () => clean(store.rdsPs()) || clean(store.rdsRt()) || clean(store.rdsPty());
+        return (
+          <Show when={label()}>
+            <div class="absolute top-2 right-3 z-10 pointer-events-none select-none max-w-[55%]">
+              <span
+                class="font-mono text-[10px] tracking-[0.15em] uppercase truncate block"
+                style={{
+                  color: 'var(--sdr-accent)',
+                  opacity: '0.85',
+                  'text-shadow': '0 0 6px var(--sdr-accent)',
+                }}
+              >
+                {label()}
+              </span>
+            </div>
+          </Show>
+        );
+      })()}
 
       <div class="p-3">
         <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">

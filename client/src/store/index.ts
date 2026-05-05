@@ -211,7 +211,13 @@ function createStore() {
     youtube?: string;
     apple?: string;
     service?: string;
+    error?: string; // set on failure so the UI can show what went wrong
   }>(null);
+
+  // Timestamp (ms) until which the Identify button should be disabled after a
+  // frequency change on ADPCM/none codecs (ring buffer needs to refill).
+  // 0 = not waiting. Opus is exempt — the server ring is independent of client tuning.
+  const [identifyReadyAt, setIdentifyReadyAt] = createSignal(0);
 
   // ---- Toast notifications (server-pushed or client-generated) ----
   const [toasts, setToasts] = createSignal<Array<{ id: number; message: string; code?: string }>>([]);
@@ -344,6 +350,7 @@ function createStore() {
     rdsSynced, setRdsSynced,
     identifyState, setIdentifyState,
     identifyResult, setIdentifyResult,
+    identifyReadyAt, setIdentifyReadyAt,
     toasts,
     addToast: (message: string, code?: string) => {
       const id = ++toastSeq;

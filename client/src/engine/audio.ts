@@ -27,6 +27,13 @@ export class AudioEngine {
   private initialized = false;
   private _loudnessEnabled = false;
 
+  // Standalone capture ring — filled by every push call regardless of worklet/AudioContext state.
+  // 12s × 48kHz = 576 000 samples. Never decremented by playback.
+  private static readonly CAPTURE_CAP = 48000 * 12;
+  private captureRing = new Float32Array(AudioEngine.CAPTURE_CAP);
+  private capturePos = 0;   // next write position
+  private captureLen = 0;   // total samples written, capped at CAPTURE_CAP
+
   constructor() {}
 
   /**
@@ -131,13 +138,15 @@ export class AudioEngine {
       class SdrAudioProcessor extends AudioWorkletProcessor {
         constructor() {
           super();
-          // Ring buffers: 3 seconds at 48kHz, separate L and R
-          this.bufferLen = 48000 * 3;
+          // Ring buffers: 12 seconds at 48kHz, separate L and R.
+          // 12s matches the server-side Opus PCM ring so ADPCM/none and Opus paths
+          // both have the same capture window for music identification.
+          this.bufferLen = 48000 * 12;
           this.bufferL = new Float32Array(this.bufferLen);
           this.bufferR = new Float32Array(this.bufferLen);
           this.writePos = 0;
           this.readPos = 0;
-          this.buffered = 0; // samples currently buffered (same for L and R)
+          this.buffered = 0;
 
           // Jitter buffer: don't start playing until we have this many samples.
           // 150ms provides headroom for variable IQ chunk sizes from the server.
@@ -158,26 +167,13 @@ export class AudioEngine {
           this.port.onmessage = (e) => {
             if (e.data === 'reset') {
               // Flush buffer on frequency/mode change
-              this.writePos = 0;
-              this.readPos = 0;
-              this.buffered = 0;
-              this.playing = false;
-              this.consecutiveUnderruns = 0;
-              return;
-            }
-
-            if (e.data && e.data.cmd === 'capture') {
-              // Return the last N seconds of buffered L-channel audio
-              const secs = e.data.secs || 10;
-              const want = Math.min(secs * 48000, this.buffered, this.bufferLen);
-              const out = new Float32Array(want);
-              const startPos = (this.writePos - want + this.bufferLen) % this.bufferLen;
-              for (let i = 0; i < want; i++) {
-                out[i] = this.bufferL[(startPos + i) % this.bufferLen];
-              }
-              this.port.postMessage({ cmd: 'captureResult', data: out }, [out.buffer]);
-              return;
-            }
+          this.writePos = 0;
+          this.readPos = 0;
+          this.buffered = 0;
+          this.playing = false;
+          this.consecutiveUnderruns = 0;
+          return;
+        }
 
             let left, right;
 
@@ -305,14 +301,13 @@ export class AudioEngine {
    * Push Int16 PCM audio data from the WebSocket (server-side demodulated)
    */
   pushAudio(int16Data: Int16Array): void {
-    if (!this.workletNode) return;
-
     // Convert Int16 to Float32
     const float32 = new Float32Array(int16Data.length);
     for (let i = 0; i < int16Data.length; i++) {
       float32[i] = int16Data[i] / 32768;
     }
-
+    this.writeCaptureRing(float32);
+    if (!this.workletNode) return;
     // Mono → duplicated to both channels by worklet
     this.workletNode.port.postMessage({ left: float32 });
   }
@@ -321,6 +316,7 @@ export class AudioEngine {
    * Push mono Float32 audio data from client-side demodulator
    */
   pushDemodulatedAudio(float32Data: Float32Array): void {
+    this.writeCaptureRing(float32Data);
     if (!this.workletNode) return;
     // Sanitize: clamp and replace NaN/Infinity to prevent biquad instability
     for (let i = 0; i < float32Data.length; i++) {
@@ -336,6 +332,10 @@ export class AudioEngine {
    * Push stereo Float32 audio data from client-side demodulator (e.g., WFM stereo)
    */
   pushStereoAudio(left: Float32Array, right: Float32Array): void {
+    // Capture mono downmix (L+R)*0.5 into the capture ring
+    const mono = new Float32Array(left.length);
+    for (let i = 0; i < left.length; i++) mono[i] = (left[i] + right[i]) * 0.5;
+    this.writeCaptureRing(mono);
     if (!this.workletNode) return;
     // Sanitize both channels
     for (let i = 0; i < left.length; i++) {
@@ -357,29 +357,41 @@ export class AudioEngine {
    * Reset the audio buffer (call on frequency/mode change to flush stale data)
    */
   resetBuffer(): void {
+    // Flush the capture ring so identify doesn't see audio from the old frequency
+    this.capturePos = 0;
+    this.captureLen = 0;
     if (this.workletNode) {
       this.workletNode.port.postMessage('reset');
     }
   }
 
   /**
-   * Capture the last `secs` seconds of audio from the worklet ring buffer.
-   * Returns a mono Float32Array at 48kHz, or null if worklet is not ready.
+   * Capture the last `secs` seconds of audio from the standalone ring buffer.
+   * Works regardless of whether the Web Audio context / worklet is active.
+   * Returns a mono Float32Array at 48kHz, or null if nothing has been buffered yet.
    */
   captureAudio(secs = 10): Promise<Float32Array | null> {
-    return new Promise((resolve) => {
-      if (!this.workletNode) { resolve(null); return; }
-      const handler = (e: MessageEvent) => {
-        if (e.data?.cmd === 'captureResult') {
-          this.workletNode!.port.removeEventListener('message', handler);
-          resolve(e.data.data as Float32Array);
-        }
-      };
-      this.workletNode.port.addEventListener('message', handler);
-      this.workletNode.port.postMessage({ cmd: 'capture', secs });
-      // Timeout safety
-      setTimeout(() => { this.workletNode?.port.removeEventListener('message', handler); resolve(null); }, 2000);
-    });
+    const cap = AudioEngine.CAPTURE_CAP;
+    const want = Math.min(secs * 48000, this.captureLen, cap);
+    if (want === 0) return Promise.resolve(null);
+    const out = new Float32Array(want);
+    const startPos = (this.capturePos - want + cap) % cap;
+    for (let i = 0; i < want; i++) {
+      out[i] = this.captureRing[(startPos + i) % cap];
+    }
+    return Promise.resolve(out);
+  }
+
+  /** Write mono samples into the standalone capture ring. */
+  private writeCaptureRing(samples: Float32Array): void {
+    const cap = AudioEngine.CAPTURE_CAP;
+    for (let i = 0; i < samples.length; i++) {
+      this.captureRing[this.capturePos] = samples[i];
+      this.capturePos = (this.capturePos + 1) % cap;
+    }
+    if (this.captureLen < cap) {
+      this.captureLen = Math.min(this.captureLen + samples.length, cap);
+    }
   }
 
   /**

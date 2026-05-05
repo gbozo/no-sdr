@@ -47,8 +47,8 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		r.Get("/capabilities", capabilitiesHandler(cfg))
 		r.Get("/bookmarks", bookmarksHandler(cfg)) // public read-only
 		// Music recognition (public — auth is handled by API key on the server side)
-		r.Get("/identify", identifyHandler(cfg))
-		r.Post("/identify", identifyHandler(cfg))
+		r.Get("/identify", identifyHandler(cfg, logger))
+		r.Post("/identify", identifyHandler(cfg, logger))
 		r.Get("/identify/status", identifyStatusHandler(cfg))
 	})
 

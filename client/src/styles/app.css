@@ -92,6 +92,10 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
   }
+  @keyframes identify-pulse {
+    0%, 100% { background-color: rgba(34, 197, 94, 0.10); }
+    50%       { background-color: rgba(34, 197, 94, 0.60); }
+  }
 }
 
 /* ---- Dynamic Theme Variables ---- */
@@ -122,6 +126,11 @@
 }
 
 /* ---- Component Styles ---- */
+
+.identify-capturing {
+  border-radius: 2px;
+  animation: identify-pulse 1s ease-in-out infinite;
+}
 @layer components {
   /* SDR Panel */
   .sdr-panel {

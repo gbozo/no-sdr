@@ -120,13 +120,14 @@ func main() {
 	api.RecordStopFunc  = dongleMgr.Recorder.Stop
 	api.RecordStatusFunc = func() any { return dongleMgr.Recorder.Status() }
 
-	// Music recognition: PCM capture from Opus pipeline + token issuance
+	// Music recognition: PCM is now snapshotted at token-issue time (handleIdentifyStart),
+	// so GetOpusPCMFunc is no longer needed at POST time. Kept for compatibility.
 	api.GetOpusPCMFunc = dongleMgr.CapturePCMForClient
-	dongleMgr.SetIssueIdentifyTokenFunc(func(connClientID, persistentID string) struct {
+	dongleMgr.SetIssueIdentifyTokenFunc(func(connClientID, persistentID string, pcmSnapshot []float32) struct {
 		Token string
 		Err   string
 	} {
-		r := api.IssueIdentifyToken(connClientID, persistentID)
+		r := api.IssueIdentifyToken(connClientID, persistentID, pcmSnapshot)
 		return struct {
 			Token string
 			Err   string

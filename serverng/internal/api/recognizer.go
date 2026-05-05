@@ -172,12 +172,20 @@ func recognizeAudD(apiKey string, wav []byte) (*RecognizeResult, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("audd HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
 	var ar auddResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
 		return nil, fmt.Errorf("audd decode: %w", err)
 	}
-	if ar.Status != "success" || ar.Result == nil {
-		return nil, nil // no match
+	if ar.Status != "success" {
+		return nil, fmt.Errorf("audd error status: %q (result nil: %v)", ar.Status, ar.Result == nil)
+	}
+	if ar.Result == nil {
+		return nil, nil // success but no match
 	}
 	s := ar.Result
 	res := &RecognizeResult{
@@ -268,8 +276,11 @@ func recognizeACRCloud(host, accessKey, accessSecret string, wav []byte) (*Recog
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
 		return nil, fmt.Errorf("acrcloud decode: %w", err)
 	}
-	if ar.Status.Code != 0 || ar.Metadata == nil || len(ar.Metadata.Music) == 0 {
-		return nil, nil // no match or error
+	if ar.Status.Code != 0 {
+		return nil, fmt.Errorf("acrcloud status %d: %s", ar.Status.Code, ar.Status.Msg)
+	}
+	if ar.Metadata == nil || len(ar.Metadata.Music) == 0 {
+		return nil, nil // success but no match
 	}
 	s := ar.Metadata.Music[0]
 	artist := ""

@@ -2369,6 +2369,33 @@ const IdentifyPanel: Component = () => {
   const state = () => store.identifyState();
   const result = () => store.identifyResult();
 
+  // Reactive boolean — true while the ADPCM/none ring buffer is still filling.
+  // Uses a 250ms tick so the button re-enables promptly when the cooldown expires.
+  const [now, setNow] = createSignal(Date.now());
+  let tickTimer: ReturnType<typeof setInterval> | undefined;
+
+  createEffect(() => {
+    const readyAt = store.identifyReadyAt();
+    if (readyAt > Date.now()) {
+      if (!tickTimer) {
+        tickTimer = setInterval(() => {
+          setNow(Date.now());
+          if (Date.now() >= store.identifyReadyAt() && tickTimer) {
+            clearInterval(tickTimer);
+            tickTimer = undefined;
+          }
+        }, 250);
+      }
+    }
+  });
+
+  onCleanup(() => { if (tickTimer) clearInterval(tickTimer); });
+
+  const busy    = () => state() === 'capturing' || state() === 'querying';
+  const warming = () => now() < store.identifyReadyAt();
+  const disabled = () => busy() || warming();
+  const ready   = () => !disabled();
+
   const label = () => {
     switch (state()) {
       case 'capturing': return 'Capturing...';
@@ -2376,8 +2403,6 @@ const IdentifyPanel: Component = () => {
       default: return 'Identify Song';
     }
   };
-
-  const busy = () => state() === 'capturing' || state() === 'querying';
 
   return (
     <div class="sdr-panel">
@@ -2392,12 +2417,19 @@ const IdentifyPanel: Component = () => {
       <div class="p-3 space-y-2">
         {/* Identify button */}
         <button
-          class={`mil-btn w-full ${busy() ? '' : ''}`}
-          disabled={busy()}
+          class="mil-btn w-full"
+          disabled={disabled()}
           onClick={() => engine.identify()}
         >
-          {/* Waveform icon */}
-          <svg class="w-3 h-3 mr-1.5 inline-block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          {/* Waveform icon — pulses while capturing/querying, steady glow when ready, dim while warming */}
+          <svg
+            class={`w-3 h-3 mr-1.5 inline-block rounded-sm ${busy() ? 'identify-capturing' : 'transition-all duration-500'}`}
+            style={!busy() && ready() ? {
+              color: 'var(--sdr-accent)',
+              filter: 'drop-shadow(0 0 4px var(--sdr-accent))',
+            } : {}}
+            viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+          >
             <path d="M1 8h2M4 5v6M7 3v10M10 5v6M13 8h2" />
           </svg>
           {label()}
@@ -2408,7 +2440,9 @@ const IdentifyPanel: Component = () => {
           <Show when={result()?.match}
             fallback={
               <div class="text-[9px] font-mono text-text-dim text-center py-1">
-                {state() === 'error' ? 'Error — check server logs' : 'No match found'}
+                {state() === 'error'
+                  ? (result()?.error ?? 'Recognition failed')
+                  : 'No match found'}
               </div>
             }
           >

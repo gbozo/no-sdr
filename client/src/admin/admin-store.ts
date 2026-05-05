@@ -9,7 +9,8 @@ export type AdminSection =
   | 'devices'
   | 'bookmarks'
   | 'features'
-  | 'monitor';
+  | 'monitor'
+  | 'identify';
 
 // ---- Dongle & Profile Types (matches Go backend) ----
 export interface SourceConfig {
@@ -92,6 +93,11 @@ export interface ServerConfig {
   fftHistoryCompression: string;
   allowedFftCodecs: string[];
   allowedIqCodecs: string[];
+  // Music identification
+  auddApiKey: string;
+  acrcloudHost: string;
+  acrcloudAccessKey: string;
+  acrcloudAccessSecret: string;
 }
 
 const DEFAULT_SERVER_CONFIG: ServerConfig = {
@@ -106,6 +112,10 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   fftHistoryCompression: 'deflate',
   allowedFftCodecs: ['none', 'adpcm', 'deflate', 'deflate-floor'],
   allowedIqCodecs: ['none', 'adpcm', 'opus', 'opus-hq'],
+  auddApiKey: '',
+  acrcloudHost: '',
+  acrcloudAccessKey: '',
+  acrcloudAccessSecret: '',
 };
 
 function createAdminStore() {

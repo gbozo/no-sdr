@@ -968,6 +968,8 @@ export class SdrEngine {
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
         store.setTuningStep(meta.tuningStep ?? 0);
+        // Center frequency changed server-side — arm identify cooldown for ADPCM/none.
+        this.armIdentifyCooldown();
         if (meta.iqSampleRate) {
           store.setIqSampleRate(meta.iqSampleRate);
           // Tell demodulator the actual IQ sample rate from server
@@ -1055,6 +1057,8 @@ export class SdrEngine {
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
         store.setTuningStep(meta.tuningStep ?? 0);
+        // Profile/center frequency changed — arm identify cooldown for ADPCM/none.
+        this.armIdentifyCooldown();
         if (meta.iqSampleRate) {
           store.setIqSampleRate(meta.iqSampleRate);
         }
@@ -1381,6 +1385,9 @@ export class SdrEngine {
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'tune', offset: offsetHz });
     this.updateMediaSession();
+    // Arm the identify cooldown for ADPCM/none — the client ring buffer was just
+    // flushed and needs 10s to refill before recognition is reliable.
+    this.armIdentifyCooldown();
   }
 
   setMode(mode: string): void {
@@ -2101,29 +2108,43 @@ export class SdrEngine {
 
       if (!isOpus) {
         if (!pcm || pcm.length === 0) {
+          console.warn('[Identify] no PCM captured from worklet — captureLen likely 0');
           store.setIdentifyState('error');
-          store.setIdentifyResult({ match: false });
+          store.setIdentifyResult({ match: false, error: 'No audio captured' });
           return;
         }
+        console.log('[Identify] captured PCM samples:', pcm.length, `(${(pcm.length / 48000).toFixed(1)}s)`);
         const wav = this.pcmToWav(pcm, 48000);
+        console.log('[Identify] WAV bytes:', wav.byteLength);
         form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
       }
 
+      console.log('[Identify] POSTing to /api/identify, isOpus:', isOpus);
       const response = await fetch('/api/identify', {
         method: 'POST',
         credentials: 'same-origin',
         body: form,
       });
 
+      console.log('[Identify] response status:', response.status);
+      const responseText = await response.text();
+      console.log('[Identify] response body:', responseText);
+
       if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-        console.error('[Identify]', err);
+        let err: { error?: string } = { error: `HTTP ${response.status}` };
+        try { err = JSON.parse(responseText); } catch {}
         store.setIdentifyState('error');
-        store.setIdentifyResult({ match: false });
+        store.setIdentifyResult({ match: false, error: err?.error ?? `HTTP ${response.status}` });
         return;
       }
 
-      const data = await response.json();
+      let data: any = {};
+      try { data = JSON.parse(responseText); } catch {
+        console.error('[Identify] failed to parse response JSON');
+        store.setIdentifyState('error');
+        store.setIdentifyResult({ match: false, error: 'Invalid server response' });
+        return;
+      }
       store.setIdentifyState('done');
       if (data.match && data.result) {
         store.setIdentifyResult({
@@ -2142,12 +2163,24 @@ export class SdrEngine {
     } catch (e) {
       console.error('[Identify] error:', e);
       store.setIdentifyState('error');
-      store.setIdentifyResult({ match: false });
+      store.setIdentifyResult({ match: false, error: e instanceof Error ? e.message : 'Network error' });
     }
   }
 
   // Resolve callback for pending identify token — set by identify(), called by handleMetaMessage
   private identifyTokenResolve: ((token: string) => void) | null = null;
+
+  /**
+   * Arms a 10-second identify cooldown for ADPCM and none codecs.
+   * On these paths the client-side ring buffer was just flushed (frequency change)
+   * and needs to refill before 10s of clean audio is available for recognition.
+   * Opus is exempt — the server-side ring is independent of client tuning.
+   */
+  private armIdentifyCooldown(): void {
+    const codec = store.iqCodec();
+    if (codec === 'opus' || codec === 'opus-hq') return;
+    store.setIdentifyReadyAt(Date.now() + 5_000);
+  }
 
   /** Encode a Float32 mono 48kHz PCM array to a minimal WAV ArrayBuffer. */
   private pcmToWav(pcm: Float32Array, sampleRate: number): ArrayBuffer {

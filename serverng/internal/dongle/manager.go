@@ -1200,13 +1200,16 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 
 // issueIdentifyTokenFunc is set by main.go to api.IssueIdentifyToken.
 // Using a function var avoids a circular import between dongle and api packages.
-// Signature: (connClientID, persistentID string) -> IssueResult
-var issueIdentifyTokenFunc func(connClientID, persistentID string) struct {
+// Signature: (connClientID, persistentID string, pcmSnapshot []float32) -> IssueResult
+var issueIdentifyTokenFunc func(connClientID, persistentID string, pcmSnapshot []float32) struct {
 	Token string
 	Err   string
 }
 
 // handleIdentifyStart issues a one-time recognition token for the client.
+// The server-side PCM ring buffer is snapshotted immediately (at button-press time)
+// so the recognition uses the audio the user was hearing, not whatever fills the
+// ring buffer after the WS+HTTP round-trip completes.
 // On success, sends the token back via WS. On failure (pending / rate limit),
 // sends a toast error message so the client can display it.
 func (m *Manager) handleIdentifyStart(clientID string) {
@@ -1219,7 +1222,13 @@ func (m *Manager) handleIdentifyStart(clientID string) {
 		persistentID = client.PersistentID
 	}
 
-	result := issueIdentifyTokenFunc(clientID, persistentID)
+	// Snapshot the PCM ring buffer now, at the moment the user pressed Identify.
+	// CapturePCMForClient returns nil for non-Opus clients; that's fine — those
+	// clients will upload a WAV file with the POST instead.
+	// 10 seconds matches identifyCaptureSecs in the api package.
+	pcmSnapshot := m.CapturePCMForClient(clientID, 10)
+
+	result := issueIdentifyTokenFunc(clientID, persistentID, pcmSnapshot)
 	if result.Err != "" {
 		// Send toast error back to this client only
 		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
@@ -1236,7 +1245,7 @@ func (m *Manager) handleIdentifyStart(clientID string) {
 }
 
 // SetIssueIdentifyTokenFunc wires the token issuance function (called by main.go).
-func (m *Manager) SetIssueIdentifyTokenFunc(fn func(connClientID, persistentID string) struct {
+func (m *Manager) SetIssueIdentifyTokenFunc(fn func(connClientID, persistentID string, pcmSnapshot []float32) struct {
 	Token string
 	Err   string
 }) {
