@@ -15,6 +15,11 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,woff2}'],
         navigateFallbackDenylist: [/^\/api/, /^\/ws/],
         disableDevLogs: true,
+        // Take over immediately on update — don't wait for all tabs to close.
+        // Combined with the _headers no-cache rules for index.html/sw.js this
+        // ensures users see the new version on next hard-refresh or tab open.
+        skipWaiting: true,
+        clientsClaim: true,
       },
       // Web app manifest
       manifest: {

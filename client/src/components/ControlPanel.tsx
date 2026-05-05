@@ -23,11 +23,11 @@ const ControlPanel: Component = () => {
       {/* Dongle & Profile Selector */}
       <DongleProfileSelector />
 
-      {/* Music Identification */}
-      <IdentifyPanel />
-
       {/* Mode Selector */}
       <ModeSelector />
+
+      {/* Music Identification */}
+      <IdentifyPanel />
 
       {/* Audio Controls */}
       <AudioControls />

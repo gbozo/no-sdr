@@ -65,6 +65,43 @@ const FrequencyDisplay: Component = () => {
     engine_tune_raw(delta);
   };
 
+  // Touch-to-tune: swipe up on a digit group tunes up, swipe down tunes down.
+  // Accumulates sub-step movement so a short swipe moves 1 step.
+  const touchTuneStart: Map<number, { y: number; groupIndex: number }> = new Map();
+
+  const handleDigitTouchStart = (groupIndex: number, e: TouchEvent) => {
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      touchTuneStart.set(t.identifier, { y: t.clientY, groupIndex });
+    }
+  };
+
+  const handleDigitTouchMove = (groupIndex: number, e: TouchEvent) => {
+    e.preventDefault();
+    const groups = digitGroups();
+    const totalGroups = groups.length;
+    const step = Math.pow(10, 3 * (totalGroups - 1 - groupIndex));
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      const start = touchTuneStart.get(t.identifier);
+      if (!start || start.groupIndex !== groupIndex) continue;
+      const dy = start.y - t.clientY; // positive = swiped up = tune up
+      // 40px per step — feels natural on mobile
+      const steps = Math.trunc(dy / 40);
+      if (steps !== 0) {
+        engine_tune_raw(steps * step);
+        touchTuneStart.set(t.identifier, { y: t.clientY, groupIndex });
+      }
+    }
+  };
+
+  const handleDigitTouchEnd = (e: TouchEvent) => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      touchTuneStart.delete(e.changedTouches[i].identifier);
+    }
+  };
+
   // Keyboard handler: left/right = step, up/down = 10x step
   const handleKeyDown = (e: KeyboardEvent) => {
     // Don't handle if user is typing in an input/select/textarea
@@ -143,9 +180,12 @@ const FrequencyDisplay: Component = () => {
               <>
                 <span
                   class="cursor-ns-resize hover:text-white transition-colors duration-100
-                         inline-block"
+                         inline-block touch-none"
                   style={{ "text-shadow": '0 0 8px var(--sdr-accent-dim)' }}
                   onWheel={(e) => handleWheel(i(), e)}
+                  onTouchStart={(e) => handleDigitTouchStart(i(), e)}
+                  onTouchMove={(e) => handleDigitTouchMove(i(), e)}
+                  onTouchEnd={handleDigitTouchEnd}
                 >
                   {group}
                 </span>

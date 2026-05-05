@@ -324,6 +324,100 @@ const timer = setInterval(() => {
     }
   };
 
+  // ---- Touch handlers ----
+  // Spectrum: 1-finger pan, 2-finger pinch-to-zoom
+  // Waterfall: 1-finger pan
+
+  let touchPanAnchor: number | null = null;       // last touch X (0-1) for 1-finger pan
+  let touchPinchDist: number | null = null;       // last pinch distance in px
+  let touchPinchMid:  number | null = null;       // last pinch midpoint (0-1)
+
+  const touchRelX = (t: Touch, el: HTMLElement): number => {
+    const r = el.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (t.clientX - r.left) / r.width));
+  };
+
+  const pinchDist = (t0: Touch, t1: Touch) =>
+    Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+
+  const handleSpectrumTouchStart = (e: TouchEvent) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      touchPanAnchor = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
+      touchPinchDist = null;
+      touchPinchMid  = null;
+      engine.beginWaterfallPan();
+    } else if (e.touches.length === 2) {
+      touchPanAnchor = null;
+      touchPinchDist = pinchDist(e.touches[0], e.touches[1]);
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      touchPinchMid = ((e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left) / r.width;
+    }
+  };
+
+  const handleSpectrumTouchMove = (e: TouchEvent) => {
+    e.preventDefault();
+    const [zs, ze] = store.spectrumZoom();
+    const span = ze - zs;
+    if (e.touches.length === 1 && touchPanAnchor !== null) {
+      const rx = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
+      pan((touchPanAnchor - rx) * span);
+      touchPanAnchor = rx;
+      engine.drawWaterfallPan();
+    } else if (e.touches.length === 2 && touchPinchDist !== null && touchPinchMid !== null) {
+      const newDist = pinchDist(e.touches[0], e.touches[1]);
+      const scale = touchPinchDist / newDist; // >1 = zoom out, <1 = zoom in
+      touchPinchDist = newDist;
+      const newSpan = Math.min(1, Math.max(0.005, span * scale));
+      const pivot = touchPinchMid;
+      const pivotFrac = zs + pivot * span;
+      let ns = pivotFrac - pivot * newSpan;
+      let ne = ns + newSpan;
+      if (ns < 0) { ne -= ns; ns = 0; }
+      if (ne > 1) { ns -= (ne - 1); ne = 1; }
+      ns = Math.max(0, ns); ne = Math.min(1, ne);
+      if (Math.abs(ne - ns - newSpan) < 0.001) engine.setSpectrumZoom(ns, ne);
+    }
+  };
+
+  const handleSpectrumTouchEnd = (e: TouchEvent) => {
+    if (e.touches.length === 0) {
+      touchPanAnchor = null;
+      touchPinchDist = null;
+      touchPinchMid  = null;
+      engine.endWaterfallPan();
+    } else if (e.touches.length === 1) {
+      // Lifted one finger during pinch → switch to pan
+      touchPinchDist = null;
+      touchPinchMid  = null;
+      touchPanAnchor = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
+    }
+  };
+
+  const handleWaterfallTouchStart = (e: TouchEvent) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      touchPanAnchor = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
+      engine.beginWaterfallPan();
+    }
+  };
+
+  const handleWaterfallTouchMove = (e: TouchEvent) => {
+    e.preventDefault();
+    if (e.touches.length !== 1 || touchPanAnchor === null) return;
+    const [zs, ze] = store.spectrumZoom();
+    const span = ze - zs;
+    const rx = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
+    pan((touchPanAnchor - rx) * span);
+    touchPanAnchor = rx;
+    engine.drawWaterfallPan();
+  };
+
+  const handleWaterfallTouchEnd = () => {
+    touchPanAnchor = null;
+    engine.endWaterfallPan();
+  };
+
   // ---- Toolbar helpers ----
 
   const btnClass = (active: boolean) =>
@@ -382,6 +476,9 @@ const timer = setInterval(() => {
           onMouseLeave={handleMouseLeave}
           onDblClick={handleSpectrumDblClick}
           onWheel={handleSpectrumWheel}
+          onTouchStart={handleSpectrumTouchStart}
+          onTouchMove={handleSpectrumTouchMove}
+          onTouchEnd={handleSpectrumTouchEnd}
         />
 
         {/* Range-select drag overlay */}
@@ -502,6 +599,9 @@ const timer = setInterval(() => {
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}
           onWheel={handleWaterfallWheel}
+          onTouchStart={handleWaterfallTouchStart}
+          onTouchMove={handleWaterfallTouchMove}
+          onTouchEnd={handleWaterfallTouchEnd}
         />
         {/* <div class="sdr-scanlines" /> */}
         <RdsOverlay />

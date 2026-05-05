@@ -2108,27 +2108,21 @@ export class SdrEngine {
 
       if (!isOpus) {
         if (!pcm || pcm.length === 0) {
-          console.warn('[Identify] no PCM captured from worklet — captureLen likely 0');
           store.setIdentifyState('error');
           store.setIdentifyResult({ match: false, error: 'No audio captured' });
           return;
         }
-        console.log('[Identify] captured PCM samples:', pcm.length, `(${(pcm.length / 48000).toFixed(1)}s)`);
         const wav = this.pcmToWav(pcm, 48000);
-        console.log('[Identify] WAV bytes:', wav.byteLength);
         form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
       }
 
-      console.log('[Identify] POSTing to /api/identify, isOpus:', isOpus);
       const response = await fetch('/api/identify', {
         method: 'POST',
         credentials: 'same-origin',
         body: form,
       });
 
-      console.log('[Identify] response status:', response.status);
       const responseText = await response.text();
-      console.log('[Identify] response body:', responseText);
 
       if (!response.ok) {
         let err: { error?: string } = { error: `HTTP ${response.status}` };

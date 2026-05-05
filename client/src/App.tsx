@@ -41,6 +41,62 @@ const App: Component = () => {
     // Apply UI theme
     document.documentElement.setAttribute('data-theme', store.uiTheme());
 
+    // ---- Service Worker update detection ----
+    // When skipWaiting activates a new SW, the browser fires 'controllerchange'.
+    // Show a toast so the user knows to reload for the latest version.
+    let swUpdatePending = false;
+    const onControllerChange = () => {
+      if (swUpdatePending) return; // only toast once
+      swUpdatePending = true;
+      store.addToast('New version available — reload to update', 'sw_update');
+    };
+    navigator.serviceWorker?.addEventListener('controllerchange', onControllerChange);
+
+    // ---- Screen Wake Lock ----
+    // Keeps the screen on while the SDR is active.
+    // Strategy 1: Screen Wake Lock API (Chrome, Edge, Firefox 126+)
+    // Strategy 2: hidden silent looping <video> (Safari / iOS fallback)
+    let wakeLock: WakeLockSentinel | null = null;
+    let wakeVideo: HTMLVideoElement | null = null;
+
+    const acquireWakeLock = async () => {
+      // Try Wake Lock API first
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+          return;
+        } catch {
+          // API exists but denied (e.g. battery saver) — fall through to video
+        }
+      }
+      // Safari / iOS fallback: a silent, invisible, looping video keeps the screen awake
+      if (!wakeVideo) {
+        wakeVideo = document.createElement('video');
+        wakeVideo.setAttribute('loop', '');
+        wakeVideo.setAttribute('playsinline', '');
+        wakeVideo.setAttribute('muted', '');
+        wakeVideo.muted = true;
+        wakeVideo.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';
+        // 1-second transparent MP4 encoded as a data URI — smallest valid H.264 stream
+        wakeVideo.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAA1FtZGF0AAACrgYF//+q3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NCByMzA5NSBiYWViNzIxIC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyMyAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTEgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiBwcmVmcmFtZXM9MyByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yOC4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAABZWWIhAAV//73iB8yy4bkVKIJTUwLmVUILqBZ5gIAAAMABAAAAwCCRgCH4AAABG8vFhcJISjpI/bQAAAABMMAACNhAAAAA0AAAQEAAAABQwAAAQEAAAABgAAAAQEAAAABuAAAAQEAAAABuAAAAQEAAAABzAAAAQEAAAABzAAAAQEAAAACgAAAAQEAAAACqAAAAQEAAAACqAAAAQEAAAAC4AAAAQEAAAAC4AAAAQEAAAADMAAAAQEAAAADMAAAAQEAAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgAAAEAAAABASgA';
+        document.body.appendChild(wakeVideo);
+      }
+      wakeVideo.play().catch(() => {}); // may fail until user interacts
+    };
+
+    const releaseWakeLock = () => {
+      wakeLock?.release().catch(() => {});
+      wakeLock = null;
+      wakeVideo?.pause();
+    };
+
+    // Acquire on mount; re-acquire after visibility change (lock is auto-released when tab hides)
+    acquireWakeLock();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') acquireWakeLock();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     // Capture PWA install prompt — do not call preventDefault() so Chrome
     // doesn't log the "Banner not shown" DevTools message. Modern Chrome (105+)
     // no longer auto-shows the mini-infobar so deferring is not required.
@@ -60,8 +116,15 @@ const App: Component = () => {
 
     onCleanup(() => {
       engine.destroy();
+      releaseWakeLock();
+      document.removeEventListener('visibilitychange', onVisibility);
+      navigator.serviceWorker?.removeEventListener('controllerchange', onControllerChange);
       window.removeEventListener('beforeinstallprompt', onBeforeInstall);
       window.removeEventListener('appinstalled', onAppInstalled);
+      if (wakeVideo) {
+        wakeVideo.remove();
+        wakeVideo = null;
+      }
     });
   });
 
