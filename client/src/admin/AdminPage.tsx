@@ -212,9 +212,9 @@ const SectionContent: Component = () => {
           case 'general': return <GeneralSection />;
           case 'devices': return <DevicesSection />;
           case 'bookmarks': return <BookmarksSection />;
+          case 'identify': return <IdentifySection />;
           case 'features': return <FeaturesSection />;
           case 'monitor': return <MonitorSection />;
-          case 'identify': return <IdentifySection />;
           default: return <GeneralSection />;
         }
       })()}

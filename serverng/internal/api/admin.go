@@ -783,6 +783,7 @@ func serverConfigHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 			"fftHistoryCompression": cfg.Server.FftHistoryCompression,
 			"allowedFftCodecs":      cfg.Server.AllowedFftCodecs,
 			"allowedIqCodecs":       cfg.Server.AllowedIqCodecs,
+			"opusComplexity":        cfg.Server.OpusComplexity,
 			// Music identification API keys (never exposed in public meta, admin only)
 			"auddApiKey":           cfg.Server.AuddAPIKey,
 			"acrcloudHost":         cfg.Server.ACRCloudHost,
@@ -808,6 +809,7 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			FftHistoryCompression *string  `json:"fftHistoryCompression"`
 			AllowedFftCodecs      []string `json:"allowedFftCodecs"`
 			AllowedIqCodecs       []string `json:"allowedIqCodecs"`
+			OpusComplexity        *int     `json:"opusComplexity"`
 			// Music identification
 			AuddAPIKey           *string `json:"auddApiKey"`
 			ACRCloudHost         *string `json:"acrcloudHost"`
@@ -856,6 +858,15 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			if SetAllowedCodecsFunc != nil {
 				SetAllowedCodecsFunc(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
 			}
+		}
+		if body.OpusComplexity != nil {
+			c := *body.OpusComplexity
+			if c < 0 {
+				c = 0
+			} else if c > 10 {
+				c = 10
+			}
+			cfg.Server.OpusComplexity = c
 		}
 		// Music identification API keys
 		if body.AuddAPIKey != nil {

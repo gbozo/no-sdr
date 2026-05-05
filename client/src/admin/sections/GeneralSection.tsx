@@ -7,7 +7,7 @@ import { adminStore } from '../admin-store';
 
 // All available codecs for checkboxes
 const ALL_FFT_CODECS = ['none', 'adpcm', 'deflate', 'deflate-floor'];
-const ALL_IQ_CODECS = ['none', 'adpcm', 'opus', 'opus-hq'];
+const ALL_IQ_CODECS = ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'];
 
 const GeneralSection: Component = () => {
   const cfg = () => adminStore.serverConfig();
@@ -80,7 +80,7 @@ const GeneralSection: Component = () => {
           </SettingsGroup>
 
           {/* DSP / History */}
-          <SettingsGroup title="DSP & History" description="FFT history and signal processing settings">
+          <SettingsGroup title="DSP & History" description="FFT history, signal processing, and Opus codec settings">
             <FieldRow label="History FFT Size" help="FFT bin count for waterfall history buffer">
               <SelectInput
                 value={String(cfg().fftHistoryFftSize)}
@@ -104,6 +104,28 @@ const GeneralSection: Component = () => {
                   { value: 'adpcm', label: 'ADPCM' },
                 ]}
               />
+            </FieldRow>
+            <FieldRow label="Opus Complexity" help="Encoder CPU vs quality trade-off (0=fastest, 10=best). Default 5 is transparent for radio audio at ≤64kbps.">
+              <div class="flex items-center gap-3">
+                <SelectInput
+                  value={String(cfg().opusComplexity)}
+                  onChange={(v) => adminStore.updateServerConfigField('opusComplexity', parseInt(v))}
+                  options={[
+                    { value: '0', label: '0 — Fastest' },
+                    { value: '1', label: '1' },
+                    { value: '2', label: '2' },
+                    { value: '3', label: '3' },
+                    { value: '4', label: '4' },
+                    { value: '5', label: '5 — Default' },
+                    { value: '6', label: '6' },
+                    { value: '7', label: '7' },
+                    { value: '8', label: '8' },
+                    { value: '9', label: '9' },
+                    { value: '10', label: '10 — Best' },
+                  ]}
+                />
+                <span class="text-[9px] font-mono text-text-dim">Takes effect on next client connect</span>
+              </div>
             </FieldRow>
             <FieldRow label="Demo Mode" help="Use simulated signals (no hardware required)">
               <ToggleInput
@@ -184,6 +206,7 @@ const PasswordInput: Component<{ value: string; onChange: (v: string) => void; p
     value={props.value}
     onInput={(e) => props.onChange(e.currentTarget.value)}
     placeholder={props.placeholder}
+    autocomplete="new-password"
     class="w-full px-3 py-1.5 bg-sdr-base border border-border rounded-sm
            text-xs font-mono text-text-primary placeholder-text-dim
            focus:outline-none focus:border-cyan transition-colors"

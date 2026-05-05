@@ -1001,7 +1001,7 @@ export class SdrEngine {
          // Send stereo_enabled BEFORE codec: the server stores it at the clientPipeline level
          // so when codec creates the Opus pipeline it already uses the correct stereo preference.
          // This prevents the first packets from being stereo when stereoEnabled=false.
-         if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
+         if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo') {
            this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
          }
          this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
@@ -1406,7 +1406,7 @@ export class SdrEngine {
     // Clear stereo indicator — the new mode may be mono
     store.setStereoDetected(false);
     // For Opus codec path, clear RDS when leaving WFM (server won't send MSG_RDS for other modes)
-    if ((store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') && m !== 'wfm') {
+    if ((store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo') && m !== 'wfm') {
       store.setRdsPs('');
       store.setRdsRt('');
       store.setRdsPty('');
@@ -1500,7 +1500,7 @@ export class SdrEngine {
   setStereoEnabled(enabled: boolean): void {
     store.setStereoEnabled(enabled);
     // For Opus path: tell server to enable/disable stereo demod
-    if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
+    if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo') {
       this.send({ cmd: 'stereo_enabled', enabled });
     }
     // For IQ path: inform the local FM demodulator
@@ -1703,7 +1703,7 @@ export class SdrEngine {
     // the "chipmunk + silence" glitch.
     this.send({ cmd: 'codec', iqCodec: codec as IqCodecType });
     // When switching to Opus, sync stereo preference to server
-    if (codec === 'opus' || codec === 'opus-hq') {
+    if (codec === 'opus' || codec === 'opus-hq' || codec === 'opus-lo') {
       this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
     }
   }
@@ -2091,7 +2091,7 @@ export class SdrEngine {
 
       // Capture audio and wait for token in parallel
       const codec = store.iqCodec();
-      const isOpus = codec === 'opus' || codec === 'opus-hq';
+      const isOpus = codec === 'opus' || codec === 'opus-hq' || codec === 'opus-lo';
 
       // Start audio capture immediately — runs in parallel with token fetch
       const capturePromise = isOpus
@@ -2172,7 +2172,7 @@ export class SdrEngine {
    */
   private armIdentifyCooldown(): void {
     const codec = store.iqCodec();
-    if (codec === 'opus' || codec === 'opus-hq') return;
+    if (codec === 'opus' || codec === 'opus-hq' || codec === 'opus-lo') return;
     store.setIdentifyReadyAt(Date.now() + 5_000);
   }
 

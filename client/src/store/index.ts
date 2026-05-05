@@ -21,7 +21,7 @@ import type {
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
 const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate', 'deflate-floor'];
-const ALL_IQ_CODECS: IqCodecType[] = ['none', 'adpcm', 'opus', 'opus-hq'];
+const ALL_IQ_CODECS: IqCodecType[] = ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'];
 
 // ---- Bookmark type ----
 export interface Bookmark {

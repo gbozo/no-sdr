@@ -70,7 +70,7 @@ export const MSG_FFT_HISTORY = 0x0D;
 export type FftCodecType = 'none' | 'adpcm' | 'deflate' | 'deflate-floor';
 
 /** Available codecs for IQ/audio data */
-export type IqCodecType = 'none' | 'adpcm' | 'opus' | 'opus-hq';
+export type IqCodecType = 'none' | 'adpcm' | 'opus-lo' | 'opus' | 'opus-hq';
 
 /** Union for backward compatibility */
 export type CodecType = FftCodecType | IqCodecType;

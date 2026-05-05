@@ -18,6 +18,12 @@ server:
         - adpcm
         - opus
         - opus-hq
+        - opus-lo
+    opusComplexity: 0
+    auddApiKey: c63a4f2cf56674c6041b73f4feef055b
+    acrcloudHost: identify-eu-west-1.acrcloud.com
+    acrcloudAccessKey: 9233f967382c7a171794366539a2ff2b
+    acrcloudAccessSecret: TM2aWry4BU6bnnR2lxNYZMdggZp7QjuJnwybut3O
 dongles:
     - id: dongle-mooroo30
       name: Remote-GBserv
@@ -59,7 +65,7 @@ dongles:
           dongleId: ""
           preFilterNb: true
           preFilterNbThreshold: 0
-          dcOffsetRemoval: null
+          dcOffsetRemoval: true
         - id: profile-mootuxy2
           name: Aviation VHF
           centerFrequency: 127500000

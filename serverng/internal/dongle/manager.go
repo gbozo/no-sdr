@@ -68,6 +68,14 @@ type Manager struct {
 	mu sync.Mutex
 }
 
+// opusComplexity returns the configured Opus complexity, defaulting to 5.
+func (m *Manager) opusComplexity() int {
+	if m.cfg.Server.OpusComplexity > 0 {
+		return m.cfg.Server.OpusComplexity
+	}
+	return 5
+}
+
 type activeDongle struct {
 	id         string
 	profile    *config.DongleProfile
@@ -1684,8 +1692,8 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 		return
 	}
 
-	isOldOpus := oldCodec == "opus" || oldCodec == "opus-hq"
-	isNewOpus := newCodec == "opus" || newCodec == "opus-hq"
+	isOldOpus := oldCodec == "opus" || oldCodec == "opus-hq" || oldCodec == "opus-lo"
+	isNewOpus := newCodec == "opus" || newCodec == "opus-hq" || newCodec == "opus-lo"
 
 	if !isOldOpus && isNewOpus {
 		// Switching from IQ to Opus: create OpusPipeline
@@ -1715,6 +1723,7 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 			SampleRate:    cp.extractor.OutputSampleRate(),
 			Quality:       newCodec,
 			StereoEnabled: &cp.stereoEnabled,
+			Complexity:    m.opusComplexity(),
 		})
 		if err != nil {
 			m.logger.Error("failed to create opus pipeline on codec switch",
@@ -1863,13 +1872,14 @@ func (m *Manager) createClientPipeline(clientID string) {
 		cp.extractor.SetNbThreshold(float32(d.profile.PreFilterNbThreshold))
 	}
 
-	// Create Opus pipeline if codec is opus or opus-hq
-	if iqCodec == "opus" || iqCodec == "opus-hq" {
+	// Create Opus pipeline if codec is opus, opus-hq, or opus-lo
+	if iqCodec == "opus" || iqCodec == "opus-hq" || iqCodec == "opus-lo" {
 		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
 			Mode:          mode,
 			SampleRate:    outputRate, // same as IQ extractor output (mode-based: WFM=240k, NFM=48k)
 			Quality:       iqCodec,
 			StereoEnabled: &cp.stereoEnabled,
+			Complexity:    m.opusComplexity(),
 		})
 		if err != nil {
 			m.logger.Error("failed to create opus pipeline, falling back to adpcm",

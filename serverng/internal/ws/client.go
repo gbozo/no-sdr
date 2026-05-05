@@ -30,7 +30,7 @@ type Client struct {
 	AudioEnabled   bool
 	StereoEnabled  bool
 	FftCodec       string // "none", "adpcm", "deflate"
-	IqCodec        string // "none", "adpcm", "opus", "opus-hq"
+	IqCodec        string // "none", "adpcm", "opus-lo", "opus", "opus-hq"
 	Mode           string
 	TuneOffset     int
 	Bandwidth      int
@@ -144,7 +144,7 @@ type AllowedCodecs struct {
 // defaultAllowedCodecs is used in tests and when no config is provided.
 var defaultAllowedCodecs = AllowedCodecs{
 	Fft: map[string]bool{"none": true, "adpcm": true, "deflate": true, "deflate-floor": true},
-	Iq:  map[string]bool{"none": true, "adpcm": true, "opus": true, "opus-hq": true},
+	Iq:  map[string]bool{"none": true, "adpcm": true, "opus-lo": true, "opus": true, "opus-hq": true},
 }
 
 // UpdateFromCommand applies a client command to the client's state.

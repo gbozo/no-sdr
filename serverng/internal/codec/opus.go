@@ -15,7 +15,8 @@ type OpusEncoder struct {
 	channels   int
 	sampleRate int
 	bitrate    int
-	frameSize  int     // samples per frame per channel (960 for 20ms @ 48kHz)
+	complexity int    // preserved across Reset() and SetChannels()
+	frameSize  int    // samples per frame per channel (2880 for 60ms @ 48kHz)
 	pcmBuf     []int16 // accumulation buffer
 	pcmPos     int
 	outBuf     []byte // reusable output buffer
@@ -26,6 +27,9 @@ type OpusEncoderConfig struct {
 	SampleRate int // must be 48000
 	Channels   int // 1 or 2
 	Bitrate    int // bps (e.g., 64000 for stereo, 32000 for mono)
+	// Complexity sets the encoder complexity (0=fastest, 10=best).
+	// 0 means "use default" which applies complexity=5.
+	Complexity int
 }
 
 // OpusPacket represents one encoded Opus frame.
@@ -57,14 +61,26 @@ func NewOpusEncoder(cfg OpusEncoderConfig) (*OpusEncoder, error) {
 		return nil, fmt.Errorf("opus: failed to set bitrate: %w", err)
 	}
 
-	// 20ms frame at 48kHz = 960 samples per channel
-	frameSize := 960
+	// Apply encoder complexity. Default is 5 when not set (0-value treated as default).
+	complexity := cfg.Complexity
+	if complexity <= 0 {
+		complexity = 5
+	}
+	if err := enc.SetComplexity(complexity); err != nil {
+		return nil, fmt.Errorf("opus: failed to set complexity: %w", err)
+	}
+
+	// 60ms frame at 48kHz = 2880 samples per channel.
+	// Larger frames reduce encoder call frequency by 3× vs 20ms,
+	// cutting per-frame overhead with negligible latency change for broadcast radio.
+	frameSize := 2880
 
 	e := &OpusEncoder{
 		encoder:    enc,
 		channels:   cfg.Channels,
 		sampleRate: cfg.SampleRate,
 		bitrate:    cfg.Bitrate,
+		complexity: complexity,
 		frameSize:  frameSize,
 		pcmBuf:     make([]int16, frameSize*cfg.Channels),
 		pcmPos:     0,
@@ -151,6 +167,9 @@ func (e *OpusEncoder) SetChannels(channels int) error {
 	if err := enc.SetBitrate(e.bitrate); err != nil {
 		return fmt.Errorf("opus: failed to set bitrate on new encoder: %w", err)
 	}
+	if err := enc.SetComplexity(e.complexity); err != nil {
+		return fmt.Errorf("opus: failed to set complexity on new encoder: %w", err)
+	}
 
 	e.encoder = enc
 	e.channels = channels
@@ -166,14 +185,32 @@ func (e *OpusEncoder) Reset() {
 		return
 	}
 	e.pcmPos = 0
-	// Reset encoder by recreating it
+	// Reset encoder by recreating it, preserving bitrate and complexity
 	if e.encoder != nil {
 		enc, err := opus.NewEncoder(e.sampleRate, e.channels, opus.AppAudio)
 		if err == nil {
 			_ = enc.SetBitrate(e.bitrate)
+			_ = enc.SetComplexity(e.complexity)
 			e.encoder = enc
 		}
 	}
+}
+
+// SetComplexity changes the encoding complexity (0=fastest, 10=best quality).
+// Default after NewOpusEncoder is 5. Changes take effect on the next Encode call.
+func (e *OpusEncoder) SetComplexity(complexity int) error {
+	if e == nil || e.encoder == nil {
+		return fmt.Errorf("opus: encoder not initialized")
+	}
+	if complexity < 0 {
+		complexity = 0
+	} else if complexity > 10 {
+		complexity = 10
+	}
+	if err := e.encoder.SetComplexity(complexity); err != nil {
+		return fmt.Errorf("opus: failed to set complexity: %w", err)
+	}
+	return nil
 }
 
 // Close releases the encoder resources.

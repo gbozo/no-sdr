@@ -93,6 +93,7 @@ export interface ServerConfig {
   fftHistoryCompression: string;
   allowedFftCodecs: string[];
   allowedIqCodecs: string[];
+  opusComplexity: number;
   // Music identification
   auddApiKey: string;
   acrcloudHost: string;
@@ -111,7 +112,8 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   fftHistoryFftSize: 1024,
   fftHistoryCompression: 'deflate',
   allowedFftCodecs: ['none', 'adpcm', 'deflate', 'deflate-floor'],
-  allowedIqCodecs: ['none', 'adpcm', 'opus', 'opus-hq'],
+  allowedIqCodecs: ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'],
+  opusComplexity: 5,
   auddApiKey: '',
   acrcloudHost: '',
   acrcloudAccessKey: '',
@@ -227,6 +229,11 @@ function createAdminStore() {
           fftHistoryCompression: data.fftHistoryCompression ?? DEFAULT_SERVER_CONFIG.fftHistoryCompression,
           allowedFftCodecs: data.allowedFftCodecs ?? DEFAULT_SERVER_CONFIG.allowedFftCodecs,
           allowedIqCodecs: data.allowedIqCodecs ?? DEFAULT_SERVER_CONFIG.allowedIqCodecs,
+          opusComplexity: data.opusComplexity ?? DEFAULT_SERVER_CONFIG.opusComplexity,
+          auddApiKey: data.auddApiKey ?? '',
+          acrcloudHost: data.acrcloudHost ?? '',
+          acrcloudAccessKey: data.acrcloudAccessKey ?? '',
+          acrcloudAccessSecret: data.acrcloudAccessSecret ?? '',
         });
       }
     } catch {

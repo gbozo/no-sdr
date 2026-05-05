@@ -23,7 +23,9 @@ type OpusPipelineConfig struct {
 	SampleRate    int    // IQ extractor output rate
 	Bitrate       int    // Opus bitrate (0 = auto based on codec quality)
 	StereoEnabled *bool  // nil = default true; set false to start in mono from first frame
-	Quality       string // "opus" or "opus-hq"
+	Quality       string // "opus-lo", "opus", or "opus-hq"
+	// Complexity is the Opus encoder complexity (0–10). 0 means use server default (5).
+	Complexity    int
 }
 
 // OpusPipeline performs server-side demodulation + Opus encoding.
@@ -134,6 +136,7 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 		SampleRate: 48000,
 		Channels:   channels,
 		Bitrate:    bitrate,
+		Complexity: cfg.Complexity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("opus_pipeline: encoder creation failed: %w", err)
@@ -186,6 +189,12 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 // demodulates, and returns Opus packets ready to send.
 func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 	if len(iqInt16) < 2 {
+		return nil
+	}
+	// Guard against a Close() that ran concurrently before we were called.
+	// The encoder is the only resource freed by Close(); demodulator is also
+	// nilled there. Both are required for a meaningful result.
+	if p.encoder == nil || p.demodulator == nil {
 		return nil
 	}
 
@@ -606,15 +615,18 @@ func (p *OpusPipeline) CapturePCM(secs int) []float32 {
 }
 
 // Close releases Opus encoder resources.
+// Only the encoder (C memory) needs explicit release. The Go buffers (complexBuf,
+// audioBuf, pcmBuf, rateBuf) are intentionally left intact: a concurrent Process()
+// call may still be executing after the pipeline pointer was swapped out of
+// cp.opusPipeline under pmu. Zeroing those slices here would race with that
+// in-flight call and cause a slice-bounds panic. The GC reclaims them once the
+// last reference drops.
 func (p *OpusPipeline) Close() {
 	if p.encoder != nil {
 		p.encoder.Close()
 		p.encoder = nil
 	}
 	p.demodulator = nil
-	p.complexBuf = nil
-	p.audioBuf = nil
-	p.pcmBuf = nil
 }
 
 // Mode returns the current demodulation mode.
@@ -685,6 +697,12 @@ func bitrateForQuality(quality string, channels int) int {
 			return 192000
 		}
 		return 128000
+	case "opus-lo":
+		// Low-bandwidth tier: suits AM/NFM voice where 16k mono is transparent.
+		if channels == 2 {
+			return 32000
+		}
+		return 16000
 	default: // "opus"
 		if channels == 2 {
 			return 64000

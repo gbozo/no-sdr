@@ -527,10 +527,10 @@ const AudioControls: Component = () => {
                 : 'text-text-muted border-border bg-transparent opacity-50'
             }`}
             title={store.stereoDetected()
-              ? (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq'
+              ? (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo'
                 ? 'Server-side stereo active (Opus)'
                 : store.mode() === 'wfm' ? 'Stereo pilot detected (19 kHz)' : 'C-QUAM stereo pilot detected (25 Hz)')
-              : (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq'
+              : (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo'
                 ? 'No stereo from server'
                 : store.mode() === 'wfm' ? 'No stereo pilot' : 'No C-QUAM stereo pilot')
             }
@@ -622,7 +622,7 @@ const AudioControls: Component = () => {
         <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
           <div class="space-y-2">
             {/* Stereo threshold — only for IQ path (not Opus — server handles detection) */}
-            <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus' && store.iqCodec() !== 'opus-hq'}>
+            <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus' && store.iqCodec() !== 'opus-hq' && store.iqCodec() !== 'opus-lo'}>
               <div>
                 <div class="flex justify-between items-center mb-1">
                   <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
@@ -647,7 +647,7 @@ const AudioControls: Component = () => {
               </div>
             </Show>
             {/* Opus stereo info */}
-            <Show when={store.stereoEnabled() && (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq')}>
+            <Show when={store.stereoEnabled() && (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo')}>
               <div class="text-[7px] font-mono text-text-muted">
                 Server-side stereo decoding via Opus
               </div>
@@ -1858,6 +1858,7 @@ const CodecSettings: Component = () => {
   const allIqCodecs: { value: IqCodecType; label: string }[] = [
     { value: 'none', label: 'None' },
     { value: 'adpcm', label: 'ADPCM' },
+    { value: 'opus-lo', label: 'Opus Lo' },
     { value: 'opus', label: 'Opus' },
     { value: 'opus-hq', label: 'Opus HQ' },
   ];

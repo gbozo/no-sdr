@@ -105,18 +105,24 @@ const TextInput: Component<{ value: string; onChange: (v: string) => void; place
     value={props.value}
     onInput={(e) => props.onChange(e.currentTarget.value)}
     placeholder={props.placeholder}
+    autocomplete="off"
+    spellcheck={false}
     class="w-full px-3 py-1.5 bg-sdr-base border border-border rounded-sm
            text-xs font-mono text-text-primary placeholder-text-dim
            focus:outline-none focus:border-cyan transition-colors"
   />
 );
 
+// API keys shown as plain text with autocomplete off — no password masking,
+// no browser credential popups.
 const PasswordInput: Component<{ value: string; onChange: (v: string) => void; placeholder?: string }> = (props) => (
   <input
-    type="password"
+    type="text"
     value={props.value}
     onInput={(e) => props.onChange(e.currentTarget.value)}
     placeholder={props.placeholder}
+    autocomplete="off"
+    spellcheck={false}
     class="w-full px-3 py-1.5 bg-sdr-base border border-border rounded-sm
            text-xs font-mono text-text-primary placeholder-text-dim
            focus:outline-none focus:border-cyan transition-colors"

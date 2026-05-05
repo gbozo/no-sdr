@@ -12,6 +12,7 @@ type OpusEncoderConfig struct {
 	SampleRate int
 	Channels   int
 	Bitrate    int
+	Complexity int
 }
 
 // OpusPacket represents one encoded Opus frame.
@@ -37,6 +38,9 @@ func (e *OpusEncoder) SetChannels(channels int) error { return nil }
 
 // Reset is a no-op stub.
 func (e *OpusEncoder) Reset() {}
+
+// SetComplexity is a no-op stub.
+func (e *OpusEncoder) SetComplexity(complexity int) error { return nil }
 
 // Close is a no-op stub.
 func (e *OpusEncoder) Close() {}
