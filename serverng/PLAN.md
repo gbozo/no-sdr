@@ -1,5 +1,7 @@
 # serverng — Go Backend Architecture Plan
 
+> **Status: COMPLETE** — Implemented in v2.0.0. This document is a reference for the architecture as built.
+
 **Target:** v2.0.0  
 **Goal:** Replace Node.js server with Go for native concurrency, lower CPU, single-binary deployment (including RPi)  
 **Constraint:** Same WebSocket binary protocol, same REST API shape — client unchanged

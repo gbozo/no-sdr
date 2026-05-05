@@ -17,9 +17,11 @@ serverng/              → Go backend (chi router, WebSocket, DSP pipeline, dong
   internal/dongle/     → Dongle lifecycle: demo/rtl_tcp/rtlsdr(cgo)/airspy/hfp/rsp + Opus pipeline
   internal/config/     → YAML config loader + validation
   internal/history/    → FFT history ring buffer (waterfall backfill)
-shared/src/            → TypeScript types, binary protocol codec, ADPCM codec (zero deps)
+shared/src/            → TypeScript types, binary protocol codec, ADPCM codec (zero deps) — merged into client/src/shared/
+client/src/shared/     → Protocol constants, codec helpers, types, modes (was separate workspace)
 client/src/engine/     → DSP: demodulators, RDS, noise reduction, audio worklet, renderers
-client/src/components/ → SolidJS UI: ControlPanel, AdminModal, WaterfallDisplay, FrequencyDisplay
+client/src/components/ → SolidJS UI: ControlPanel, WaterfallDisplay, FrequencyDisplay
+client/src/admin/      → Admin page: AdminPage, admin-store, sections/
 client/src/store/      → SolidJS reactive state
 client/src/styles/     → Tailwind v4 @theme (design tokens in CSS, no JS config)
 config/config.yaml     → Dongle + profile definitions (validated by Go config package)
@@ -75,16 +77,16 @@ Dongle (uint8 IQ @ 2.4 MSPS)
 | `0x08` | FFT_ADPCM | ADPCM on Int16(dB×100) |
 | `0x0B` | FFT_DEFLATE | Int16(minDb) + Int16(maxDb) + Uint32(binCount) + deflate bytes (DEFAULT) |
 | `0x0D` | FFT_HISTORY | Waterfall history burst |
-| `0x02` | IQ | Int16Array (raw interleaved I/Q) |
-| `0x09` | IQ_ADPCM | Uint32(sampleCount) + ADPCM bytes (DEFAULT) |
+| `0x02` | IQ | Uint32(sampleRate) + Uint8(channels=2) + Uint8(reserved) + Int16 interleaved I/Q |
+| `0x09` | IQ_ADPCM | Uint32(sampleCount) + Uint32(sampleRate) + Uint8(channels=2) + Uint8(reserved) + ADPCM bytes (DEFAULT) |
 | `0x0C` | AUDIO_OPUS | Uint16(sampleCount) + Uint8(channels) + Opus packet |
 | `0x03` | META | UTF-8 JSON (ServerMeta) |
 | `0x05` | AUDIO | Int16Array mono samples |
 | `0x06` | DECODER | JSON-encoded decoder messages |
 | `0x07` | SIGNAL_LEVEL | Float32 dB value |
-| `0x0A` | RDS | UTF-8 JSON (RDS data) |
+| `0x0A` | RDS | UTF-8 JSON (RDS data: ps, rt, ptyName, pi, synced) |
 
-Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, etc.)
+Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, `stereo_enabled`, etc.)
 
 ## Build & Dev
 
@@ -163,8 +165,11 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 
 - Spectral NR (Wiener) has robotic artifacts on tonal signals — LMS ANR is the recommended alternative
 - SdrEngine client-side is a god object — rendering and audio coordination are extraction candidates
-- `opusscript` (Node.js CJS) is no longer used — replaced by Go `hraban/opus.v2` (build-tag gated)
-- The old `server/` directory (Node.js/Hono backend) has been removed; all backend is now in `serverng/`
+- Audio not re-enabled after WS reconnect — AudioWorklet state not fully restored
+
+## Active Work
+
+See [WORK.md](./WORK.md) for the current task backlog.
 
 ## graphify
 
