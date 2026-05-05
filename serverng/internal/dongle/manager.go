@@ -55,6 +55,9 @@ type Manager struct {
 	// Per-client IQ extraction pipelines
 	clientPipelines map[string]*clientPipeline
 
+	// IQ recorder (SigMF)
+	Recorder *Recorder
+
 	// getVersion returns the current config version for notifications.
 	// Set by main.go after config version is created.
 	getVersion func() uint64
@@ -121,6 +124,7 @@ func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Man
 		dongles:         make(map[string]*activeDongle),
 		dongleStates:    make(map[string]*DongleState),
 		clientPipelines: make(map[string]*clientPipeline),
+		Recorder:        NewRecorder("recordings", logger),
 	}
 
 	// Initialize state for all configured dongles.
@@ -264,8 +268,15 @@ func (m *Manager) Stop() {
 		delete(m.dongles, id)
 	}
 
-	// Clean up all client pipelines
-	for id := range m.clientPipelines {
+	// Close all client pipelines including their Opus encoders.
+	// Without this, libopus encoder memory is leaked on shutdown.
+	for id, cp := range m.clientPipelines {
+		cp.pmu.Lock()
+		if cp.opusPipeline != nil {
+			cp.opusPipeline.Close()
+			cp.opusPipeline = nil
+		}
+		cp.pmu.Unlock()
 		delete(m.clientPipelines, id)
 	}
 }
@@ -716,7 +727,7 @@ func (m *Manager) spawnRtlTcp(ctx context.Context, dcfg *config.DongleConfig) *e
 	}
 
 	// Poll for TCP port to open — rtl_tcp typically takes < 500ms.
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
@@ -943,6 +954,9 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 					iqChunk[i], iqChunk[i+1] = iqChunk[i+1], iqChunk[i]
 				}
 			}
+
+			// Feed active IQ recorder (no-op when not recording)
+			m.Recorder.WriteIQ(d.id, iqChunk)
 
 			// Per-client IQ extraction — runs BEFORE FFT
 			m.processClientIQ(d.id, iqChunk)

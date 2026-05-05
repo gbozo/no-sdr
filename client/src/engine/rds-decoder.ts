@@ -24,12 +24,22 @@ export interface RdsData {
   ct: string;                   // Clock Time (ISO-ish)
   af: number[];                 // Alternative Frequencies (MHz)
   synced: boolean;              // Block sync acquired
+  ecc: number | null;           // Extended Country Code (group 1A)
+  ptyn: string;                 // Programme Type Name 8-char (group 10A)
+  eon: EonEntry[];              // Enhanced Other Networks (group 14A)
+}
+
+export interface EonEntry {
+  pi: number;    // PI of other network
+  ps: string;    // PS name of other network (8 chars)
+  af: number[];  // AFs for the other network (MHz)
 }
 
 export function emptyRdsData(): RdsData {
   return {
     pi: null, ps: '', rt: '', pty: null, ptyName: '',
-    tp: false, ta: false, ms: false, ct: '', af: [], synced: false,
+    tp: false, ta: false, ms: false, ct: '', af: [],
+    synced: false, ecc: null, ptyn: '', eon: [],
   };
 }
 
@@ -257,6 +267,8 @@ class GroupParser {
   private psChars: string[] = Array(8).fill(' ');
   private rtChars: string[] = Array(64).fill(' ');
   private rtAbFlag = -1;
+  private ptynChars: string[] = Array(8).fill(' ');
+  private eonMap: Map<number, EonEntry> = new Map();
 
   parse(group: (number | null)[], data: RdsData): void {
     const [blockA, blockB, blockC, blockD] = group;
@@ -282,13 +294,21 @@ class GroupParser {
       case 0: // 0A / 0B — Basic tuning + PS name
         this.parseGroup0(blockB, blockC, blockD, data, versionB);
         break;
+      case 1: // 1A — Programme Item Number + ECC
+        if (versionB === 0) this.parseGroup1A(blockC, blockD, data);
+        break;
       case 2: // 2A / 2B — RadioText
         this.parseGroup2(blockB, blockC, blockD, data, versionB);
         break;
       case 4: // 4A — Clock Time
         if (versionB === 0) this.parseGroup4A(blockB, blockC, blockD, data);
         break;
-      // TODO: group 1A (ECC), 10A (PTYN), 14A (EON), etc.
+      case 10: // 10A — Programme Type Name (PTYN)
+        if (versionB === 0) this.parseGroup10A(blockB, blockC, blockD, data);
+        break;
+      case 14: // 14A / 14B — Enhanced Other Networks
+        this.parseGroup14(blockB, blockC, blockD, data, versionB);
+        break;
     }
   }
 
@@ -382,7 +402,7 @@ class GroupParser {
 
   private decodeAF(code: number, data: RdsData): void {
     if (code >= 1 && code <= 204) {
-      const freqMhz = 87.6 + code * 0.1;
+      const freqMhz = Math.round((87.6 + code * 0.1) * 10) / 10;
       if (!data.af.includes(freqMhz)) {
         data.af.push(freqMhz);
         data.af.sort((a, b) => a - b);
@@ -390,10 +410,79 @@ class GroupParser {
     }
   }
 
+  // Group 1A: Extended Country Code + Language Code
+  private parseGroup1A(c: number | null, _d: number | null, data: RdsData): void {
+    if (c === null) return;
+    // Block C bits 15–8 = Language Code (informational), bits 7–0 = ECC
+    data.ecc = c & 0xFF;
+  }
+
+  // Group 10A: Programme Type Name (PTYN) — 8-char name, 2 chars per group
+  private parseGroup10A(b: number, c: number | null, d: number | null, data: RdsData): void {
+    const segAddr = b & 0x1; // bit 0 selects chars 0-1 vs 2-3 of each half
+    // A/B flag in bit 4 — if changed, clear the PTYN buffer
+    // (simplified: no explicit AB tracking for PTYN)
+    if (c !== null) {
+      this.ptynChars[segAddr * 4]     = rdsChar((c >> 8) & 0xFF);
+      this.ptynChars[segAddr * 4 + 1] = rdsChar(c & 0xFF);
+    }
+    if (d !== null) {
+      this.ptynChars[segAddr * 4 + 2] = rdsChar((d >> 8) & 0xFF);
+      this.ptynChars[segAddr * 4 + 3] = rdsChar(d & 0xFF);
+    }
+    data.ptyn = this.ptynChars.join('').trimEnd();
+  }
+
+  // Group 14A: Enhanced Other Networks
+  private parseGroup14(
+    b: number, c: number | null, d: number | null, data: RdsData, versionB: number,
+  ): void {
+    const eonPi = d; // Block D = ON PI (other network PI)
+    if (eonPi === null) return;
+
+    let entry = this.eonMap.get(eonPi);
+    if (!entry) {
+      entry = { pi: eonPi, ps: '        ', af: [] };
+      this.eonMap.set(eonPi, entry);
+    }
+
+    if (versionB === 0) {
+      // 14A: variant code in bits 3-0 of block B
+      const variant = b & 0x0F;
+      if (variant <= 3 && c !== null) {
+        // Variants 0-3: PS name segments (2 chars each)
+        const chars = entry.ps.padEnd(8, ' ').split('');
+        chars[variant * 2]     = rdsChar((c >> 8) & 0xFF);
+        chars[variant * 2 + 1] = rdsChar(c & 0xFF);
+        entry.ps = chars.join('');
+      } else if ((variant >= 4 && variant <= 11) && c !== null) {
+        // Variants 4-11: mapped AF pairs
+        const af1 = (c >> 8) & 0xFF;
+        const af2 = c & 0xFF;
+        const addAF = (code: number) => {
+          if (code >= 1 && code <= 204) {
+            const mhz = Math.round((87.6 + code * 0.1) * 10) / 10;
+            if (!entry!.af.includes(mhz)) {
+              entry!.af.push(mhz);
+              entry!.af.sort((a, b) => a - b);
+            }
+          }
+        };
+        addAF(af1);
+        addAF(af2);
+      }
+    }
+    // Rebuild EON list for RdsData output
+    data.eon = Array.from(this.eonMap.values())
+      .map(e => ({ ...e, ps: e.ps.trimEnd() }));
+  }
+
   reset(): void {
     this.psChars.fill(' ');
     this.rtChars.fill(' ');
+    this.ptynChars.fill(' ');
     this.rtAbFlag = -1;
+    this.eonMap.clear();
   }
 }
 

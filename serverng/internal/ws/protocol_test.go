@@ -47,8 +47,9 @@ func TestPackFFTCompressedMessage(t *testing.T) {
 func TestPackIQAdpcmMessage(t *testing.T) {
 	adpcm := []byte{0xAB, 0xCD, 0xEF, 0x12}
 	sampleCount := uint32(1024)
+	sampleRate  := uint32(48000)
 
-	msg := PackIQAdpcmMessage(adpcm, sampleCount)
+	msg := PackIQAdpcmMessage(adpcm, sampleCount, sampleRate)
 
 	// Type byte
 	if msg[0] != MsgIQAdpcm {
@@ -61,15 +62,31 @@ func TestPackIQAdpcmMessage(t *testing.T) {
 		t.Errorf("expected sampleCount %d, got %d", sampleCount, gotCount)
 	}
 
-	// ADPCM payload at offset 5
+	// Sample rate at offset 5 (Uint32 LE)
+	gotRate := binary.LittleEndian.Uint32(msg[5:9])
+	if gotRate != sampleRate {
+		t.Errorf("expected sampleRate %d, got %d", sampleRate, gotRate)
+	}
+
+	// Channels at offset 9
+	if msg[9] != 2 {
+		t.Errorf("expected channels=2, got %d", msg[9])
+	}
+
+	// Reserved at offset 10
+	if msg[10] != 0 {
+		t.Errorf("expected reserved=0, got %d", msg[10])
+	}
+
+	// ADPCM payload at offset 11
 	for i, v := range adpcm {
-		if msg[5+i] != v {
-			t.Errorf("adpcm[%d]: expected 0x%02x, got 0x%02x", i, v, msg[5+i])
+		if msg[11+i] != v {
+			t.Errorf("adpcm[%d]: expected 0x%02x, got 0x%02x", i, v, msg[11+i])
 		}
 	}
 
-	// Total length: 1 + 4 + len(adpcm)
-	expectedLen := 1 + 4 + len(adpcm)
+	// Total length: 1 + 10 + len(adpcm)
+	expectedLen := 1 + 10 + len(adpcm)
 	if len(msg) != expectedLen {
 		t.Errorf("expected length %d, got %d", expectedLen, len(msg))
 	}
@@ -158,25 +175,42 @@ func TestPackAudioOpusMessage(t *testing.T) {
 }
 
 func TestPackIQMessage(t *testing.T) {
-	samples := []int16{100, -200, 32767, -32768, 0}
+	samples    := []int16{100, -200, 32767, -32768, 0}
+	sampleRate := uint32(240000)
 
-	msg := PackIQMessage(samples)
+	msg := PackIQMessage(samples, sampleRate)
 
 	// Type byte
 	if msg[0] != MsgIQ {
 		t.Errorf("expected type 0x%02x, got 0x%02x", MsgIQ, msg[0])
 	}
 
-	// Verify each sample as Int16 LE
+	// Sample rate at offset 1 (Uint32 LE)
+	gotRate := binary.LittleEndian.Uint32(msg[1:5])
+	if gotRate != sampleRate {
+		t.Errorf("expected sampleRate %d, got %d", sampleRate, gotRate)
+	}
+
+	// Channels at offset 5
+	if msg[5] != 2 {
+		t.Errorf("expected channels=2, got %d", msg[5])
+	}
+
+	// Reserved at offset 6
+	if msg[6] != 0 {
+		t.Errorf("expected reserved=0, got %d", msg[6])
+	}
+
+	// Verify each sample as Int16 LE at offset 7
 	for i, expected := range samples {
-		got := int16(binary.LittleEndian.Uint16(msg[1+i*2:]))
+		got := int16(binary.LittleEndian.Uint16(msg[7+i*2:]))
 		if got != expected {
 			t.Errorf("sample[%d]: expected %d, got %d", i, expected, got)
 		}
 	}
 
-	// Total: 1 + len(samples)*2
-	expectedLen := 1 + len(samples)*2
+	// Total: 1 + 6 (header) + len(samples)*2
+	expectedLen := 1 + 6 + len(samples)*2
 	if len(msg) != expectedLen {
 		t.Errorf("expected length %d, got %d", expectedLen, len(msg))
 	}

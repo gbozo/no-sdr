@@ -6,14 +6,7 @@
 
 ## Active
 
-### Fix: protocol_test.go broken by wire-format update
-- [ ] `TestPackIQAdpcmMessage` calls old 2-arg `PackIQAdpcmMessage(data, sampleCount)` — now requires 3 args (add `sampleRate uint32`)
-- [ ] `TestPackIQMessage` calls old 1-arg `PackIQMessage(samples)` — now requires 2 args (add `sampleRate uint32`)
-- **File:** `serverng/internal/ws/protocol_test.go`
-
-### Fix: `go vet` warnings
-- [ ] `internal/demod/cquam.go:177` — self-assignment of `c.cosGamma` (vet: self-assignment)
-- [ ] `internal/dongle/manager.go:719` — `net.Dial` with `"%s:%d"` format string doesn't handle IPv6 addresses (use `net.JoinHostPort` instead)
+None — all known issues resolved.
 
 ---
 
@@ -29,43 +22,40 @@
 - [ ] Add `docker-compose.yml` healthcheck using `/api/status`
 - **Files:** `docker/Dockerfile`, `docker/docker-compose.yml`
 
-### T54 — RDS Extended Group Types (client-side decoder)
-- [ ] Group 1A: ECC (Enhanced Country Code)
-- [ ] Group 10A: PTYN (Programme Type Name, 8 chars)
-- [ ] Group 14A: EON (Enhanced Other Networks — alternative frequencies)
-- **File:** `client/src/engine/rds-decoder.ts:291` (existing TODO comment)
-- **Note:** Server-side Go decoder (`serverng/internal/demod/rds.go`) also only handles 0A/0B and 2A/2B
-
-### T55 — Server-Side RDS Extended Groups
-- [ ] Match client-side additions once T54 is done
-- [ ] Add PTY, PI to `RdsData` wire JSON (already present) — verify CT (group 4A clock time) parsing
-- **File:** `serverng/internal/demod/rds.go`
-
-### T56 — IQ Recording (SigMF)
-- [ ] REST endpoint `POST /api/admin/record` → start IQ capture to file
-- [ ] `DELETE /api/admin/record` → stop + return file path
-- [ ] SigMF metadata sidecar (`.sigmf-meta` JSON)
-- [ ] File naming: `{dongleID}_{centerFreq}_{timestamp}.sigmf-data`
-- **Files:** `serverng/internal/api/admin.go`, new `serverng/internal/dongle/recorder.go`
-
-### T57 — Graceful Shutdown Hardening
-- [ ] Verify Opus encoder `Close()` is called on all client pipelines during shutdown
-- [ ] Confirm `dongleMgr.Stop()` waits for all `runDongle` goroutines to exit (currently uses `cancel()` only)
-- [ ] Add shutdown timeout log entry if drain exceeds 5s
-- **File:** `serverng/cmd/serverng/main.go` (shutdown already wired, needs verification)
-
 ---
 
-## Done (Phase 1–4, v2.0.0–v2.3.1)
+## Done
 
-All Phase 1–4 tasks complete. See [WORK.md](../WORK.md) for full history.
+### Active issues fixed (previously listed)
+- [x] `protocol_test.go` broken by IQ wire-format update — tests updated for new 6/10-byte headers
+- [x] `go vet` warnings — cquam self-assignment removed, IPv6 dial fixed with `net.JoinHostPort`
 
-Notable post-v2.0.0 server work:
-- [x] Wire-driven IQ protocol headers (MSG_IQ 6-byte, MSG_IQ_ADPCM 10-byte)
-- [x] RDS decoder rewritten to IEC 62106 standard, wired into OpusPipeline
-- [x] Opus chipmunk fix: `SetMode()` recalculates `decimFactor` after updating `p.mode`
-- [x] Admin FFT hot-apply: `SwitchProfile` unconditionally rebuilds `FftProcessor`
-- [x] `stereoEnabled` propagated to `OpusPipeline` at construction; `ws.Client.StereoEnabled` defaults to `true`
-- [x] Resilient dongle boot (5-retry exponential backoff)
-- [x] Config versioning + optimistic concurrency (ETag/If-Match)
-- [x] DC offset removal DSP block, sqrt/fast-atan optimisations
+### T54 — RDS Extended Group Types (client-side)
+- [x] Group 1A: ECC (Extended Country Code) — `data.ecc`
+- [x] Group 10A: PTYN (Programme Type Name, 8 chars) — `data.ptyn`
+- [x] Group 14A: EON (Enhanced Other Networks) — `data.eon[]` with PI, PS, AF
+- **File:** `client/src/engine/rds-decoder.ts`
+
+### T55 — RDS Extended Group Types (server-side Go)
+- [x] `RdsData` extended: `ECC *uint8`, `PTYN string`, `EON []EonEntry`
+- [x] `EonEntry` struct: PI, PS, AF
+- [x] Group 1A, 10A, 14A parsing in `groupParser.parse()`
+- [x] `groupParser` extended: `ptynChars`, `eonMap`
+- [x] Change-detection switched from struct `!=` to JSON comparison (supports pointer/slice fields)
+- **Files:** `serverng/internal/demod/rds.go`, `serverng/internal/dongle/opus_pipeline.go`
+
+### T56 — IQ Recording (SigMF)
+- [x] `serverng/internal/dongle/recorder.go` — `Recorder` with `Start`, `Stop`, `WriteIQ`, `Status`
+- [x] SigMF sidecar (`.sigmf-meta`) with `cu8` datatype, center freq, sample rate, datetime
+- [x] `Manager.Recorder` wired into `runDongle` hot path
+- [x] Admin REST endpoints: `POST /api/admin/dongles/{id}/record`, `DELETE /api/admin/dongles/{id}/record`, `GET /api/admin/recordings`
+- [x] `RecordStartFunc`, `RecordStopFunc`, `RecordStatusFunc` wired in `main.go`
+
+### T57 — Graceful Shutdown Hardening
+- [x] `Manager.Stop()` now closes all `clientPipeline.opusPipeline` (was leaking libopus encoder memory)
+- [x] Active IQ recordings are stopped cleanly on shutdown with SigMF metadata written
+- [x] Drain timeout logged as `Warn` when WebSocket drain exceeds 5s
+- [x] Shutdown elapsed time logged on clean exit
+
+### Phase 1–4, v2.0.0–v2.3.1 (all complete)
+See [WORK.md](../WORK.md) for full history.

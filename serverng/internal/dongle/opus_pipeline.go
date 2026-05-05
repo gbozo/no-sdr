@@ -71,8 +71,7 @@ type OpusPipeline struct {
 
 	// RDS decoder — only non-nil when mode=="wfm"
 	rdsDecoder   *demod.RdsDecoder
-	rdsLastSent  demod.RdsData // last snapshot sent to the client
-	rdsHasSent   bool         // false until the first RDS message has been sent
+	rdsLastJSON  []byte       // last JSON snapshot sent to the client (nil = never sent)
 }
 
 const stereoHoldFrames = 10
@@ -216,11 +215,10 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 		if stereoDemod, ok := p.demodulator.(*demod.FmStereoDemod); ok {
 			composite := stereoDemod.GetComposite()
 			if rdsData := p.rdsDecoder.Process(composite); rdsData != nil {
-				if !p.rdsHasSent || *rdsData != p.rdsLastSent {
-					if b, err := json.Marshal(rdsData); err == nil {
+				if b, err := json.Marshal(rdsData); err == nil {
+					if string(b) != string(p.rdsLastJSON) {
 						rdsJSON = b
-						p.rdsLastSent = *rdsData
-						p.rdsHasSent = true
+						p.rdsLastJSON = b
 					}
 				}
 			}
@@ -459,12 +457,12 @@ func (p *OpusPipeline) SetMode(mode string) error {
 		} else {
 			p.rdsDecoder.Reset()
 		}
-		p.rdsLastSent = demod.RdsData{}
-		p.rdsHasSent = false
+		p.rdsLastJSON = nil
+		
 	} else {
 		p.rdsDecoder = nil
-		p.rdsLastSent = demod.RdsData{}
-		p.rdsHasSent = false
+		p.rdsLastJSON = nil
+		
 	}
 
 	return nil
@@ -532,8 +530,8 @@ func (p *OpusPipeline) Reset() {
 		// Re-create instead of reset to ensure clean sync state.
 		p.rdsDecoder = demod.NewRdsDecoder(float64(p.sampleRate))
 	}
-	p.rdsLastSent = demod.RdsData{}
-	p.rdsHasSent = false
+	p.rdsLastJSON = nil
+	
 	p.upsampleAccum = 0
 	p.lastSample = 0
 }

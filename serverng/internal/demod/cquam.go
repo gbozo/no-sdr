@@ -174,7 +174,7 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 	c.vcoRe = vcoRe
 	c.vcoIm = vcoIm
 	c.omega2 = omega2
-	c.cosGamma = c.cosGamma // preserve last
+	// c.cosGamma is intentionally not updated here — retain last computed value
 	c.gS1 = gS1
 	c.gS2 = gS2
 	c.gSampleCount = gCount

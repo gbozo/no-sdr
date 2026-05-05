@@ -80,6 +80,10 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 			r.Post("/save-config", saveConfigHandler(cfg, cfgPath, cfgVersion))
 			r.Get("/server/config", serverConfigHandler(cfg, cfgVersion))
 			r.Put("/server/config", updateServerConfigHandler(cfg, cfgVersion))
+			// IQ recording (SigMF)
+			r.Get("/recordings", recordStatusHandler())
+			r.Post("/dongles/{id}/record", recordStartHandler(cfg))
+			r.Delete("/dongles/{id}/record", recordStopHandler())
 		})
 	})
 

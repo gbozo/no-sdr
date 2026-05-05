@@ -385,6 +385,15 @@ var HandleProfileRemovedFunc func(dongleID, profileID string)
 // Set by main.go; nil when rtlsdr support is not compiled in.
 var EnumerateLocalDevicesFunc func() []any
 
+// RecordStartFunc starts an IQ recording for a dongle. Set by main.go.
+var RecordStartFunc func(dongleID string, centerFreq int64, sampleRate int) error
+
+// RecordStopFunc stops an IQ recording and returns the output path. Set by main.go.
+var RecordStopFunc func(dongleID string) (string, error)
+
+// RecordStatusFunc returns active recordings. Set by main.go.
+var RecordStatusFunc func() any
+
 // SetAllowedCodecsFunc updates the WS manager's allowed codec sets at runtime.
 // Set by main.go so the admin handler can propagate changes without a restart.
 var SetAllowedCodecsFunc func(fft, iq []string)
@@ -894,4 +903,67 @@ func needsReinit(old, new *config.DongleConfig) bool {
 		return true
 	}
 	return false
+}
+
+// recordStartHandler begins IQ recording for a dongle.
+// POST /api/admin/dongles/{id}/record
+func recordStartHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dongleID := chi.URLParam(r, "id")
+		if RecordStartFunc == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "recording not available"})
+			return
+		}
+		// Find the dongle to get center frequency and sample rate
+		var centerFreq int64
+		var sampleRate int
+		for _, d := range cfg.Dongles {
+			if d.ID == dongleID && len(d.Profiles) > 0 {
+				centerFreq = d.Profiles[0].CenterFrequency
+				sampleRate = d.Profiles[0].SampleRate
+				if sampleRate <= 0 {
+					sampleRate = d.SampleRate
+				}
+				break
+			}
+		}
+		if sampleRate <= 0 {
+			sampleRate = 2400000
+		}
+		if err := RecordStartFunc(dongleID, centerFreq, sampleRate); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "recording", "dongleId": dongleID})
+	}
+}
+
+// recordStopHandler stops IQ recording for a dongle and returns the file path.
+// DELETE /api/admin/dongles/{id}/record
+func recordStopHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dongleID := chi.URLParam(r, "id")
+		if RecordStopFunc == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "recording not available"})
+			return
+		}
+		path, err := RecordStopFunc(dongleID)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "stopped", "file": path})
+	}
+}
+
+// recordStatusHandler returns all active recordings.
+// GET /api/admin/recordings
+func recordStatusHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if RecordStatusFunc == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		writeJSON(w, http.StatusOK, RecordStatusFunc())
+	}
 }

@@ -18,12 +18,22 @@ var ptyNames = [32]string{
 // RdsData holds decoded RDS information from an FM broadcast.
 // Field names and types match the TypeScript RdsData interface consumed by the client.
 type RdsData struct {
-	PS      string `json:"ps"`      // Station name (up to 8 chars)
-	RT      string `json:"rt"`      // Radio text (up to 64 chars)
-	PI      uint16 `json:"pi"`      // Programme Identification code (always present)
-	PTY     uint8  `json:"pty"`     // Programme type code
-	PtyName string `json:"ptyName"` // Human-readable PTY label
-	Synced  bool   `json:"synced"`  // Block sync acquired
+	PS      string   `json:"ps"`      // Station name (up to 8 chars)
+	RT      string   `json:"rt"`      // Radio text (up to 64 chars)
+	PI      uint16   `json:"pi"`      // Programme Identification code (always present)
+	PTY     uint8    `json:"pty"`     // Programme type code
+	PtyName string   `json:"ptyName"` // Human-readable PTY label
+	Synced  bool     `json:"synced"`  // Block sync acquired
+	ECC     *uint8   `json:"ecc"`     // Extended Country Code (group 1A); nil if not yet received
+	PTYN    string   `json:"ptyn"`    // Programme Type Name 8-char (group 10A)
+	EON     []EonEntry `json:"eon"`   // Enhanced Other Networks (group 14A)
+}
+
+// EonEntry holds data for one Enhanced Other Network (group 14A).
+type EonEntry struct {
+	PI uint16   `json:"pi"` // PI of the other network
+	PS string   `json:"ps"` // PS name of the other network
+	AF []float32 `json:"af"` // Alternative frequencies (MHz)
 }
 
 // ---- Biquad filter (transposed direct form II) ----
@@ -378,18 +388,23 @@ func (b *blockSync) reset() {
 // ---- Group parser ----
 
 type groupParser struct {
-	psChars [8]byte
-	rtChars [64]byte
+	psChars  [8]byte
+	rtChars  [64]byte
 	rtAbFlag int
+	ptynChars [8]byte
+	eonMap   map[uint16]*EonEntry // keyed by ON PI
 }
 
 func newGroupParser() *groupParser {
-	gp := &groupParser{rtAbFlag: -1}
+	gp := &groupParser{rtAbFlag: -1, eonMap: make(map[uint16]*EonEntry)}
 	for i := range gp.psChars {
 		gp.psChars[i] = ' '
 	}
 	for i := range gp.rtChars {
 		gp.rtChars[i] = ' '
+	}
+	for i := range gp.ptynChars {
+		gp.ptynChars[i] = ' '
 	}
 	return gp
 }
@@ -440,19 +455,24 @@ func (gp *groupParser) parse(group [4]int32, data *RdsData) {
 		}
 		data.PS = strings.TrimRight(string(gp.psChars[:]), " \x00")
 
+	case 1:
+		// Type 1A: Programme Item Number + Extended Country Code
+		if !versionB && blockC != -1 {
+			ecc := uint8(blockC & 0xFF)
+			data.ECC = &ecc
+		}
+
 	case 2:
 		// Type 2A/2B: RadioText
 		segment := int(blockB & 0x0F)
 		abFlag := int((blockB >> 4) & 1)
 		if gp.rtAbFlag != abFlag {
-			// A/B flag flipped — clear RT buffer
 			for i := range gp.rtChars {
 				gp.rtChars[i] = ' '
 			}
 			gp.rtAbFlag = abFlag
 		}
 		if versionB {
-			// 2B: 2 chars from block D
 			if blockD != -1 {
 				idx := segment * 2
 				if idx < 62 {
@@ -461,7 +481,6 @@ func (gp *groupParser) parse(group [4]int32, data *RdsData) {
 				}
 			}
 		} else {
-			// 2A: 4 chars from C + D
 			if blockC != -1 && blockD != -1 {
 				idx := segment * 4
 				if idx < 60 {
@@ -472,7 +491,6 @@ func (gp *groupParser) parse(group [4]int32, data *RdsData) {
 				}
 			}
 		}
-		// Find null terminator or CR
 		rtEnd := 64
 		for i := 0; i < 64; i++ {
 			if gp.rtChars[i] == 0x0D || gp.rtChars[i] == 0 {
@@ -481,6 +499,73 @@ func (gp *groupParser) parse(group [4]int32, data *RdsData) {
 			}
 		}
 		data.RT = strings.TrimRight(string(gp.rtChars[:rtEnd]), " \x00\x0D")
+
+	case 10:
+		// Type 10A: Programme Type Name (PTYN) — 8 chars, 4 per group
+		if !versionB {
+			segment := int(blockB & 0x01) // bit 0 → segment 0 or 1
+			if blockC != -1 {
+				idx := segment * 4
+				gp.ptynChars[idx] = rdsChar(byte((blockC >> 8) & 0xFF))
+				gp.ptynChars[idx+1] = rdsChar(byte(blockC & 0xFF))
+			}
+			if blockD != -1 {
+				idx := segment*4 + 2
+				gp.ptynChars[idx] = rdsChar(byte((blockD >> 8) & 0xFF))
+				gp.ptynChars[idx+1] = rdsChar(byte(blockD & 0xFF))
+			}
+			data.PTYN = strings.TrimRight(string(gp.ptynChars[:]), " \x00")
+		}
+
+	case 14:
+		// Type 14A: Enhanced Other Networks
+		if !versionB && blockD != -1 {
+			onPI := uint16(blockD)
+			entry, ok := gp.eonMap[onPI]
+			if !ok {
+				entry = &EonEntry{PI: onPI, PS: "        "}
+				gp.eonMap[onPI] = entry
+			}
+			variant := int(blockB & 0x0F)
+			switch {
+			case variant <= 3 && blockC != -1:
+				// PS name: 2 chars per variant
+				psBytes := []byte(entry.PS)
+				if len(psBytes) < 8 {
+					psBytes = append(psBytes, make([]byte, 8-len(psBytes))...)
+				}
+				psBytes[variant*2] = rdsChar(byte((blockC >> 8) & 0xFF))
+				psBytes[variant*2+1] = rdsChar(byte(blockC & 0xFF))
+				entry.PS = string(psBytes)
+			case variant >= 4 && variant <= 11 && blockC != -1:
+				// Mapped AFs
+				af1 := byte((blockC >> 8) & 0xFF)
+				af2 := byte(blockC & 0xFF)
+				addAF := func(code byte) {
+					if code >= 1 && code <= 204 {
+						mhz := float32(87.6 + float64(code)*0.1)
+						mhz = float32(int(mhz*10+0.5)) / 10 // round to 1dp
+						for _, f := range entry.AF {
+							if f == mhz {
+								return
+							}
+						}
+						entry.AF = append(entry.AF, mhz)
+					}
+				}
+				addAF(af1)
+				addAF(af2)
+			}
+			// Rebuild EON slice
+			data.EON = make([]EonEntry, 0, len(gp.eonMap))
+			for _, e := range gp.eonMap {
+				data.EON = append(data.EON, EonEntry{
+					PI: e.PI,
+					PS: strings.TrimRight(e.PS, " \x00"),
+					AF: append([]float32{}, e.AF...),
+				})
+			}
+		}
 	}
 }
 
@@ -491,7 +576,11 @@ func (gp *groupParser) reset() {
 	for i := range gp.rtChars {
 		gp.rtChars[i] = ' '
 	}
+	for i := range gp.ptynChars {
+		gp.ptynChars[i] = ' '
+	}
 	gp.rtAbFlag = -1
+	gp.eonMap = make(map[uint16]*EonEntry)
 }
 
 // ---- Main RDS decoder ----
@@ -543,9 +632,10 @@ func NewRdsDecoder(sampleRate float64) *RdsDecoder {
 		bpf2:    bandpassCoeffs(rdsSubcarrierHz, 10, sampleRate),
 		ncoInc:  2.0 * math.Pi * rdsSubcarrierHz / sampleRate,
 		lpfI:    lowpassCoeffs(2400, 0.707, decimatedRate),
-		symSync: newSymbolSync(decimatedRate),
-		blkSync: newBlockSync(),
+		symSync:  newSymbolSync(decimatedRate),
+		blkSync:  newBlockSync(),
 		grpParse: newGroupParser(),
+		data:     RdsData{EON: []EonEntry{}},
 	}
 	return r
 }
@@ -627,5 +717,5 @@ func (r *RdsDecoder) Reset() {
 	r.delta.reset()
 	r.blkSync.reset()
 	r.grpParse.reset()
-	r.data = RdsData{}
+	r.data = RdsData{EON: []EonEntry{}}
 }

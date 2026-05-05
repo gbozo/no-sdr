@@ -115,6 +115,10 @@ func main() {
 		}
 		return out
 	}
+	// IQ recording endpoints
+	api.RecordStartFunc = dongleMgr.Recorder.Start
+	api.RecordStopFunc  = dongleMgr.Recorder.Stop
+	api.RecordStatusFunc = func() any { return dongleMgr.Recorder.Status() }
 
 	// Wire config push notifications (Phase 3: real-time config push)
 	api.NotifyDongleAddedFunc = dongleMgr.NotifyDongleAdded
@@ -177,25 +181,33 @@ func main() {
 	<-ctx.Done()
 	logger.Info("shutting down gracefully...")
 
-	// 1. Stop accepting new connections (server shutdown starts)
-	// 2. Drain WebSocket connections (5 second window)
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer drainCancel()
+	shutdownStart := time.Now()
 
-	// Stop dongle pipelines first (stops IQ data flow)
+	// 1. Stop dongle pipelines first (stops IQ data flow + closes Opus encoders)
 	dongleMgr.Stop()
 
-	// Drain WebSocket connections
-	wsMgr.Shutdown(drainCtx)
+	// 2. Stop any active IQ recordings cleanly
+	for _, rec := range dongleMgr.Recorder.Status() {
+		if path, err := dongleMgr.Recorder.Stop(rec.DongleID); err == nil {
+			logger.Info("closed IQ recording on shutdown", "file", path)
+		}
+	}
 
-	// Shut down HTTP server (stops accepting, waits for in-flight)
+	// 3. Drain WebSocket connections (5 second window)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+	wsMgr.Shutdown(drainCtx)
+	if drainCtx.Err() != nil {
+		logger.Warn("WebSocket drain timed out — some clients may have been dropped")
+	}
+
+	// 4. Shut down HTTP server (stops accepting, waits for in-flight requests)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("shutdown error", "error", err)
+		logger.Error("HTTP shutdown error", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("server stopped", "version", version)
+	logger.Info("server stopped", "version", version, "elapsed", time.Since(shutdownStart).Round(time.Millisecond))
 }
