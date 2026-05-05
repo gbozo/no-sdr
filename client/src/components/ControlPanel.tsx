@@ -13,8 +13,12 @@ import { getPaletteNames } from '../engine/palettes.js';
 const ControlPanel: Component = () => {
   return (
     <div class="flex flex-col gap-3 p-3 overflow-y-auto h-full">
-      {/* S-Meter */}
-      <SMeter />
+      {/* S-Meter — fixed width centred on mobile, full width on desktop */}
+      <div class="flex justify-center md:block">
+        <div class="w-full max-w-[300px] md:max-w-none">
+          <SMeter />
+        </div>
+      </div>
 
       {/* Dongle & Profile Selector */}
       <DongleProfileSelector />

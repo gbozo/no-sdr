@@ -87,14 +87,14 @@ const App: Component = () => {
   };
 
   return (
-    <div class="h-screen flex flex-col bg-sdr-base text-text-primary select-none">
+    <div class="min-h-screen md:h-screen md:overflow-hidden flex flex-col bg-sdr-base text-text-primary select-none">
       {/* Top Bar */}
-      <header class="h-11 bg-sdr-surface border-b border-border flex items-center px-4 relative shrink-0">
+      <header class="bg-sdr-surface border-b border-border flex items-center px-3 md:px-4 relative shrink-0 min-h-[44px] flex-wrap gap-y-1 py-1 md:py-0 md:h-11">
         {/* Top accent gradient line */}
         <div class="absolute top-0 inset-x-0 h-[2px]
                     bg-gradient-to-r from-cyan via-amber to-cyan opacity-70" />
 
-        <div class="flex items-center gap-3 flex-1">
+        <div class="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
           <h1 class="font-mono text-xs font-bold tracking-[0.15em] text-text-primary uppercase">
             <span class="text-cyan">NO</span><span class="text-text-dim">(DE)</span><span class="text-cyan">-SDR</span>
           </h1>
@@ -182,26 +182,27 @@ const App: Component = () => {
       </header>
 
       {/* Main Content */}
-      <div class="flex-1 flex min-h-0 relative">
+      <div class="flex-1 flex flex-col md:flex-row md:min-h-0 relative">
         {/* Connection state overlay */}
         <ConnectionOverlay />
 
-        {/* Sidebar */}
+        {/* ── Sidebar (mobile: full-width AFTER waterfall via order / desktop: 300px left column) ── */}
         <Show when={store.sidebarOpen()}>
-          <aside class="w-[300px] bg-sdr-surface border-r border-border overflow-y-auto shrink-0">
+          <aside class="order-last md:order-none w-full md:w-[300px] bg-sdr-surface border-t md:border-t-0 md:border-r border-border md:overflow-y-auto md:shrink-0">
             <ControlPanel />
           </aside>
         </Show>
 
-        {/* Main Area */}
-        <div class="flex-1 flex flex-col min-w-0">
+        {/* ── Main display column ── */}
+        <div class="md:flex-1 md:flex md:flex-col md:min-w-0 md:min-h-0">
+
           {/* Frequency Display */}
-          <div class="shrink-0 p-2 pb-0">
+          <div class="p-2 pb-0">
             <FrequencyDisplay />
           </div>
 
-          {/* Waterfall + Spectrum */}
-          <div class="flex-1 min-h-0 p-2 flex flex-col">
+          {/* Waterfall — mobile: 50vh / desktop: flex-1 */}
+          <div class="md:flex-1 md:min-h-0 p-2 flex flex-col" style="min-height: 50vh">
             <div class="flex-1 min-h-0 rounded-md overflow-hidden border border-border bg-black flex flex-col">
               <WaterfallDisplay />
             </div>
@@ -210,19 +211,19 @@ const App: Component = () => {
       </div>
 
       {/* Bottom Status Bar */}
-      <footer class="h-7 bg-sdr-surface border-t border-border flex items-center px-4 shrink-0">
-        <div class="flex items-center gap-4 text-[8px] font-mono text-text-dim uppercase tracking-wider w-full">
+      <footer class="h-7 bg-sdr-surface border-t border-border flex items-center px-2 md:px-4 shrink-0">
+        <div class="flex items-center gap-2 md:gap-4 text-[8px] font-mono text-text-dim uppercase tracking-wider w-full overflow-hidden">
           <span>
             Mode: <span class="text-text-secondary">{store.mode().toUpperCase()}</span>
           </span>
-          <span>
+          <span class="hidden sm:inline">
             BW: <span class="text-text-secondary">{(store.bandwidth() / 1000).toFixed(1)}k</span>
           </span>
-          <span>
+          <span class="hidden sm:inline">
             Vol: <span class="text-text-secondary">{Math.round(store.volume() * 100)}%</span>
           </span>
           <Show when={store.squelch() !== null}>
-            <span>
+            <span class="hidden sm:inline">
               SQL: <span class="text-text-secondary">{store.squelch()} dB</span>
             </span>
           </Show>
@@ -230,7 +231,7 @@ const App: Component = () => {
 
           {/* Client ID (persistent UUID, first 8 chars) + connection index */}
           <Show when={store.localClientId()}>
-            <span class="border-r border-border pr-4">
+            <span class="hidden sm:inline border-r border-border pr-4">
               ID: <span class="text-text-secondary">{store.localClientId().slice(0, 8)}</span>
               <Show when={store.connIndex() > 0}>
                 <span class="text-text-dim">:{store.connIndex()}</span>
@@ -242,7 +243,9 @@ const App: Component = () => {
           <BandwidthMeter />
 
           {/* Server CPU / memory */}
-          <ServerStatsMeter />
+          <div class="hidden sm:flex">
+            <ServerStatsMeter />
+          </div>
 
           <Show when={store.isAdmin()}>
             <span class="text-amber">ADMIN</span>

@@ -49,7 +49,7 @@ dongles:
           defaultMode: wfm
           gain: 23
           fftSize: 2048
-          fftFps: 6
+          fftFps: 25
           defaultTuneOffset: 0
           tuningStep: 1000
           swapIQ: false
