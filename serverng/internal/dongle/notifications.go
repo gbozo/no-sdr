@@ -180,6 +180,20 @@ func (m *Manager) NotifyProfileAdded(dongleID string, profile *config.DongleProf
 
 // NotifyProfileUpdated broadcasts that a profile was modified.
 func (m *Manager) NotifyProfileUpdated(dongleID string, profile *config.DongleProfile) {
+	// If this profile is the active one on a running dongle, apply the changes
+	// live (FFT size/fps, frequency, bandwidth, etc.) without a full reinit.
+	m.mu.Lock()
+	d, running := m.dongles[dongleID]
+	isActive := running && d.profile != nil && d.profile.ID == profile.ID
+	m.mu.Unlock()
+
+	if isActive {
+		if err := m.SwitchProfile(dongleID, profile.ID); err != nil {
+			m.logger.Warn("failed to apply profile update to running dongle",
+				"dongleID", dongleID, "profileID", profile.ID, "error", err)
+		}
+	}
+
 	msg := packConfigNotification(&ConfigNotification{
 		Type:      EventProfileUpdated,
 		DongleID:  dongleID,

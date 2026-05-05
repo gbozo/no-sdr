@@ -48,8 +48,8 @@ dongles:
           defaultBandwidth: 200000
           defaultMode: wfm
           gain: 23
-          fftSize: 8192
-          fftFps: 12
+          fftSize: 2048
+          fftFps: 6
           defaultTuneOffset: 0
           tuningStep: 1000
           swapIQ: false
@@ -78,5 +78,5 @@ dongles:
           dongleId: ""
           preFilterNb: true
           preFilterNbThreshold: 0
-          dcOffsetRemoval: null
+          dcOffsetRemoval: true
 bookmarks: []

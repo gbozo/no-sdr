@@ -846,9 +846,11 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 		}
 	}
 
-	// Rebuild FFT processor if fftSize changed
-	oldFftSize := d.profile.FftSize
-	if newProfile.FftSize != oldFftSize && newProfile.FftSize > 0 {
+	// Always rebuild the FFT processor on SwitchProfile. We cannot compare old vs
+	// new values here because when called from NotifyProfileUpdated (admin profile
+	// edit), d.profile and newProfile are the same pointer — the config was already
+	// mutated in-place before this function is called.
+	if newProfile.FftSize > 0 {
 		sampleRate := newProfile.SampleRate
 		if sampleRate <= 0 {
 			sampleRate = d.dongleCfg.SampleRate
