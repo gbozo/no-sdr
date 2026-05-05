@@ -1193,7 +1193,54 @@ func (m *Manager) handleCommand(clientID string, cmd *ws.ClientCommand) {
 		m.handleSetPreFilterNb(clientID, cmd)
 	case "set_pre_filter_nb_threshold":
 		m.handleSetPreFilterNbThreshold(clientID, cmd)
+	case "identify_start":
+		m.handleIdentifyStart(clientID)
 	}
+}
+
+// issueIdentifyTokenFunc is set by main.go to api.IssueIdentifyToken.
+// Using a function var avoids a circular import between dongle and api packages.
+// Signature: (connClientID, persistentID string) -> IssueResult
+var issueIdentifyTokenFunc func(connClientID, persistentID string) struct {
+	Token string
+	Err   string
+}
+
+// handleIdentifyStart issues a one-time recognition token for the client.
+// On success, sends the token back via WS. On failure (pending / rate limit),
+// sends a toast error message so the client can display it.
+func (m *Manager) handleIdentifyStart(clientID string) {
+	if issueIdentifyTokenFunc == nil {
+		return // recognition not wired
+	}
+	client := m.wsMgr.GetClient(clientID)
+	persistentID := clientID // fallback: use connection ID
+	if client != nil && client.PersistentID != "" {
+		persistentID = client.PersistentID
+	}
+
+	result := issueIdentifyTokenFunc(clientID, persistentID)
+	if result.Err != "" {
+		// Send toast error back to this client only
+		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
+			Type:    "toast",
+			Message: result.Err,
+			Code:    "identify_rate_limit",
+		}))
+		return
+	}
+	m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
+		Type:    "identify_token",
+		Message: result.Token,
+	}))
+}
+
+// SetIssueIdentifyTokenFunc wires the token issuance function (called by main.go).
+func (m *Manager) SetIssueIdentifyTokenFunc(fn func(connClientID, persistentID string) struct {
+	Token string
+	Err   string
+}) {
+	issueIdentifyTokenFunc = fn
 }
 
 // handleAdminAuth validates admin password sent over WebSocket.
@@ -1886,6 +1933,25 @@ func outputRateForMode(mode string) int {
 	default:
 		return 48000
 	}
+}
+
+// CapturePCMForClient returns the last `secs` seconds of decoded mono 48kHz Float32 audio
+// from the Opus pipeline of the given client, or nil if the client is not on the Opus path.
+// Used by the music recognition endpoint.
+func (m *Manager) CapturePCMForClient(clientID string, secs int) []float32 {
+	m.mu.Lock()
+	cp, ok := m.clientPipelines[clientID]
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	cp.pmu.Lock()
+	opus := cp.opusPipeline
+	cp.pmu.Unlock()
+	if opus == nil {
+		return nil
+	}
+	return opus.CapturePCM(secs)
 }
 
 // statsLoop broadcasts server stats (CPU%, memory, client count) to all clients every 2 seconds.

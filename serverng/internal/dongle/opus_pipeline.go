@@ -72,6 +72,14 @@ type OpusPipeline struct {
 	// RDS decoder — only non-nil when mode=="wfm"
 	rdsDecoder   *demod.RdsDecoder
 	rdsLastJSON  []byte       // last JSON snapshot sent to the client (nil = never sent)
+
+	// PCM capture ring buffer for music recognition.
+	// Holds the last captureSecs seconds of decoded 48kHz Float32 audio (mono).
+	captureRing   []float32
+	capturePos    int
+	captureLen    int  // samples currently valid (0 → captureCap)
+	captureCap    int  // total ring capacity = captureSecs * 48000
+	captureChans  int  // channel count of last frame written
 }
 
 const stereoHoldFrames = 10
@@ -148,6 +156,9 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 		upsampleRatio = 48000.0 / float64(demodOutRate)
 	}
 
+	const captureSecs = 12 // hold last 12 seconds — more than enough for a 10s sample
+	captureCap := captureSecs * 48000
+
 	p := &OpusPipeline{
 		demodulator:   demodBlock,
 		encoder:       encoder,
@@ -158,6 +169,9 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 		decimFactor:   decimFactor,
 		upsampleRatio: upsampleRatio,
 		stereoEnabled: stereoEnabled,
+		captureRing:   make([]float32, captureCap),
+		captureCap:    captureCap,
+		captureChans:  1,
 	}
 
 	// Wire RDS decoder for WFM — operates on composite at the full input rate (240kHz).
@@ -357,6 +371,36 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 		return nil
 	}
 
+	// Feed PCM capture ring buffer (used for music recognition).
+	// Write downmixed mono samples regardless of encoder channel count.
+	p.captureChans = p.channels
+	if demodIsStereo && p.channels == 2 {
+		// audioForOpus is interleaved L,R — write downmixed mono to ring
+		frames := outLen / 2
+		for i := 0; i < frames; i++ {
+			p.captureRing[p.capturePos] = (audioForOpus[i*2] + audioForOpus[i*2+1]) * 0.5
+			p.capturePos = (p.capturePos + 1) % p.captureCap
+		}
+		if p.captureLen < p.captureCap {
+			p.captureLen += frames
+			if p.captureLen > p.captureCap {
+				p.captureLen = p.captureCap
+			}
+		}
+	} else {
+		// Mono audio — write directly
+		for i := 0; i < outLen; i++ {
+			p.captureRing[p.capturePos] = audioForOpus[i]
+			p.capturePos = (p.capturePos + 1) % p.captureCap
+		}
+		if p.captureLen < p.captureCap {
+			p.captureLen += outLen
+			if p.captureLen > p.captureCap {
+				p.captureLen = p.captureCap
+			}
+		}
+	}
+
 	// Step 4: Convert float32 audio to int16 PCM for Opus
 	if cap(p.pcmBuf) < outLen {
 		p.pcmBuf = make([]int16, outLen)
@@ -531,9 +575,34 @@ func (p *OpusPipeline) Reset() {
 		p.rdsDecoder = demod.NewRdsDecoder(float64(p.sampleRate))
 	}
 	p.rdsLastJSON = nil
-	
+	p.capturePos = 0
+	p.captureLen = 0
 	p.upsampleAccum = 0
 	p.lastSample = 0
+}
+
+// CapturePCM returns the last `secs` seconds of decoded mono 48kHz audio
+// from the capture ring buffer, or all available audio if less is buffered.
+// The returned slice is a fresh copy safe for asynchronous use.
+func (p *OpusPipeline) CapturePCM(secs int) []float32 {
+	want := secs * 48000
+	if want > p.captureCap {
+		want = p.captureCap
+	}
+	avail := p.captureLen
+	if avail > want {
+		avail = want
+	}
+	if avail == 0 {
+		return nil
+	}
+	out := make([]float32, avail)
+	// Read backwards from capturePos
+	start := (p.capturePos - avail + p.captureCap) % p.captureCap
+	for i := 0; i < avail; i++ {
+		out[i] = p.captureRing[(start+i)%p.captureCap]
+	}
+	return out
 }
 
 // Close releases Opus encoder resources.

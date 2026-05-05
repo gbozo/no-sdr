@@ -1085,6 +1085,24 @@ export class SdrEngine {
         store.setIsAdmin(true);
         break;
 
+      case 'identify_token':
+        // One-time token for music recognition — resolve the pending identify() promise
+        if (this.identifyTokenResolve && meta.message) {
+          this.identifyTokenResolve(meta.message);
+        }
+        break;
+
+      case 'toast':
+        // Server-pushed notification (rate limit, errors, etc.)
+        store.addToast(meta.message, meta.code);
+        // If an identify was in progress, reset it
+        if (store.identifyState() === 'capturing' || store.identifyState() === 'querying') {
+          store.setIdentifyState('error');
+          store.setIdentifyResult({ match: false });
+          this.identifyTokenResolve = null;
+        }
+        break;
+
       case 'error':
         console.error(`[SDR] Server error: ${meta.message} (${meta.code ?? ''})`);
         break;
@@ -2024,6 +2042,135 @@ export class SdrEngine {
 
   adminSetProfile(dongleId: string, profileId: string): void {
     this.send({ cmd: 'admin_set_profile', dongleId, profileId });
+  }
+
+  // ---- Music Identification ----
+
+  /**
+   * Identify the currently playing music.
+   *
+   * - Opus codec path: server captures from its internal PCM ring buffer (best quality).
+   * Identify the currently playing music.
+   *
+   * Flow:
+   *  1. Sends `identify_start` over WebSocket → server issues a one-time token (20s TTL)
+   *  2. Simultaneously starts capturing 10s of audio from the worklet ring buffer
+   *  3. When token arrives via `identify_token` META message, POSTs token + WAV to /api/identify
+   *     (Opus path: server uses its own PCM buffer; ADPCM/none path: uses the uploaded WAV)
+   *  4. Result stored in store.identifyResult
+   *
+   * Updates store.identifyState and store.identifyResult reactively.
+   */
+  async identify(): Promise<void> {
+    if (store.identifyState() === 'capturing' || store.identifyState() === 'querying') return;
+
+    store.setIdentifyState('capturing');
+    store.setIdentifyResult(null);
+
+    try {
+      // Request a one-time token from the server via WebSocket
+      const tokenPromise = new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.identifyTokenResolve = null;
+          reject(new Error('token timeout — server did not respond in time'));
+        }, 5000);
+        this.identifyTokenResolve = (token: string) => {
+          clearTimeout(timer);
+          this.identifyTokenResolve = null;
+          resolve(token);
+        };
+      });
+      this.send({ cmd: 'identify_start' });
+
+      // Capture audio and wait for token in parallel
+      const codec = store.iqCodec();
+      const isOpus = codec === 'opus' || codec === 'opus-hq';
+
+      // Start audio capture immediately — runs in parallel with token fetch
+      const capturePromise = isOpus
+        ? Promise.resolve(null)                 // Opus: server has its own PCM buffer
+        : this.audio.captureAudio(10);          // ADPCM/none: capture from worklet
+
+      const [token, pcm] = await Promise.all([tokenPromise, capturePromise]);
+
+      store.setIdentifyState('querying');
+
+      // Build multipart form: always include token; include WAV for non-Opus paths
+      const form = new FormData();
+      form.append('token', token);
+
+      if (!isOpus) {
+        if (!pcm || pcm.length === 0) {
+          store.setIdentifyState('error');
+          store.setIdentifyResult({ match: false });
+          return;
+        }
+        const wav = this.pcmToWav(pcm, 48000);
+        form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+      }
+
+      const response = await fetch('/api/identify', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: form,
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        console.error('[Identify]', err);
+        store.setIdentifyState('error');
+        store.setIdentifyResult({ match: false });
+        return;
+      }
+
+      const data = await response.json();
+      store.setIdentifyState('done');
+      if (data.match && data.result) {
+        store.setIdentifyResult({
+          match:   true,
+          title:   data.result.title,
+          artist:  data.result.artist,
+          album:   data.result.album,
+          spotify: data.result.spotify,
+          youtube: data.result.youtube,
+          apple:   data.result.apple,
+          service: data.result.service,
+        });
+      } else {
+        store.setIdentifyResult({ match: false });
+      }
+    } catch (e) {
+      console.error('[Identify] error:', e);
+      store.setIdentifyState('error');
+      store.setIdentifyResult({ match: false });
+    }
+  }
+
+  // Resolve callback for pending identify token — set by identify(), called by handleMetaMessage
+  private identifyTokenResolve: ((token: string) => void) | null = null;
+
+  /** Encode a Float32 mono 48kHz PCM array to a minimal WAV ArrayBuffer. */
+  private pcmToWav(pcm: Float32Array, sampleRate: number): ArrayBuffer {
+    const numSamples = pcm.length;
+    const buf = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buf);
+    const write4 = (o: number, s: string) => { for (let i = 0; i < 4; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    const writeU32 = (o: number, v: number) => view.setUint32(o, v, true);
+    const writeU16 = (o: number, v: number) => view.setUint16(o, v, true);
+    write4(0, 'RIFF');
+    writeU32(4, 36 + numSamples * 2);
+    write4(8, 'WAVE');
+    write4(12, 'fmt ');
+    writeU32(16, 16); writeU16(20, 1); writeU16(22, 1);
+    writeU32(24, sampleRate); writeU32(28, sampleRate * 2);
+    writeU16(32, 2); writeU16(34, 16);
+    write4(36, 'data');
+    writeU32(40, numSamples * 2);
+    for (let i = 0; i < numSamples; i++) {
+      const s = Math.max(-1, Math.min(1, pcm[i]));
+      view.setInt16(44 + i * 2, s < 0 ? s * 32768 : s * 32767, true);
+    }
+    return buf;
   }
 
   // ---- Cleanup ----

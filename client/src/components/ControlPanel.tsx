@@ -23,6 +23,9 @@ const ControlPanel: Component = () => {
       {/* Dongle & Profile Selector */}
       <DongleProfileSelector />
 
+      {/* Music Identification */}
+      <IdentifyPanel />
+
       {/* Mode Selector */}
       <ModeSelector />
 
@@ -2359,3 +2362,94 @@ const AdminPanel: Component = () => {
 };
 
 export default ControlPanel;
+
+// ---- Music Identification Panel ----
+
+const IdentifyPanel: Component = () => {
+  const state = () => store.identifyState();
+  const result = () => store.identifyResult();
+
+  const label = () => {
+    switch (state()) {
+      case 'capturing': return 'Capturing...';
+      case 'querying':  return 'Identifying...';
+      default: return 'Identify Song';
+    }
+  };
+
+  const busy = () => state() === 'capturing' || state() === 'querying';
+
+  return (
+    <div class="sdr-panel">
+      <div class="sdr-panel-header">
+        <span>Identify</span>
+        <Show when={state() === 'done' && result()?.match}>
+          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal truncate max-w-[160px]">
+            {result()?.artist} — {result()?.title}
+          </span>
+        </Show>
+      </div>
+      <div class="p-3 space-y-2">
+        {/* Identify button */}
+        <button
+          class={`mil-btn w-full ${busy() ? '' : ''}`}
+          disabled={busy()}
+          onClick={() => engine.identify()}
+        >
+          {/* Waveform icon */}
+          <svg class="w-3 h-3 mr-1.5 inline-block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <path d="M1 8h2M4 5v6M7 3v10M10 5v6M13 8h2" />
+          </svg>
+          {label()}
+        </button>
+
+        {/* Result display */}
+        <Show when={state() === 'done' || state() === 'error'}>
+          <Show when={result()?.match}
+            fallback={
+              <div class="text-[9px] font-mono text-text-dim text-center py-1">
+                {state() === 'error' ? 'Error — check server logs' : 'No match found'}
+              </div>
+            }
+          >
+            <div class="border border-border rounded-sm bg-sdr-elevated p-2 space-y-1">
+              <div class="text-[11px] font-mono text-text-primary font-semibold leading-tight">
+                {result()?.title}
+              </div>
+              <div class="text-[9px] font-mono text-text-secondary">
+                {result()?.artist}
+                <Show when={result()?.album}>
+                  <span class="text-text-dim"> · {result()?.album}</span>
+                </Show>
+              </div>
+              {/* Links */}
+              <div class="flex gap-2 pt-1">
+                <Show when={result()?.spotify}>
+                  <a href={result()!.spotify} target="_blank" rel="noopener"
+                     class="text-[8px] font-mono uppercase tracking-wider text-[#1DB954] hover:brightness-125 transition-all">
+                    Spotify
+                  </a>
+                </Show>
+                <Show when={result()?.youtube}>
+                  <a href={result()!.youtube} target="_blank" rel="noopener"
+                     class="text-[8px] font-mono uppercase tracking-wider text-[#FF0000] hover:brightness-125 transition-all">
+                    YouTube
+                  </a>
+                </Show>
+                <Show when={result()?.apple}>
+                  <a href={result()!.apple} target="_blank" rel="noopener"
+                     class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-text-secondary transition-all">
+                    Apple
+                  </a>
+                </Show>
+                <span class="ml-auto text-[7px] font-mono text-text-muted">
+                  via {result()?.service ?? '—'}
+                </span>
+              </div>
+            </div>
+          </Show>
+        </Show>
+      </div>
+    </div>
+  );
+};

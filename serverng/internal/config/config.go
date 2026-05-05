@@ -83,6 +83,13 @@ type ServerConfig struct {
 	// AllowedIqCodecs lists the IQ/audio codecs the server will accept.
 	// Opus variants are automatically removed if the binary was built without libopus.
 	AllowedIqCodecs []string `yaml:"allowedIqCodecs" json:"allowedIqCodecs"`
+
+	// Music recognition API keys (optional).
+	// AudD is the primary service; ACRCloud is the fallback for higher coverage.
+	AuddAPIKey           string `yaml:"auddApiKey"           json:"-"` // https://audd.io
+	ACRCloudHost         string `yaml:"acrcloudHost"         json:"-"` // e.g. identify-eu-west-1.acrcloud.com
+	ACRCloudAccessKey    string `yaml:"acrcloudAccessKey"    json:"-"`
+	ACRCloudAccessSecret string `yaml:"acrcloudAccessSecret" json:"-"`
 }
 
 // DongleConfig describes an SDR dongle and its profiles.

@@ -88,6 +88,9 @@ const App: Component = () => {
 
   return (
     <div class="min-h-screen md:h-screen md:overflow-hidden flex flex-col bg-sdr-base text-text-primary select-none">
+      {/* Toast notifications — fixed overlay, doesn't affect layout */}
+      <ToastStack />
+
       {/* Top Bar */}
       <header class="bg-sdr-surface border-b border-border flex items-center px-3 md:px-4 relative shrink-0 min-h-[44px] flex-wrap gap-y-1 py-1 md:py-0 md:h-11">
         {/* Top accent gradient line */}
@@ -396,6 +399,35 @@ const ThemeButton: Component<{ theme: string; label: string }> = (props) => {
     >
       {props.label}
     </button>
+  );
+};
+
+// Toast notification stack — fixed bottom-right overlay
+const ToastStack: Component = () => {
+  return (
+    <div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-[320px]">
+      <For each={store.toasts()}>
+        {(toast) => (
+          <div
+            class="pointer-events-auto flex items-start gap-3 px-3 py-2.5
+                   bg-sdr-elevated border border-border rounded-sm shadow-lg
+                   font-mono text-[10px] text-text-secondary
+                   animate-[fadeInUp_0.15s_ease-out]"
+          >
+            {/* Icon — warning for rate-limit, info otherwise */}
+            <span class="shrink-0 text-amber text-[12px] leading-none mt-px">
+              {toast.code === 'identify_rate_limit' ? '⚠' : 'ℹ'}
+            </span>
+            <span class="flex-1 leading-relaxed">{toast.message}</span>
+            <button
+              class="shrink-0 text-text-muted hover:text-text-secondary transition-colors leading-none mt-px"
+              onClick={() => store.dismissToast(toast.id)}
+              aria-label="Dismiss"
+            >✕</button>
+          </div>
+        )}
+      </For>
+    </div>
   );
 };
 

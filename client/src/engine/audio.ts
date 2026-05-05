@@ -166,6 +166,19 @@ export class AudioEngine {
               return;
             }
 
+            if (e.data && e.data.cmd === 'capture') {
+              // Return the last N seconds of buffered L-channel audio
+              const secs = e.data.secs || 10;
+              const want = Math.min(secs * 48000, this.buffered, this.bufferLen);
+              const out = new Float32Array(want);
+              const startPos = (this.writePos - want + this.bufferLen) % this.bufferLen;
+              for (let i = 0; i < want; i++) {
+                out[i] = this.bufferL[(startPos + i) % this.bufferLen];
+              }
+              this.port.postMessage({ cmd: 'captureResult', data: out }, [out.buffer]);
+              return;
+            }
+
             let left, right;
 
             if (e.data instanceof Float32Array) {
@@ -347,6 +360,26 @@ export class AudioEngine {
     if (this.workletNode) {
       this.workletNode.port.postMessage('reset');
     }
+  }
+
+  /**
+   * Capture the last `secs` seconds of audio from the worklet ring buffer.
+   * Returns a mono Float32Array at 48kHz, or null if worklet is not ready.
+   */
+  captureAudio(secs = 10): Promise<Float32Array | null> {
+    return new Promise((resolve) => {
+      if (!this.workletNode) { resolve(null); return; }
+      const handler = (e: MessageEvent) => {
+        if (e.data?.cmd === 'captureResult') {
+          this.workletNode!.port.removeEventListener('message', handler);
+          resolve(e.data.data as Float32Array);
+        }
+      };
+      this.workletNode.port.addEventListener('message', handler);
+      this.workletNode.port.postMessage({ cmd: 'capture', secs });
+      // Timeout safety
+      setTimeout(() => { this.workletNode?.port.removeEventListener('message', handler); resolve(null); }, 2000);
+    });
   }
 
   /**

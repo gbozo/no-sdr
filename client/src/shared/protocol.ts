@@ -97,7 +97,9 @@ export type ClientCommand =
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
   | { cmd: 'admin_stop_dongle'; dongleId: string }
-  | { cmd: 'admin_start_dongle'; dongleId: string };
+  | { cmd: 'admin_start_dongle'; dongleId: string }
+  // Music identification
+  | { cmd: 'identify_start' };
 
 // ---- Server Meta Messages ----
 
@@ -178,7 +180,11 @@ export type ServerMeta =
   | { type: 'server_config_updated'; server: PushServerConfig; version?: number }
   | { type: 'config_saved'; version?: number }
   | { type: 'dongle_disconnected'; dongleId: string; reason: string }
-  | { type: 'codec_status'; codec: string; accepted: boolean; reason?: string };
+  | { type: 'codec_status'; codec: string; accepted: boolean; reason?: string }
+  // Music identification — one-time token response
+  | { type: 'identify_token'; message: string }
+  // Server-initiated toast notification (info / warning / error)
+  | { type: 'toast'; message: string; code?: string };
 
 // ---- Binary Message Helpers ----
 

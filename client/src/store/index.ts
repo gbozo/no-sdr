@@ -200,6 +200,23 @@ function createStore() {
   const [rdsPi, setRdsPi] = createSignal('');                 // PI code (hex string)
   const [rdsSynced, setRdsSynced] = createSignal(false);      // RDS sync acquired
 
+  // ---- Music identification ----
+  const [identifyState, setIdentifyState] = createSignal<'idle' | 'capturing' | 'querying' | 'done' | 'error'>('idle');
+  const [identifyResult, setIdentifyResult] = createSignal<null | {
+    match: boolean;
+    title?: string;
+    artist?: string;
+    album?: string;
+    spotify?: string;
+    youtube?: string;
+    apple?: string;
+    service?: string;
+  }>(null);
+
+  // ---- Toast notifications (server-pushed or client-generated) ----
+  const [toasts, setToasts] = createSignal<Array<{ id: number; message: string; code?: string }>>([]);
+  let toastSeq = 0;
+
   return {
     // Connection
     connected, setConnected,
@@ -325,6 +342,15 @@ function createStore() {
     rdsPty, setRdsPty,
     rdsPi, setRdsPi,
     rdsSynced, setRdsSynced,
+    identifyState, setIdentifyState,
+    identifyResult, setIdentifyResult,
+    toasts,
+    addToast: (message: string, code?: string) => {
+      const id = ++toastSeq;
+      setToasts(prev => [...prev, { id, message, code }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
+    },
+    dismissToast: (id: number) => setToasts(prev => prev.filter(t => t.id !== id)),
   };
 }
 

@@ -120,6 +120,19 @@ func main() {
 	api.RecordStopFunc  = dongleMgr.Recorder.Stop
 	api.RecordStatusFunc = func() any { return dongleMgr.Recorder.Status() }
 
+	// Music recognition: PCM capture from Opus pipeline + token issuance
+	api.GetOpusPCMFunc = dongleMgr.CapturePCMForClient
+	dongleMgr.SetIssueIdentifyTokenFunc(func(connClientID, persistentID string) struct {
+		Token string
+		Err   string
+	} {
+		r := api.IssueIdentifyToken(connClientID, persistentID)
+		return struct {
+			Token string
+			Err   string
+		}{Token: r.Token, Err: r.Err}
+	})
+
 	// Wire config push notifications (Phase 3: real-time config push)
 	api.NotifyDongleAddedFunc = dongleMgr.NotifyDongleAdded
 	api.NotifyDongleUpdatedFunc = dongleMgr.NotifyDongleUpdated
