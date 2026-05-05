@@ -199,6 +199,28 @@ export class SdrEngine {
         }
       }
     };
+
+    // Resume AudioContext when page becomes visible again (e.g. screen unlock).
+    // This is the baseline for keeping audio alive on mobile.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        this.audio.resume();
+      }
+    });
+  }
+
+  /** Update the Media Session API metadata (lock screen / notification shade).
+   *  Best-effort: keeps audio alive on Android, may help on iOS 17+. */
+  private updateMediaSession(): void {
+    if (!('mediaSession' in navigator)) return;
+    const freqHz = store.tunedFrequency();
+    const freqMhz = (freqHz / 1e6).toFixed(4).replace(/\.?0+$/, '');
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: `${freqMhz} MHz`,
+      artist: store.mode().toUpperCase(),
+      album: 'no-sdr',
+    });
+    navigator.mediaSession.playbackState = 'playing';
   }
 
   /** Attach RDS callback to current demodulator if it supports RDS */
@@ -1325,6 +1347,7 @@ export class SdrEngine {
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'tune', offset: offsetHz });
+    this.updateMediaSession();
   }
 
   setMode(mode: string): void {
@@ -1373,6 +1396,7 @@ export class SdrEngine {
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'mode', mode });
+    this.updateMediaSession();
   }
 
   setBandwidth(hz: number): void {
@@ -1959,6 +1983,8 @@ export class SdrEngine {
 
     // Tell server to start sending IQ data now that audio is enabled
     this.send({ cmd: 'audio_enabled', enabled: true });
+    // Announce to the OS lock screen / notification shade
+    this.updateMediaSession();
   }
 
   // ---- Resize Handling ----
