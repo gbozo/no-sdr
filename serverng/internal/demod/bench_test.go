@@ -185,3 +185,58 @@ func BenchmarkDemodPipeline(b *testing.B) {
 		demod.Process(complexBuf, demodOut[:nSamples])
 	}
 }
+
+// BenchmarkRdsDecoder measures the CPU cost of RDS decoding alone.
+// Input is a 20ms block of composite audio at 240kHz (4800 float32 samples).
+// This is what gets added to the WFM Opus pipeline per 20ms frame.
+func BenchmarkRdsDecoder(b *testing.B) {
+	const sampleRate = 240000.0
+	const blockSize = 4800 // 20ms at 240kHz
+
+	rng := rand.New(rand.NewSource(42))
+	// Synthesize realistic composite: noise + pilot at 19kHz + RDS subcarrier at 57kHz
+	composite := make([]float32, blockSize)
+	for i := range composite {
+		t := float64(i) / sampleRate
+		pilot := 0.09 * math.Sin(2*math.Pi*19000*t)
+		rds := 0.04 * math.Sin(2*math.Pi*57000*t)
+		noise := rng.NormFloat64() * 0.02
+		composite[i] = float32(pilot + rds + noise)
+	}
+
+	dec := NewRdsDecoder(sampleRate)
+
+	b.SetBytes(int64(blockSize * 4)) // float32 = 4 bytes
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		dec.Process(composite)
+	}
+}
+
+// BenchmarkFmStereoWithRds measures the combined cost of FmStereoDemod + RDS decoding,
+// which is exactly the hot path added to the WFM Opus pipeline.
+// Compare to BenchmarkFmStereoPipeline to see the marginal overhead.
+func BenchmarkFmStereoWithRds(b *testing.B) {
+	const sampleRate = 240000.0
+	const blockSize = 4800 // 20ms at 240kHz
+
+	fmDemod := NewFmStereoDemod(50e-6)
+	if err := fmDemod.Init(dsp.BlockContext{SampleRate: sampleRate}); err != nil {
+		b.Fatal(err)
+	}
+	rdsDecoder := NewRdsDecoder(sampleRate)
+
+	rng := rand.New(rand.NewSource(42))
+	input := generateTestIQ(blockSize, sampleRate, rng)
+	output := make([]float32, blockSize*2)
+
+	b.SetBytes(int64(blockSize * 8))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		fmDemod.Process(input, output)
+		composite := fmDemod.GetComposite()
+		rdsDecoder.Process(composite)
+	}
+}

@@ -1,6 +1,7 @@
 package dongle
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/gbozo/no-sdr/serverng/internal/codec"
@@ -18,11 +19,11 @@ type OpusResult struct {
 
 // OpusPipelineConfig configures the server-side demod + Opus encoding pipeline.
 type OpusPipelineConfig struct {
-	Mode       string // "wfm", "nfm", "am", "am-stereo", "usb", "lsb", "cw", "sam"
-	SampleRate int    // IQ extractor output rate
-	Bitrate    int    // Opus bitrate (0 = auto based on codec quality)
-	Stereo     bool   // force stereo (for WFM stereo, C-QUAM)
-	Quality    string // "opus" or "opus-hq"
+	Mode          string // "wfm", "nfm", "am", "am-stereo", "usb", "lsb", "cw", "sam"
+	SampleRate    int    // IQ extractor output rate
+	Bitrate       int    // Opus bitrate (0 = auto based on codec quality)
+	StereoEnabled *bool  // nil = default true; set false to start in mono from first frame
+	Quality       string // "opus" or "opus-hq"
 }
 
 // OpusPipeline performs server-side demodulation + Opus encoding.
@@ -67,6 +68,11 @@ type OpusPipeline struct {
 	audioBuf   []float32   // demodulator output
 	rateBuf    []float32   // rate-converted audio (48kHz)
 	pcmBuf     []int16     // float32 → int16 for Opus
+
+	// RDS decoder — only non-nil when mode=="wfm"
+	rdsDecoder   *demod.RdsDecoder
+	rdsLastSent  demod.RdsData // last snapshot sent to the client
+	rdsHasSent   bool         // false until the first RDS message has been sent
 }
 
 const stereoHoldFrames = 10
@@ -88,8 +94,13 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 	}
 
 	channels := channelsForMode(mode)
-	if cfg.Stereo {
-		channels = 2
+	// Respect the caller's stereo preference. Default is true (stereo allowed) if not specified.
+	stereoEnabled := true
+	if cfg.StereoEnabled != nil {
+		stereoEnabled = *cfg.StereoEnabled
+	}
+	if !stereoEnabled {
+		channels = 1
 	}
 
 	bitrate := cfg.Bitrate
@@ -147,7 +158,12 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 		quality:       quality,
 		decimFactor:   decimFactor,
 		upsampleRatio: upsampleRatio,
-		stereoEnabled: true, // default: user hasn't disabled stereo
+		stereoEnabled: stereoEnabled,
+	}
+
+	// Wire RDS decoder for WFM — operates on composite at the full input rate (240kHz).
+	if mode == "wfm" {
+		p.rdsDecoder = demod.NewRdsDecoder(float64(cfg.SampleRate))
 	}
 
 	return p, nil
@@ -189,6 +205,26 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 	written := p.demodulator.Process(p.complexBuf, p.audioBuf)
 	if written == 0 {
 		return nil
+	}
+
+	// Extract RDS from the composite baseband (WFM only, before stereo matrix / decimation).
+	// FmStereoDemod.GetComposite() returns the discriminator output at 240kHz.
+	// RdsDecoder.Process() returns non-nil only when a complete RDS group is decoded.
+	// We only emit JSON when the decoded data has changed since the last send.
+	var rdsJSON []byte
+	if p.rdsDecoder != nil {
+		if stereoDemod, ok := p.demodulator.(*demod.FmStereoDemod); ok {
+			composite := stereoDemod.GetComposite()
+			if rdsData := p.rdsDecoder.Process(composite); rdsData != nil {
+				if !p.rdsHasSent || *rdsData != p.rdsLastSent {
+					if b, err := json.Marshal(rdsData); err == nil {
+						rdsJSON = b
+						p.rdsLastSent = *rdsData
+						p.rdsHasSent = true
+					}
+				}
+			}
+		}
 	}
 
 	// Determine if the demod output is stereo (interleaved L,R).
@@ -349,11 +385,17 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 	// Step 6: Convert to OpusResult
 	results := make([]OpusResult, len(packets))
 	for i, pkt := range packets {
+		var rds []byte
+		if i == 0 {
+			// Attach RDS data (if any) only to the first packet of this frame.
+			// RDS groups arrive at ~11.4 Hz — one group per ~87ms.
+			rds = rdsJSON
+		}
 		results[i] = OpusResult{
 			Packet:   pkt.Data,
 			Samples:  pkt.Samples,
 			Channels: pkt.Channels,
-			RdsData:  nil, // RDS extraction is future work
+			RdsData:  rds,
 		}
 	}
 
@@ -375,6 +417,12 @@ func (p *OpusPipeline) SetMode(mode string) error {
 	}
 
 	newChannels := channelsForMode(mode)
+	// If stereo is disabled by the user, cap at mono regardless of mode.
+	// Process() also enforces this on every frame, but applying it here prevents
+	// a one-frame window where the encoder is stereo before stereoEnabled is checked.
+	if !p.stereoEnabled {
+		newChannels = 1
+	}
 
 	// If channel count changed, update the Opus encoder
 	if newChannels != p.channels {
@@ -392,11 +440,31 @@ func (p *OpusPipeline) SetMode(mode string) error {
 	p.demodulator = newDemod
 	p.mode = mode
 
+	// Recalculate rate conversion for the new mode.
+	// WFM: FmStereoDemod decimates internally (240k→48k), so pipeline decimFactor = 1.
+	// This must happen after p.mode is updated so UpdateSampleRate uses the correct mode.
+	p.UpdateSampleRate(p.sampleRate)
+
 	// Re-apply bandwidth if it was set before the mode change.
 	if p.bandwidth > 0 {
 		if bs, ok := p.demodulator.(bandwidthSetter); ok {
 			bs.SetBandwidth(float64(p.bandwidth))
 		}
+	}
+
+	// Update RDS decoder: only active for WFM mode.
+	if mode == "wfm" {
+		if p.rdsDecoder == nil {
+			p.rdsDecoder = demod.NewRdsDecoder(float64(p.sampleRate))
+		} else {
+			p.rdsDecoder.Reset()
+		}
+		p.rdsLastSent = demod.RdsData{}
+		p.rdsHasSent = false
+	} else {
+		p.rdsDecoder = nil
+		p.rdsLastSent = demod.RdsData{}
+		p.rdsHasSent = false
 	}
 
 	return nil
@@ -460,6 +528,12 @@ func (p *OpusPipeline) Reset() {
 	if p.encoder != nil {
 		p.encoder.Reset()
 	}
+	if p.rdsDecoder != nil {
+		// Re-create instead of reset to ensure clean sync state.
+		p.rdsDecoder = demod.NewRdsDecoder(float64(p.sampleRate))
+	}
+	p.rdsLastSent = demod.RdsData{}
+	p.rdsHasSent = false
 	p.upsampleAccum = 0
 	p.lastSample = 0
 }

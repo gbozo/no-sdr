@@ -64,8 +64,9 @@ func newClient(id string, conn *websocket.Conn, ctx context.Context, cancel cont
 		conn:        conn,
 		ctx:         ctx,
 		cancel:      cancel,
-		FftCodec:    "",  // empty = "none" — client sends preferred codec after subscribe
-		IqCodec:     "",  // empty = "none" — client sends preferred codec after subscribe
+		FftCodec:      "",   // empty = "none" — client sends preferred codec after subscribe
+		IqCodec:       "",   // empty = "none" — client sends preferred codec after subscribe
+		StereoEnabled: true, // default true until client sends stereo_enabled=false
 		ConnectedAt: time.Now(),
 		writeCh:     make(chan []byte, writeCap),
 		lastDrainAt: time.Now(),

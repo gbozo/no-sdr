@@ -106,11 +106,11 @@ self.onmessage = (e: MessageEvent<FftDecodeRequest>) => {
 
     const rawBytes = fftData.length * 4;
     const result: FftDecodeResult = { id, fftData, wireBytes, rawBytes };
-    self.postMessage(result, [fftData.buffer]);
+    self.postMessage(result, { transfer: [fftData.buffer] });
 
   } catch (err) {
     // Post a zero-length result so callers don't hang waiting
     const fftData = new Float32Array(0);
-    self.postMessage({ id, fftData, wireBytes, rawBytes: 0 } satisfies FftDecodeResult, [fftData.buffer]);
+    self.postMessage({ id, fftData, wireBytes, rawBytes: 0 } satisfies FftDecodeResult, { transfer: [fftData.buffer] });
   }
 };

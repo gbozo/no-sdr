@@ -280,10 +280,14 @@ const DongleEditor: Component<{
   }
 
   function updateLocalSource<K extends keyof SourceConfig>(key: K, value: SourceConfig[K]) {
-    setLocalState(prev => ({
-      ...prev,
-      source: { ...(prev.source || dongle()?.source || {}), [key]: value },
-    }));
+    setLocalState(prev => {
+      const base = prev.source || dongle()?.source || {};
+      const merged = { ...base, [key]: value };
+      return {
+        ...prev,
+        source: merged as SourceConfig,
+      };
+    });
   }
 
   return (

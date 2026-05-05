@@ -1830,7 +1830,7 @@ const SMeter: Component = () => {
               cacheW = 0; cacheH = 0;
             }}
             class="w-full rounded-sm"
-            style={{ height: '110px', imageRendering: 'crisp-edges' }}
+            style={{ height: '110px', 'image-rendering': 'crisp-edges' }}
           />
         </Show>
       </div>

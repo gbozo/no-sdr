@@ -93,6 +93,7 @@ type clientPipeline struct {
 	nbEnabled    bool
 	nbThreshold  float32 // multiplier (default 10.0)
 	iqChunkCount int64   // debug counter
+	stereoEnabled bool   // remembered stereo preference, applied on pipeline creation
 }
 
 // maxRetries is the number of retry attempts for dongle initialization.
@@ -1053,14 +1054,15 @@ func (m *Manager) processOneClient(clientID string, cp *clientPipeline, iqChunk 
 		if cp.accumPos >= cp.chunkSize {
 			// Full 20ms chunk — encode and send based on IQ codec
 			chunk := cp.accumBuf[:cp.chunkSize]
+			sampleRate := uint32(cp.extractor.OutputSampleRate())
 			if cp.iqCodec == "adpcm" {
 				encoded := cp.adpcmEnc.Encode(chunk)
 				// sampleCount = total Int16 values (not IQ pairs)
-				msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize))
+				msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize), sampleRate)
 				m.wsMgr.SendTo(clientID, msg)
 			} else {
 				// "none" — send raw Int16 IQ
-				msg := ws.PackIQMessage(chunk)
+				msg := ws.PackIQMessage(chunk, sampleRate)
 				m.wsMgr.SendTo(clientID, msg)
 			}
 			cp.accumPos = 0
@@ -1404,6 +1406,10 @@ func (m *Manager) handleStereoEnabled(clientID string, cmd *ws.ClientCommand) {
 	if !ok {
 		return
 	}
+	// Persist preference so it is applied if the Opus pipeline is recreated later
+	// (e.g., on codec switch). This prevents the "first packet is stereo" race where
+	// the pipeline is created with stereoEnabled=true before stereo_enabled=false arrives.
+	cp.stereoEnabled = *cmd.Enabled
 	// pmu guards opusPipeline against concurrent Process() calls in the hot path.
 	cp.pmu.Lock()
 	if cp.opusPipeline != nil {
@@ -1633,9 +1639,10 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 		}
 
 		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
-			Mode:       mode,
-			SampleRate: cp.extractor.OutputSampleRate(),
-			Quality:    newCodec,
+			Mode:          mode,
+			SampleRate:    cp.extractor.OutputSampleRate(),
+			Quality:       newCodec,
+			StereoEnabled: &cp.stereoEnabled,
 		})
 		if err != nil {
 			m.logger.Error("failed to create opus pipeline on codec switch",
@@ -1762,15 +1769,16 @@ func (m *Manager) createClientPipeline(clientID string) {
 	chunkSize := int(float64(ext.OutputSampleRate()) * 2.0 * 0.020)
 
 	cp := &clientPipeline{
-		extractor:   ext,
-		adpcmEnc:    codecPkg.NewImaAdpcmEncoder(),
-		accumBuf:    make([]int16, chunkSize),
-		accumPos:    0,
-		chunkSize:   chunkSize,
-		iqCodec:     iqCodec,
-		dongleID:    dongleID,
-		nbEnabled:   false,
-		nbThreshold: 10.0,
+		extractor:     ext,
+		adpcmEnc:      codecPkg.NewImaAdpcmEncoder(),
+		accumBuf:      make([]int16, chunkSize),
+		accumPos:      0,
+		chunkSize:     chunkSize,
+		iqCodec:       iqCodec,
+		dongleID:      dongleID,
+		nbEnabled:     false,
+		nbThreshold:   10.0,
+		stereoEnabled: client.StereoEnabled,
 	}
 
 	// Apply profile-level NB defaults to the extractor
@@ -1786,9 +1794,10 @@ func (m *Manager) createClientPipeline(clientID string) {
 	// Create Opus pipeline if codec is opus or opus-hq
 	if iqCodec == "opus" || iqCodec == "opus-hq" {
 		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
-			Mode:       mode,
-			SampleRate: outputRate, // same as IQ extractor output (mode-based: WFM=240k, NFM=48k)
-			Quality:    iqCodec,
+			Mode:          mode,
+			SampleRate:    outputRate, // same as IQ extractor output (mode-based: WFM=240k, NFM=48k)
+			Quality:       iqCodec,
+			StereoEnabled: &cp.stereoEnabled,
 		})
 		if err != nil {
 			m.logger.Error("failed to create opus pipeline, falling back to adpcm",

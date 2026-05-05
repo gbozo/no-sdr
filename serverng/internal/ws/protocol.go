@@ -132,24 +132,38 @@ func PackFFTDeflateMessage(deflatedData []byte, minDb, maxDb int16, binCount uin
 	return buf
 }
 
-// PackIQMessage packs raw IQ samples (Int16 interleaved I/Q).
-// Wire: [0x02][Int16 samples as LE bytes...]
-func PackIQMessage(samples []int16) []byte {
-	buf := make([]byte, 1+len(samples)*2)
+// PackIQMessage packs raw IQ samples with a self-describing header.
+// Wire: [0x02][Uint32 sampleRate LE][Uint8 channels=2][Uint8 reserved=0][Int16 samples LE...]
+//
+// The header lets the client configure its demodulator from the frame itself —
+// no external state (META messages, mode commands) needed to decode the frame.
+func PackIQMessage(samples []int16, sampleRate uint32) []byte {
+	const headerSize = 6 // 4 (sampleRate) + 1 (channels) + 1 (reserved)
+	buf := make([]byte, 1+headerSize+len(samples)*2)
 	buf[0] = MsgIQ
+	binary.LittleEndian.PutUint32(buf[1:5], sampleRate)
+	buf[5] = 2 // always 2-channel interleaved I/Q
+	buf[6] = 0 // reserved
 	for i, s := range samples {
-		binary.LittleEndian.PutUint16(buf[1+i*2:], uint16(s))
+		binary.LittleEndian.PutUint16(buf[7+i*2:], uint16(s))
 	}
 	return buf
 }
 
-// PackIQAdpcmMessage packs ADPCM-compressed IQ data.
-// Wire: [0x09][Uint32 sampleCount LE][adpcm bytes...]
-func PackIQAdpcmMessage(adpcmData []byte, sampleCount uint32) []byte {
-	buf := make([]byte, 1+4+len(adpcmData))
+// PackIQAdpcmMessage packs ADPCM-compressed IQ data with a self-describing header.
+// Wire: [0x09][Uint32 sampleCount LE][Uint32 sampleRate LE][Uint8 channels=2][Uint8 reserved=0][adpcm bytes...]
+//
+// sampleCount is the number of Int16 IQ samples (I+Q pairs × 2) before compression.
+// sampleRate is the IQ sub-band sample rate (e.g., 240000 for WFM, 48000 for NFM).
+func PackIQAdpcmMessage(adpcmData []byte, sampleCount uint32, sampleRate uint32) []byte {
+	const headerSize = 10 // 4 (sampleCount) + 4 (sampleRate) + 1 (channels) + 1 (reserved)
+	buf := make([]byte, 1+headerSize+len(adpcmData))
 	buf[0] = MsgIQAdpcm
 	binary.LittleEndian.PutUint32(buf[1:5], sampleCount)
-	copy(buf[5:], adpcmData)
+	binary.LittleEndian.PutUint32(buf[5:9], sampleRate)
+	buf[9] = 2  // always 2-channel interleaved I/Q
+	buf[10] = 0 // reserved
+	copy(buf[11:], adpcmData)
 	return buf
 }
 

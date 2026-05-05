@@ -29,6 +29,8 @@ import {
   type ServerMeta,
   type ClientCommand,
   type CodecType,
+  type FftCodecType,
+  type IqCodecType,
   type DemodMode,
 } from '~/shared';
 import { inflateSync } from 'fflate';
@@ -109,7 +111,8 @@ export class SdrEngine {
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
 
   // Opus decoder for server-side demodulated audio (WASM, async init)
-  private opusDecoder: OpusDecoder | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private opusDecoder: OpusDecoder<any> | null = null;
   private opusDecoderReady = false;
   private opusDecoderChannels = 1;
 
@@ -463,19 +466,38 @@ export class SdrEngine {
 
       case MSG_IQ: {
         // Per-user IQ sub-band data → client-side demodulation → audio
-        const iqData = new Int16Array(payload);
+        // Wire: [Uint32 sampleRate LE][Uint8 channels][Uint8 reserved][Int16 I/Q samples...]
         this.bwIqWireBytes += payload.byteLength;
-        this.bwIqRawBytes += payload.byteLength; // no compression
-        this.processIqData(iqData);
+        if (payload.byteLength < 6) break; // malformed header
+        const iqRawHdr = new DataView(payload);
+        const iqRawSampleRate = iqRawHdr.getUint32(0, true);
+        // Update demodulator input rate only when it changes (wire-driven, avoids per-frame resamplePhase reset)
+        if (iqRawSampleRate > 0 && iqRawSampleRate !== store.iqSampleRate()) {
+          this.demodulator.setInputSampleRate(iqRawSampleRate);
+          store.setIqSampleRate(iqRawSampleRate);
+          this.updateResampleRatio();
+        }
+        const iqRawData = new Int16Array(payload, 6);
+        this.bwIqRawBytes += iqRawData.byteLength;
+        this.processIqData(iqRawData);
         break;
       }
 
       case MSG_IQ_ADPCM: {
         // ADPCM-compressed IQ sub-band: decode nibbles → Int16 interleaved I/Q
+        // Wire: [Uint32 sampleCount LE][Uint32 sampleRate LE][Uint8 channels][Uint8 reserved][ADPCM bytes...]
         this.bwIqWireBytes += payload.byteLength;
-        const iqHeaderView = new DataView(payload);
-        const sampleCount = iqHeaderView.getUint32(0, true);
-        const adpcmData = new Uint8Array(payload, 4);
+        if (payload.byteLength < 10) break; // malformed header
+        const iqAdpcmHdr = new DataView(payload);
+        const sampleCount = iqAdpcmHdr.getUint32(0, true);
+        const iqAdpcmSampleRate = iqAdpcmHdr.getUint32(4, true);
+        // Update demodulator input rate only when it changes
+        if (iqAdpcmSampleRate > 0 && iqAdpcmSampleRate !== store.iqSampleRate()) {
+          this.demodulator.setInputSampleRate(iqAdpcmSampleRate);
+          store.setIqSampleRate(iqAdpcmSampleRate);
+          this.updateResampleRatio();
+        }
+        const adpcmData = new Uint8Array(payload, 10);
         const decoded = this.iqAdpcmDecoder.decode(adpcmData);
         // Trim to exact sample count (ADPCM may produce +1 sample if odd count)
         const iqData = sampleCount < decoded.length ? decoded.subarray(0, sampleCount) : decoded;
@@ -494,10 +516,11 @@ export class SdrEngine {
           const channels = headerView.getUint8(2);
           const opusPacket = new Uint8Array(payload, 3);
 
-          // Recreate decoder if channel count changed (async — drops frames until ready)
-          if (channels !== this.opusDecoderChannels) {
-            this.opusDecoderReady = false;
-            this.initOpusDecoder(channels); // fire-and-forget
+          // Wire-driven decoder lifecycle: rebuild if decoder is absent, not ready,
+          // or channel count changed. This is the ONLY place that manages the Opus
+          // decoder — client is a dumb terminal driven by wire headers.
+          if (!this.opusDecoder || !this.opusDecoderReady || channels !== this.opusDecoderChannels) {
+            this.resetOpusDecoderState(channels);
           }
 
           // Squelch gate — same logic as processIqData()
@@ -934,17 +957,15 @@ export class SdrEngine {
         this.iqAdpcmDecoder.reset();
         // Update resampler for this mode's output rate
         this.updateResampleRatio();
-        // Re-send codec preferences so the server applies them to this subscription.
-        // Always send — persisted values from localStorage may differ from server defaults.
-        this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
-        // Always sync stereo preference for Opus path immediately after codec is set.
-        // The server creates a fresh OpusAudioPipeline with stereo enabled by default,
-        // so we must send stereo_enabled even when the value is false — otherwise the
-        // server encodes stereo while the client expects mono, causing a channel-count
-        // mismatch that triggers async Opus decoder re-init and drops audio until resolved.
-        if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
-          this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
-        }
+         // Re-send codec preferences so the server applies them to this subscription.
+         // Always send — persisted values from localStorage may differ from server defaults.
+         // Send stereo_enabled BEFORE codec: the server stores it at the clientPipeline level
+         // so when codec creates the Opus pipeline it already uses the correct stereo preference.
+         // This prevents the first packets from being stereo when stereoEnabled=false.
+         if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
+           this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
+         }
+         this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
 
         // Restore client tuning state from before the reconnect.
         // Only re-send if the value differs from the server's profile default so we
@@ -980,16 +1001,9 @@ export class SdrEngine {
         // or HMR cycle even though the AudioEngine instance was already initialised.
         if (audioWasActive) {
           this.audio.resume();
-          // Pre-init the Opus decoder with the correct channel count so no
-          // async re-init is triggered when the first packet arrives.
-          // On the Opus path the server honours stereo_enabled before sending
-          // audio, but we prime the decoder here to eliminate any race window.
-          if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
-            const expectedChannels = store.stereoEnabled() ? 2 : 1;
-            if (!this.opusDecoderReady || this.opusDecoderChannels !== expectedChannels) {
-              this.initOpusDecoder(expectedChannels);
-            }
-          }
+          // Client is a dumb terminal: the Opus decoder lifecycle is managed
+          // exclusively by MSG_AUDIO_OPUS based on the wire channel header.
+          // Do NOT pre-init here — just enable audio and let the server drive.
           this.send({ cmd: 'audio_enabled', enabled: true });
         }
 
@@ -1296,13 +1310,18 @@ export class SdrEngine {
     this.demodulator.reset();
     // Reset ADPCM decoder — predictor state is invalid after frequency change
     this.iqAdpcmDecoder.reset();
-    // On the IQ codec path the client holds demodulated samples that go stale
-    // when the server shifts the extracted sub-band — flush the ring buffer.
-    // On the Opus path the server re-tunes seamlessly; flushing causes a
-    // needless 150ms silence while the jitter buffer re-fills.
-    if (store.iqCodec() === 'none' || store.iqCodec() === 'adpcm') {
-      this.audio.resetBuffer();
-    }
+    // Reset audio filter IIR state — delay-line history from the old frequency
+    // causes a transient noise burst on the first frames of the new frequency.
+    this.rumbleFilter.reset();
+    this.autoNotch.reset();
+    this.hiBlend.reset();
+    // Reset soft-mute gain so the new frequency starts at full gain
+    this.softMuteGain = 1.0;
+    // Flush stale audio from the jitter buffer. On the Opus path the old
+    // comment said "server re-tunes seamlessly" but the jitter buffer can hold
+    // up to 3 seconds of audio — without a flush the user hears the old
+    // frequency playing out before the new one starts (the "takes longer" effect).
+    this.audio.resetBuffer();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
     this.send({ cmd: 'tune', offset: offsetHz });
@@ -1321,6 +1340,8 @@ export class SdrEngine {
     this.demodulator.reset();
     this.demodulator.setBandwidth(store.bandwidth());
     this.attachRdsCallback();
+    // Clear stereo indicator — the new mode may be mono
+    store.setStereoDetected(false);
     // For Opus codec path, clear RDS when leaving WFM (server won't send MSG_RDS for other modes)
     if ((store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') && m !== 'wfm') {
       store.setRdsPs('');
@@ -1333,6 +1354,13 @@ export class SdrEngine {
     this.audio.resetBuffer();
     // Reset ADPCM decoder — mode/rate change invalidates predictor
     this.iqAdpcmDecoder.reset();
+    // Reset audio filter IIR state — stale delay-line history from the previous
+    // mode causes transient noise on the first frames of the new mode.
+    this.rumbleFilter.reset();
+    this.autoNotch.reset();
+    this.hiBlend.reset();
+    // Reset soft-mute gain — avoid inheriting a suppressed gain value across modes
+    this.softMuteGain = 1.0;
     // Reset noise reduction state for new mode
     this.nr.reset();
     this.anr.reset();
@@ -1594,23 +1622,78 @@ export class SdrEngine {
   // ---- Codec Settings ----
 
   setFftCodec(codec: CodecType): void {
-    store.setFftCodec(codec);
-    this.send({ cmd: 'codec', fftCodec: codec });
+    store.setFftCodec(codec as FftCodecType);
+    this.send({ cmd: 'codec', fftCodec: codec as FftCodecType });
   }
 
   setIqCodec(codec: CodecType): void {
     store.setIqCodec(codec as any);
     // Reset codec decoders when switching codecs
     this.iqAdpcmDecoder.reset();
-    // Initialize Opus decoder if switching to opus
-    if ((codec === 'opus' || codec === 'opus-hq') && !this.opusDecoderReady) {
-      this.initOpusDecoder();
-    }
-    this.send({ cmd: 'codec', iqCodec: codec });
+    // Do NOT proactively initialize the Opus decoder here.
+    // MSG_AUDIO_OPUS is the sole owner of decoder lifecycle — it initialises
+    // (via resetOpusDecoderState) when the first server packet arrives with
+    // the actual channel count in the wire header. Proactive init with a
+    // hardcoded channel count races with resetOpusDecoderState() and can
+    // install a stale mono decoder that feeds the stereo bitstream, causing
+    // the "chipmunk + silence" glitch.
+    this.send({ cmd: 'codec', iqCodec: codec as IqCodecType });
     // When switching to Opus, sync stereo preference to server
     if (codec === 'opus' || codec === 'opus-hq') {
       this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
     }
+  }
+
+  /**
+   * Reset Opus decoder state without causing a gap in audio decoding.
+   *
+   * - Same channel count: calls decoder.reset() which is async but keeps the
+   *   decoder live and ready — no dropped packets.
+   * - Channel count change: builds a new decoder in the background and only
+   *   swaps it in once ready, so opusDecoderReady never goes false mid-stream.
+   *
+   * Use this on mode/tune changes instead of initOpusDecoder() to avoid the
+   * "chipmunk + silence" artifact caused by dropping packets while the WASM
+   * decoder is reinitialising.
+   */
+  private resetOpusDecoderState(channels: number): void {
+    const isStereo = channels >= 2;
+    const targetChannels = isStereo ? 2 : 1;
+
+    if (this.opusDecoder && this.opusDecoderReady && targetChannels === this.opusDecoderChannels) {
+      // Same channel config — decoder stays live. Opus packets are independently
+      // decodable (with PLC), so no decoder reset is needed on mode/tune change.
+      // The jitter buffer flush (already done by caller) is sufficient.
+      return;
+    }
+
+    // Channel count change (or decoder not yet ready):
+    // A mono decoder fed stereo packets (or vice versa) produces chipmunk.
+    // Stop decoding immediately, flush the jitter buffer, build a new decoder.
+    // The resulting silence window is <50ms (WASM module is cached after first load).
+    if (this.opusDecoder) {
+      try { this.opusDecoder.free(); } catch { /* ignore */ }
+      this.opusDecoder = null;
+    }
+    this.opusDecoderReady = false;
+    this.opusDecoderChannels = targetChannels; // set eagerly — prevents duplicate triggers
+    this.audio.resetBuffer();
+
+    const next = new OpusDecoder({
+      sampleRate: 48000,
+      channels: targetChannels,
+      streamCount: 1,
+      coupledStreamCount: isStereo ? 1 : 0,
+      channelMappingTable: isStereo ? [0, 1] : [0],
+    });
+    next.ready.then(() => {
+      this.opusDecoder = next as unknown as OpusDecoder<any>;
+      this.opusDecoderReady = true;
+    }).catch((e) => {
+      console.error('[SDR] Failed to reinit Opus decoder:', e);
+      this.opusDecoderChannels = isStereo ? 1 : 2; // roll back
+      try { next.free(); } catch { /* ignore */ }
+    });
   }
 
   /** Initialize Opus WASM decoder (async, one-time) */
@@ -1630,7 +1713,7 @@ export class SdrEngine {
         coupledStreamCount: isStereo ? 1 : 0,
         channelMappingTable: isStereo ? [0, 1] : [0],
       });
-      await this.opusDecoder.ready;
+      await this.opusDecoder!.ready;
       this.opusDecoderReady = true;
       this.opusDecoderChannels = isStereo ? 2 : 1;
     } catch (e) {
@@ -1870,17 +1953,9 @@ export class SdrEngine {
     this.hiBlend.setEnabled(store.hiBlendEnabled());
     this.hiBlend.setCutoff(store.hiBlendCutoff());
 
-    // For Opus codec path: initialise the WASM decoder with the correct
-    // channel count before sending audio_enabled. On a fresh page load
-    // setIqCodec() is never called (codec comes from persisted store), so
-    // the decoder is null. We must await it here so the first packets are
-    // not silently dropped while the decoder is still initialising.
-    if (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq') {
-      const expectedChannels = store.stereoEnabled() ? 2 : 1;
-      if (!this.opusDecoderReady || this.opusDecoderChannels !== expectedChannels) {
-        await this.initOpusDecoder(expectedChannels);
-      }
-    }
+    // Client is a dumb terminal: the Opus decoder lifecycle is managed
+    // exclusively by MSG_AUDIO_OPUS based on the wire channel header.
+    // No pre-init here — just tell the server to start sending.
 
     // Tell server to start sending IQ data now that audio is enabled
     this.send({ cmd: 'audio_enabled', enabled: true });

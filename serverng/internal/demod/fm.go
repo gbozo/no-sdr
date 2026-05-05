@@ -603,6 +603,14 @@ func (f *FmStereoDemod) BlendFactor() float32 {
 	return f.blendFactor
 }
 
+// GetComposite returns the composite baseband buffer from the last Process() call.
+// This is the FM discriminator output at the input sample rate (e.g., 240kHz for WFM),
+// before stereo matrix and decimation. Valid only until the next Process() call.
+// Used by RdsDecoder which requires the pre-stereo composite at the full input rate.
+func (f *FmStereoDemod) GetComposite() []float32 {
+	return f.composite
+}
+
 // SetBandwidth is a no-op for WFM stereo: WFM is always full-band (200kHz RF, 15kHz audio).
 // The fixed 51-tap FIR LPF at 15kHz handles audio bandwidth limiting.
 func (f *FmStereoDemod) SetBandwidth(_ float64) {}
