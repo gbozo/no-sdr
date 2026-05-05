@@ -210,16 +210,27 @@ export class SdrEngine {
   }
 
   /** Update the Media Session API metadata (lock screen / notification shade).
+   *  Uses RDS PS/RT when available, falls back to frequency + mode.
    *  Best-effort: keeps audio alive on Android, may help on iOS 17+. */
   private updateMediaSession(): void {
     if (!('mediaSession' in navigator)) return;
-    const freqHz = store.tunedFrequency();
+
+    const freqHz  = store.tunedFrequency();
     const freqMhz = (freqHz / 1e6).toFixed(4).replace(/\.?0+$/, '');
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: `${freqMhz} MHz`,
-      artist: store.mode().toUpperCase(),
-      album: 'no-sdr',
-    });
+    const mode    = store.mode().toUpperCase();
+
+    // RDS PS (station name) as title when decoded, otherwise "100.3 MHz"
+    const ps  = store.rdsPs().trim();
+    const rt  = store.rdsRt().trim();
+    const pty = store.rdsPty().trim();
+
+    const title  = ps  || `${freqMhz} MHz`;
+    // Artist: RT if present, else mode or PTY label
+    const artist = rt  || (pty ? `${mode} · ${pty}` : mode);
+    // Album: always show frequency so it's visible on the lock screen
+    const album  = ps  ? `${freqMhz} MHz` : 'no-sdr';
+
+    navigator.mediaSession.metadata = new MediaMetadata({ title, artist, album });
     navigator.mediaSession.playbackState = 'playing';
   }
 
@@ -232,6 +243,8 @@ export class SdrEngine {
         store.setRdsPty(data.ptyName);
         store.setRdsPi(data.pi !== null ? data.pi.toString(16).toUpperCase().padStart(4, '0') : '');
         store.setRdsSynced(data.synced);
+        // Update lock screen with station name / radio text as RDS data arrives
+        this.updateMediaSession();
       });
     } else {
       // Clear RDS data when not in WFM mode
@@ -730,6 +743,8 @@ export class SdrEngine {
             store.setRdsPi('');
           }
           if (rds.synced !== undefined) store.setRdsSynced(rds.synced);
+          // Update lock screen with RDS station name / radio text
+          this.updateMediaSession();
         } catch (e) {
           console.error('[RDS] decode error:', e);
         }
