@@ -150,6 +150,45 @@ func (e *FftDeflateEncoder) EncodePayload(fft []float32, minDb, maxDb float32) (
 	return payload, nil
 }
 
+// EncodeMessage encodes a full wire message in a single allocation:
+// [msgType][Int16 minDb LE][Int16 maxDb LE][Uint32 binCount LE][deflate bytes]
+// This avoids the make+copy that would otherwise be needed to prepend the type byte.
+func (e *FftDeflateEncoder) EncodeMessage(msgType byte, fft []float32, minDb, maxDb float32) ([]byte, error) {
+	n := len(fft)
+
+	// Grow scratch if needed
+	if cap(e.scratch) < n {
+		e.scratch = make([]byte, n)
+	}
+	scratch := e.scratch[:n]
+
+	compressFftInto(fft, minDb, maxDb, scratch)
+
+	for i := n - 1; i > 0; i-- {
+		scratch[i] = scratch[i] - scratch[i-1]
+	}
+
+	e.buf.Reset()
+	e.writer.Reset(&e.buf)
+	if _, err := e.writer.Write(scratch); err != nil {
+		return nil, fmt.Errorf("flate write: %w", err)
+	}
+	if err := e.writer.Close(); err != nil {
+		return nil, fmt.Errorf("flate close: %w", err)
+	}
+
+	// Single allocation: 1 (type) + 8 (header) + deflated
+	msg := make([]byte, 1+8+e.buf.Len())
+	msg[0] = msgType
+	minDbI16 := int16(math.Round(float64(minDb)))
+	maxDbI16 := int16(math.Round(float64(maxDb)))
+	binary.LittleEndian.PutUint16(msg[1:3], uint16(minDbI16))
+	binary.LittleEndian.PutUint16(msg[3:5], uint16(maxDbI16))
+	binary.LittleEndian.PutUint32(msg[5:9], uint32(n))
+	copy(msg[9:], e.buf.Bytes())
+	return msg, nil
+}
+
 // EncodePayloadFloor encodes with noise-floor clamping for better compression.
 // Bins below the EMA-smoothed noise floor are clamped to the floor value,
 // reducing delta variance in the noise region.
@@ -218,17 +257,87 @@ func (e *FftDeflateEncoder) EncodePayloadFloor(fft []float32, minDb, maxDb float
 		return nil, fmt.Errorf("flate close: %w", err)
 	}
 
-	deflated := make([]byte, e.buf.Len())
-	copy(deflated, e.buf.Bytes())
-
-	// Pack payload with header
-	payload := make([]byte, 8+len(deflated))
+	// Single allocation: 8 (header) + deflated
+	payload := make([]byte, 8+e.buf.Len())
 	minDbI16 := int16(math.Round(float64(minDb)))
 	maxDbI16 := int16(math.Round(float64(maxDb)))
 	binary.LittleEndian.PutUint16(payload[0:2], uint16(minDbI16))
 	binary.LittleEndian.PutUint16(payload[2:4], uint16(maxDbI16))
 	binary.LittleEndian.PutUint32(payload[4:8], uint32(n))
-	copy(payload[8:], deflated)
+	copy(payload[8:], e.buf.Bytes())
 
 	return payload, nil
+}
+
+// EncodeMessageFloor encodes with noise-floor clamping and returns a full wire
+// message in a single allocation:
+// [msgType][Int16 minDb LE][Int16 maxDb LE][Uint32 binCount LE][deflate bytes]
+func (e *FftDeflateEncoder) EncodeMessageFloor(msgType byte, fft []float32, minDb, maxDb float32) ([]byte, error) {
+	n := len(fft)
+
+	if cap(e.scratch) < n {
+		e.scratch = make([]byte, n)
+	}
+	scratch := e.scratch[:n]
+
+	compressFftInto(fft, minDb, maxDb, scratch)
+
+	var hist [256]int
+	for i := 0; i < n; i++ {
+		hist[scratch[i]]++
+	}
+	target := (n*noiseFloorPercentile + 99) / 100
+	cumulative := 0
+	percentileIdx := 0
+	for b := 0; b < 256; b++ {
+		cumulative += hist[b]
+		if cumulative >= target {
+			percentileIdx = b
+			break
+		}
+	}
+
+	if !e.noiseFloorSet {
+		e.noiseFloorEma = float64(percentileIdx)
+		e.noiseFloorSet = true
+	} else {
+		e.noiseFloorEma += noiseFloorEmaAlpha * (float64(percentileIdx) - e.noiseFloorEma)
+	}
+	floorIdx := int(e.noiseFloorEma + 0.5)
+	if floorIdx < 0 {
+		floorIdx = 0
+	} else if floorIdx > 255 {
+		floorIdx = 255
+	}
+	floorByte := byte(floorIdx)
+
+	for i := 0; i < n; i++ {
+		if scratch[i] < floorByte {
+			scratch[i] = floorByte
+		}
+	}
+
+	for i := n - 1; i > 0; i-- {
+		scratch[i] = scratch[i] - scratch[i-1]
+	}
+
+	e.buf.Reset()
+	e.writer.Reset(&e.buf)
+	if _, err := e.writer.Write(scratch); err != nil {
+		return nil, fmt.Errorf("flate write: %w", err)
+	}
+	if err := e.writer.Close(); err != nil {
+		return nil, fmt.Errorf("flate close: %w", err)
+	}
+
+	// Single allocation: 1 (type) + 8 (header) + deflated
+	msg := make([]byte, 1+8+e.buf.Len())
+	msg[0] = msgType
+	minDbI16 := int16(math.Round(float64(minDb)))
+	maxDbI16 := int16(math.Round(float64(maxDb)))
+	binary.LittleEndian.PutUint16(msg[1:3], uint16(minDbI16))
+	binary.LittleEndian.PutUint16(msg[3:5], uint16(maxDbI16))
+	binary.LittleEndian.PutUint32(msg[5:9], uint32(n))
+	copy(msg[9:], e.buf.Bytes())
+	return msg, nil
 }

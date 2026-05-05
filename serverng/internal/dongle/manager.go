@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -86,6 +85,10 @@ type activeDongle struct {
 	deflateFloorEnc *codecPkg.FftDeflateEncoder
 	fftHistory *history.FftBuffer
 	cancel     context.CancelFunc
+
+	// iqScratch is a reusable snapshot buffer for processClientIQ.
+	// Owned exclusively by the runDongle goroutine — no locking needed.
+	iqScratch []cpEntry
 }
 
 // clientPipeline holds per-client IQ extraction state.
@@ -967,7 +970,7 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 			m.Recorder.WriteIQ(d.id, iqChunk)
 
 			// Per-client IQ extraction — runs BEFORE FFT
-			m.processClientIQ(d.id, iqChunk)
+			m.processClientIQ(d, iqChunk)
 
 			// Feed IQ data to FFT processor
 			frames := d.fftProc.ProcessIqData(iqChunk)
@@ -981,21 +984,26 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 	}
 }
 
+// cpEntry pairs a client ID with its pipeline for processClientIQ snapshots.
+type cpEntry struct {
+	clientID string
+	cp       *clientPipeline
+}
+
 // processClientIQ extracts sub-band IQ for each client with an active pipeline
 // subscribed to the given dongle.
-func (m *Manager) processClientIQ(dongleID string, iqChunk []byte) {
+func (m *Manager) processClientIQ(d *activeDongle, iqChunk []byte) {
 	m.mu.Lock()
-	// Collect pipelines for this dongle (snapshot under lock)
-	type cpEntry struct {
-		clientID string
-		cp       *clientPipeline
-	}
-	var entries []cpEntry
+	// Reuse d.iqScratch to avoid allocating a new slice on every IQ chunk.
+	// d.iqScratch is owned exclusively by the runDongle goroutine for this
+	// dongle, so it is safe to access here under m.mu while snapshotting.
+	entries := d.iqScratch[:0]
 	for clientID, cp := range m.clientPipelines {
-		if cp.dongleID == dongleID {
+		if cp.dongleID == d.id {
 			entries = append(entries, cpEntry{clientID, cp})
 		}
 	}
+	d.iqScratch = entries
 	m.mu.Unlock()
 
 	if len(entries) == 0 {
@@ -1130,26 +1138,22 @@ func (m *Manager) broadcastFftFrame(d *activeDongle, fftFrame []float32) {
 		switch client.FftCodec {
 		case "deflate":
 			if deflateMsg == nil {
-				payload, err := d.deflateEnc.EncodePayload(fftFrame, minDb, maxDb)
+				var err error
+				deflateMsg, err = d.deflateEnc.EncodeMessage(ws.MsgFFTDeflate, fftFrame, minDb, maxDb)
 				if err != nil {
 					m.logger.Error("deflate encode error", "error", err, "dongle", d.id)
 					continue
 				}
-				deflateMsg = make([]byte, 1+len(payload))
-				deflateMsg[0] = ws.MsgFFTDeflate
-				copy(deflateMsg[1:], payload)
 			}
 			msg = deflateMsg
 		case "deflate-floor":
 			if deflateFloorMsg == nil {
-				payload, err := d.deflateFloorEnc.EncodePayloadFloor(fftFrame, minDb, maxDb)
+				var err error
+				deflateFloorMsg, err = d.deflateFloorEnc.EncodeMessageFloor(ws.MsgFFTDeflate, fftFrame, minDb, maxDb)
 				if err != nil {
 					m.logger.Error("deflate-floor encode error", "error", err, "dongle", d.id)
 					continue
 				}
-				deflateFloorMsg = make([]byte, 1+len(payload))
-				deflateFloorMsg[0] = ws.MsgFFTDeflate
-				copy(deflateFloorMsg[1:], payload)
 			}
 			msg = deflateFloorMsg
 		case "adpcm":
@@ -1992,12 +1996,11 @@ func (m *Manager) statsLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// CPU usage
+			// CPU usage via rusage — zero allocation, no STW pause.
 			syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
 			nowCPU := ru.Utime.Nano() + ru.Stime.Nano()
 			elapsed := time.Since(lastTime)
 			cpuDelta := nowCPU - lastCPU
-			// cpuPercent = (cpu ns used) / (wall ns elapsed) * 100
 			cpuPercent := 0
 			if elapsed.Nanoseconds() > 0 {
 				cpuPercent = int(cpuDelta * 100 / elapsed.Nanoseconds())
@@ -2008,10 +2011,9 @@ func (m *Manager) statsLoop(ctx context.Context) {
 			lastCPU = nowCPU
 			lastTime = time.Now()
 
-			// Memory (RSS)
-			var memStats runtime.MemStats
-			runtime.ReadMemStats(&memStats)
-			memMb := int(memStats.Sys / 1_048_576)
+			// RSS memory via rusage — no stop-the-world.
+			// ru.Maxrss is in bytes on Linux, kilobytes on Darwin.
+			memMb := rusageMemMB(&ru)
 
 			// Broadcast to all connected clients
 			statsJSON, _ := json.Marshal(map[string]any{
@@ -2024,7 +2026,6 @@ func (m *Manager) statsLoop(ctx context.Context) {
 			msg[0] = ws.MsgMeta
 			copy(msg[1:], statsJSON)
 
-			// Send to all clients
 			m.wsMgr.BroadcastAll(msg)
 		}
 	}

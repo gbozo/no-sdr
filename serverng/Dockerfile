@@ -6,7 +6,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /serverng ./cmd/serverng
+# GOAMD64=v3 targets AVX2 (Intel Haswell 2013+) on amd64.
+# Safe for cross-compilation — does not embed build-host native extensions.
+RUN CGO_ENABLED=0 GOOS=linux GOAMD64=v3 go build -ldflags="-s -w" -o /serverng ./cmd/serverng
 
 # Final image — just the binary + ca-certificates for HTTPS
 FROM alpine:3.20

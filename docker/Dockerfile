@@ -72,7 +72,12 @@ RUN go mod download
 
 COPY serverng/ .
 
-RUN CGO_ENABLED=1 GOOS=linux \
+# GOAMD64=v3 targets AVX2 (Intel Haswell 2013+, AMD Ryzen 1000+) on amd64 builds.
+# This enables vectorization of the FIR/FFT hot loops without being native-only.
+# arm64 uses the default baseline (no equivalent microarch level needed).
+# Do NOT use -gcflags="-cpu=native" here — the build runner's native extensions
+# would be embedded into binaries meant to run on different hardware.
+RUN CGO_ENABLED=1 GOOS=linux GOAMD64=v3 \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     go build \
         -tags 'opus rtlsdr nolibopusfile' \

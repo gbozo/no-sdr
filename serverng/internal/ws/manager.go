@@ -191,7 +191,7 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		Type:             "welcome",
 		ClientId:         persistentID,
 		ConnIndex:        connIndex,
-		ServerVersion:    "2.0.0",
+		ServerVersion:    "2.6.0",
 		AllowedFftCodecs: allowedFft,
 		AllowedIqCodecs:  allowedIq,
 	})

@@ -275,6 +275,28 @@ func (f *simpleFir) process(x float32) float32 {
 	return acc
 }
 
+// processBatch filters an input slice into out in a single call, allowing
+// the compiler to vectorize the inner MAC loop across the tap array.
+// len(out) must be >= len(in).
+func (f *simpleFir) processBatch(in, out []float32) {
+	taps := f.taps
+	buf := f.buf
+	mask := f.bufMask
+	pos := f.pos
+	for i, x := range in {
+		buf[pos] = x
+		var acc float32
+		idx := pos
+		for _, tap := range taps {
+			acc += tap * buf[idx]
+			idx = (idx - 1) & mask
+		}
+		out[i] = acc
+		pos = (pos + 1) & mask
+	}
+	f.pos = pos
+}
+
 func (f *simpleFir) reset() {
 	for i := range f.buf {
 		f.buf[i] = 0
@@ -293,11 +315,24 @@ type FmStereoDemod struct {
 	decimFactor  int
 	decimCounter int
 
-	// 19kHz PLL for pilot detection
-	pllPhase float64
+	// 19kHz PLL for pilot detection.
+	// pllSin/pllCos is the running phasor (sin φ, cos φ).
+	// pllFreq is the VCO frequency in rad/sample.
+	// We use an incremental phasor instead of calling math.Sin/Cos every sample:
+	// each step rotates (pllSin, pllCos) by Δω using a 5th-order Taylor polynomial
+	// for sin/cos, then renorms every pllRenormInterval samples to prevent drift.
+	pllSin   float64
+	pllCos   float64
 	pllFreq  float64
 	pllAlpha float64
 	pllBeta  float64
+
+	// pllPhase is the accumulated phase, kept only for Reset() to restore the
+	// phasor to a consistent state without calling Init() again.
+	pllPhase float64
+
+	// Renormalisation counter for the running phasor.
+	pllRenormCount int
 
 	// Pilot BPF + energy estimator (SNR-based blend)
 	pilotEnergy float32
@@ -331,9 +366,35 @@ type FmStereoDemod struct {
 	// Composite baseband buffer (reused)
 	composite []float32
 
+	// Scratch buffers for batch FIR input/output
+	lprInBuf  []float32
+	lrInBuf   []float32
+	lprOutBuf []float32
+	lrOutBuf  []float32
+
+	// Per-sample blend state for pass 2
+	blendBuf []float32
+
 	// Pre-allocated L/R output for the decimated frames
 	leftOut  []float32
 	rightOut []float32
+}
+
+// pllRenormInterval is the number of samples between phasor renormalisations.
+// Drift at double precision is negligible over 1000 samples.
+const pllRenormInterval = 1000
+
+// sinCos5 computes sin(x) and cos(x) using 5th-order Taylor polynomials.
+// Accurate to < 2×10⁻⁵ for |x| ≤ 0.6 rad (the max PLL step at 240kHz).
+// Replaces math.Sin/math.Cos in the per-sample PLL inner loop.
+func sinCos5(x float64) (s, c float64) {
+	x2 := x * x
+	x3 := x2 * x
+	x4 := x2 * x2
+	x5 := x4 * x
+	s = x - x3/6.0 + x5/120.0
+	c = 1.0 - x2/2.0 + x4/24.0
+	return
 }
 
 // NewFmStereoDemod creates a new FM stereo demodulator.
@@ -373,9 +434,12 @@ func (f *FmStereoDemod) Init(ctx dsp.BlockContext) error {
 	f.pllAlpha = 2.0 * damp * bw * 2.0 * math.Pi / f.sampleRate
 	f.pllBeta = math.Pow(bw*2.0*math.Pi/f.sampleRate, 2)
 
-	// Initial PLL frequency at 19kHz
+	// Initial PLL frequency at 19kHz; phasor starts at phase=0 (sin=0, cos=1)
 	f.pllFreq = 2.0 * math.Pi * 19000.0 / f.sampleRate
 	f.pllPhase = 0
+	f.pllSin = 0
+	f.pllCos = 1
+	f.pllRenormCount = 0
 
 	// Pilot detection (energy-based SNR, matching Node.js)
 	f.energyAlpha = 0.002
@@ -429,10 +493,23 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 	f.leftOut = f.leftOut[:maxOut]
 	f.rightOut = f.rightOut[:maxOut]
 
-	alpha := f.deemphAlpha
-	stateL := f.deemphStateL
-	stateR := f.deemphStateR
-	pllPhase := f.pllPhase
+	// Grow FIR scratch buffers
+	if cap(f.lprInBuf) < n {
+		f.lprInBuf = make([]float32, n)
+		f.lrInBuf = make([]float32, n)
+		f.lprOutBuf = make([]float32, n)
+		f.lrOutBuf = make([]float32, n)
+		f.blendBuf = make([]float32, n)
+	}
+	lprIn := f.lprInBuf[:n]
+	lrIn := f.lrInBuf[:n]
+	lprOut := f.lprOutBuf[:n]
+	lrOut := f.lrOutBuf[:n]
+	blends := f.blendBuf[:n]
+
+	// ---- Pass 1: PLL + build FIR inputs ----
+	pllSin := f.pllSin
+	pllCos := f.pllCos
 	pllFreq := f.pllFreq
 	pilotEnergy := f.pilotEnergy
 	noiseEnergy := f.noiseEnergy
@@ -440,31 +517,31 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 	blendFactor := f.blendFactor
 	pilotDetected := f.pilotDetected
 	holdCounter := f.holdCounter
-	decimCounter := f.decimCounter
-
-	outIdx := 0
-
-	const twoPi = 2 * math.Pi
+	renormCount := f.pllRenormCount
 
 	for i := 0; i < n; i++ {
 		comp := f.composite[i]
 
-		// Step 2: PLL tracks 19kHz pilot (same as Node.js)
-		pilotRef := float32(math.Sin(pllPhase))
+		pilotRef := float32(pllSin)
 		phaseErr := float64(comp * pilotRef)
 		pllFreq += f.pllBeta * phaseErr
-		pllPhase += f.pllAlpha*phaseErr + pllFreq
-		if pllPhase >= twoPi {
-			pllPhase -= twoPi
-		} else if pllPhase < 0 {
-			pllPhase += twoPi
+
+		dw := f.pllAlpha*phaseErr + pllFreq
+		sinDw, cosDw := sinCos5(dw)
+		pllSin, pllCos = pllSin*cosDw+pllCos*sinDw, pllCos*cosDw-pllSin*sinDw
+
+		renormCount++
+		if renormCount >= pllRenormInterval {
+			norm := 1.0 / math.Sqrt(pllSin*pllSin+pllCos*pllCos)
+			pllSin *= norm
+			pllCos *= norm
+			renormCount = 0
 		}
 
-		// Step 3: Pilot detection via energy-based SNR (matching Node.js)
-		// Bandpass-free approximation: use raw composite for noise and
-		// pilot-correlated energy for pilot estimate.
-		cosVal := float32(math.Cos(pllPhase))
-		bpfOut := comp * cosVal // approximate bandpass at 19kHz
+		cosVal := float32(pllCos)
+
+		// Pilot energy / SNR
+		bpfOut := comp * cosVal
 		pilotEnergy = pilotEnergy*(1-energyAlpha) + bpfOut*bpfOut*energyAlpha
 		noiseEnergy = noiseEnergy*(1-energyAlpha) + comp*comp*energyAlpha
 
@@ -472,7 +549,6 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 		if noiseEnergy > 1e-12 {
 			snr = pilotEnergy / noiseEnergy
 		}
-
 		if snr > 0.006 {
 			pilotDetected = true
 			holdCounter = f.holdSamples
@@ -495,20 +571,45 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 				targetBlend = 1
 			}
 		}
-		// Fast attack, slow decay blend (matching Node.js blendAlpha logic)
 		var blendAlpha float32 = 0.003
 		if targetBlend > blendFactor {
 			blendAlpha = 0.015
 		}
 		blendFactor += blendAlpha * (targetBlend - blendFactor)
+		blends[i] = blendFactor
 
-		// Step 4: L+R and L-R through 51-tap FIR LPF (matching Node.js lprFilter/lrFilter)
-		lPlusR := f.lprFir.process(comp)
-		carrier38 := 2*cosVal*cosVal - 1 // cos(2θ) = 2cos²θ − 1
-		lMinusR := f.lrFir.process(2.0 * comp * carrier38)
+		// FIR input pre-computation
+		lprIn[i] = comp
+		carrier38 := 2*cosVal*cosVal - 1
+		lrIn[i] = 2.0 * comp * carrier38
+	}
 
-		// Step 5: Stereo matrix with blend (Node.js: left = lpr + blend*lr)
-		blend := blendFactor
+	f.pllSin = pllSin
+	f.pllCos = pllCos
+	f.pllFreq = pllFreq
+	f.pllRenormCount = renormCount
+	f.pilotEnergy = pilotEnergy
+	f.noiseEnergy = noiseEnergy
+	f.blendFactor = blendFactor
+	f.pilotDetected = pilotDetected
+	f.holdCounter = holdCounter
+
+	// ---- Batch FIR: vectorizable inner loop ----
+	f.lprFir.processBatch(lprIn, lprOut)
+	f.lrFir.processBatch(lrIn, lrOut)
+
+	// ---- Pass 2: stereo matrix, de-emphasis, decimate ----
+	alpha := f.deemphAlpha
+	stateL := f.deemphStateL
+	stateR := f.deemphStateR
+	decimCounter := f.decimCounter
+	outIdx := 0
+
+	for i := 0; i < n; i++ {
+		lPlusR := lprOut[i]
+		lMinusR := lrOut[i]
+		blend := blends[i]
+
 		var left, right float32
 		if blend > 0.001 {
 			left = lPlusR + blend*lMinusR
@@ -518,16 +619,13 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 			right = lPlusR
 		}
 
-		// Step 6: De-emphasis L and R (75e-6, pre-decimation at 240kHz)
 		stateL = alpha*left + (1-alpha)*stateL
 		stateR = alpha*right + (1-alpha)*stateR
 
-		// Step 7: Decimate inside the demod (matching Node.js decimCounterL)
 		decimCounter++
 		if decimCounter >= f.decimFactor {
 			decimCounter = 0
 			if outIdx < maxOut {
-				// DC block after decimation (matching Node.js dcL/dcR)
 				dcOutL := stateL - f.dcPrevL + 0.995*f.dcOutPrevL
 				f.dcPrevL = stateL
 				f.dcOutPrevL = dcOutL
@@ -543,13 +641,6 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 		}
 	}
 
-	f.pllPhase = pllPhase
-	f.pllFreq = pllFreq
-	f.pilotEnergy = pilotEnergy
-	f.noiseEnergy = noiseEnergy
-	f.blendFactor = blendFactor
-	f.pilotDetected = pilotDetected
-	f.holdCounter = holdCounter
 	f.decimCounter = decimCounter
 	f.deemphStateL = stateL
 	f.deemphStateR = stateR
@@ -573,6 +664,9 @@ func (f *FmStereoDemod) Reset() {
 	f.mono.Reset()
 	f.pllPhase = 0
 	f.pllFreq = 2.0 * math.Pi * 19000.0 / f.sampleRate
+	f.pllSin = 0
+	f.pllCos = 1
+	f.pllRenormCount = 0
 	f.pilotEnergy = 0
 	f.noiseEnergy = 0
 	f.blendFactor = 0

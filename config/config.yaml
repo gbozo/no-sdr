@@ -54,8 +54,8 @@ dongles:
           defaultBandwidth: 200000
           defaultMode: wfm
           gain: 23
-          fftSize: 2048
-          fftFps: 25
+          fftSize: 4096
+          fftFps: 12
           defaultTuneOffset: 0
           tuningStep: 1000
           swapIQ: false
@@ -65,7 +65,7 @@ dongles:
           dongleId: ""
           preFilterNb: true
           preFilterNbThreshold: 0
-          dcOffsetRemoval: true
+          dcOffsetRemoval: null
         - id: profile-mootuxy2
           name: Aviation VHF
           centerFrequency: 127500000
