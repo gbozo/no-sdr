@@ -109,6 +109,24 @@ const FrequencyDisplay: Component = () => {
     <div class="sdr-panel relative overflow-hidden">
       <div class="sdr-scanlines" />
       <div class="sdr-dot-grid" />
+
+      {/* RDS station name — absolute top-right, purely decorative, never shifts layout */}
+      <Show when={store.rdsPs().trim()}>
+        <div class="absolute top-2 right-3 z-10 pointer-events-none select-none">
+          <span
+            class="font-mono text-[10px] tracking-[0.2em] uppercase"
+            style={{
+              color: 'var(--sdr-accent)',
+              opacity: '0.55',
+              'text-shadow': '0 0 6px var(--sdr-accent-dim)',
+              'letter-spacing': '0.18em',
+            }}
+          >
+            {store.rdsPs().trim()}
+          </span>
+        </div>
+      </Show>
+
       <div class="p-3">
         <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">
           <span>VFO Frequency</span>
