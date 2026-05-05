@@ -2,11 +2,6 @@
 
 See [WORK.md](./WORK.md) for the active task backlog and completed history.
 
-## Known Issues
-
-- [ ] **Audio not re-enabled after WS reconnect** — AudioWorklet state not restored; audio silent until page reload
-- [ ] **Spectral NR (Wiener) artifacts** — robotic artefacts on tonal signals; LMS ANR is the recommended path, Wiener should be removed
-
 ## Future Features
 
 ### Audio & DSP

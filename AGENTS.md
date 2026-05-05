@@ -161,12 +161,6 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 3. **Never create a GitHub release** unless separately instructed.
 4. Commit format: `<type>(<scope>): <summary>` (feat/fix/refactor/chore/docs/test/perf)
 
-## Known Issues
-
-- Spectral NR (Wiener) has robotic artifacts on tonal signals — LMS ANR is the recommended alternative
-- SdrEngine client-side is a god object — rendering and audio coordination are extraction candidates
-- Audio not re-enabled after WS reconnect — AudioWorklet state not fully restored
-
 ## Active Work
 
 See [WORK.md](./WORK.md) for the current task backlog.
