@@ -3,7 +3,7 @@ dist/
 *.tsbuildinfo
 
 # Config overrides
-config/local.yaml
+config/config.yaml
 
 # Environment
 .env
