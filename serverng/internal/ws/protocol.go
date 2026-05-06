@@ -61,6 +61,7 @@ type ClientCommand struct {
 	ProfileId     string `json:"profileId,omitempty"`
 	Offset        int    `json:"offset,omitempty"`
 	Mode          string `json:"mode,omitempty"`
+	Bandwidth     int    `json:"bandwidth,omitempty"`
 	Hz            int    `json:"hz,omitempty"`
 	FftCodec      string `json:"fftCodec,omitempty"`
 	IqCodec       string `json:"iqCodec,omitempty"`

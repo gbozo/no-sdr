@@ -1613,10 +1613,9 @@ func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 	}
 }
 
-// handleBandwidth stores the client's audio filter bandwidth and forwards it
-// to the Opus pipeline demodulator for audio LPF control.
-// NOTE: bandwidth is the audio/RF filter width in Hz — it does NOT change the
-// IQ extractor sample rate (that is controlled solely by mode via handleMode).
+// handleBandwidth stores the client's audio/RF filter bandwidth.
+// Updates the IQ extractor's Butterworth LPF (RF filtering) and,
+// for Opus clients, the demodulator's audio LPF.
 func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
 	cp, ok := m.clientPipelines[clientID]
@@ -1626,7 +1625,11 @@ func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 		return
 	}
 
-	// Forward bandwidth to Opus pipeline demodulator if active.
+	// Update IQ extractor's RF filter cutoff (bandwidth/2).
+	// This ensures the RF signal is properly band-limited before demodulation.
+	cp.extractor.SetBandwidth(cmd.Hz)
+
+	// Forward bandwidth to Opus pipeline demodulator if active (audio LPF).
 	cp.pmu.Lock()
 	if cp.opusPipeline != nil {
 		cp.opusPipeline.SetBandwidth(cmd.Hz)
@@ -1636,7 +1639,7 @@ func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	m.logger.Debug("client bandwidth updated", "clientID", clientID, "hz", cmd.Hz)
 }
 
-// handleMode updates output rate based on demodulation mode.
+// handleMode updates output rate and bandwidth based on demodulation mode.
 func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
 	cp, ok := m.clientPipelines[clientID]
@@ -1646,6 +1649,13 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 		// Always use mode-based rate (same IQ for both IQ-codec and Opus paths)
 		rate := outputRateForMode(cmd.Mode)
 		cp.extractor.SetOutputSampleRate(rate)
+
+		// Apply bandwidth from command (if provided) or reset to mode default.
+		// This must come after SetOutputSampleRate so the bandwidth is preserved.
+		if cmd.Bandwidth > 0 {
+			cp.extractor.SetBandwidth(cmd.Bandwidth)
+		}
+
 		m.updateChunkSize(cp)
 
 		// Update opus pipeline demodulator if active.
@@ -1668,7 +1678,7 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 			cp.adpcmEnc.Reset()
 		}
 
-		m.logger.Debug("client mode updated", "clientID", clientID, "mode", cmd.Mode, "outputRate", rate)
+		m.logger.Debug("client mode updated", "clientID", clientID, "mode", cmd.Mode, "outputRate", rate, "bandwidth", cmd.Bandwidth)
 	}
 }
 

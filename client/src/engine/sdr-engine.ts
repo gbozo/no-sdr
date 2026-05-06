@@ -328,8 +328,14 @@ export class SdrEngine {
    * The waterfall canvas is transferred to the WaterfallWorker via OffscreenCanvas.
    * The spectrum canvas stays on the main thread (needs synchronous tooltip reads).
    */
-  attachCanvases(waterfallCanvas: HTMLCanvasElement, spectrumCanvas: HTMLCanvasElement): void {
+    attachCanvases(waterfallCanvas: HTMLCanvasElement, spectrumCanvas: HTMLCanvasElement): void {
     this.waterfallCanvas = waterfallCanvas;
+
+    // FIX: Terminate existing worker before creating new one (remount case)
+    if (this.waterfallWorker) {
+      this.waterfallWorker.terminate();
+      this.waterfallWorker = null;
+    }
 
     // Spin up the waterfall worker and transfer canvas control
     this.waterfallWorker = new Worker(
@@ -399,6 +405,10 @@ export class SdrEngine {
       store.setConnectionState('connected');
       this.reconnectAttempts = 0;
       store.setReconnectAttempt(0);
+      // FIX: Resume AudioContext if it was initialized
+      if (this.audio?.isInitialized) {
+        this.audio.resume();
+      }
       console.log('[SDR] WebSocket connected');
       // state_sync from server provides the full dongle list — no REST fallback needed
     };
@@ -420,6 +430,8 @@ export class SdrEngine {
     this.ws.onclose = () => {
       store.setConnected(false);
       store.setConnectionState('disconnected');
+      // FIX: Clear activeDongleId so state_sync triggers resubscription on reconnect
+      store.setActiveDongleId('');
       console.log('[SDR] WebSocket disconnected');
       this.scheduleReconnect();
     };
@@ -1435,7 +1447,8 @@ export class SdrEngine {
     this.updateResampleRatio();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
-    this.send({ cmd: 'mode', mode });
+    // Send mode + bandwidth together so server can set RF filter correctly
+    this.send({ cmd: 'mode', mode, bandwidth: store.bandwidth() });
     this.updateMediaSession();
   }
 

@@ -81,7 +81,7 @@ export type ClientCommand =
   | { cmd: 'subscribe'; dongleId: string; profileId?: string }
   | { cmd: 'unsubscribe' }
   | { cmd: 'tune'; offset: number } // frequency offset from center in Hz
-  | { cmd: 'mode'; mode: string }
+  | { cmd: 'mode'; mode: string; bandwidth?: number }
   | { cmd: 'bandwidth'; hz: number }
   | { cmd: 'squelch'; db: number | null }
   | { cmd: 'volume'; level: number }

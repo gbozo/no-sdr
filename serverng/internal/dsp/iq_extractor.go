@@ -28,7 +28,8 @@ type IqExtractor struct {
 
 	inputRate  int
 	outputRate int
-	factor     int // decimation factor
+	factor     int       // decimation factor
+	bandwidth  int       // RF filter bandwidth in Hz (0 = use outputRate/2)
 
 	logger *slog.Logger
 
@@ -145,6 +146,7 @@ func (e *IqExtractor) SetTuneOffset(hz int) {
 
 // SetOutputSampleRate changes bandwidth/decimation at runtime.
 // Recomputes filter cutoff and decimation factor.
+// If bandwidth was previously set, it is reapplied after the rate change.
 func (e *IqExtractor) SetOutputSampleRate(rate int) {
 	if rate <= 0 || rate > e.inputRate {
 		return
@@ -155,8 +157,12 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 	e.factor = factor
 	e.outputRate = actualRate
 
-	// Update filter cutoff and RESET state (old state corrupts new response)
-	e.filter.SetCutoff(float64(actualRate) / 2.0)
+	// Update filter cutoff: use explicit bandwidth if set, otherwise outputRate/2
+	if e.bandwidth > 0 {
+		e.filter.SetCutoff(float64(e.bandwidth) / 2.0)
+	} else {
+		e.filter.SetCutoff(float64(actualRate) / 2.0)
+	}
 	e.filter.Reset()
 
 	// Update decimation factor — need to rebuild the decimate block
@@ -174,6 +180,21 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 		return
 	}
 	e.pipeline = pipeline
+}
+
+// SetBandwidth sets the RF filter bandwidth in Hz.
+// Updates the Butterworth LPF cutoff to bandwidth/2 and resets filter state.
+// Set bandwidth=0 to revert to outputRate/2 (default behavior).
+func (e *IqExtractor) SetBandwidth(hz int) {
+	if hz <= 0 {
+		e.bandwidth = 0
+		// Revert to outputRate/2
+		e.filter.SetCutoff(float64(e.outputRate) / 2.0)
+	} else {
+		e.bandwidth = hz
+		e.filter.SetCutoff(float64(hz) / 2.0)
+	}
+	e.filter.Reset()
 }
 
 // Reset clears all filter state.
