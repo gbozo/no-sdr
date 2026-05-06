@@ -50,6 +50,8 @@ RUN cmake -S /rtl-sdr -B /rtl-sdr/build \
 # ---- Go Build ----
 FROM golang:1.23-alpine AS go-builder
 
+ARG TARGETARCH
+
 # Build tools + CGO deps
 RUN apk add --no-cache \
     gcc \
@@ -61,7 +63,7 @@ RUN apk add --no-cache \
 # Copy the Osmocom rtl-sdr we just built
 COPY --from=rtlsdr-builder /usr/local/include/rtl-sdr*.h  /usr/local/include/
 RUN --mount=from=rtlsdr-builder,src=/usr/local/include,dst=/src/include \
-    cp /src/include/rtl_sdr_compat.h /usr/local/include/ 2>/dev/null || true
+    cp /src/include/rtl_sdr_compat.h /usr/local/include 2>/dev/null || true
 COPY --from=rtlsdr-builder /usr/local/lib/librtlsdr*            /usr/local/lib/
 COPY --from=rtlsdr-builder /usr/local/lib/pkgconfig/librtlsdr.pc /usr/local/lib/pkgconfig/
 
@@ -72,18 +74,34 @@ RUN go mod download
 
 COPY serverng/ .
 
-# GOAMD64=v3 targets AVX2 (Intel Haswell 2013+, AMD Ryzen 1000+) on amd64 builds.
-# This enables vectorization of the FIR/FFT hot loops without being native-only.
-# arm64 uses the default baseline (no equivalent microarch level needed).
-# Do NOT use -gcflags="-cpu=native" here — the build runner's native extensions
+# For amd64: build for each GOAMD64 level (v1-v4) to optimize for different CPU generations.
+# For arm64: build once and symlink v2/v3/v4 to v1 (GOAMD64 is ignored for arm64).
+# Do NOT use -gcflags="-cpu=native" — the build runner's native extensions
 # would be embedded into binaries meant to run on different hardware.
-RUN CGO_ENABLED=1 GOOS=linux GOAMD64=v3 \
-    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
-    go build \
-        -tags 'opus rtlsdr nolibopusfile' \
-        -ldflags="-s -w" \
-        -o /serverng \
-        ./cmd/serverng
+# The -ldflags set the 'goamd64' variable so the binary knows which level it was built for.
+# Format: -X importpath.variable=value
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      for level in v1 v2 v3 v4; do \
+        CGO_ENABLED=1 GOOS=linux GOAMD64=$level \
+        PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+        go build \
+            -tags 'opus rtlsdr nolibopusfile' \
+            -ldflags="-s -w -X main.goamd64=$level" \
+            -o /serverng-$level \
+            ./cmd/serverng; \
+      done; \
+    else \
+      CGO_ENABLED=1 GOOS=linux \
+      PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+      go build \
+          -tags 'opus rtlsdr nolibopusfile' \
+          -ldflags="-s -w -X main.goamd64=" \
+          -o /serverng-v1 \
+          ./cmd/serverng; \
+      ln -sf /serverng-v1 /serverng-v2; \
+      ln -sf /serverng-v1 /serverng-v3; \
+      ln -sf /serverng-v1 /serverng-v4; \
+    fi
 
 # ---- Runtime ----
 FROM alpine:3.20
@@ -101,8 +119,15 @@ RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 WORKDIR /app
 
-# Go binary
-COPY --from=go-builder /serverng /app/serverng
+# Go binaries (multi-level for amd64, single for arm64)
+COPY --from=go-builder /serverng-v1 /app/serverng-v1
+COPY --from=go-builder /serverng-v2 /app/serverng-v2
+COPY --from=go-builder /serverng-v3 /app/serverng-v3
+COPY --from=go-builder /serverng-v4 /app/serverng-v4
+
+# Entrypoint script for CPU-level detection
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Built client static files
 COPY --from=client-builder /app/client/dist /app/static
@@ -115,4 +140,4 @@ EXPOSE 3000
 ENV STATIC_DIR=/app/static
 ENV CONFIG_PATH=/app/config/config.yaml
 
-ENTRYPOINT ["/app/serverng"]
+ENTRYPOINT ["/app/entrypoint.sh"]

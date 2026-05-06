@@ -9,6 +9,7 @@ interface SystemInfo {
   goVersion: string;
   os: string;
   arch: string;
+  goamd64?: string;
   uptime: number;
   memory: {
     allocMB: number;
@@ -184,12 +185,15 @@ const FeaturesSection: Component = () => {
         {(data) => (
           <div class="space-y-5">
             {/* Build Info */}
-            <InfoGroup title="Build Information">
-              <InfoRow label="Version" value={data().version} accent />
-              <InfoRow label="Go Version" value={data().goVersion} />
-              <InfoRow label="Platform" value={`${data().os}/${data().arch}`} />
-              <InfoRow label="Uptime" value={formatUptime(data().uptime)} />
-            </InfoGroup>
+             <InfoGroup title="Build Information">
+               <InfoRow label="Version" value={data().version} accent />
+               <InfoRow label="Go Version" value={data().goVersion} />
+               <InfoRow label="Platform" value={`${data().os}/${data().arch}`} />
+               <Show when={data().goamd64}>
+                 <InfoRow label="GOAMD64" value={data().goamd64!} accent />
+               </Show>
+               <InfoRow label="Uptime" value={formatUptime(data().uptime)} />
+             </InfoGroup>
 
             {/* Runtime */}
             <InfoGroup title="Runtime">

@@ -22,6 +22,10 @@ import (
 // version is set by ldflags at build time.
 var version = "dev"
 
+// goamd64 is set by ldflags at build time to indicate the GOAMD64 level
+// (v1, v2, v3, or v4) this binary was compiled for.
+var goamd64 = ""
+
 func main() {
 	// --version flag
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -151,6 +155,7 @@ func main() {
 	cfgVersion := config.NewConfigVersion()
 	api.GetConfigVersionFunc = cfgVersion.Get
 	api.Version = version
+	api.GoAMD64 = goamd64
 	api.GetDongleStatesFunc = func() map[string]any {
 		states := dongleMgr.GetAllDongleStates()
 		result := make(map[string]any, len(states))

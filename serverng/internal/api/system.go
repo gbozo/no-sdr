@@ -13,6 +13,10 @@ import (
 // Version is set by main.go at startup from ldflags.
 var Version = "dev"
 
+// GoAMD64 is set by main.go from ldflags — indicates the GOAMD64
+// level (v1–v4) the binary was compiled for. Empty for non-amd64 builds.
+var GoAMD64 = ""
+
 // GetDongleStatesFunc returns current lifecycle states for all dongles.
 // Set by main.go to dongle.Manager.GetAllDongleStates.
 var GetDongleStatesFunc func() map[string]any
@@ -29,6 +33,7 @@ func systemInfoHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 			"goVersion": runtime.Version(),
 			"os":        runtime.GOOS,
 			"arch":      runtime.GOARCH,
+			"goamd64":  GoAMD64,
 			"uptime":    int64(time.Since(startTime).Seconds()),
 			"memory": map[string]any{
 				"allocMB":   float64(mem.Alloc) / 1024 / 1024,
