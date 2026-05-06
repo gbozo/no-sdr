@@ -189,8 +189,8 @@ const FeaturesSection: Component = () => {
                <InfoRow label="Version" value={data().version} accent />
                <InfoRow label="Go Version" value={data().goVersion} />
                <InfoRow label="Platform" value={`${data().os}/${data().arch}`} />
-               <Show when={data().goamd64}>
-                 <InfoRow label="GOAMD64" value={data().goamd64!} accent />
+               <Show when={data().goamd64 as string}>
+                 <InfoRow label="GOAMD64" value={data().goamd64 as string} accent />
                </Show>
                <InfoRow label="Uptime" value={formatUptime(data().uptime)} />
              </InfoGroup>
