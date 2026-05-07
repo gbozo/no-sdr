@@ -85,20 +85,36 @@ func lowpassCoeffs(freq, Q, fs float64) biquadCoeffs {
 	}
 }
 
-// ---- Symbol sync (integrating accumulator, matching TypeScript SymbolSync) ----
+// ---- Symbol sync (Gardner TED, matching TypeScript SymbolSync) ----
 
 type symbolSync struct {
 	samplesPerSymbol float64
 	phase            float64
-	prevSample       float64
 	accumulator      float64
 	sampleCount      int
+
+	// Gardner TED state
+	prevSymbolValue  float64
+	midSample        float64
+	halfSymbolPhase  float64
+	midCaptured      bool
+
+	// PI loop filter for timing
+	loopGain   float64 // proportional
+	loopBeta   float64 // integral
+	freqOffset float64 // accumulated frequency adjustment
 }
 
 func newSymbolSync(decimatedRate float64) *symbolSync {
-	// PSK symbol rate = 2× bit rate (each symbol carries one biphase half-bit)
+	sps := decimatedRate / (rdsBitrate * 2)
+	// Loop bandwidth: ~1% of symbol rate
+	BLTs := 0.01
+	damping := 1.0
+	denominator := 1.0 + 2.0*damping*BLTs + BLTs*BLTs
 	return &symbolSync{
-		samplesPerSymbol: decimatedRate / (rdsBitrate * 2),
+		samplesPerSymbol: sps,
+		loopGain:         (4.0 * damping * BLTs) / denominator,
+		loopBeta:         (4.0 * BLTs * BLTs) / denominator,
 	}
 }
 
@@ -107,18 +123,41 @@ func (s *symbolSync) push(sample float64) (float64, bool) {
 	s.accumulator += sample
 	s.sampleCount++
 	s.phase += 1.0 / s.samplesPerSymbol
+	s.halfSymbolPhase += 1.0 / s.samplesPerSymbol
+
+	// Capture mid-point sample (at half-symbol boundary)
+	if !s.midCaptured && s.halfSymbolPhase >= 0.5 {
+		if s.sampleCount > 0 {
+			s.midSample = s.accumulator / float64(s.sampleCount)
+		}
+		s.midCaptured = true
+	}
 
 	if s.phase >= 1.0 {
 		s.phase -= 1.0
+		s.halfSymbolPhase = 0
 		sym := s.accumulator / float64(s.sampleCount)
 		s.accumulator = 0
 		s.sampleCount = 0
+		s.midCaptured = false
 
-		// Timing nudge at zero crossing
-		if (s.prevSample > 0) != (sym > 0) {
-			s.phase += 0.01
+		// Gardner TED: error = (prevSymbol - currentSymbol) * midSample
+		ted := (s.prevSymbolValue - sym) * s.midSample
+
+		// PI loop filter
+		s.freqOffset += s.loopBeta * ted
+		phaseAdj := s.loopGain*ted + s.freqOffset
+
+		// Apply timing correction (clamp to prevent instability)
+		maxAdj := 0.3 / s.samplesPerSymbol
+		if phaseAdj > maxAdj {
+			phaseAdj = maxAdj
+		} else if phaseAdj < -maxAdj {
+			phaseAdj = -maxAdj
 		}
-		s.prevSample = sym
+		s.phase += phaseAdj
+
+		s.prevSymbolValue = sym
 		return sym, true
 	}
 	return 0, false
@@ -126,9 +165,13 @@ func (s *symbolSync) push(sample float64) (float64, bool) {
 
 func (s *symbolSync) reset() {
 	s.phase = 0
-	s.prevSample = 0
+	s.prevSymbolValue = 0
+	s.midSample = 0
+	s.halfSymbolPhase = 0
+	s.midCaptured = false
 	s.accumulator = 0
 	s.sampleCount = 0
+	s.freqOffset = 0
 }
 
 // ---- Biphase decoder (clock-polarity tracking, matching TypeScript BiphaseDecoder) ----
@@ -217,6 +260,55 @@ const (
 	syndromeCprime uint32 = 0x3CC
 	syndromeD      uint32 = 0x258
 )
+
+// singleBitSyndromes maps a syndrome value to the bit position (0-25) that caused it.
+// Used for single-bit error correction: if (receivedSyndrome XOR expectedOffsetSyndrome)
+// matches an entry, we can correct by flipping that bit.
+var singleBitSyndromes map[uint32]int
+
+func init() {
+	singleBitSyndromes = make(map[uint32]int, 26)
+	for i := 0; i < 26; i++ {
+		singleBitSyndromes[parityMatrix[i]] = 25 - i
+	}
+}
+
+// syndromeForOffset returns the expected syndrome for a given offset type.
+func syndromeForOffset(s rdsSyndrome) uint32 {
+	switch s {
+	case synA:
+		return syndromeA
+	case synB:
+		return syndromeB
+	case synC:
+		return syndromeC
+	case synCprime:
+		return syndromeCprime
+	case synD:
+		return syndromeD
+	default:
+		return 0
+	}
+}
+
+// tryCorrectBlock attempts single-bit error correction on a 26-bit block.
+// Returns the corrected block and true if successful, or (0, false) if not correctable.
+func tryCorrectBlock(register uint32, expected rdsSyndrome) (uint32, bool) {
+	syndrome := calculateSyndrome(register)
+	// Try expected offset
+	errorSyn := syndrome ^ syndromeForOffset(expected)
+	if bitPos, ok := singleBitSyndromes[errorSyn]; ok {
+		return register ^ (1 << bitPos), true
+	}
+	// For C position, also try C' (stations may alternate)
+	if expected == synC {
+		errorSyn = syndrome ^ syndromeCprime
+		if bitPos, ok := singleBitSyndromes[errorSyn]; ok {
+			return register ^ (1 << bitPos), true
+		}
+	}
+	return 0, false
+}
 
 type rdsSyndrome int
 
@@ -353,12 +445,19 @@ func (b *blockSync) pushBit(bit bool) ([4]int32, bool) {
 		b.errorCount = 0
 		b.goodBlocks++
 	} else {
-		b.group[b.blockIndex] = -1 // bad block
-		b.errorCount++
-		if b.errorCount > maxBlockErrors {
-			b.synced = false
-			b.goodBlocks = 0
-			return [4]int32{}, false
+		// Attempt single-bit error correction before marking block as bad
+		if corrected, ok := tryCorrectBlock(b.register, b.expectedOffset); ok {
+			b.group[b.blockIndex] = int32((corrected >> 10) & 0xFFFF)
+			b.errorCount = 0
+			b.goodBlocks++
+		} else {
+			b.group[b.blockIndex] = -1 // bad block
+			b.errorCount++
+			if b.errorCount > maxBlockErrors {
+				b.synced = false
+				b.goodBlocks = 0
+				return [4]int32{}, false
+			}
 		}
 	}
 
@@ -644,21 +743,41 @@ func NewRdsDecoder(sampleRate float64) *RdsDecoder {
 // input sample rate (e.g., 240kHz) and returns an updated *RdsData if new RDS data
 // was decoded in this batch, or nil if nothing new.
 func (r *RdsDecoder) Process(composite []float32) *RdsData {
-	var updated bool
+	return r.processInternal(composite, nil)
+}
 
-	for _, s := range composite {
+// ProcessWithPilot is like Process but uses pilot-locked phase for coherent RDS demodulation.
+// pilotPhases must be the same length as composite and contains the 19kHz pilot phase per sample.
+// When pilot is locked, this eliminates NCO drift and greatly improves block decode rate.
+func (r *RdsDecoder) ProcessWithPilot(composite []float32, pilotPhases []float64) *RdsData {
+	return r.processInternal(composite, pilotPhases)
+}
+
+func (r *RdsDecoder) processInternal(composite []float32, pilotPhases []float64) *RdsData {
+	var updated bool
+	usePilot := pilotPhases != nil && len(pilotPhases) == len(composite)
+
+	for idx, s := range composite {
 		x := float64(s)
 
 		// 1. Bandpass filter at 57kHz (two cascaded stages)
 		filtered := r.bpf1s.process(x, &r.bpf1)
 		filtered = r.bpf2s.process(filtered, &r.bpf2)
 
-		// 2. Mix down to baseband — I channel only (BPSK; Q not needed)
-		cosN := math.Cos(r.ncoPhase)
-		iRaw := filtered * cosN
-		r.ncoPhase += r.ncoInc
-		if r.ncoPhase >= 2.0*math.Pi {
-			r.ncoPhase -= 2.0 * math.Pi
+		// 2. Mix down to baseband
+		var iRaw float64
+		if usePilot {
+			// Pilot-locked: RDS subcarrier = 3 × pilot phase (57 = 3 × 19 kHz)
+			rdsPhase := 3.0 * pilotPhases[idx]
+			iRaw = filtered * math.Cos(rdsPhase)
+		} else {
+			// Free-running NCO fallback
+			cosN := math.Cos(r.ncoPhase)
+			iRaw = filtered * cosN
+			r.ncoPhase += r.ncoInc
+			if r.ncoPhase >= 2.0*math.Pi {
+				r.ncoPhase -= 2.0 * math.Pi
+			}
 		}
 
 		// 3. Decimate by rdsDecimate

@@ -472,6 +472,11 @@ class PilotPll {
     return this._blendFactor;
   }
 
+  /** Current pilot phase (radians, 0..2π). RDS subcarrier = 3× this phase. */
+  get pilotPhase(): number {
+    return this.phase;
+  }
+
   reset(): void {
     this.phase = 0;
     this.freqError = 0;
@@ -647,11 +652,17 @@ class FmDemodulator implements Demodulator {
       this.prevI = i;
       this.prevQ = q;
 
-      // Scale by gain factor
-      phase *= this.gain;
+      // Scale by gain factor — this is the composite MPX signal
+      const composite = phase * this.gain;
+
+      // Feed composite to RDS decoder (WFM only, before LP/de-emphasis filtering)
+      // Uses free-running NCO since pilot PLL is not available in mono path
+      if (this.wideband && this.rdsDecoder) {
+        this.rdsDecoder.pushSample(composite);
+      }
 
       // Low-pass filter
-      phase = this.lpFilter.process(phase);
+      phase = this.lpFilter.process(composite);
 
       // De-emphasis (applied before decimation for WFM)
       if (this.wideband) {
@@ -666,7 +677,7 @@ class FmDemodulator implements Demodulator {
         }
       } else {
         // NFM: no decimation needed (input is already at audio rate).
-        // De-emphasis already applied above (line 630) — do NOT apply again.
+        // De-emphasis already applied above — do NOT apply again.
         this._monoOutBuf[outIdx++] = this.dcBlocker.process(phase);
       }
     }
@@ -711,7 +722,14 @@ class FmDemodulator implements Demodulator {
       this.prevQ = q;
 
       // Feed composite to RDS decoder (before any filtering)
-      this.rdsDecoder?.pushSample(composite);
+      // Use pilot-locked phase when PLL is detected for coherent demodulation
+      if (this.rdsDecoder) {
+        if (pll.detected) {
+          this.rdsDecoder.pushSampleWithPilot(composite, pll.pilotPhase);
+        } else {
+          this.rdsDecoder.pushSample(composite);
+        }
+      }
 
       // --- Stereo decoding ---
 
@@ -840,6 +858,13 @@ class FmDemodulator implements Demodulator {
 
       // Re-init stereo components for new sample rate
       this.initStereo();
+
+      // Recreate RDS decoder at the new sample rate (filter coefficients depend on it)
+      if (this.rdsDecoder) {
+        const cb = this.onRdsCallback;
+        this.rdsDecoder = new RdsDecoder(this.inputSampleRate);
+        if (cb) this.rdsDecoder.setCallback(cb);
+      }
     } else {
       // NFM: input rate should be ~48kHz, no decimation
       this.decimator = null;

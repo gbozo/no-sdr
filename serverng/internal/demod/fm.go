@@ -366,6 +366,10 @@ type FmStereoDemod struct {
 	// Composite baseband buffer (reused)
 	composite []float32
 
+	// Pilot phase buffer: per-sample pilot phase (19kHz) for RDS pilot-locked demod.
+	// Populated during Process(). RDS subcarrier = 3× pilot phase.
+	pilotPhases []float64
+
 	// Scratch buffers for batch FIR input/output
 	lprInBuf  []float32
 	lrInBuf   []float32
@@ -519,6 +523,14 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 	holdCounter := f.holdCounter
 	renormCount := f.pllRenormCount
 
+	// Ensure pilot phase buffer is large enough for RDS use
+	if cap(f.pilotPhases) < n {
+		f.pilotPhases = make([]float64, n)
+	}
+	f.pilotPhases = f.pilotPhases[:n]
+	// Track accumulated phase for RDS (cheaper than atan2 per-sample)
+	pilotPhase := f.pllPhase
+
 	for i := 0; i < n; i++ {
 		comp := f.composite[i]
 
@@ -582,12 +594,22 @@ func (f *FmStereoDemod) Process(in []complex64, out []float32) int {
 		lprIn[i] = comp
 		carrier38 := 2*cosVal*cosVal - 1
 		lrIn[i] = 2.0 * comp * carrier38
+
+		// Track pilot phase for RDS pilot-locked demodulation
+		pilotPhase += f.pllAlpha*phaseErr + pllFreq
+		if pilotPhase >= 2*math.Pi {
+			pilotPhase -= 2 * math.Pi
+		} else if pilotPhase < 0 {
+			pilotPhase += 2 * math.Pi
+		}
+		f.pilotPhases[i] = pilotPhase
 	}
 
 	f.pllSin = pllSin
 	f.pllCos = pllCos
 	f.pllFreq = pllFreq
 	f.pllRenormCount = renormCount
+	f.pllPhase = pilotPhase
 	f.pilotEnergy = pilotEnergy
 	f.noiseEnergy = noiseEnergy
 	f.blendFactor = blendFactor
@@ -703,6 +725,18 @@ func (f *FmStereoDemod) BlendFactor() float32 {
 // Used by RdsDecoder which requires the pre-stereo composite at the full input rate.
 func (f *FmStereoDemod) GetComposite() []float32 {
 	return f.composite
+}
+
+// GetPilotPhases returns the per-sample pilot phase buffer from the last Process() call.
+// Each entry is the 19kHz pilot phase in radians [0, 2π). RDS subcarrier = 3× pilot phase.
+// Valid only until the next Process() call.
+func (f *FmStereoDemod) GetPilotPhases() []float64 {
+	return f.pilotPhases
+}
+
+// PilotDetected returns true if a 19kHz pilot tone is currently detected.
+func (f *FmStereoDemod) PilotDetected() bool {
+	return f.pilotDetected
 }
 
 // SetBandwidth is a no-op for WFM stereo: WFM is always full-band (200kHz RF, 15kHz audio).

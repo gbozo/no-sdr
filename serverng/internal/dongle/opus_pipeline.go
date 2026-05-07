@@ -237,7 +237,15 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 	if p.rdsDecoder != nil {
 		if stereoDemod, ok := p.demodulator.(*demod.FmStereoDemod); ok {
 			composite := stereoDemod.GetComposite()
-			if rdsData := p.rdsDecoder.Process(composite); rdsData != nil {
+			// Use pilot-locked RDS demodulation when pilot is detected (coherent, no drift)
+			var rdsData *demod.RdsData
+			if stereoDemod.PilotDetected() {
+				pilotPhases := stereoDemod.GetPilotPhases()
+				rdsData = p.rdsDecoder.ProcessWithPilot(composite, pilotPhases)
+			} else {
+				rdsData = p.rdsDecoder.Process(composite)
+			}
+			if rdsData != nil {
 				if b, err := json.Marshal(rdsData); err == nil {
 					if string(b) != string(p.rdsLastJSON) {
 						rdsJSON = b

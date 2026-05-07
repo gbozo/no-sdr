@@ -62,6 +62,15 @@ const SYNDROME_C      = 0x25C;
 const SYNDROME_CPRIME = 0x3CC;
 const SYNDROME_D      = 0x258;
 
+// Error correction: pre-compute syndrome for single-bit errors at each position.
+// If (receivedSyndrome XOR expectedOffsetSyndrome) matches one of these, we can
+// correct a single-bit error by flipping that bit in the 26-bit block.
+// Entry i = syndrome caused by an error in bit position (25-i), i.e. PARITY_MATRIX[i].
+const SINGLE_BIT_SYNDROMES: Map<number, number> = new Map();
+for (let i = 0; i < 26; i++) {
+  SINGLE_BIT_SYNDROMES.set(PARITY_MATRIX[i], 25 - i);
+}
+
 // PTY names (RDS standard, Europe; RBDS US uses different labels)
 const PTY_NAMES = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education',
@@ -113,6 +122,43 @@ function nextOffset(offset: Offset): Offset {
     case 'D': return 'A';
     default: return 'A';
   }
+}
+
+/** Get the expected syndrome value for a given offset */
+function syndromeForOffset(offset: Offset): number {
+  switch (offset) {
+    case 'A': return SYNDROME_A;
+    case 'B': return SYNDROME_B;
+    case 'C': return SYNDROME_C;
+    case 'Cprime': return SYNDROME_CPRIME;
+    case 'D': return SYNDROME_D;
+    default: return 0;
+  }
+}
+
+/**
+ * Attempt single-bit error correction on a 26-bit block.
+ * Returns the corrected 26-bit block, or -1 if correction is not possible.
+ * expectedOffset is what we expect this block to be (A, B, C, D).
+ */
+function tryCorrectBlock(register: number, expectedOffset: Offset): number {
+  const syndrome = calculateSyndrome(register);
+  // Try the expected offset first
+  let errorSyndrome = syndrome ^ syndromeForOffset(expectedOffset);
+  let bitPos = SINGLE_BIT_SYNDROMES.get(errorSyndrome);
+  if (bitPos !== undefined) {
+    // Correct by flipping the identified bit
+    return register ^ (1 << bitPos);
+  }
+  // For block C position, also try C' (some stations alternate)
+  if (expectedOffset === 'C') {
+    errorSyndrome = syndrome ^ syndromeForOffset('Cprime');
+    bitPos = SINGLE_BIT_SYNDROMES.get(errorSyndrome);
+    if (bitPos !== undefined) {
+      return register ^ (1 << bitPos);
+    }
+  }
+  return -1; // Cannot correct
 }
 
 // ---- Simple 2nd-order IIR Biquad ----
@@ -221,12 +267,21 @@ class BlockSync {
       this.errorCount = 0;
       this.goodBlocks++;
     } else {
-      this.group[this.blockIndex] = null; // mark as bad
-      this.errorCount++;
-      if (this.errorCount > this.MAX_ERRORS) {
-        this.synced = false;
-        this.goodBlocks = 0;
-        return null;
+      // Attempt single-bit error correction before giving up on this block
+      const corrected = tryCorrectBlock(this.register, this.expectedOffset);
+      if (corrected >= 0) {
+        // Successfully corrected — extract 16-bit data from corrected block
+        this.group[this.blockIndex] = (corrected >> 10) & 0xFFFF;
+        this.errorCount = 0;
+        this.goodBlocks++;
+      } else {
+        this.group[this.blockIndex] = null; // mark as bad
+        this.errorCount++;
+        if (this.errorCount > this.MAX_ERRORS) {
+          this.synced = false;
+          this.goodBlocks = 0;
+          return null;
+        }
       }
     }
 
@@ -486,37 +541,72 @@ class GroupParser {
   }
 }
 
-// ---- Symbol Sync (early-late gate, simplified) ----
+// ---- Symbol Sync (Gardner Timing Error Detector) ----
+// The Gardner TED uses: ted = (prevSymbol - currentSymbol) * midSample
+// This provides a proportional timing error signal that's much more robust
+// than a simple zero-crossing nudge.
 
 class SymbolSync {
   private samplesPerSymbol: number;
   private phase = 0;
-  private prevSample = 0;
   private accumulator = 0;
   private sampleCount = 0;
 
+  // Gardner TED state
+  private prevSymbolValue = 0;
+  private midSample = 0;
+  private halfSymbolPhase = 0;
+  private midCaptured = false;
+
+  // Loop filter (PI controller for timing)
+  private readonly loopGain: number;      // proportional
+  private readonly loopBeta: number;      // integral
+  private freqOffset = 0;                 // accumulated frequency adjustment
+
   constructor(sampleRate: number) {
     this.samplesPerSymbol = sampleRate / (RDS_BITRATE * 2); // PSK symbol rate = 2× bit rate
+
+    // Loop bandwidth: ~1% of symbol rate for good tracking without jitter
+    // BL/Ts ≈ 0.01 where Ts = samplesPerSymbol
+    const BLTs = 0.01;
+    const damping = 1.0; // critically damped
+    const denominator = 1 + 2 * damping * BLTs + BLTs * BLTs;
+    this.loopGain = (4 * damping * BLTs) / denominator;
+    this.loopBeta = (4 * BLTs * BLTs) / denominator;
   }
 
   push(sample: number): number | null {
     this.accumulator += sample;
     this.sampleCount++;
     this.phase += 1.0 / this.samplesPerSymbol;
+    this.halfSymbolPhase += 1.0 / this.samplesPerSymbol;
+
+    // Capture mid-point sample (at half-symbol boundary)
+    if (!this.midCaptured && this.halfSymbolPhase >= 0.5) {
+      this.midSample = this.sampleCount > 0 ? this.accumulator / this.sampleCount : 0;
+      this.midCaptured = true;
+    }
 
     if (this.phase >= 1.0) {
       this.phase -= 1.0;
+      this.halfSymbolPhase = 0;
       const symbolValue = this.accumulator / this.sampleCount;
       this.accumulator = 0;
       this.sampleCount = 0;
+      this.midCaptured = false;
 
-      // Timing error: use zero-crossing between prev and current
-      // Adjust phase slightly
-      if ((this.prevSample > 0) !== (symbolValue > 0)) {
-        // Zero crossing near boundary — nudge phase
-        this.phase += 0.01;
-      }
-      this.prevSample = symbolValue;
+      // Gardner TED: error = (prevSymbol - currentSymbol) * midSample
+      const ted = (this.prevSymbolValue - symbolValue) * this.midSample;
+
+      // PI loop filter
+      this.freqOffset += this.loopBeta * ted;
+      const phaseAdj = this.loopGain * ted + this.freqOffset;
+
+      // Apply timing correction (clamp to prevent instability)
+      const maxAdj = 0.3 / this.samplesPerSymbol;
+      this.phase += Math.max(-maxAdj, Math.min(maxAdj, phaseAdj));
+
+      this.prevSymbolValue = symbolValue;
       return symbolValue;
     }
     return null;
@@ -524,9 +614,13 @@ class SymbolSync {
 
   reset(): void {
     this.phase = 0;
-    this.prevSample = 0;
+    this.prevSymbolValue = 0;
+    this.midSample = 0;
+    this.halfSymbolPhase = 0;
+    this.midCaptured = false;
     this.accumulator = 0;
     this.sampleCount = 0;
+    this.freqOffset = 0;
   }
 }
 
@@ -651,19 +745,41 @@ export class RdsDecoder {
     this.data = emptyRdsData();
   }
 
-  /** Feed one composite (MPX) sample at 240 kHz */
+  /**
+   * Feed one composite (MPX) sample with pilot-locked phase.
+   * pilotPhase is the 19kHz pilot PLL phase (radians). RDS subcarrier = 3× pilot.
+   * This eliminates NCO drift and provides coherent demodulation.
+   */
+  pushSampleWithPilot(composite: number, pilotPhase: number): void {
+    // 1. Bandpass filter at 57 kHz (cascaded for sharper rolloff)
+    let filtered = this.bpf1.process(composite);
+    filtered = this.bpf2.process(filtered);
+
+    // 2. Mix down using pilot-locked phase: RDS subcarrier = 3 × pilot (57 = 3 × 19 kHz)
+    const rdsPhase = 3 * pilotPhase;
+    const cosN = Math.cos(rdsPhase);
+    const iRaw = filtered * cosN;
+
+    this.processBaseband(iRaw);
+  }
+
+  /** Feed one composite (MPX) sample at 240 kHz (free-running NCO fallback) */
   pushSample(composite: number): void {
     // 1. Bandpass filter at 57 kHz (cascaded for sharper rolloff)
     let filtered = this.bpf1.process(composite);
     filtered = this.bpf2.process(filtered);
 
-    // 2. Mix down to baseband using NCO
+    // 2. Mix down to baseband using free-running NCO
     const cosN = Math.cos(this.ncoPhase);
-    const sinN = Math.sin(this.ncoPhase);
     const iRaw = filtered * cosN;
-    const qRaw = filtered * sinN;
     this.ncoPhase += this.ncoPhaseInc;
     if (this.ncoPhase > 2 * Math.PI) this.ncoPhase -= 2 * Math.PI;
+
+    this.processBaseband(iRaw);
+  }
+
+  /** Common baseband processing after mix-down */
+  private processBaseband(iRaw: number): void {
 
     // 3. Decimate
     this.decimateCounter++;
