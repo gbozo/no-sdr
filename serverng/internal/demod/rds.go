@@ -768,8 +768,10 @@ func (r *RdsDecoder) processInternal(composite []float32, pilotPhases []float64)
 		var iRaw float64
 		if usePilot {
 			// Pilot-locked: RDS subcarrier = 3 × pilot phase (57 = 3 × 19 kHz)
+			// The pilot PLL locks sin(φ) to the 19kHz pilot tone. The RDS subcarrier
+			// is sin(3φ) per IEC 62106, so we mix with sin(3φ) to get the I-channel.
 			rdsPhase := 3.0 * pilotPhases[idx]
-			iRaw = filtered * math.Cos(rdsPhase)
+			iRaw = filtered * math.Sin(rdsPhase)
 		} else {
 			// Free-running NCO fallback
 			cosN := math.Cos(r.ncoPhase)

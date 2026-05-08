@@ -756,9 +756,11 @@ export class RdsDecoder {
     filtered = this.bpf2.process(filtered);
 
     // 2. Mix down using pilot-locked phase: RDS subcarrier = 3 × pilot (57 = 3 × 19 kHz)
+    // The pilot PLL locks sin(φ) to the 19kHz pilot tone. The RDS subcarrier
+    // is sin(3φ) per IEC 62106, so we mix with sin(3φ) to get the I-channel.
     const rdsPhase = 3 * pilotPhase;
-    const cosN = Math.cos(rdsPhase);
-    const iRaw = filtered * cosN;
+    const sinN = Math.sin(rdsPhase);
+    const iRaw = filtered * sinN;
 
     this.processBaseband(iRaw);
   }
