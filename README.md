@@ -50,7 +50,11 @@
 
 **no-sdr** turns cheap RTL-SDR USB dongles into a full-featured web-based radio receiver. Multiple users connect through their browser and independently tune, demodulate, and listen to signals — all sharing the same hardware. No plugins, no installs, just open a URL.
 
-Think of it as your own private, open [WebSDR](http://websdr.org) that you can run at home, in a hackerspace, or on a docker container (compose). Works in Raspberry Pi too. 
+Think of it as your own private, open [WebSDR](http://websdr.org) that you can run at your home pc or on a docker container (compose). Works in Raspberry Pi too. 
+
+This project aims High Fidelity, weak signals processing, near lossless quality, low bandwidth consumption and aims every feature to be run also on arm architecture (RPi/MAC). For x86 four binaries are included and you CPU capability level is detected on container start, processors with streaming extensions (SSE/AVX etc.) have superior performance and each client cosnumes less CPU cycles. All of this open, no closed source. 
+
+There is also an Identify Song button, you can identify the currently song you listen too (you need some API keys for Audd)
 
 *Made with ❤️ and patience, your friend George*
 
@@ -77,6 +81,7 @@ Think of it as your own private, open [WebSDR](http://websdr.org) that you can r
 Opus codecs use server-side demodulation with full stereo FM and C-QUAM support. Clients independently select their preferred codec — no restart needed.
 A typical HF / AM Profile with sampling rate of 2.4 MBPS , fft size of 4096 buckets with 8 frames per second and deflate compression 8-10 KB/s, with opus mono audio compression ~4 KB/s.
 So a total of around 12-13 KB/s per client of bandwidht required with full audio and waterfall, spectrum.
+There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s but as always there is a drawback, opus has nasty artifact at this rate (and some nasty robotic hiss).
 
 </td>
 </tr>
@@ -90,7 +95,7 @@ So a total of around 12-13 KB/s per client of bandwidht required with full audio
 - **Stereo FM** — PLL-based 19kHz pilot detection, L-R DSB-SC demodulation with SNR-proportional stereo blend
 - **RDS** — client-side FM RDS decoder extracts station name (PS), radio text (RT), programme type, PI code, and clock time with overlay on waterfall
 - **AM Stereo (C-QUAM) [EXPERIMENTAL]** — auto-detected in AM mode via two-stage verification (25Hz Goertzel pilot + PLL lock confirmation). When a C-QUAM station is detected, stereo decoding activates automatically. *This feature needs testers with access to C-QUAM AM stereo broadcasts — please report results via GitHub issues!*
-- **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
+- PLANNED -> **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
 - **Multi-user** — everyone shares the same waterfall; each user tunes independently within the dongle's bandwidth
 - **Multi-dongle** — configure multiple RTL-SDR devices, each with its own frequency profiles
 - **Three dongle source types** — local USB (`rtl_sdr`), remote TCP (`rtl_tcp`), or demo simulator
@@ -192,23 +197,23 @@ RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
                                                         └─ Squelch gate
 ```
 
-**Hybrid DSP model**: The server computes FFT and broadcasts it to all clients (shared waterfall). Per-user IQ sub-bands are extracted using a numerically-controlled oscillator (NCO) for frequency shifting, a 4th-order Butterworth anti-aliasing filter, and integer decimation. Each client receives its own narrowband IQ stream and performs demodulation locally. Server CPU cost scales with user count only for IQ extraction — demodulation is entirely client-side.
+**Hybrid DSP model**: The server computes FFT and broadcasts it to all clients (shared waterfall). Per-user IQ sub-bands are extracted using a numerically-controlled oscillator (NCO) for frequency shifting, a 4th-order Butterworth anti-aliasing filter, and integer decimation. Each client receives its own narrowband IQ stream and performs demodulation locally. Server CPU cost scales with user count only for IQ extraction — demodulation is entirely client-side with no codec and ADPCM.
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|-----------|
-| Runtime | Node.js 22 (ESM) |
-| Backend | [Hono](https://hono.dev) + [@hono/node-ws](https://github.com/honojs/middleware/tree/main/packages/node-ws) |
+| Runtime | GO 1.23 |
+| Backend | Go 1.23 |
 | Frontend | [SolidJS](https://www.solidjs.com) |
 | Build | [Vite 6](https://vite.dev) |
 | Styling | [Tailwind CSS v4](https://tailwindcss.com) |
 | FFT | [fft.js](https://github.com/nicedoc/fft.js) (radix-4, pure JS) |
-| Opus | [opusscript](https://github.com/abalabahaha/opusscript) (server WASM) + [opus-decoder](https://github.com/eshaz/wasm-audio-decoders) (client WASM) |
-| Deflate | Node.js zlib (server) + [fflate](https://github.com/101arrowz/fflate) (client) |
+| Opus | OPUSlib |
+| Deflate | zlib (server) + [fflate](https://github.com/101arrowz/fflate) (client) |
 | Config | YAML ([js-yaml](https://github.com/nodeca/js-yaml)) + [Zod](https://zod.dev) |
 | Logging | [pino](https://getpino.io) |
-| Language | TypeScript 5 (strict) |
+| Language | GO / TypeScript 5 (strict) |
 
 ## Configuration
 
@@ -306,7 +311,7 @@ Profiles can be created, updated, and deleted at runtime via the admin REST API.
 | **CW** | Continuous Wave / Morse code | 50–1000 Hz | 700Hz BFO + narrow bandpass |
 | **RAW** | Raw IQ passthrough | Variable | I-channel audio output |
 
-### Digital (server-side, external binaries)
+### Digital (server-side, external binaries) - NOT YET IMPLEMENTED
 
 | Mode | Binary | Description |
 |------|--------|-------------|
@@ -360,7 +365,7 @@ Configure the dongle source as `rtl_tcp` with `host: rtl_tcp` and `port: 1234`.
 
 ### Raspberry Pi
 
-no-sdr runs well on Raspberry Pi 4/5 (ARM64). Install Node.js 22 via [NodeSource](https://github.com/nodesource/distributions) or [nvm](https://github.com/nvm-sh/nvm), then:
+no-sdr runs well on Raspberry Pi 4/5 (ARM64).
 
 ```bash
 sudo apt install rtl-sdr
@@ -369,7 +374,7 @@ cd no-sdr
 npm install && npm run build && npm start
 ```
 
-### Reverse Proxy (nginx)
+### Reverse Proxy (nginx) - Only if you want to terminate SSL
 
 ```nginx
 server {
@@ -432,13 +437,10 @@ npm run clean
 
 ### Project Structure
 
-This is an npm workspaces monorepo with three packages:
-
-- **`shared/`** — Zero-dependency types, protocol constants, mode definitions, IMA-ADPCM codec
-- **`server/`** — Hono backend, hardware management, FFT, IQ extraction, Opus audio pipeline, WebSocket
+- **`server/`** — Go backend, hardware management, FFT, IQ extraction, Opus audio pipeline, WebSocket
 - **`client/`** — SolidJS frontend, Canvas renderers, DSP, stereo FM, RDS decoder, AudioWorklet + EQ
 
-Build order: `shared` → `client` → `server` (the server serves the built client).
+Build order: `client` → `server` (the server serves the built client).
 
 ## Contributing
 
@@ -453,11 +455,9 @@ Contributions are welcome. Please:
 
 - **AM Stereo (C-QUAM) testing** — auto-detection is experimental; we need testers near C-QUAM stations (~45 in the US, a handful in Italy, Japan, Philippines, Thailand). Requires direct sampling mod or HF-capable dongle. Please report results!
 - **Testing** — unit tests for DSP, protocol, config validation, ADPCM codec
-- **Spectral NR** — current Wiener filter has robotic artifacts; needs rework (RNNoise WASM, multi-band expander)
 - **WebGL waterfall** — GPU-accelerated rendering for large FFT sizes
 - **Recording** — IQ recording and playback (SigMF format)
 - **Bookmarks** — frequency bookmark management
-- **Mobile UI** — responsive design for tablets and phones
 - **New decoders** — WASM ports of C decoders (FT8, DAB, etc.)
 
 ## License
@@ -471,4 +471,4 @@ MIT
 - [fft.js](https://github.com/nicedoc/fft.js) by Fedor Indutny — fast pure-JS radix-4 FFT
 - [RTL-SDR](https://www.rtl-sdr.com/) community — for making software-defined radio accessible to everyone
 - [SolidJS](https://www.solidjs.com/) — reactive UI without the VDOM overhead
-- [Hono](https://hono.dev/) — ultrafast web framework for the edge and Node.js
+
