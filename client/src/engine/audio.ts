@@ -149,31 +149,41 @@ export class AudioEngine {
           this.buffered = 0;
 
           // Jitter buffer: don't start playing until we have this many samples.
-          // 150ms provides headroom for variable IQ chunk sizes from the server.
-          this.minBuffer = 7200; // 150ms at 48kHz
+          // 200ms provides headroom for variable IQ chunk sizes and Opus 60ms frames.
+          this.minBuffer = 9600; // 200ms at 48kHz
           // Target buffer level for adaptive rate control.
-          // When playing, we aim to keep the buffer at this level (200ms).
-          // If buffer drifts above/below, we subtly adjust playback rate
-          // by skipping or duplicating one sample per render quantum.
+          // The proportional controller always nudges toward this level.
           this.targetBuffer = 9600; // 200ms at 48kHz
           this.playing = false;
+
+          // Fade-in state: ramp from 0 to 1 over fadeInLen samples after playback starts
+          this.fadeInRemaining = 0;
+          this.fadeInLen = 64; // ~1.3ms ramp — eliminates pop on playback resume
 
           // Underrun detection
           this.underruns = 0;
           // Consecutive underrun counter — only reset playing after 3 in a row
-          // to avoid a 150ms silence gap from a single late IQ chunk
+          // to avoid a 200ms silence gap from a single late IQ chunk
           this.consecutiveUnderruns = 0;
+
+          // Proportional controller gain for drift correction.
+          // Higher = faster response but more jitter; lower = smoother but slower.
+          // 0.002 means: for every 1% deviation from target, adjust by ~0.26 samples/quantum.
+          this.driftGain = 0.002;
+          // Maximum samples to add/subtract per quantum (caps correction rate at ~1.5%)
+          this.maxCorrection = 2;
 
           this.port.onmessage = (e) => {
             if (e.data === 'reset') {
               // Flush buffer on frequency/mode change
-          this.writePos = 0;
-          this.readPos = 0;
-          this.buffered = 0;
-          this.playing = false;
-          this.consecutiveUnderruns = 0;
-          return;
-        }
+              this.writePos = 0;
+              this.readPos = 0;
+              this.buffered = 0;
+              this.playing = false;
+              this.consecutiveUnderruns = 0;
+              this.fadeInRemaining = 0;
+              return;
+            }
 
             let left, right;
 
@@ -218,6 +228,8 @@ export class AudioEngine {
           if (!this.playing) {
             if (this.buffered >= this.minBuffer) {
               this.playing = true;
+              // Arm fade-in to prevent pop when transitioning from silence
+              this.fadeInRemaining = this.fadeInLen;
             } else {
               // Silence while buffering
               outL.fill(0);
@@ -234,7 +246,7 @@ export class AudioEngine {
             this.consecutiveUnderruns++;
             // Only drop back to re-fill mode after 3 consecutive underruns
             // (i.e. ~8ms of silence). A single late IQ chunk must not cause
-            // a 150ms hard rebuffer — that produces the audible pop/click.
+            // a 200ms hard rebuffer — that produces the audible pop/click.
             if (this.consecutiveUnderruns >= 3) {
               this.playing = false;
               this.consecutiveUnderruns = 0;
@@ -244,36 +256,58 @@ export class AudioEngine {
           // Underrun resolved — reset counter
           this.consecutiveUnderruns = 0;
 
-          // Adaptive rate control: adjust consumption rate to keep buffer
-          // near the target level. This prevents both underruns and overflow
-          // from clock drift or variable chunk timing.
-          // - Buffer too full (>300ms): consume one extra sample (speed up ~0.8%)
-          // - Buffer too low (<100ms): consume one fewer sample (slow down ~0.8%)
-          // - Otherwise: consume exactly len samples (normal rate)
-          let consume = len;
-          if (this.buffered > this.targetBuffer + 4800) {
-            // Buffer growing too large — consume 1 extra to drain
-            consume = len + 1;
-          } else if (this.buffered < this.minBuffer && this.buffered >= len) {
-            // Buffer getting dangerously low — consume 1 fewer to build up
-            consume = len - 1;
-          }
+          // ---- Continuous proportional drift correction ----
+          // Instead of a dead-zone threshold, always nudge toward targetBuffer.
+          // This prevents drift from accumulating silently and then causing a
+          // sudden correction glitch every 10-30 seconds.
+          const error = (this.buffered - this.targetBuffer) / this.targetBuffer;
+          const rawCorrection = error * this.driftGain * len;
+          const correction = Math.max(-this.maxCorrection, Math.min(this.maxCorrection, rawCorrection));
+          let consume = len + Math.round(correction);
 
-          // Ensure we have enough samples
-          if (this.buffered < consume) consume = this.buffered;
+          // Safety: ensure consume is at least 1 and doesn't exceed available
+          if (consume < 1) consume = 1;
+          if (consume > this.buffered) consume = this.buffered;
 
-          // Read samples from ring buffer with simple rate adaptation.
-          // When consume != len, we use nearest-neighbor resampling
-          // (imperceptible at ±1 sample per 128).
-          for (let i = 0; i < len; i++) {
-            // Map output sample index to input sample index
-            const srcIdx = Math.min(Math.round(i * consume / len), consume - 1);
-            const pos = (this.readPos + srcIdx) % this.bufferLen;
-            outL[i] = this.bufferL[pos];
-            if (outR) outR[i] = this.bufferR[pos];
+          // ---- Read samples with linear interpolation for rate adjustment ----
+          // When consume != len, we resample using linear interpolation.
+          // This produces a smooth sub-sample correction without discontinuities.
+          if (consume === len) {
+            // Fast path: 1:1 copy, no resampling needed
+            for (let i = 0; i < len; i++) {
+              const pos = (this.readPos + i) % this.bufferLen;
+              outL[i] = this.bufferL[pos];
+              if (outR) outR[i] = this.bufferR[pos];
+            }
+          } else {
+            // Linear interpolation resampling
+            const ratio = consume / len;
+            for (let i = 0; i < len; i++) {
+              const srcF = i * ratio; // fractional source index
+              const srcI = Math.floor(srcF);
+              const frac = srcF - srcI;
+
+              const idx0 = (this.readPos + Math.min(srcI, consume - 1)) % this.bufferLen;
+              const idx1 = (this.readPos + Math.min(srcI + 1, consume - 1)) % this.bufferLen;
+
+              outL[i] = this.bufferL[idx0] * (1 - frac) + this.bufferL[idx1] * frac;
+              if (outR) outR[i] = this.bufferR[idx0] * (1 - frac) + this.bufferR[idx1] * frac;
+            }
           }
           this.readPos = (this.readPos + consume) % this.bufferLen;
           this.buffered -= consume;
+
+          // ---- Fade-in ramp after playback resume (prevents pop) ----
+          if (this.fadeInRemaining > 0) {
+            const startGain = 1.0 - (this.fadeInRemaining / this.fadeInLen);
+            for (let i = 0; i < len && this.fadeInRemaining > 0; i++) {
+              const gain = startGain + (i + 1) / this.fadeInLen;
+              const g = Math.min(1.0, gain);
+              outL[i] *= g;
+              if (outR) outR[i] *= g;
+              this.fadeInRemaining--;
+            }
+          }
 
           return true;
         }
@@ -309,7 +343,8 @@ export class AudioEngine {
     this.writeCaptureRing(float32);
     if (!this.workletNode) return;
     // Mono → duplicated to both channels by worklet
-    this.workletNode.port.postMessage({ left: float32 });
+    // Transfer ownership to worklet thread (zero-copy, reduces GC pressure)
+    this.workletNode.port.postMessage({ left: float32 }, [float32.buffer]);
   }
 
   /**
@@ -325,7 +360,8 @@ export class AudioEngine {
       else if (v > 1.0) { float32Data[i] = 1.0; }
       else if (v < -1.0) { float32Data[i] = -1.0; }
     }
-    this.workletNode.port.postMessage({ left: float32Data });
+    // Transfer ownership to worklet thread (zero-copy, reduces GC pressure)
+    this.workletNode.port.postMessage({ left: float32Data }, [float32Data.buffer]);
   }
 
   /**
@@ -350,7 +386,8 @@ export class AudioEngine {
       else if (v > 1.0) { right[i] = 1.0; }
       else if (v < -1.0) { right[i] = -1.0; }
     }
-    this.workletNode.port.postMessage({ left, right });
+    // Transfer ownership to worklet thread (zero-copy, reduces GC pressure)
+    this.workletNode.port.postMessage({ left, right }, [left.buffer, right.buffer]);
   }
 
   /**
