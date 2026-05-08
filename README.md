@@ -341,13 +341,6 @@ The Dockerfile uses a multi-stage build and includes `rtl-sdr`, `dump1090`, and 
 
 ```yaml
 services:
-  rtl_tcp:
-    image: kosniaz/rtl_tcp
-    devices:
-      - /dev/bus/usb:/dev/bus/usb
-    privileged: true
-    command: ["-a", "0.0.0.0", "-p", "1234"]
-
   no-sdr:
     build:
       context: ..
@@ -355,9 +348,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ../config:/app/config:ro
-    depends_on:
-      - rtl_tcp
+      - ../config:/app/config:ro   
     restart: unless-stopped
 ```
 
