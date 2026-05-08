@@ -925,11 +925,42 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 		TuningStep:   newProfile.TuningStep,
 	}
 	metaMsg := ws.PackMetaMessage(meta)
+	newBw := defaultBandwidthForMode(newProfile.Mode)
 	for _, client := range clients {
 		m.wsMgr.SendTo(client.ID, metaMsg)
-		// Update profile ID on each subscribed client
-		m.wsMgr.SetClientProfileID(client.ID, newProfile.ID)
+		// Update ws.Client state to match new profile (mode, bandwidth, reset tune offset)
+		m.wsMgr.ApplyProfileChangeToClient(client.ID, newProfile.ID, newProfile.Mode, newBw)
 	}
+
+	// Update existing client pipelines to match the new profile's mode and bandwidth.
+	// Without this, pipelines keep the old mode's output rate and bandwidth,
+	// causing over-wide filtering and station bleed on codec paths.
+	newRate := outputRateForMode(newProfile.Mode)
+	m.mu.Lock()
+	for _, client := range clients {
+		if cp, exists := m.clientPipelines[client.ID]; exists && cp.extractor != nil {
+			cp.extractor.SetOutputSampleRate(newRate)
+			cp.extractor.SetBandwidth(newBw)
+			cp.extractor.SetTuneOffset(0) // offset is invalid for new center frequency
+			m.updateChunkSize(cp)
+			// Update Opus pipeline if active
+			cp.pmu.Lock()
+			if cp.opusPipeline != nil {
+				cp.opusPipeline.UpdateSampleRate(newRate)
+				if err := cp.opusPipeline.SetMode(newProfile.Mode); err != nil {
+					m.logger.Error("failed to update opus pipeline mode on profile switch",
+						"clientID", client.ID, "mode", newProfile.Mode, "error", err)
+				}
+			}
+			cp.pmu.Unlock()
+			// Reset accumulator
+			cp.accumPos = 0
+			if cp.adpcmEnc != nil {
+				cp.adpcmEnc.Reset()
+			}
+		}
+	}
+	m.mu.Unlock()
 
 	m.logger.Info("switched dongle profile",
 		"dongleID", dongleID,
@@ -1654,6 +1685,9 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 		// This must come after SetOutputSampleRate so the bandwidth is preserved.
 		if cmd.Bandwidth > 0 {
 			cp.extractor.SetBandwidth(cmd.Bandwidth)
+		} else {
+			// No explicit bandwidth — apply mode's default to prevent over-wide filtering
+			cp.extractor.SetBandwidth(defaultBandwidthForMode(cmd.Mode))
 		}
 
 		m.updateChunkSize(cp)
@@ -1886,6 +1920,15 @@ func (m *Manager) createClientPipeline(clientID string) {
 		cp.extractor.SetNbThreshold(float32(d.profile.PreFilterNbThreshold))
 	}
 
+	// Apply bandwidth: use the client's stored value if they previously sent one,
+	// otherwise fall back to the mode's default. This handles the case where
+	// bandwidth was set before audio_enabled (pipeline creation).
+	bw := client.Bandwidth
+	if bw <= 0 {
+		bw = defaultBandwidthForMode(mode)
+	}
+	cp.extractor.SetBandwidth(bw)
+
 	// Create Opus pipeline if codec is opus, opus-hq, or opus-lo
 	if iqCodec == "opus" || iqCodec == "opus-hq" || iqCodec == "opus-lo" {
 		pipeline, err := NewOpusPipeline(OpusPipelineConfig{
@@ -1965,6 +2008,29 @@ func outputRateForMode(mode string) int {
 		return 12000
 	default:
 		return 48000
+	}
+}
+
+// defaultBandwidthForMode returns the default RF filter bandwidth for a demodulation mode.
+// Matches the client-side DEMOD_MODES[mode].defaultBandwidth values.
+func defaultBandwidthForMode(mode string) int {
+	switch mode {
+	case "wfm":
+		return 200000
+	case "nfm":
+		return 12500
+	case "am":
+		return 6000
+	case "am-stereo":
+		return 10000
+	case "sam":
+		return 6000
+	case "usb", "lsb":
+		return 2400
+	case "cw":
+		return 500
+	default:
+		return 12500
 	}
 }
 

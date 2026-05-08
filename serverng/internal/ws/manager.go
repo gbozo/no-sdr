@@ -134,6 +134,18 @@ func (m *Manager) SetClientProfileID(clientID, profileID string) {
 	client.mu.Unlock()
 }
 
+// ApplyProfileChangeToClient updates a client's state for a profile switch.
+// Resets mode, bandwidth, and tune offset to match the new profile.
+func (m *Manager) ApplyProfileChangeToClient(clientID, profileID, mode string, bandwidth int) {
+	m.mu.RLock()
+	client, ok := m.clients[clientID]
+	m.mu.RUnlock()
+	if !ok {
+		return
+	}
+	client.ApplyProfileChange(profileID, mode, bandwidth)
+}
+
 // HandleUpgrade is the HTTP handler for WebSocket upgrade requests.
 // Use with chi: r.Get("/ws", mgr.HandleUpgrade)
 func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {

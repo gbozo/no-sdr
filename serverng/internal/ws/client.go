@@ -134,6 +134,17 @@ func (c *Client) Unsubscribe() {
 	c.ProfileID = ""
 }
 
+// ApplyProfileChange updates the client's state when the server switches profiles.
+// This ensures ws.Client fields stay in sync with the pipeline state.
+func (c *Client) ApplyProfileChange(profileID, mode string, bandwidth int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ProfileID = profileID
+	c.Mode = mode
+	c.Bandwidth = bandwidth
+	c.TuneOffset = 0 // offset is invalid for new center frequency
+}
+
 // AllowedCodecs holds the codec sets the server will accept from clients.
 // Set once at startup by the Manager; safe to read concurrently (never mutated after init).
 type AllowedCodecs struct {
@@ -171,6 +182,10 @@ func (c *Client) UpdateFromCommand(cmd *ClientCommand, allowed *AllowedCodecs) *
 	case "mode":
 		if cmd.Mode != "" {
 			c.Mode = cmd.Mode
+		}
+		// Also store bandwidth if piggybacked on the mode command
+		if cmd.Bandwidth > 0 {
+			c.Bandwidth = cmd.Bandwidth
 		}
 	case "bandwidth":
 		c.Bandwidth = cmd.Hz

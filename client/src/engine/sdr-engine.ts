@@ -1032,8 +1032,7 @@ export class SdrEngine {
           this.demodulator.setBandwidth(bw);
           this.attachRdsCallback();
           if (meta.iqSampleRate) this.demodulator.setInputSampleRate(meta.iqSampleRate);
-          this.send({ cmd: 'mode', mode: prevMode });
-          this.send({ cmd: 'bandwidth', hz: bw });
+          this.send({ cmd: 'mode', mode: prevMode, bandwidth: bw });
           this.updateResampleRatio();
         } else if (prevBandwidth && prevBandwidth !== store.bandwidth()) {
           store.setBandwidth(prevBandwidth);
@@ -1060,6 +1059,12 @@ export class SdrEngine {
 
         // Request waterfall history to prefill the display immediately
         this.send({ cmd: 'request_history' });
+
+        // Re-send noise blanker state (persisted in localStorage but not part of subscribe reset)
+        if (store.nbEnabled()) {
+          this.send({ cmd: 'set_pre_filter_nb', enabled: true });
+          this.send({ cmd: 'set_pre_filter_nb_threshold', threshold: store.nbLevel() });
+        }
         break;
       }
 
@@ -1069,6 +1074,8 @@ export class SdrEngine {
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
         store.setTuningStep(meta.tuningStep ?? 0);
+        // Reset tune offset — previous offset is invalid for new center frequency
+        store.setTuneOffset(0);
         // Profile/center frequency changed — arm identify cooldown for ADPCM/none.
         this.armIdentifyCooldown();
         if (meta.iqSampleRate) {
