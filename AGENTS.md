@@ -17,6 +17,7 @@ serverng/              → Go backend (chi router, WebSocket, DSP pipeline, dong
   internal/dongle/     → Dongle lifecycle: demo/rtl_tcp/rtlsdr(cgo)/airspy/hfp/rsp + Opus pipeline
   internal/config/     → YAML config loader + validation
   internal/history/    → FFT history ring buffer (waterfall backfill)
+  internal/gpu/        → GPU offload: VkFFT + Vulkan compute shaders (planned)
 shared/src/            → TypeScript types, binary protocol codec, ADPCM codec (zero deps) — merged into client/src/shared/
 client/src/shared/     → Protocol constants, codec helpers, types, modes (was separate workspace)
 client/src/engine/     → DSP: demodulators, RDS, noise reduction, audio worklet, renderers
@@ -67,6 +68,53 @@ Dongle (uint8 IQ @ 2.4 MSPS)
 | `client/src/engine/audio.ts` | AudioWorklet + 5-band EQ + jitter buffer | Per audio frame |
 | `shared/src/protocol.ts` | Binary WS protocol: client-side pack/unpack, codec helpers | Every WS message |
 | `shared/src/adpcm.ts` | IMA-ADPCM decoder (TypeScript, browser-side) | Every IQ/FFT frame |
+
+## GPU Acceleration (planned)
+
+Offload DSP to GPU via Vulkan + VkFFT for CPU core liberation and higher throughput.
+
+### Operations to Offload
+
+| Operation | GPU Library | Per-Client | Priority |
+|-----------|-------------|------------|----------|
+| FFT (65536 @ 30fps) | VkFFT | No (shared) | **Critical** |
+| Butterworth LPF (4th-order) | Vulkan Compute Shader | Yes | High |
+| NCO Frequency Shift | Vulkan Compute Shader | Yes | High |
+| Decimation (integer) | Vulkan Compute Shader | Yes | High |
+| FM Stereo FIR (2×51-tap) | Vulkan Compute Shader | Yes | **Critical** |
+
+### Hardware Tiers
+
+| Tier | Hardware | FFT Speedup | Primary Benefit |
+|------|----------|-------------|-----------------|
+| 1 | Intel UHD 630, AMD Vega 8 | 1.5–3× | CPU core liberation |
+| 2 | AMD 680M/780M, Intel Xe | 3–5× | Real throughput gains |
+| 3 | RTX 3060+, RX 6700+ | 5–10× | Many clients |
+
+### Why Vulkan + VkFFT
+
+- **Cross-platform:** Nvidia, AMD, Intel, Apple, Pi4
+- **AMD APU benefit:** Vulkan 60% faster than ROCm (VRAM+GTT ~88GB vs VRAM only ~48GB)
+- **VkFFT:** MIT license, header-only, runtime kernel generation
+
+### Implementation Phases
+
+1. `serverng/internal/gpu/` — Vulkan device detection, CPU fallback
+2. FFT via VkFFT (drop-in replacement)
+3. IQ DSP — Butterworth + NCO + Decimate shaders
+4. FM Stereo FIR shader
+5. Multi-client batching with command buffers
+
+### Dependencies
+
+```yaml
+required:
+  - github.com/DTolm/VkFFT  # MIT, header-only via CGO
+  - vulkan-sdk >= 1.2
+build: go build -tags gpu_vulkan ./cmd/serverng
+```
+
+Full plan: `docs/gpu-offload-plan.md`
 
 ## Binary Protocol (Server → Client)
 

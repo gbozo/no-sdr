@@ -35,6 +35,14 @@
 - [ ] Multi-server aggregation (gateway for multiple serverng instances)
 - [ ] Docker cross-compile — linux/amd64, linux/arm64 (RPi), darwin/arm64 via multi-stage Dockerfile
 
+### GPU Acceleration (see docs/gpu-offload-plan.md)
+- [ ] Create `serverng/internal/gpu/` package with Vulkan detection
+- [ ] Wrap VkFFT via CGO for GPU FFT offloading
+- [ ] GPU Butterworth + NCO + decimation in IQ extractor (compute shaders)
+- [ ] GPU FM Stereo FIR (2× 51-tap at 240 kHz)
+- [ ] Multi-client batching with Vulkan command buffers
+- [ ] Graceful CPU fallback when GPU unavailable
+
 ### Decoders
 - [ ] DMR/D-Star/YSF (digiham WASM)
 - [ ] DAB/DAB+ (welle.io WASM)
