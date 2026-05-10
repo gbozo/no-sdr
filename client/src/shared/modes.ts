@@ -117,7 +117,7 @@ export const DEMOD_MODES: Record<DemodMode, DemodModeInfo> = {
     name: 'Raw IQ',
     shortName: 'RAW',
     description: 'Unprocessed I/Q samples',
-    bandwidthRange: [1_000, 3_000_000],
+    bandwidthRange: [1_000, 300_000],
     defaultBandwidth: 48_000,
     minSampleRate: 8_000,
     hasAudio: false,

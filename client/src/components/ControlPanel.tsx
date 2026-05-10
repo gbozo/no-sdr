@@ -628,50 +628,52 @@ const ModeSelector: Component = () => {
           {DEMOD_MODES[store.mode()]?.description ?? ''}
         </div>
 
-        {/* Filter Bandwidth slider */}
-        <div class="mt-3 pt-2 border-t border-border/40">
-          <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Filter BW
-            </label>
-            <span class="text-[9px] font-mono text-text-dim">
-              {(store.bandwidth() / 1000).toFixed(1)} kHz
-            </span>
+        {/* Filter Bandwidth + Squelch — side by side */}
+        <div class="mt-3 pt-2 border-t border-border/40 flex gap-3">
+          {/* Filter Bandwidth */}
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                Filter BW
+              </label>
+              <span class="text-[9px] font-mono text-text-dim">
+                {(store.bandwidth() / 1000).toFixed(1)} kHz
+              </span>
+            </div>
+            <input
+              type="range"
+              aria-label="Filter bandwidth"
+              min={DEMOD_MODES[store.mode()]?.bandwidthRange[0] ?? 100}
+              max={DEMOD_MODES[store.mode()]?.bandwidthRange[1] ?? 200000}
+              step={100}
+              value={store.bandwidth()}
+              onInput={(e) => engine.setBandwidth(parseInt(e.currentTarget.value))}
+              class="sdr-range w-full"
+            />
           </div>
-          <input
-            type="range"
-            aria-label="Filter bandwidth"
-            min={DEMOD_MODES[store.mode()]?.bandwidthRange[0] ?? 100}
-            max={DEMOD_MODES[store.mode()]?.bandwidthRange[1] ?? 200000}
-            step={100}
-            value={store.bandwidth()}
-            onInput={(e) => engine.setBandwidth(parseInt(e.currentTarget.value))}
-            class="sdr-range"
-          />
-        </div>
-
-        {/* Squelch */}
-        <div class="mt-3 pt-2 border-t border-border/40">
-          <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Squelch
-            </label>
-            <span class="text-[9px] font-mono text-text-dim">
-              {store.squelch() !== null ? `${store.squelch()} dB` : 'Off'}
-            </span>
+          {/* Squelch */}
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                Squelch
+              </label>
+              <span class="text-[9px] font-mono text-text-dim">
+                {store.squelch() !== null ? `${store.squelch()} dB` : 'Off'}
+              </span>
+            </div>
+            <input
+              type="range"
+              aria-label="Squelch threshold"
+              min={-80}
+              max={0}
+              value={store.squelch() ?? -80}
+              onInput={(e) => {
+                const val = parseInt(e.currentTarget.value);
+                engine.setSquelch(val <= -80 ? null : val);
+              }}
+              class="sdr-range w-full"
+            />
           </div>
-          <input
-            type="range"
-            aria-label="Squelch threshold"
-            min={-80}
-            max={0}
-            value={store.squelch() ?? -80}
-            onInput={(e) => {
-              const val = parseInt(e.currentTarget.value);
-              engine.setSquelch(val <= -80 ? null : val);
-            }}
-            class="sdr-range"
-          />
         </div>
       </div>
       </Show>
@@ -725,52 +727,55 @@ const AudioControls: Component = () => {
       </div>
       <Show when={open()}>
         <div class="p-3 space-y-3">
-        {/* Volume */}
-        <div>
-          <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Volume
-            </label>
-            <span class="text-[9px] font-mono text-text-dim">
-              {Math.round(store.volume() * 100)}%
-            </span>
-          </div>
-          <input
-            type="range"
-            aria-label="Volume"
-            min={0}
-            max={100}
-            value={Math.round(store.volume() * 100)}
-            onInput={(e) => engine.setVolume(parseInt(e.currentTarget.value) / 100)}
-            class="sdr-range"
-          />
-        </div>
-
-        {/* Balance (L/R) */}
-        <div>
-          <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
-              Balance
-            </label>
-            <span class="text-[9px] font-mono text-text-dim min-w-[28px] text-right">
-              {store.balance() === 0 ? 'C' : store.balance() < 0 ? `L${Math.round(Math.abs(store.balance()) * 100)}` : `R${Math.round(store.balance() * 100)}`}
-            </span>
-          </div>
-          <div class="relative">
+        {/* Volume + Balance — side by side */}
+        <div class="flex gap-3">
+          {/* Volume */}
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                Volume
+              </label>
+              <span class="text-[9px] font-mono text-text-dim">
+                {Math.round(store.volume() * 100)}%
+              </span>
+            </div>
             <input
               type="range"
-              aria-label="Balance left-right"
-              min={-100}
+              aria-label="Volume"
+              min={0}
               max={100}
-              value={Math.round(store.balance() * 100)}
-              onInput={(e) => engine.setBalance(parseInt(e.currentTarget.value) / 100)}
-              class="sdr-range"
+              value={Math.round(store.volume() * 100)}
+              onInput={(e) => engine.setVolume(parseInt(e.currentTarget.value) / 100)}
+              class="sdr-range w-full"
             />
-            {/* Center tick mark */}
-            <div class="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-text-dim pointer-events-none" />
           </div>
-          <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
-            <span>L</span><span>C</span><span>R</span>
+
+          {/* Balance (L/R) */}
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                Balance
+              </label>
+              <span class="text-[9px] font-mono text-text-dim min-w-[28px] text-right">
+                {store.balance() === 0 ? 'C' : store.balance() < 0 ? `L${Math.round(Math.abs(store.balance()) * 100)}` : `R${Math.round(store.balance() * 100)}`}
+              </span>
+            </div>
+            <div class="relative">
+              <input
+                type="range"
+                aria-label="Balance left-right"
+                min={-100}
+                max={100}
+                value={Math.round(store.balance() * 100)}
+                onInput={(e) => engine.setBalance(parseInt(e.currentTarget.value) / 100)}
+                class="sdr-range w-full"
+              />
+              {/* Center tick mark */}
+              <div class="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-text-dim pointer-events-none" />
+            </div>
+            <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
+              <span>L</span><span>C</span><span>R</span>
+            </div>
           </div>
         </div>
 
