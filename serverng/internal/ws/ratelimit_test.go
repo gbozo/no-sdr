@@ -92,9 +92,11 @@ func TestReleaseToZeroRemovesEntry(t *testing.T) {
 func TestMiddlewareRejects429(t *testing.T) {
 	rl := NewRateLimiter(1)
 
-	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// nil resolver → falls back to r.RemoteAddr
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
+	handler := rl.Middleware(nil)(inner)
 
 	// First request — should pass
 	req1 := httptest.NewRequest("GET", "/ws", nil)
@@ -118,9 +120,10 @@ func TestMiddlewareRejects429(t *testing.T) {
 func TestMiddlewareAllowsDifferentIPs(t *testing.T) {
 	rl := NewRateLimiter(1)
 
-	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
+	handler := rl.Middleware(nil)(inner)
 
 	req1 := httptest.NewRequest("GET", "/ws", nil)
 	req1.RemoteAddr = "1.2.3.4:1000"

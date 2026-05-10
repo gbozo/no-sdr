@@ -942,6 +942,7 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 			cp.extractor.SetOutputSampleRate(newRate)
 			cp.extractor.SetBandwidth(newBw)
 			cp.extractor.SetTuneOffset(0) // offset is invalid for new center frequency
+			cp.extractor.SetDCOffsetRemoval(newProfile.DCOffsetRemoval == nil || *newProfile.DCOffsetRemoval)
 			m.updateChunkSize(cp)
 			// Update Opus pipeline if active
 			cp.pmu.Lock()

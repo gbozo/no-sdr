@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"runtime"
 	"time"
@@ -78,20 +79,32 @@ func clientsHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 		resp := make([]map[string]any, 0, len(clients))
 
 		for _, info := range clients {
+			// Strip port from IP for display; keep full value as fallback.
+			displayIP := info.IP
+			if host, _, err := net.SplitHostPort(info.IP); err == nil {
+				displayIP = host
+			}
+
 			entry := map[string]any{
-				"id":           info.ID,
-				"persistentId": info.PersistentID,
-				"connIndex":    info.ConnIndex,
-				"ip":           info.IP,
-				"dongleId":     info.DongleID,
-				"profileId":    info.ProfileID,
-				"fftCodec":     info.FftCodec,
-				"iqCodec":      info.IqCodec,
-				"mode":         info.Mode,
-				"tuneOffset":   info.TuneOffset,
-				"bandwidth":    info.Bandwidth,
-				"audioEnabled": info.AudioEnabled,
-				"connectedAt":  info.ConnectedAt,
+				"id":            info.ID,
+				"persistentId":  info.PersistentID,
+				"connIndex":     info.ConnIndex,
+				"ip":            displayIP,
+				"dongleId":      info.DongleID,
+				"profileId":     info.ProfileID,
+				"fftCodec":      info.FftCodec,
+				"iqCodec":       info.IqCodec,
+				"mode":          info.Mode,
+				"tuneOffset":    info.TuneOffset,
+				"bandwidth":     info.Bandwidth,
+				"audioEnabled":  info.AudioEnabled,
+				"stereoEnabled": info.StereoEnabled,
+				"connectedAt":   info.ConnectedAt,
+			}
+
+			// Include raw proxy header value when available (non-empty = behind proxy).
+			if info.RealIP != "" {
+				entry["realIp"] = info.RealIP
 			}
 
 			// Resolve dongle name and profile details from config

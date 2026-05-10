@@ -94,6 +94,7 @@ export interface ServerConfig {
   allowedFftCodecs: string[];
   allowedIqCodecs: string[];
   opusComplexity: number;
+  realIPHeader: string;
   // Music identification
   auddApiKey: string;
   acrcloudHost: string;
@@ -114,6 +115,7 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   allowedFftCodecs: ['none', 'adpcm', 'deflate', 'deflate-floor'],
   allowedIqCodecs: ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'],
   opusComplexity: 5,
+  realIPHeader: '',
   auddApiKey: '',
   acrcloudHost: '',
   acrcloudAccessKey: '',
@@ -230,6 +232,7 @@ function createAdminStore() {
           allowedFftCodecs: data.allowedFftCodecs ?? DEFAULT_SERVER_CONFIG.allowedFftCodecs,
           allowedIqCodecs: data.allowedIqCodecs ?? DEFAULT_SERVER_CONFIG.allowedIqCodecs,
           opusComplexity: data.opusComplexity ?? DEFAULT_SERVER_CONFIG.opusComplexity,
+          realIPHeader: data.realIPHeader ?? '',
           auddApiKey: data.auddApiKey ?? '',
           acrcloudHost: data.acrcloudHost ?? '',
           acrcloudAccessKey: data.acrcloudAccessKey ?? '',

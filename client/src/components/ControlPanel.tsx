@@ -48,6 +48,183 @@ const ControlPanel: Component = () => {
 };
 
 // ---- Mode Selector ----
+// ---- L/R VU Meter ----
+const VuMeter: Component<{ audioOpen: () => boolean }> = (props) => {
+  let canvasRef: HTMLCanvasElement | undefined;
+  let rafId: number | undefined;
+  let intervalId: ReturnType<typeof setInterval> | undefined;
+
+  // Peak hold per channel: [L, R]
+  const peaks = [0, 0];
+  const peakHoldMs = [0, 0];
+  const PEAK_HOLD_TIME = 1500; // ms before peak starts decaying
+  const PEAK_DECAY = 0.005;    // fraction per frame
+
+  const draw = () => {
+    const canvas = canvasRef;
+    if (!canvas) return;
+    const ctx2d = canvas.getContext('2d');
+    if (!ctx2d) return;
+
+    const [analyserL, analyserR] = engine.getAudioAnalysersLR();
+
+    const dpr  = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width  = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const accent = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
+
+    // ── Background ──
+    ctx2d.fillStyle = '#04080f';
+    ctx2d.beginPath();
+    ctx2d.roundRect(0, 0, w, h, 3);
+    ctx2d.fill();
+    ctx2d.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx2d.lineWidth = 1;
+    ctx2d.beginPath();
+    ctx2d.roundRect(0.5, 0.5, w - 1, h - 1, 3);
+    ctx2d.stroke();
+
+    const pad = 4;
+    const labelW = 10;
+    const barAreaX = pad + labelW + 2;
+    const barAreaW = w - barAreaX - pad;
+    const rowH = (h - pad * 2 - 2) / 2;
+
+    // Compute RMS from time-domain data for a single analyser
+    const getRmsFromAnalyser = (an: AnalyserNode): number => {
+      const buf = new Float32Array(an.fftSize);
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length);
+    };
+
+    const channelLevels: [number, number] = [0, 0];
+    const FLOOR = -40;
+
+    if (analyserL && analyserR) {
+      const rmsL = getRmsFromAnalyser(analyserL);
+      const rmsR = getRmsFromAnalyser(analyserR);
+      const dbL = rmsL > 1e-6 ? 20 * Math.log10(rmsL) : -96;
+      const dbR = rmsR > 1e-6 ? 20 * Math.log10(rmsR) : -96;
+      channelLevels[0] = Math.max(0, Math.min(1, (dbL - FLOOR) / (-FLOOR)));
+      channelLevels[1] = Math.max(0, Math.min(1, (dbR - FLOOR) / (-FLOOR)));
+    }
+
+    const labels = ['L', 'R'];
+    const colors = [accent, accent];
+
+    for (let ch = 0; ch < 2; ch++) {
+      const y = pad + ch * (rowH + 2);
+      const level = channelLevels[ch];
+      const now2 = performance.now();
+
+      // Update peak hold
+      if (level > peaks[ch]) {
+        peaks[ch] = level;
+        peakHoldMs[ch] = now2;
+      } else if (now2 - peakHoldMs[ch] > PEAK_HOLD_TIME) {
+        peaks[ch] = Math.max(0, peaks[ch] - PEAK_DECAY);
+      }
+
+      // Track background
+      ctx2d.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx2d.beginPath();
+      ctx2d.roundRect(barAreaX, y + rowH * 0.15, barAreaW, rowH * 0.7, 2);
+      ctx2d.fill();
+
+      // Color zones: green (0–65%), amber (65–85%), red (85–100%)
+      const greenW  = Math.min(level, 0.65) / 0.65 * (barAreaW * 0.65);
+      const amberW  = level > 0.65 ? Math.min(level - 0.65, 0.20) / 0.20 * (barAreaW * 0.20) : 0;
+      const redW    = level > 0.85 ? Math.min(level - 0.85, 0.15) / 0.15 * (barAreaW * 0.15) : 0;
+      const bh = rowH * 0.7;
+      const by = y + rowH * 0.15;
+
+      if (greenW > 0) {
+        ctx2d.fillStyle = colors[ch];
+        ctx2d.fillRect(barAreaX, by, Math.round(greenW), bh);
+      }
+      if (amberW > 0) {
+        ctx2d.fillStyle = '#e0a020';
+        ctx2d.fillRect(barAreaX + barAreaW * 0.65, by, Math.round(amberW), bh);
+      }
+      if (redW > 0) {
+        ctx2d.fillStyle = '#cc3333';
+        ctx2d.fillRect(barAreaX + barAreaW * 0.85, by, Math.round(redW), bh);
+      }
+
+      // Peak hold tick
+      if (peaks[ch] > 0.01) {
+        const px = barAreaX + peaks[ch] * barAreaW;
+        ctx2d.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx2d.fillRect(Math.round(px) - 1, by, 2, bh);
+      }
+
+      // Channel label
+      ctx2d.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx2d.font = `${Math.round(rowH * 0.55)}px monospace`;
+      ctx2d.textAlign = 'left';
+      ctx2d.textBaseline = 'middle';
+      ctx2d.fillText(labels[ch], pad, y + rowH * 0.5);
+    }
+
+    // dBFS scale ticks at 0, -6, -12, -20, -40
+    const scalePoints = [
+      { db: 0,   label: '0' },
+      { db: -6,  label: '-6' },
+      { db: -12, label: '-12' },
+      { db: -20, label: '-20' },
+    ];
+    const FLOOR2 = -40;
+    ctx2d.font = '6px monospace';
+    ctx2d.textAlign = 'center';
+    ctx2d.fillStyle = 'rgba(255,255,255,0.2)';
+    for (const { db, label } of scalePoints) {
+      const xFrac = (db - FLOOR2) / (-FLOOR2);
+      const x = barAreaX + xFrac * barAreaW;
+      ctx2d.fillRect(Math.round(x), pad, 1, h - pad * 2);
+      ctx2d.fillText(label, Math.round(x), h - 2);
+    }
+  };
+
+  createEffect(() => {
+    const visible = props.audioOpen();
+    if (visible) {
+      if (!intervalId) {
+        intervalId = setInterval(() => {
+          if (rafId) cancelAnimationFrame(rafId);
+          rafId = requestAnimationFrame(draw);
+        }, 1000 / 25);
+      }
+    } else {
+      if (intervalId) { clearInterval(intervalId); intervalId = undefined; }
+      if (rafId)      { cancelAnimationFrame(rafId); rafId = undefined; }
+    }
+  });
+
+  onCleanup(() => {
+    if (intervalId) clearInterval(intervalId);
+    if (rafId)      cancelAnimationFrame(rafId);
+  });
+
+  return (
+    <canvas
+      ref={(el) => { canvasRef = el; }}
+      class="w-full rounded-sm"
+      style={{ height: '38px' }}
+      title="L/R audio level (VU meter, −40 dBFS to 0 dBFS)"
+    />
+  );
+};
+
 // ---- Audio Spectrum Display ----
 const AudioSpectrum: Component<{ audioOpen: () => boolean }> = (props) => {
   let canvasRef: HTMLCanvasElement | undefined;
@@ -505,6 +682,12 @@ const ModeSelector: Component = () => {
 // ---- Audio Controls ----
 const AudioControls: Component = () => {
   const [open, setOpen] = createSignal(true);
+  // Ticking signal to drive live meters (blend bar, compressor GR) at ~10 fps
+  const [tick, setTick] = createSignal(0);
+  onMount(() => {
+    const id = setInterval(() => setTick(t => t + 1), 100);
+    onCleanup(() => clearInterval(id));
+  });
 
   return (
     <div class="sdr-panel">
@@ -618,6 +801,35 @@ const AudioControls: Component = () => {
           </Show>
         </div>
 
+        {/* Compressor gain reduction — only shown when Loudness is on */}
+        <Show when={store.loudness()}>
+          <div>
+            <div class="flex justify-between items-center mb-0.5">
+              <span class="text-[7px] font-mono text-text-muted uppercase tracking-wider">Compressor GR</span>
+              <span class="text-[7px] font-mono text-text-dim">
+                {(() => {
+                  const gr = (tick(), engine.getAudioCompressor()?.reduction ?? 0);
+                  return `${gr.toFixed(1)} dB`;
+                })()}
+              </span>
+            </div>
+            <div class="relative h-1.5 rounded-full overflow-hidden bg-sdr-base border border-border/40">
+              {/* GR bar grows from the right (more reduction = wider bar from right) */}
+              <div
+                class="absolute inset-y-0 right-0 rounded-full"
+                style={{
+                  width: `${Math.min(100, Math.abs((tick(), engine.getAudioCompressor()?.reduction ?? 0)) * 2)}%`,
+                  background: '#e0a020',
+                  opacity: '0.85',
+                }}
+              />
+            </div>
+            <div class="flex justify-between text-[6px] font-mono text-text-muted mt-0.5">
+              <span>0 dB</span><span>GR</span><span>−20 dB</span>
+            </div>
+          </div>
+        </Show>
+
         {/* Stereo Settings (WFM, AM, AM Stereo) */}
         <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
           <div class="space-y-2">
@@ -644,6 +856,28 @@ const AudioControls: Component = () => {
                 <div class="text-[7px] font-mono text-text-muted mt-0.5">
                   Decode stereo only when signal &gt; {store.stereoThreshold()} dB
                 </div>
+                {/* Stereo blend indicator — live 0→1 from PilotPLL */}
+                <div class="mt-2">
+                  <div class="flex justify-between items-center mb-0.5">
+                    <span class="text-[7px] font-mono text-text-muted uppercase tracking-wider">Pilot blend</span>
+                    <span class="text-[7px] font-mono text-text-dim">
+                       {(tick(), Math.round(engine.getStereoBlend() * 100))}%
+                     </span>
+                  </div>
+                  <div class="relative h-1.5 rounded-full overflow-hidden bg-sdr-base border border-border/40">
+                    <div
+                      class="absolute inset-y-0 left-0 rounded-full transition-[width] duration-100"
+                      style={{
+                        width: `${Math.max(0, Math.min(1, (tick(), engine.getStereoBlend()))) * 100}%`,
+                        background: `var(--sdr-accent)`,
+                        opacity: store.stereoDetected() ? '1' : '0.4',
+                      }}
+                    />
+                  </div>
+                  <div class="flex justify-between text-[6px] font-mono text-text-muted mt-0.5">
+                    <span>MONO</span><span>BLEND</span><span>STEREO</span>
+                  </div>
+                </div>
               </div>
             </Show>
             {/* Opus stereo info */}
@@ -656,6 +890,16 @@ const AudioControls: Component = () => {
         </Show>
 
         {/* 5-Band Equalizer */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              VU Meter
+            </label>
+          </div>
+          <VuMeter audioOpen={open} />
+        </div>
+
+        {/* 5-Band Equalizer — spacer below VU */}
         <div>
           <div class="flex justify-between items-center mb-2">
             <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">

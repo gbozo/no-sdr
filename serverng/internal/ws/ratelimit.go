@@ -57,20 +57,28 @@ func (rl *RateLimiter) Count(ip string) int {
 }
 
 // Middleware returns an HTTP middleware that rejects connections over the limit.
-// It extracts the client IP from r.RemoteAddr (use with chi's RealIP middleware
-// for correct IP behind proxies).
-func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		// chi's RealIP middleware rewrites RemoteAddr, so this works behind proxies.
+// It extracts the client IP via the provided resolver function. Pass
+// Manager.ResolveClientIP so the same header logic applies everywhere.
+// If resolver is nil, r.RemoteAddr is used (works when chi's RealIP middleware
+// is active for X-Forwarded-For / X-Real-IP).
+func (rl *RateLimiter) Middleware(resolver func(r *http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var ip string
+			if resolver != nil {
+				ip = resolver(r)
+			} else {
+				ip = r.RemoteAddr
+			}
 
-		if !rl.Allow(ip) {
-			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-			return
-		}
+			if !rl.Allow(ip) {
+				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+				return
+			}
 
-		next.ServeHTTP(w, r)
-		// Note: Release is NOT called here because WebSocket connections persist.
-		// The caller (WS Manager) must call Release(ip) when the connection closes.
-	})
+			next.ServeHTTP(w, r)
+			// Note: Release is NOT called here because WebSocket connections persist.
+			// The caller (WS Manager) must call Release(ip) when the connection closes.
+		})
+	}
 }

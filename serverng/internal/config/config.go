@@ -89,6 +89,13 @@ type ServerConfig struct {
 	// and cuts encode CPU by ~30% compared to the libopus default of 10.
 	OpusComplexity int `yaml:"opusComplexity" json:"opusComplexity"`
 
+	// RealIPHeader is the HTTP header to read the client's real IP from when the
+	// server sits behind a reverse proxy or tunnel (e.g. Cloudflare, nginx).
+	// Common values: "CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For".
+	// A custom header name is also accepted.
+	// When empty (default) the TCP RemoteAddr is used as-is.
+	RealIPHeader string `yaml:"realIPHeader" json:"realIPHeader"`
+
 	// Music recognition API keys (optional).
 	// AudD is the primary service; ACRCloud is the fallback for higher coverage.
 	AuddAPIKey           string `yaml:"auddApiKey"           json:"-"` // https://audd.io

@@ -24,6 +24,10 @@ export class AudioEngine {
   private compressorNode: DynamicsCompressorNode | null = null;
   private loudnessGainNode: GainNode | null = null; // pre-compressor boost for loudness
   private analyserNode: AnalyserNode | null = null;
+  // Per-channel analysers for L/R VU meter — fed by a ChannelSplitterNode after gainNode
+  private splitterNode: ChannelSplitterNode | null = null;
+  private analyserNodeL: AnalyserNode | null = null;
+  private analyserNodeR: AnalyserNode | null = null;
   private initialized = false;
   private _loudnessEnabled = false;
 
@@ -124,6 +128,19 @@ export class AudioEngine {
     this.analyserNode.smoothingTimeConstant = 0.75;
     this.gainNode.connect(this.analyserNode);
     this.gainNode.connect(this.audioCtx.destination);
+
+    // Per-channel L/R analysers for VU meter
+    // ChannelSplitter splits stereo gainNode output into separate mono streams
+    this.splitterNode = this.audioCtx.createChannelSplitter(2);
+    this.analyserNodeL = this.audioCtx.createAnalyser();
+    this.analyserNodeL.fftSize = 1024;
+    this.analyserNodeL.smoothingTimeConstant = 0.0; // raw, no smoothing — VU uses RMS over window
+    this.analyserNodeR = this.audioCtx.createAnalyser();
+    this.analyserNodeR.fftSize = 1024;
+    this.analyserNodeR.smoothingTimeConstant = 0.0;
+    this.gainNode.connect(this.splitterNode);
+    this.splitterNode.connect(this.analyserNodeL, 0); // channel 0 = Left
+    this.splitterNode.connect(this.analyserNodeR, 1); // channel 1 = Right
 
     // Register the audio worklet processor with stereo support.
     // Uses a jitter buffer: accumulates samples before starting playback,
@@ -573,6 +590,15 @@ export class AudioEngine {
     return this.analyserNode;
   }
 
+  /** Returns [leftAnalyser, rightAnalyser] for per-channel VU metering. Both null until initialized. */
+  getAnalysersLR(): [AnalyserNode | null, AnalyserNode | null] {
+    return [this.analyserNodeL, this.analyserNodeR];
+  }
+
+  getCompressor(): DynamicsCompressorNode | null {
+    return this.compressorNode;
+  }
+
   /**
    * Clean up
    */
@@ -587,6 +613,7 @@ export class AudioEngine {
     this.loudnessGainNode?.disconnect();
     this.compressorNode?.disconnect();
     this.gainNode?.disconnect();
+    this.splitterNode?.disconnect();
     this.audioCtx?.close();
     this.initialized = false;
   }

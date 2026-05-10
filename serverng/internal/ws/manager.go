@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 // Manager handles WebSocket client connections and broadcasting.
 type Manager struct {
 	clients      map[string]*Client
-	clientIPs    map[string]string // clientID -> IP address
 	mu           sync.RWMutex
 	logger       *slog.Logger
 	onCommand    func(clientID string, cmd *ClientCommand)
@@ -23,6 +23,7 @@ type Manager struct {
 	onConnect    func(clientID string)
 	rateLimiter  *RateLimiter
 	allowed      AllowedCodecs
+	realIPHeader string // HTTP header to read real client IP from (proxy/tunnel support)
 
 	// maxFftFps is the highest FFT frame rate across all active profiles.
 	// Used to size the per-client write channel so that even at high fps
@@ -41,7 +42,6 @@ func NewManager(logger *slog.Logger) *Manager {
 	}
 	return &Manager{
 		clients:   make(map[string]*Client),
-		clientIPs: make(map[string]string),
 		logger:    logger,
 		allowed:   defaultAllowedCodecs,
 		maxFftFps: 30, // default; override with SetMaxFftFps
@@ -94,6 +94,54 @@ func (m *Manager) SetRateLimiter(rl *RateLimiter) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.rateLimiter = rl
+}
+
+// SetRealIPHeader configures which HTTP header carries the real client IP when the
+// server is behind a reverse proxy or tunnel. Common values:
+//   - "CF-Connecting-IP"  (Cloudflare)
+//   - "X-Real-IP"         (nginx)
+//   - "X-Forwarded-For"   (generic proxies — first value used)
+//
+// When empty (default) the TCP RemoteAddr is used as-is.
+// Safe to call while the server is running; takes effect on the next connection.
+func (m *Manager) SetRealIPHeader(header string) {
+	m.mu.Lock()
+	m.realIPHeader = header
+	m.mu.Unlock()
+}
+
+// ResolveClientIP extracts the real client IP from the request. When a proxy
+// header is configured its value takes precedence over RemoteAddr.
+// Returns (resolved, raw):
+//   - resolved: the usable IP string (first entry of X-Forwarded-For, full value
+//     for other headers, or r.RemoteAddr as fallback)
+//   - raw: the verbatim header value; empty when no proxy header is configured
+//
+// This is exported so rate-limiting middleware can use the same header logic.
+func (m *Manager) ResolveClientIP(r *http.Request) string {
+	resolved, _ := m.resolveClientIPFull(r)
+	return resolved
+}
+
+// resolveClientIPFull returns both the resolved IP and the raw header value.
+func (m *Manager) resolveClientIPFull(r *http.Request) (resolved, raw string) {
+	m.mu.RLock()
+	hdr := m.realIPHeader
+	m.mu.RUnlock()
+
+	if hdr != "" {
+		if val := r.Header.Get(hdr); val != "" {
+			raw = val
+			// X-Forwarded-For can be "client, proxy1, proxy2" — use first entry
+			for i := 0; i < len(val); i++ {
+				if val[i] == ',' {
+					return strings.TrimSpace(val[:i]), raw
+				}
+			}
+			return strings.TrimSpace(val), raw
+		}
+	}
+	return r.RemoteAddr, ""
 }
 
 // SetCommandHandler registers a callback for client commands.
@@ -173,15 +221,12 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	client := newClient(connID, conn, ctx, cancel, m.writeChanCap())
 	client.PersistentID = persistentID
 	client.ConnIndex = connIndex
-	client.RemoteAddr = r.RemoteAddr
-
-	// Track client IP for rate limiter release on disconnect
-	m.mu.Lock()
-	m.clientIPs[connID] = r.RemoteAddr
-	m.mu.Unlock()
+	clientIP, rawIP := m.resolveClientIPFull(r)
+	client.RemoteAddr = clientIP
+	client.RealIP = rawIP
 
 	m.addClient(client)
-	m.logger.Info("client connected", "connId", connID, "persistentId", persistentID, "remote", r.RemoteAddr)
+	m.logger.Info("client connected", "connId", connID, "persistentId", persistentID, "remote", clientIP, "realIP", rawIP)
 
 	// Start the stale-client checker the first time any client connects.
 	m.staleOnce.Do(func() {
@@ -369,16 +414,15 @@ func (m *Manager) addClient(c *Client) {
 func (m *Manager) removeClient(clientID string) {
 	m.mu.Lock()
 	client, ok := m.clients[clientID]
-	ip := m.clientIPs[clientID]
 	if ok {
 		delete(m.clients, clientID)
-		delete(m.clientIPs, clientID)
 	}
 	handler := m.onDisconnect
 	rl := m.rateLimiter
 	m.mu.Unlock()
 
 	if ok {
+		ip := client.RemoteAddr
 		client.cancel()
 		client.conn.Close(websocket.StatusNormalClosure, "")
 		m.logger.Info("client disconnected", "id", clientID)
@@ -574,6 +618,7 @@ type ClientInfo struct {
 	PersistentID  string    `json:"persistentId"`
 	ConnIndex     int       `json:"connIndex"`
 	IP            string    `json:"ip"`
+	RealIP        string    `json:"realIp,omitempty"` // raw proxy header value; empty when not behind proxy
 	DongleID      string    `json:"dongleId"`
 	ProfileID     string    `json:"profileId"`
 	FftCodec      string    `json:"fftCodec"`
@@ -598,7 +643,8 @@ func (m *Manager) GetAllClients() []ClientInfo {
 			ID:            c.ID,
 			PersistentID:  c.PersistentID,
 			ConnIndex:     c.ConnIndex,
-			IP:            m.clientIPs[c.ID],
+			IP:            c.RemoteAddr,
+			RealIP:        c.RealIP,
 			DongleID:      c.DongleID,
 			ProfileID:     c.ProfileID,
 			FftCodec:      c.FftCodec,

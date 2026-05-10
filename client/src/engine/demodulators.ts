@@ -803,6 +803,10 @@ class FmDemodulator implements Demodulator {
     return this._stereoDetected;
   }
 
+  get blendFactor(): number {
+    return this.pilotPll?.blendFactor ?? 0;
+  }
+
   setStereoEnabled(enabled: boolean): void {
     this.stereoEnabled = enabled;
   }

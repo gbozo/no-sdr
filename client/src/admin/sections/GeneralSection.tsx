@@ -2,7 +2,7 @@
 // General Settings Section — Station info, network, security, codecs
 // ============================================================
 
-import { Component, Show, For, createMemo } from 'solid-js';
+import { Component, Show, For, createMemo, createSignal } from 'solid-js';
 import { adminStore } from '../admin-store';
 
 // All available codecs for checkboxes
@@ -59,6 +59,12 @@ const GeneralSection: Component = () => {
                 onChange={(v) => adminStore.updateServerConfigField('port', v)}
                 min={1}
                 max={65535}
+              />
+            </FieldRow>
+            <FieldRow label="Real IP Header" help="Read client IP from a proxy/tunnel header instead of TCP RemoteAddr">
+              <ProxyIPHeaderInput
+                value={cfg().realIPHeader}
+                onChange={(v) => adminStore.updateServerConfigField('realIPHeader', v)}
               />
             </FieldRow>
             <div class="mt-2 px-3 py-2 bg-amber/5 border border-amber/20 rounded-sm">
@@ -231,14 +237,13 @@ const NumberInput: Component<{ value: number; onChange: (v: number) => void; min
 
 const SelectInput: Component<{ value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }> = (props) => (
   <select
-    value={props.value}
     onChange={(e) => props.onChange(e.currentTarget.value)}
     class="px-3 py-1.5 bg-sdr-base border border-border rounded-sm
            text-xs font-mono text-text-primary
            focus:outline-none focus:border-cyan transition-colors"
   >
     <For each={props.options}>
-      {(opt) => <option value={opt.value}>{opt.label}</option>}
+      {(opt) => <option value={opt.value} selected={opt.value === props.value}>{opt.label}</option>}
     </For>
   </select>
 );
@@ -292,6 +297,76 @@ const CodecCheckboxes: Component<{ all: string[]; selected: string[]; onChange: 
           );
         }}
       </For>
+    </div>
+  );
+};
+
+const KNOWN_PRESET_VALUES = new Set([
+  '', 'CF-Connecting-IP', 'X-Real-IP', 'X-Forwarded-For', 'True-Client-IP', 'X-Client-IP',
+]);
+
+const PROXY_HEADER_PRESETS = [
+  { value: '',                   label: 'Direct (no proxy)' },
+  { value: 'CF-Connecting-IP',   label: 'CF-Connecting-IP — Cloudflare' },
+  { value: 'X-Real-IP',          label: 'X-Real-IP — nginx / Caddy' },
+  { value: 'X-Forwarded-For',    label: 'X-Forwarded-For — generic proxy' },
+  { value: 'True-Client-IP',     label: 'True-Client-IP — Akamai / Cloudflare Enterprise' },
+  { value: 'X-Client-IP',        label: 'X-Client-IP — Apache' },
+  { value: '__custom__',         label: 'Custom header…' },
+];
+
+const ProxyIPHeaderInput: Component<{ value: string; onChange: (v: string) => void }> = (props) => {
+  const isCustom = () => props.value !== '' && !KNOWN_PRESET_VALUES.has(props.value);
+
+  // Local signal tracks whether the user has chosen the "Custom" option in the
+  // dropdown. We need this separately from props.value because when the user
+  // first clicks "Custom" the text field is empty and props.value stays ''.
+  const [customMode, setCustomMode] = createSignal(isCustom());
+
+  // The text shown in the custom text input — seeded from props.value if it
+  // already holds a non-preset value (e.g. loaded from config).
+  const [customText, setCustomText] = createSignal(isCustom() ? props.value : '');
+
+  const selectValue = () => {
+    if (customMode()) return '__custom__';
+    if (KNOWN_PRESET_VALUES.has(props.value)) return props.value;
+    return '';
+  };
+
+  const handlePresetChange = (v: string) => {
+    if (v === '__custom__') {
+      // Enter custom mode — do NOT call onChange yet; wait for the user to type
+      setCustomMode(true);
+    } else {
+      setCustomMode(false);
+      props.onChange(v);
+    }
+  };
+
+  const handleCustomChange = (v: string) => {
+    setCustomText(v);
+    props.onChange(v);
+  };
+
+  return (
+    <div class="flex flex-col gap-2">
+      <SelectInput
+        value={selectValue()}
+        onChange={handlePresetChange}
+        options={PROXY_HEADER_PRESETS}
+      />
+      <Show when={customMode()}>
+        <TextInput
+          value={customText()}
+          onChange={handleCustomChange}
+          placeholder="e.g. X-My-Real-IP"
+        />
+      </Show>
+      <Show when={props.value !== ''}>
+        <p class="text-[8px] font-mono text-text-dim">
+          Active: <span class="text-cyan">{props.value}</span> — takes effect on next client connect
+        </p>
+      </Show>
     </div>
   );
 };

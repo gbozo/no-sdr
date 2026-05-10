@@ -35,7 +35,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 
 	// WebSocket upgrade with rate limiting
 	r.Group(func(r chi.Router) {
-		r.Use(wsRateLimiter.Middleware)
+		r.Use(wsRateLimiter.Middleware(wsMgr.ResolveClientIP))
 		r.Get("/ws", wsMgr.HandleUpgrade)
 	})
 

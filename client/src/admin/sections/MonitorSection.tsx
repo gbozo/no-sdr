@@ -9,6 +9,7 @@ interface ClientInfo {
   persistentId: string;
   connIndex: number;
   ip: string;
+  realIp?: string;  // raw proxy header value; present only when behind a proxy
   dongleId: string;
   dongleName?: string;
   profileId: string;
@@ -83,7 +84,10 @@ const ClientRow: Component<{ client: ClientInfo }> = (props) => (
 
     {/* IP */}
     <div class="w-24 shrink-0">
-      <span class="text-[10px] font-mono text-text-primary">{props.client.ip}</span>
+      <span class="text-[10px] font-mono text-text-primary">{props.client.realIp || props.client.ip}</span>
+      <Show when={props.client.realIp}>
+        <div class="text-[8px] font-mono text-text-dim/50 truncate" title={props.client.ip}>{props.client.ip}</div>
+      </Show>
     </div>
 
     {/* Dongle + Profile + Frequency */}

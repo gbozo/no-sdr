@@ -38,8 +38,16 @@ type Client struct {
 	// ConnectedAt records when the client connected.
 	ConnectedAt time.Time
 
-	// RemoteAddr is the client's IP address (for state tracking).
+	// RemoteAddr is the resolved client IP address. When a proxy header is
+	// configured this is the value extracted from that header (first entry for
+	// X-Forwarded-For lists). Falls back to the TCP remote address.
 	RemoteAddr string
+
+	// RealIP is the raw value of the configured proxy header (e.g. the full
+	// X-Forwarded-For chain or the CF-Connecting-IP value). Empty when no
+	// proxy header is configured; identical to RemoteAddr for single-value
+	// headers.
+	RealIP string
 
 	// Write channel with backpressure
 	writeCh chan []byte

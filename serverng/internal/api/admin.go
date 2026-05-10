@@ -195,6 +195,7 @@ type adminProfileResponse struct {
 	Description          string  `json:"description"`
 	PreFilterNb          bool    `json:"preFilterNb"`
 	PreFilterNbThreshold int     `json:"preFilterNbThreshold"`
+	DCOffsetRemoval      *bool   `json:"dcOffsetRemoval"`
 }
 
 // adminDonglesHandler returns all dongles with full hardware details.
@@ -241,6 +242,7 @@ func adminDonglesHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc
 					Description:          p.Description,
 					PreFilterNb:          p.PreFilterNb,
 					PreFilterNbThreshold: p.PreFilterNbThreshold,
+					DCOffsetRemoval:      p.DCOffsetRemoval,
 				})
 			}
 			resp = append(resp, dr)
@@ -397,6 +399,10 @@ var RecordStatusFunc func() any
 // SetAllowedCodecsFunc updates the WS manager's allowed codec sets at runtime.
 // Set by main.go so the admin handler can propagate changes without a restart.
 var SetAllowedCodecsFunc func(fft, iq []string)
+
+// SetRealIPHeaderFunc updates the WS manager's real-IP proxy header at runtime.
+// Set by main.go; takes effect on the next new connection.
+var SetRealIPHeaderFunc func(header string)
 
 // --- Notification callbacks (wired by main.go to dongle.Manager) ---
 
@@ -784,6 +790,7 @@ func serverConfigHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 			"allowedFftCodecs":      cfg.Server.AllowedFftCodecs,
 			"allowedIqCodecs":       cfg.Server.AllowedIqCodecs,
 			"opusComplexity":        cfg.Server.OpusComplexity,
+			"realIPHeader":          cfg.Server.RealIPHeader,
 			// Music identification API keys (never exposed in public meta, admin only)
 			"auddApiKey":           cfg.Server.AuddAPIKey,
 			"acrcloudHost":         cfg.Server.ACRCloudHost,
@@ -815,6 +822,7 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			ACRCloudHost         *string `json:"acrcloudHost"`
 			ACRCloudAccessKey    *string `json:"acrcloudAccessKey"`
 			ACRCloudAccessSecret *string `json:"acrcloudAccessSecret"`
+			RealIPHeader         *string `json:"realIPHeader"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -880,6 +888,12 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 		}
 		if body.ACRCloudAccessSecret != nil {
 			cfg.Server.ACRCloudAccessSecret = *body.ACRCloudAccessSecret
+		}
+		if body.RealIPHeader != nil {
+			cfg.Server.RealIPHeader = *body.RealIPHeader
+			if SetRealIPHeaderFunc != nil {
+				SetRealIPHeaderFunc(*body.RealIPHeader)
+			}
 		}
 
 		// Bump config version

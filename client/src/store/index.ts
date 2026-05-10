@@ -136,7 +136,8 @@ function createStore() {
   const [fftSize, setFftSize] = createSignal(2048);
 
   // ---- Audio Start State ----
-  const [audioStarted, setAudioStarted] = createSignal(false);
+  // Persisted so HMR/reconnect can restore audio without another user gesture.
+  const [audioStarted, setAudioStarted] = persist<boolean>('audio.started', false);
 
   // ---- UI State ----
   const [sidebarOpen, setSidebarOpen] = createSignal(true);

@@ -88,6 +88,9 @@ func main() {
 	// Create WebSocket manager.
 	wsMgr := ws.NewManager(logger)
 	wsMgr.SetAllowedCodecs(cfg.Server.AllowedFftCodecs, cfg.Server.AllowedIqCodecs)
+	if cfg.Server.RealIPHeader != "" {
+		wsMgr.SetRealIPHeader(cfg.Server.RealIPHeader)
+	}
 
 	// Size write channels to the highest FFT fps across all profiles so that
 	// even fast-update profiles get ~3s of headroom before drop-oldest fires.
@@ -111,6 +114,7 @@ func main() {
 	api.DongleReinitFunc = dongleMgr.ReinitDongle
 	api.HandleProfileRemovedFunc = dongleMgr.HandleProfileRemoved
 	api.SetAllowedCodecsFunc = wsMgr.SetAllowedCodecs
+	api.SetRealIPHeaderFunc = wsMgr.SetRealIPHeader
 	api.EnumerateLocalDevicesFunc = func() []any {
 		devs := dongle.EnumerateLocalDevices()
 		out := make([]any, len(devs))

@@ -35,7 +35,8 @@ const App: Component = () => {
   (globalThis as any).__sdrEngine = engine;
 
   onMount(() => {
-    // Connect to WebSocket
+    // Connect to WebSocket on first mount. On HMR the engine singleton is reused
+    // and already connected, so connect() is a no-op (readyState guard).
     engine.connect();
 
     // Apply UI theme
@@ -233,18 +234,26 @@ const App: Component = () => {
         </Show>
 
         {/* Admin Button */}
-        <button
+        <a
+          href="/admin"
           class="ml-4 p-1.5 border border-border rounded-sm
                  text-text-dim hover:text-amber hover:border-amber
-                 transition-colors"
-          onClick={() => navigate('/admin')}
+                 transition-colors inline-flex items-center"
           title="Admin Settings"
+          onClick={(e) => {
+            // Allow Ctrl/Cmd/middle-click to open in new tab natively;
+            // only intercept plain left-clicks for client-side navigation.
+            if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+              e.preventDefault();
+              navigate('/admin');
+            }
+          }}
         >
           <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
             <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
             <path d="M13.3 10a1.1 1.1 0 00.2 1.2l.04.04a1.34 1.34 0 11-1.9 1.9l-.04-.04a1.1 1.1 0 00-1.2-.2 1.1 1.1 0 00-.67 1.01v.11a1.34 1.34 0 11-2.68 0v-.06a1.1 1.1 0 00-.72-1.01 1.1 1.1 0 00-1.2.2l-.04.04a1.34 1.34 0 11-1.9-1.9l.04-.04a1.1 1.1 0 00.2-1.2 1.1 1.1 0 00-1.01-.67h-.11a1.34 1.34 0 110-2.68h.06a1.1 1.1 0 001.01-.72 1.1 1.1 0 00-.2-1.2l-.04-.04a1.34 1.34 0 111.9-1.9l.04.04a1.1 1.1 0 001.2.2h.05a1.1 1.1 0 00.67-1.01v-.11a1.34 1.34 0 112.68 0v.06a1.1 1.1 0 00.72 1.01 1.1 1.1 0 001.2-.2l.04-.04a1.34 1.34 0 111.9 1.9l-.04.04a1.1 1.1 0 00-.2 1.2v.05a1.1 1.1 0 001.01.67h.11a1.34 1.34 0 110 2.68h-.06a1.1 1.1 0 00-1.01.72z"/>
           </svg>
-        </button>
+        </a>
       </header>
 
       {/* Main Content */}

@@ -147,6 +147,11 @@ export class SdrEngine {
   // so the jitter buffer can fill and signal level can stabilize.
   private squelchBypassUntil = 0;
 
+  // Tracks whether we have ever successfully subscribed in this session.
+  // Unlike activeDongleId (cleared on disconnect), this stays true across
+  // reconnects so the 'subscribed' handler can restore tuning state.
+  private hadPriorSubscription = false;
+
   // Bandwidth / throughput tracking (updated every second)
   private bwFftFrames = 0;
   private bwIqSamples = 0;
@@ -966,13 +971,15 @@ export class SdrEngine {
 
       case 'subscribed': {
         // Capture client-side state before the server profile defaults overwrite it.
-        // Only meaningful on reconnects — guard with wasSubscribed so first-time
-        // connections never restore stale store defaults (mode='nfm', offset=0, etc.)
-        const wasSubscribed  = !!store.activeDongleId();
-        const prevTuneOffset = wasSubscribed ? store.tuneOffset()  : 0;
-        const prevMode       = wasSubscribed ? store.mode()        : null;
-        const prevBandwidth  = wasSubscribed ? store.bandwidth()   : 0;
+        // hadPriorSubscription persists across reconnects (unlike activeDongleId which
+        // is cleared on disconnect), so this correctly identifies a reconnect scenario.
+        const isReconnect    = this.hadPriorSubscription;
+        const prevTuneOffset = isReconnect ? store.tuneOffset()  : 0;
+        const prevMode       = isReconnect ? store.mode()        : null;
+        const prevBandwidth  = isReconnect ? store.bandwidth()   : 0;
         const audioWasActive = this.audio.isInitialized;
+        // Mark that we have successfully subscribed at least once.
+        this.hadPriorSubscription = true;
 
         store.setActiveDongleId(meta.dongleId);
         store.setActiveProfileId(meta.profileId ?? '');
@@ -1018,44 +1025,42 @@ export class SdrEngine {
          }
          this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
 
-        // Restore client tuning state from before the reconnect.
-        // Only re-send if the value differs from the server's profile default so we
-        // don't spam the server on a first-time connection where prevMode/offset are
-        // already at their zero/default values.
-        if (prevMode && prevMode !== meta.mode) {
-          store.setMode(prevMode as DemodMode);
-          const modeInfo = DEMOD_MODES[prevMode as DemodMode];
-          this.demodulator = getDemodulator(prevMode as DemodMode);
-          this.demodulator.reset();
-          const bw = prevBandwidth || modeInfo?.defaultBandwidth || store.bandwidth();
-          store.setBandwidth(bw);
-          this.demodulator.setBandwidth(bw);
-          this.attachRdsCallback();
-          if (meta.iqSampleRate) this.demodulator.setInputSampleRate(meta.iqSampleRate);
-          this.send({ cmd: 'mode', mode: prevMode, bandwidth: bw });
-          this.updateResampleRatio();
-        } else if (prevBandwidth && prevBandwidth !== store.bandwidth()) {
-          store.setBandwidth(prevBandwidth);
-          this.demodulator.setBandwidth(prevBandwidth);
-          this.send({ cmd: 'bandwidth', hz: prevBandwidth });
-        }
+         // Restore client tuning state from before the reconnect.
+         // On a reconnect the server always resets to profile defaults, so we must
+         // unconditionally re-send mode, bandwidth, and tune offset.
+         // On a first-time connection isReconnect=false so prevMode/prevBandwidth/prevTuneOffset
+         // are all null/0 and none of the branches fire.
+         if (isReconnect && prevMode) {
+           store.setMode(prevMode as DemodMode);
+           const modeInfo = DEMOD_MODES[prevMode as DemodMode];
+           this.demodulator = getDemodulator(prevMode as DemodMode);
+           this.demodulator.reset();
+           const bw = prevBandwidth || modeInfo?.defaultBandwidth || store.bandwidth();
+           store.setBandwidth(bw);
+           this.demodulator.setBandwidth(bw);
+           this.attachRdsCallback();
+           if (meta.iqSampleRate) this.demodulator.setInputSampleRate(meta.iqSampleRate);
+           this.send({ cmd: 'mode', mode: prevMode, bandwidth: bw });
+           this.updateResampleRatio();
+         } else if (isReconnect && prevBandwidth) {
+           store.setBandwidth(prevBandwidth);
+           this.demodulator.setBandwidth(prevBandwidth);
+           this.send({ cmd: 'bandwidth', hz: prevBandwidth });
+         }
 
-        if (prevTuneOffset !== 0) {
-          store.setTuneOffset(prevTuneOffset);
-          this.send({ cmd: 'tune', offset: prevTuneOffset });
-          this.squelchBypassUntil = performance.now() + 500;
-        }
+         if (isReconnect && prevTuneOffset !== 0) {
+           store.setTuneOffset(prevTuneOffset);
+           this.send({ cmd: 'tune', offset: prevTuneOffset });
+           this.squelchBypassUntil = performance.now() + 500;
+         }
 
         // Re-enable audio if it was active before disconnect.
-        // Also resume the AudioContext — it may be suspended after a page reload
-        // or HMR cycle even though the AudioEngine instance was already initialised.
-        if (audioWasActive) {
-          this.audio.resume();
-          // Client is a dumb terminal: the Opus decoder lifecycle is managed
-          // exclusively by MSG_AUDIO_OPUS based on the wire channel header.
-          // Do NOT pre-init here — just enable audio and let the server drive.
-          this.send({ cmd: 'audio_enabled', enabled: true });
-        }
+         // Also resume the AudioContext — it may be suspended after a page reload
+         // or HMR cycle even though the AudioEngine instance was already initialised.
+         if (audioWasActive) {
+           this.audio.resume();
+           this.send({ cmd: 'audio_enabled', enabled: true });
+         }
 
         // Request waterfall history to prefill the display immediately
         this.send({ cmd: 'request_history' });
@@ -1931,6 +1936,24 @@ export class SdrEngine {
   /** AnalyserNode for the audio spectrum display. Null until audio is initialised. */
   getAudioAnalyser(): AnalyserNode | null { return this.audio.getAnalyser(); }
 
+  /** [leftAnalyser, rightAnalyser] for per-channel VU metering. */
+  getAudioAnalysersLR(): [AnalyserNode | null, AnalyserNode | null] { return this.audio.getAnalysersLR(); }
+
+  /** DynamicsCompressorNode — exposes .reduction (gain reduction in dB, ≤0). Null until initialised. */
+  getAudioCompressor(): DynamicsCompressorNode | null { return this.audio.getCompressor(); }
+
+  /**
+   * Stereo blend factor for the active demodulator (0 = mono, 1 = full stereo).
+   * Reads PilotPLL.blendFactor for WFM and lockLevel for C-QUAM/SAM.
+   * Returns -1 if the current mode is not stereo-capable or the demod doesn't expose blend.
+   */
+  getStereoBlend(): number {
+    const d = this.demodulator as any;
+    if (d?.blendFactor !== undefined) return d.blendFactor as number;
+    // WFM demod wraps PilotPLL internally; blendFactor exposed via getter
+    return -1;
+  }
+
   /**
    * Seek the waterfall to `offset` frames back from live (0 = live).
    * Redraws the waterfall from the client buffer window.
@@ -2233,5 +2256,10 @@ export class SdrEngine {
   }
 }
 
-// Singleton engine instance
-export const engine = new SdrEngine();
+// Singleton engine instance.
+// Survives HMR by reusing the existing instance stored on globalThis — this
+// preserves WS connection, audio state, and tuning state across hot reloads.
+const _global = globalThis as any;
+export const engine: SdrEngine = _global.__sdrEngine instanceof SdrEngine
+  ? _global.__sdrEngine
+  : (_global.__sdrEngine = new SdrEngine());

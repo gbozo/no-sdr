@@ -27,6 +27,47 @@ const WaterfallDisplay: Component = () => {
   // Pan drag state (middle-click or Shift+left-click)
   const [panAnchor, setPanAnchor] = createSignal<number | null>(null);
 
+  // ---- Click-to-tune fine tuning state ----
+  // 'finetune': mouse drag adjusts frequency by small steps from the base offset
+  const [tuneMode,        setTuneMode]        = createSignal<'finetune' | null>(null);
+  // Offset (Hz from center) at the moment the mouse button went down
+  const [tuneBaseOffset,  setTuneBaseOffset]  = createSignal(0);
+  // clientX at the moment the mouse button went down (for delta computation)
+  const [tuneBaseX,       setTuneBaseX]       = createSignal(0);
+  // Whether the mousedown landed inside the filter passband (for nudge-on-click)
+  const [tuneInsideBand,  setTuneInsideBand]  = createSignal(false);
+  // Clicked Hz at mousedown (for inside-band nudge direction)
+  const [tuneClickHz,     setTuneClickHz]     = createSignal(0);
+
+  // Fine-tune sensitivity: Hz of frequency change per pixel of mouse movement.
+  // This is computed from the current zoom so that the feel is consistent
+  // regardless of how far the user is zoomed in.
+  const fineTuneHzPerPx = (): number => {
+    const [zs, ze] = store.spectrumZoom();
+    const rect = spectrumRef?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return 50;
+    // How many Hz per pixel in the current zoom view
+    const hzPerPx = (ze - zs) * store.sampleRate() / rect.width;
+    // Fine-tune uses 15% of that so movement feels deliberate but precise
+    return hzPerPx * 0.15;
+  };
+
+  // Returns true if the given relative X position falls within the current filter passband
+  const isInsideFilterBand = (relX: number): boolean => {
+    const [zs, ze] = store.spectrumZoom();
+    const sr = store.sampleRate();
+    const offset = store.tuneOffset();
+    const bw = store.bandwidth();
+    // Convert current tuned offset to normalised zoom-space position
+    const normFull = (offset / sr) + 0.5;
+    const normZoomed = (normFull - zs) / (ze - zs);
+    // Half-bandwidth in zoom-space
+    const halfBwZoom = (bw / sr / 2) / (ze - zs);
+    const lo = normZoomed - halfBwZoom;
+    const hi = normZoomed + halfBwZoom;
+    return relX >= lo && relX <= hi;
+  };
+
   // Seek-back scrub
   const [seekOffset, setSeekOffset] = createSignal(0);
   const [bufferCount, setBufferCount] = createSignal(0); // viewport fraction at drag start
@@ -112,6 +153,28 @@ const WaterfallDisplay: Component = () => {
       setDragStart(rx);
       setDragEnd(rx);
       setIsDragging(true);
+      return;
+    }
+    // Left-click tuning logic
+    if (e.button === 0 && !e.shiftKey && !store.spectrumRangeSelect()) {
+      const clickedHz = xFracToHz(rx);
+      const clickedOffset = Math.round(clickedHz - store.centerFrequency());
+      if (isInsideFilterBand(rx)) {
+        // --- Inside band: fine-tune from current position (no jump) ---
+        setTuneMode('finetune');
+        setTuneBaseOffset(store.tuneOffset());
+        setTuneBaseX(e.clientX);
+        setTuneInsideBand(true);
+        setTuneClickHz(clickedHz);
+      } else {
+        // --- Outside band: instant tune, then fine-tune from new position ---
+        engine.tune(clickedOffset);
+        setTuneMode('finetune');
+        setTuneBaseOffset(clickedOffset);
+        setTuneBaseX(e.clientX);
+        setTuneInsideBand(false);
+        setTuneClickHz(clickedHz);
+      }
     }
   };
 
@@ -156,6 +219,14 @@ const timer = setInterval(() => {
       pan((panAnchor()! - rx) * span);
       setPanAnchor(rx); // update anchor so pan is incremental
       engine.drawWaterfallPan();
+    } else if (tuneMode() === 'finetune') {
+      // Fine-tune: mouse delta * hz-per-px * fine factor = frequency nudge
+      const dxPx = e.clientX - tuneBaseX();
+      const deltaHz = Math.round(dxPx * fineTuneHzPerPx());
+      const newOffset = tuneBaseOffset() + deltaHz;
+      if (newOffset !== store.tuneOffset()) {
+        engine.tune(newOffset);
+      }
     }
   };
 
@@ -180,13 +251,33 @@ const timer = setInterval(() => {
       }
       setDragStart(null);
       setDragEnd(null);
-    } else if (e.button === 0 && !e.shiftKey) {
-      // Plain click-to-tune (no step snapping — user clicked an exact frequency)
-      const rect = spectrumRef.getBoundingClientRect();
-      const offset = xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency();
-      engine.tune(Math.round(offset));
+      return;
+    }
 
-      // Spectrum click = intent to listen — start audio if not yet running
+    const mode = tuneMode();
+    if (mode !== null && e.button === 0) {
+      // Pure click inside band (no drag) → nudge toward clicked position,
+      // scaled by how far from center the click landed (0 = center → tiny step,
+      // 1 = band edge → full step equal to half the bandwidth).
+      const dxPx = Math.abs(e.clientX - tuneBaseX());
+      if (tuneInsideBand() && dxPx < 3) {
+        const targetOffset  = Math.round(tuneClickHz() - store.centerFrequency());
+        const currentOffset = store.tuneOffset();
+        const diff = targetOffset - currentOffset;
+        if (Math.abs(diff) > 1) {
+          // t: 0 at center, 1 at band edge
+          const halfBw = store.bandwidth() / 2;
+          const t = Math.min(1, Math.abs(diff) / halfBw);
+          // Step scales from ~5% of halfBw near center to ~25% near the edge
+          const step = halfBw * (0.05 + t * 0.20);
+          engine.tune(Math.round(currentOffset + Math.sign(diff) * Math.min(step, Math.abs(diff))));
+        }
+      }
+
+      setTuneMode(null);
+      setTuneInsideBand(false);
+
+      // Start audio on first click if not running
       if (!engine.isAudioInitialized) {
         try {
           await engine.initAudio();
@@ -251,6 +342,10 @@ const timer = setInterval(() => {
       setIsDragging(false);
       setDragStart(null);
       setDragEnd(null);
+    }
+    // Cancel any in-progress fine-tune drag if mouse leaves the canvas
+    if (tuneMode() !== null) {
+      setTuneMode(null);
     }
   };
 
