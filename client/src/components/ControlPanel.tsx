@@ -1230,6 +1230,140 @@ const SMeter: Component = () => {
   let canvasRef: HTMLCanvasElement | undefined;
   let rafId: number | undefined;
 
+  // ── Signal history graph ──────────────────────────────────────────────────
+  // Ring buffer: ~120 samples at 25fps ≈ ~4.8 seconds of history
+  const GRAPH_HISTORY = 120;
+  const graphHistory = new Float32Array(GRAPH_HISTORY).fill(-120);
+  let graphHead = 0; // index of the next write position
+  let graphCanvasRef: HTMLCanvasElement | undefined;
+  let graphRafId: number | undefined;
+  let graphIntervalId: ReturnType<typeof setInterval> | undefined;
+
+  // Push the latest level into the ring buffer (called each time pct() is read)
+  let lastPushedLevel = -120;
+  const pushGraphSample = (level: number) => {
+    if (level === lastPushedLevel) return; // de-dupe identical values
+    lastPushedLevel = level;
+    graphHistory[graphHead] = level;
+    graphHead = (graphHead + 1) % GRAPH_HISTORY;
+  };
+
+  const drawGraph = () => {
+    const canvas = graphCanvasRef;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    const pw = Math.round(w * dpr);
+    const ph = Math.round(h * dpr);
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width  = pw;
+      canvas.height = ph;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const theme = document.documentElement.dataset.theme ?? 'default';
+    const accentRaw = theme === 'vfd' ? '#ffaa00' : theme === 'crt' ? '#44ee66' : '#22ccee';
+    // Parse hex to rgba helper
+    const hexToRgba = (hex: string, a: number) => {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},${a})`;
+    };
+
+    ctx.clearRect(0, 0, pw, ph);
+
+    // Scale to CSS pixels
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const MIN_DB = -120;
+    const MAX_DB = -13;
+    const range  = MAX_DB - MIN_DB;
+
+    const padL = 2;
+    const padR = 22; // space for right-side dB labels
+    const padT = 2;
+    const padB = 2;
+    const gw = w - padL - padR;
+    const gh = h - padT - padB;
+
+    // Build ordered samples from ring buffer (oldest → newest)
+    const n = GRAPH_HISTORY;
+    const toX = (i: number) => padL + (i / (n - 1)) * gw;
+    const toY = (db: number) => padT + gh - ((Math.max(MIN_DB, Math.min(MAX_DB, db)) - MIN_DB) / range) * gh;
+
+    // Filled area
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + gh);
+    grad.addColorStop(0,   hexToRgba(accentRaw, 0.55));
+    grad.addColorStop(0.6, hexToRgba(accentRaw, 0.18));
+    grad.addColorStop(1,   hexToRgba(accentRaw, 0.04));
+
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const idx = (graphHead + i) % n; // oldest first
+      const db  = graphHistory[idx];
+      const x   = toX(i);
+      const y   = toY(db);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    // Close at bottom right → bottom left
+    ctx.lineTo(toX(n - 1), padT + gh);
+    ctx.lineTo(toX(0),     padT + gh);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line on top
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const idx = (graphHead + i) % n;
+      const db  = graphHistory[idx];
+      const x   = toX(i);
+      const y   = toY(db);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = hexToRgba(accentRaw, 0.85);
+    ctx.lineWidth   = 1;
+    ctx.stroke();
+
+    // Right-side dB scale labels: -120, -80, -40, -13
+    ctx.font      = `${Math.max(7, h * 0.22)}px monospace`;
+    ctx.textAlign = 'right';
+    const labelDb = [-120, -80, -40, -13];
+    for (const db of labelDb) {
+      const y = toY(db);
+      // tick
+      ctx.strokeStyle = hexToRgba(accentRaw, 0.30);
+      ctx.lineWidth   = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + gw, y);
+      ctx.stroke();
+      // label
+      ctx.fillStyle = hexToRgba(accentRaw, 0.55);
+      ctx.fillText(`${db}`, w - 2, y + 3);
+    }
+
+    // Highlight current value (rightmost point)
+    const curIdx = (graphHead + n - 1) % n;
+    const curDb  = graphHistory[curIdx];
+    const curX   = toX(n - 1);
+    const curY   = toY(curDb);
+    ctx.beginPath();
+    ctx.arc(curX, curY, 2, 0, Math.PI * 2);
+    ctx.fillStyle = hexToRgba(accentRaw, 0.95);
+    ctx.fill();
+
+    graphRafId = requestAnimationFrame(drawGraph);
+  };
+
   // Start peak decay timer on mount
   onMount(() => {
     peakDecayTimer = setInterval(() => {
@@ -1242,13 +1376,18 @@ const SMeter: Component = () => {
   });
 
   onCleanup(() => {
-    if (peakDecayTimer) clearInterval(peakDecayTimer);
-    if (intervalId)     clearInterval(intervalId);
-    if (rafId)          cancelAnimationFrame(rafId);
+    if (peakDecayTimer)   clearInterval(peakDecayTimer);
+    if (intervalId)       clearInterval(intervalId);
+    if (rafId)            cancelAnimationFrame(rafId);
+    if (graphIntervalId)  clearInterval(graphIntervalId);
+    if (graphRafId)       cancelAnimationFrame(graphRafId);
   });
 
   const pct = () => {
     const level = store.signalLevel();
+
+    // Push into history graph ring buffer
+    pushGraphSample(level);
 
     // Fixed scale: -120 dB = 0% (S0/noise floor), -13 dB = 100% (S9+60dB).
     const MIN_DB = -120;
@@ -1753,6 +1892,14 @@ const SMeter: Component = () => {
     }
   });
 
+  // Graph runs at 25fps regardless of meter style
+  onMount(() => {
+    graphIntervalId = setInterval(() => {
+      if (graphRafId) cancelAnimationFrame(graphRafId);
+      graphRafId = requestAnimationFrame(drawGraph);
+    }, 1000 / 25);
+  });
+
   const [open, setOpen] = createSignal(true);
 
   const toggleStyle = () => {
@@ -1840,6 +1987,18 @@ const SMeter: Component = () => {
             style={{ height: '110px', 'image-rendering': 'crisp-edges' }}
           />
         </Show>
+
+        {/* Signal history graph — always visible below the meter */}
+        <div class="mt-2">
+          <div class="text-[7px] font-mono uppercase tracking-[0.12em] text-text-muted mb-0.5">
+            History
+          </div>
+          <canvas
+            ref={(el) => { graphCanvasRef = el; }}
+            class="w-full rounded-sm"
+            style={{ height: '36px', 'image-rendering': 'crisp-edges' }}
+          />
+        </div>
       </div>
       </Show>
     </div>
