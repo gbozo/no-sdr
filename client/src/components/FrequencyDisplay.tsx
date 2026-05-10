@@ -31,7 +31,6 @@ const TUNING_STEPS = [
 function getEffectiveStep(): number {
   const step = store.tuningStep();
   if (step > 0) return step;
-  // Auto: use bandwidth as step
   return store.bandwidth();
 }
 
@@ -42,56 +41,101 @@ function formatStep(hz: number): string {
   return `${hz} Hz`;
 }
 
+/**
+ * A flat entry for rendering: either a digit (with its position-from-right = Hz power)
+ * or a separator dot.
+ */
+interface DigitEntry {
+  kind: 'digit';
+  char: string;
+  posFromRight: number; // step = 10^posFromRight
+}
+interface DotEntry {
+  kind: 'dot';
+}
+type FreqEntry = DigitEntry | DotEntry;
+
+/**
+ * Parse a dot-formatted frequency string into flat entries with per-digit step power.
+ * e.g. "98.765.432" → [{kind:'digit',char:'9',posFromRight:7}, ..., {kind:'dot'}, ...]
+ */
+function parseFreqEntries(dotStr: string): FreqEntry[] {
+  // Remove dots to get digit count
+  const digits = dotStr.replace(/\./g, '');
+  const totalDigits = digits.length;
+  const result: FreqEntry[] = [];
+  let digitIndex = 0;
+  for (let i = 0; i < dotStr.length; i++) {
+    const ch = dotStr[i];
+    if (ch === '.') {
+      result.push({ kind: 'dot' });
+    } else {
+      const posFromRight = totalDigits - 1 - digitIndex;
+      result.push({ kind: 'digit', char: ch, posFromRight });
+      digitIndex++;
+    }
+  }
+  return result;
+}
+
 const FrequencyDisplay: Component = () => {
-  const freqStr = createMemo(() => {
-    const hz = store.tunedFrequency();
-    return formatFrequencyDotted(hz);
-  });
+  const freqStr = createMemo(() => formatFrequencyDotted(store.tunedFrequency()));
 
-  // Split into digit groups for hover interaction
-  const digitGroups = createMemo(() => {
-    const str = freqStr();
-    return str.split('.');
-  });
+  // Flat entries: digits + dots with per-digit step information
+  const freqEntries = createMemo(() => parseFreqEntries(freqStr()));
 
-  // Handle scroll-to-tune on digit groups (no step snapping — uses digit position)
-  const handleWheel = (groupIndex: number, e: WheelEvent) => {
+  // ── Scroll wheel — per digit (capped at 1 MHz for leftmost digits) ──────────
+  const handleDigitWheel = (posFromRight: number, e: WheelEvent) => {
     e.preventDefault();
-    const groups = digitGroups();
-    const totalGroups = groups.length;
-    // Each group represents 3 digits = 10^(3*(totalGroups-1-groupIndex))
-    const step = Math.pow(10, 3 * (totalGroups - 1 - groupIndex));
+    const step = Math.pow(10, Math.min(posFromRight, 6));
     const delta = e.deltaY > 0 ? -step : step;
     engine_tune_raw(delta);
   };
 
-  // Touch-to-tune: swipe up on a digit group tunes up, swipe down tunes down.
-  // Accumulates sub-step movement so a short swipe moves 1 step.
-  const touchTuneStart: Map<number, { y: number; groupIndex: number }> = new Map();
+  // ── Mouse move — update cursor to show up/down intent ─────────────────────
+  const handleDigitMouseMove = (e: MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const cursor = relY < rect.height / 2 ? 'n-resize' : 's-resize';
+    (e.currentTarget as HTMLElement).style.cursor = cursor;
+  };
 
-  const handleDigitTouchStart = (groupIndex: number, e: TouchEvent) => {
+  const handleDigitMouseLeave = (e: MouseEvent) => {
+    (e.currentTarget as HTMLElement).style.cursor = 'ns-resize';
+  };
+
+  // ── Click — top half = +step, bottom half = −step ────────────────────────
+  const handleDigitClick = (posFromRight: number, e: MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const step = Math.pow(10, Math.min(posFromRight, 6));
+    const delta = relY < rect.height / 2 ? step : -step;
+    engine_tune_raw(delta);
+  };
+
+  // ── Touch tuning (group-level, kept for mobile) ───────────────────────────
+  const touchTuneStart: Map<number, { y: number; posFromRight: number }> = new Map();
+
+  const handleDigitTouchStart = (posFromRight: number, e: TouchEvent) => {
     e.preventDefault();
     for (let i = 0; i < e.changedTouches.length; i++) {
       const t = e.changedTouches[i];
-      touchTuneStart.set(t.identifier, { y: t.clientY, groupIndex });
+      touchTuneStart.set(t.identifier, { y: t.clientY, posFromRight });
     }
   };
 
-  const handleDigitTouchMove = (groupIndex: number, e: TouchEvent) => {
+  const handleDigitTouchMove = (posFromRight: number, e: TouchEvent) => {
     e.preventDefault();
-    const groups = digitGroups();
-    const totalGroups = groups.length;
-    const step = Math.pow(10, 3 * (totalGroups - 1 - groupIndex));
+    const step = Math.pow(10, Math.min(posFromRight, 6));
     for (let i = 0; i < e.changedTouches.length; i++) {
       const t = e.changedTouches[i];
       const start = touchTuneStart.get(t.identifier);
-      if (!start || start.groupIndex !== groupIndex) continue;
+      if (!start || start.posFromRight !== posFromRight) continue;
       const dy = start.y - t.clientY; // positive = swiped up = tune up
-      // 40px per step — feels natural on mobile
-      const steps = Math.trunc(dy / 40);
+      const steps = Math.trunc(dy / 40); // 40px per step
       if (steps !== 0) {
         engine_tune_raw(steps * step);
-        touchTuneStart.set(t.identifier, { y: t.clientY, groupIndex });
+        touchTuneStart.set(t.identifier, { y: t.clientY, posFromRight });
       }
     }
   };
@@ -102,32 +146,21 @@ const FrequencyDisplay: Component = () => {
     }
   };
 
-  // Keyboard handler: left/right = step, up/down = 10x step
+  // ── Keyboard ──────────────────────────────────────────────────────────────
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Don't handle if user is typing in an input/select/textarea
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    // Don't handle if modifier keys are held (browser shortcuts)
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     const step = getEffectiveStep();
     let delta = 0;
 
     switch (e.key) {
-      case 'ArrowRight':
-        delta = step;
-        break;
-      case 'ArrowLeft':
-        delta = -step;
-        break;
-      case 'ArrowUp':
-        delta = step * 10;
-        break;
-      case 'ArrowDown':
-        delta = -step * 10;
-        break;
-      default:
-        return; // Don't preventDefault for unhandled keys
+      case 'ArrowRight': delta = step; break;
+      case 'ArrowLeft':  delta = -step; break;
+      case 'ArrowUp':    delta = step * 10; break;
+      case 'ArrowDown':  delta = -step * 10; break;
+      default: return;
     }
 
     e.preventDefault();
@@ -147,7 +180,7 @@ const FrequencyDisplay: Component = () => {
       <div class="sdr-scanlines" />
       <div class="sdr-dot-grid" />
 
-      {/* RDS info — absolute top-right, shows PS, RT, or PTY, whatever is available */}
+      {/* RDS info — absolute top-right */}
       {(() => {
         const clean = (s: string) => s.replace(/[\x00-\x1f]/g, '').trim();
         const label = () => clean(store.rdsPs()) || clean(store.rdsRt()) || clean(store.rdsPty());
@@ -173,28 +206,42 @@ const FrequencyDisplay: Component = () => {
         <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">
           <span>VFO Frequency</span>
         </div>
-        <div class="font-display text-4xl tracking-wider leading-none"
-             style={{ color: 'var(--sdr-freq-color)' }}>
-          <For each={digitGroups()}>
-            {(group, i) => (
-              <>
+
+        {/* Frequency digits — one <span> per character */}
+        <div
+          class="font-display text-4xl tracking-wider leading-none select-none"
+          style={{ color: 'var(--sdr-freq-color)' }}
+        >
+          <For each={freqEntries()}>
+            {(entry) => (
+              <Show
+                when={entry.kind === 'digit'}
+                fallback={
+                  /* dot separator */
+                  <span class="text-text-dim mx-0.5">.</span>
+                }
+              >
+                {/* individual digit */}
                 <span
-                  class="cursor-ns-resize hover:text-white transition-colors duration-100
-                         inline-block touch-none"
-                  style={{ "text-shadow": '0 0 8px var(--sdr-accent-dim)' }}
-                  onWheel={(e) => handleWheel(i(), e)}
-                  onTouchStart={(e) => handleDigitTouchStart(i(), e)}
-                  onTouchMove={(e) => handleDigitTouchMove(i(), e)}
+                  class="inline-block touch-none hover:text-white transition-colors duration-75"
+                  style={{
+                    cursor: 'ns-resize',
+                    'text-shadow': '0 0 8px var(--sdr-accent-dim)',
+                  }}
+                  onWheel={(e) => handleDigitWheel((entry as DigitEntry).posFromRight, e)}
+                  onMouseMove={handleDigitMouseMove}
+                  onMouseLeave={handleDigitMouseLeave}
+                  onClick={(e) => handleDigitClick((entry as DigitEntry).posFromRight, e)}
+                  onTouchStart={(e) => handleDigitTouchStart((entry as DigitEntry).posFromRight, e)}
+                  onTouchMove={(e) => handleDigitTouchMove((entry as DigitEntry).posFromRight, e)}
                   onTouchEnd={handleDigitTouchEnd}
                 >
-                  {group}
+                  {(entry as DigitEntry).char}
                 </span>
-                {i() < digitGroups().length - 1 && (
-                  <span class="text-text-dim mx-0.5">.</span>
-                )}
-              </>
+              </Show>
             )}
           </For>
+
           <span class="relative inline-block text-sm text-text-secondary ml-2 font-mono">
             Hz
             <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
@@ -208,6 +255,7 @@ const FrequencyDisplay: Component = () => {
             </Show>
           </span>
         </div>
+
         {/* Info row: center, offset, step */}
         <div class="mt-1 flex items-center gap-0 text-[9px] font-mono text-text-dim">
           <span>Center: {formatFrequencyDotted(store.centerFrequency())} Hz</span>
@@ -250,7 +298,6 @@ function engine_tune_stepped(deltaHz: number): void {
   const currentOffset = store.tuneOffset();
   let newOffset = currentOffset + deltaHz;
 
-  // Snap to step grid (relative to center frequency)
   if (step > 1) {
     newOffset = Math.round(newOffset / step) * step;
   }
@@ -260,7 +307,7 @@ function engine_tune_stepped(deltaHz: number): void {
   engine.tune(Math.round(clamped));
 }
 
-// Helper to tune relative without step snapping (scroll wheel on digits)
+// Helper to tune relative without step snapping (scroll wheel + click on digits)
 function engine_tune_raw(deltaHz: number): void {
   const { engine } = await_engine();
   const currentOffset = store.tuneOffset();
@@ -271,7 +318,6 @@ function engine_tune_raw(deltaHz: number): void {
 }
 
 function await_engine() {
-  // Lazy import to avoid circular dependency
   return { engine: (globalThis as any).__sdrEngine };
 }
 
