@@ -179,6 +179,11 @@ func main() {
 		logger.Error("dongle manager start error (server will continue)", "error", err)
 	}
 
+	// Band plan service — ships embedded data, refreshes from upstream weekly.
+	bandPlanSvc := api.NewBandPlanService(logger)
+	bandPlanSvc.StartScheduler()
+	api.BandPlanSvc = bandPlanSvc
+
 	// Create chi router with all routes.
 	router := api.NewRouterWithPath(wsMgr, cfg, logger, staticDir, cfgPath, cfgVersion)
 

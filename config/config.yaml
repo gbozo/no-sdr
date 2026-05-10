@@ -86,4 +86,23 @@ dongles:
           preFilterNb: true
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
+        - id: profile-mp07v3bz
+          name: MW Broadcast (AM)
+          centerFrequency: 1400000
+          sampleRate: 1800000
+          defaultBandwidth: 10000
+          defaultMode: am
+          gain: 0
+          fftSize: 8192
+          fftFps: 10
+          defaultTuneOffset: 0
+          tuningStep: 1000
+          swapIQ: false
+          oscillatorOffset: 0
+          directSampling: 2
+          description: Medium wave 530–1700 kHz (requires direct sampling)
+          dongleId: ""
+          preFilterNb: true
+          preFilterNbThreshold: 0
+          dcOffsetRemoval: null
 bookmarks: []

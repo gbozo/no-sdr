@@ -5,6 +5,7 @@
 import { Component, onMount, onCleanup, Show, createSignal, For, createEffect } from 'solid-js';
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
+import { bands, tagColor, TAG_BORDER_COLORS } from '../store/bandplan.js';
 
 const WaterfallDisplay: Component = () => {
   let waterfallRef!: HTMLCanvasElement;
@@ -735,7 +736,7 @@ const timer = setInterval(() => {
   );
 };
 
-// Frequency scale — zoom-aware, with signal markers
+// Frequency scale — zoom-aware, with signal markers and band plan overlay
 const FrequencyScale: Component = () => {
   const formatFreq = (hz: number): string => {
     const mhz = hz / 1e6;
@@ -770,27 +771,87 @@ const FrequencyScale: Component = () => {
       }));
   };
 
+  // Band plan entries clipped to the current zoom viewport
+  const visibleBands = () => {
+    const [zs, ze] = store.spectrumZoom();
+    const sr = store.sampleRate();
+    const cf = store.centerFrequency();
+    const loHz = cf + (zs - 0.5) * sr;
+    const hiHz = cf + (ze - 0.5) * sr;
+    const span = hiHz - loHz;
+    if (span <= 0) return [];
+    return bands()
+      .filter(b => b.upper_bound > loHz && b.lower_bound < hiHz)
+      .map(b => {
+        const clampedLo = Math.max(b.lower_bound, loHz);
+        const clampedHi = Math.min(b.upper_bound, hiHz);
+        return {
+          ...b,
+          leftPct:  ((clampedLo - loHz) / span) * 100,
+          widthPct: ((clampedHi - clampedLo) / span) * 100,
+        };
+      });
+  };
+
   return (
-    <div class="absolute bottom-0 left-0 right-0 h-5 flex items-center
-                bg-sdr-base/80 border-t border-border/50 pointer-events-none">
-      <div class="relative flex justify-between w-full px-1 text-[8px] font-mono text-text-dim">
-        <For each={viewHz()}>
-          {(hz, i) => (
-            <span class={i() === 2 ? 'text-text-secondary' : ''}>{formatFreq(hz)}</span>
-          )}
+    <>
+      {/* Band plan colour strips — overlaid at top of spectrum canvas */}
+      <div class="absolute top-0 left-0 right-0 h-5 pointer-events-none z-10 overflow-hidden">
+        <For each={visibleBands()}>
+          {(b) => {
+            const borderColor = TAG_BORDER_COLORS[b.tags?.[0] ?? ''] ?? 'rgba(150,150,150,0.35)';
+            return (
+              <div
+                class="absolute top-0 bottom-0"
+                style={{
+                  left: `${b.leftPct}%`,
+                  width: `${b.widthPct}%`,
+                  background: `linear-gradient(to top, transparent 0%, ${tagColor(b.tags)} 100%)`,
+                  'border-left': `1px solid ${borderColor}`,
+                  'border-right': `1px solid ${borderColor}`,
+                }}
+                title={`${b.name}${b.tags?.length ? ' · ' + b.tags.join(', ') : ''}`}
+              />
+            );
+          }}
         </For>
-        {/* Signal marker ticks */}
-        <For each={visibleMarkers()}>
-          {(m) => (
-            <div
-              class="absolute top-0 bottom-0 w-px bg-amber opacity-70"
-              style={{ left: `${m.pct}%` }}
-              title={formatFreq(m.hz)}
-            />
+        {/* Band name labels for wide enough bands */}
+        <For each={visibleBands().filter(b => b.widthPct > 3)}>
+          {(b) => (
+            <span
+              class="absolute top-0 bottom-0 flex items-center justify-center
+                     text-[7px] font-mono text-white overflow-hidden whitespace-nowrap"
+              style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%`,
+                       'text-shadow': '0 0 3px rgba(0,0,0,0.9)' }}
+            >
+              {b.name}
+            </span>
           )}
         </For>
       </div>
-    </div>
+      {/* Frequency labels + signal markers — bottom of spectrum */}
+      <div class="absolute bottom-0 left-0 right-0 pointer-events-none">
+        <div class="relative flex items-center h-5 bg-sdr-base/80 border-t border-border/50">
+          <div class="relative flex justify-between w-full px-1 text-[8px] font-mono text-text-dim">
+            <For each={viewHz()}>
+              {(hz, i) => (
+                <span class={i() === 2 ? 'text-text-secondary' : ''}>{formatFreq(hz)}</span>
+              )}
+            </For>
+            {/* Signal marker ticks */}
+            <For each={visibleMarkers()}>
+              {(m) => (
+                <div
+                  class="absolute top-0 bottom-0 w-px bg-amber opacity-70"
+                  style={{ left: `${m.pct}%` }}
+                  title={formatFreq(m.hz)}
+                />
+              )}
+            </For>
+          </div>
+        </div>
+      </div>
+    </>
   );
 };
 

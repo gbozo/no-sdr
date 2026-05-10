@@ -15,6 +15,9 @@ import (
 
 var startTime = time.Now()
 
+// BandPlanSvc is set by main.go before NewRouterWithPath is called.
+var BandPlanSvc *BandPlanService
+
 // NewRouter creates the chi router with all routes.
 func NewRouter(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string) http.Handler {
 	return NewRouterWithPath(wsMgr, cfg, logger, staticDir, "", nil)
@@ -46,6 +49,14 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 		r.Get("/dongles/{id}/profiles", dongleProfilesHandler(cfg))
 		r.Get("/capabilities", capabilitiesHandler(cfg))
 		r.Get("/bookmarks", bookmarksHandler(cfg)) // public read-only
+		// Band plan (public, no auth)
+		r.Get("/bandplan", func(w http.ResponseWriter, r *http.Request) {
+			if BandPlanSvc != nil {
+				BandPlanSvc.Handler()(w, r)
+			} else {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "bandplan service not initialized"})
+			}
+		})
 		// Music recognition (public — auth is handled by API key on the server side)
 		r.Get("/identify", identifyHandler(cfg, logger))
 		r.Post("/identify", identifyHandler(cfg, logger))

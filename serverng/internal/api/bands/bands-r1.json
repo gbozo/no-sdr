@@ -1,0 +1,450 @@
+[
+  {
+    "name": "2190m",
+    "lower_bound": 135700,
+    "upper_bound": 137800,
+    "frequencies": {
+      "fst4": 136000,
+      "fst4w": 136000,
+      "wspr": 136000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "630m",
+    "lower_bound": 472000,
+    "upper_bound": 479000,
+    "frequencies": {
+      "fst4": 474200,
+      "fst4w": 474200,
+      "wspr": 474200
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "160m",
+    "lower_bound": 1810000,
+    "upper_bound": 2000000,
+    "frequencies": {
+      "bpsk31": 1838000,
+      "ft8": 1840000,
+      "wspr": 1836600,
+      "jt65": 1838000,
+      "jt9": 1839000,
+      "js8": 1842000,
+      "fst4": 1839000,
+      "fst4w": 1836800,
+      "sstv": { "frequency": 1890000, "underlying": "lsb" }
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "80m",
+    "lower_bound": 3500000,
+    "upper_bound": 3800000,
+    "frequencies": {
+      "bpsk31": 3580000,
+      "ft8": 3573000,
+      "wspr": 3568600,
+      "jt65": 3570000,
+      "jt9": 3572000,
+      "ft4": [3568000, 3575000],
+      "js8": 3578000,
+      "cwskimmer": 3510000,
+      "sstv": [
+        { "frequency": 3730000, "underlying": "lsb" },
+        { "frequency": 3845000, "underlying": "lsb" }
+      ]
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "60m",
+    "lower_bound": 5351500,
+    "upper_bound": 5366500,
+    "frequencies": {
+      "ft8": 5357000,
+      "wspr": [5287200, 5364700]
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "40m",
+    "lower_bound": 7000000,
+    "upper_bound": 7200000,
+    "frequencies": {
+      "bpsk31": 7040000,
+      "ft8": 7074000,
+      "wspr": 7038600,
+      "jt65": 7076000,
+      "jt9": 7078000,
+      "ft4": 7047500,
+      "js8": 7078000,
+      "cwskimmer": 7010000,
+      "sstv": [
+        { "frequency": 7165000, "underlying": "lsb" },
+        { "frequency": 7171000, "underlying": "lsb" }
+      ]
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "30m",
+    "lower_bound": 10100000,
+    "upper_bound": 10150000,
+    "frequencies": {
+      "bpsk31": 10141000,
+      "ft8": 10136000,
+      "wspr": 10138700,
+      "jt65": 10138000,
+      "jt9": 10140000,
+      "ft4": 10140000,
+      "js8": 10130000,
+      "rtty450": 10099800,
+      "sstv": 10132000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "20m",
+    "lower_bound": 14000000,
+    "upper_bound": 14350000,
+    "frequencies": {
+      "bpsk31": 14070000,
+      "ft8": 14074000,
+      "wspr": 14095600,
+      "jt65": 14076000,
+      "jt9": 14078000,
+      "ft4": 14080000,
+      "js8": 14078000,
+      "cwskimmer": 14010000,
+      "sstv": 14230000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "17m",
+    "lower_bound": 18068000,
+    "upper_bound": 18168000,
+    "frequencies": {
+      "bpsk31": 18098000,
+      "ft8": 18100000,
+      "wspr": 18104600,
+      "jt65": 18102000,
+      "jt9": 18104000,
+      "ft4": 18104000,
+      "js8": 18104000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "15m",
+    "lower_bound": 21000000,
+    "upper_bound": 21450000,
+    "frequencies": {
+      "bpsk31": 21070000,
+      "ft8": 21074000,
+      "wspr": 21094600,
+      "jt65": 21076000,
+      "jt9": 21078000,
+      "ft4": 21140000,
+      "js8": 21078000,
+      "sstv": 21340000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "12m",
+    "lower_bound": 24890000,
+    "upper_bound": 24990000,
+    "frequencies": {
+      "bpsk31": 24920000,
+      "ft8": 24915000,
+      "wspr": 24924600,
+      "jt65": 24917000,
+      "jt9": 24919000,
+      "ft4": 24919000,
+      "js8": 24922000,
+      "sstv": 24975000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "10m",
+    "lower_bound": 28000000,
+    "upper_bound": 29700000,
+    "frequencies": {
+      "bpsk31": [28070000, 28120000],
+      "ft8": 28074000,
+      "wspr": 28124600,
+      "jt65": 28076000,
+      "jt9": 28078000,
+      "ft4": 28180000,
+      "js8": 28078000,
+      "cwskimmer": 28010000,
+      "sstv": 28680000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "6m",
+    "lower_bound": 50000000,
+    "upper_bound": 54000000,
+    "frequencies": {
+      "bpsk31": 50305000,
+      "ft8": 50313000,
+      "wspr": 50293000,
+      "jt65": 50310000,
+      "jt9": 50312000,
+      "ft4": 50318000,
+      "js8": 50318000,
+      "q65": [50211000, 50275000],
+      "msk144": 50260000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "4m",
+    "lower_bound": 70000000,
+    "upper_bound": 70500000,
+    "frequencies": {
+      "wspr": 70091000,
+      "msk144": 70230000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "2m",
+    "lower_bound": 144000000,
+    "upper_bound": 146000000,
+    "frequencies": {
+      "wspr": 144489000,
+      "ft8": 144174000,
+      "ft4": 144170000,
+      "jt65": 144120000,
+      "packet": [144800000, 145825000],
+      "q65": 144116000,
+      "msk144": 144360000,
+      "sstv": [144500000, 144887500],
+      "page": 144862500
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "70cm",
+    "lower_bound": 430000000,
+    "upper_bound": 440000000,
+    "frequencies": {
+      "page": 439987500,
+      "q65": 432065000,
+      "msk144": 432360000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "23cm",
+    "lower_bound": 1240000000,
+    "upper_bound": 1300000000,
+    "frequencies": {
+      "q65": 1296065000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "13cm",
+    "lower_bound": 2300000000,
+    "upper_bound": 2450000000,
+    "frequencies": {
+      "q65": [2301065000, 2304065000, 2320065000]
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "9cm",
+    "lower_bound": 3400000000,
+    "upper_bound": 3475000000,
+    "frequencies": {
+      "q65": 3400065000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "6cm",
+    "lower_bound": 5650000000,
+    "upper_bound": 5850000000,
+    "frequencies": {
+      "q65": 5760200000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "3cm",
+    "lower_bound": 10000000000,
+    "upper_bound": 10500000000,
+    "frequencies": {
+      "q65": 10368200000
+    },
+    "tags": ["hamradio"]
+  },
+  {
+    "name": "AM Broadcast",
+    "lower_bound": 200000,
+    "upper_bound": 1700000,
+    "frequencies": {
+      "navtex": [ 490000, 518000 ]
+    },
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "120m Broadcast",
+    "lower_bound": 2300000,
+    "upper_bound": 2495000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "90m Broadcast",
+    "lower_bound": 3200000,
+    "upper_bound": 3400000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "75m Broadcast",
+    "lower_bound": 3900000,
+    "upper_bound": 4000000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "60m Broadcast",
+    "lower_bound": 4750000,
+    "upper_bound": 4995000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "49m Broadcast",
+    "lower_bound": 5900000,
+    "upper_bound": 6200000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "41m Broadcast",
+    "lower_bound": 7200000,
+    "upper_bound": 7450000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "31m Broadcast",
+    "lower_bound": 9400000,
+    "upper_bound": 9900000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "25m Broadcast",
+    "lower_bound": 11600000,
+    "upper_bound": 12100000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "22m Broadcast",
+    "lower_bound": 13570000,
+    "upper_bound": 13870000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "19m Broadcast",
+    "lower_bound": 15100000,
+    "upper_bound": 15830000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "16m Broadcast",
+    "lower_bound": 17480000,
+    "upper_bound": 17900000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "15m Broadcast",
+    "lower_bound": 18900000,
+    "upper_bound": 19020000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "13m Broadcast",
+    "lower_bound": 21450000,
+    "upper_bound": 21850000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "11m Broadcast",
+    "lower_bound": 25670000,
+    "upper_bound": 26100000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "FM Broadcast",
+    "lower_bound": 87500000,
+    "upper_bound": 108000000,
+    "tags": ["broadcast"]
+  },
+  {
+    "name": "11m CB",
+    "lower_bound": 26965000,
+    "upper_bound": 28000000,
+    "frequencies": {
+      "js8": 27245000,
+      "sstv": 27700000
+    },
+    "tags": ["public"]
+  },
+  {
+    "name": "PMR446",
+    "lower_bound": 446000000,
+    "upper_bound": 446200000,
+    "tags": ["public"]
+  },
+  {
+    "name": "ADS-B",
+    "lower_bound": 960000000,
+    "upper_bound": 1215000000,
+    "tags": ["service"],
+    "frequencies": {
+      "adsb": 1090000000
+    }
+  },
+  {
+    "name": "LPD433",
+    "lower_bound": 433050000,
+    "upper_bound": 434790000,
+    "tags": ["public"],
+    "frequencies": {
+      "ism": 433920000
+    }
+  },
+  {
+    "name": "VHF Air",
+    "lower_bound": 108000000,
+    "upper_bound": 137000000,
+    "tags": ["service"],
+    "frequencies": {
+      "acars": 131550000,
+      "vdl2": 136975000
+    }
+  },
+  {
+    "name": "VHF Satellite",
+    "lower_bound": 137000000,
+    "upper_bound": 138000000,
+    "tags": ["service"],
+    "frequencies": {
+      "meteor-lrpt": [137900000, 137101000]
+    }
+  },
+  {
+    "name": "VHF Marine",
+    "lower_bound": 156000000,
+    "upper_bound": 174000000,
+    "tags": ["service"],
+    "frequencies": {
+      "ais": [161975000, 162025000]
+    }
+  }
+]
