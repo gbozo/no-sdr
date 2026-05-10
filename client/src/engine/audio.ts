@@ -353,15 +353,17 @@ export class AudioEngine {
   pushDemodulatedAudio(float32Data: Float32Array): void {
     this.writeCaptureRing(float32Data);
     if (!this.workletNode) return;
-    // Sanitize: clamp and replace NaN/Infinity to prevent biquad instability
+    // Copy to a fresh buffer for transfer — the source may be a subarray of a
+    // reusable pre-allocated buffer that must not be detached.
+    const copy = new Float32Array(float32Data.length);
     for (let i = 0; i < float32Data.length; i++) {
       const v = float32Data[i];
-      if (v !== v || v === Infinity || v === -Infinity) { float32Data[i] = 0; }
-      else if (v > 1.0) { float32Data[i] = 1.0; }
-      else if (v < -1.0) { float32Data[i] = -1.0; }
+      // Sanitize: clamp and replace NaN/Infinity to prevent biquad instability
+      copy[i] = (v !== v || v === Infinity || v === -Infinity) ? 0
+        : v > 1.0 ? 1.0 : v < -1.0 ? -1.0 : v;
     }
-    // Transfer ownership to worklet thread (zero-copy, reduces GC pressure)
-    this.workletNode.port.postMessage({ left: float32Data }, [float32Data.buffer]);
+    // Transfer ownership to worklet thread (zero-copy)
+    this.workletNode.port.postMessage({ left: copy }, [copy.buffer]);
   }
 
   /**
@@ -373,21 +375,22 @@ export class AudioEngine {
     for (let i = 0; i < left.length; i++) mono[i] = (left[i] + right[i]) * 0.5;
     this.writeCaptureRing(mono);
     if (!this.workletNode) return;
-    // Sanitize both channels
+    // Copy to fresh buffers for transfer — sources may be subarrays of reusable
+    // pre-allocated demodulator buffers that must not be detached.
+    const leftCopy = new Float32Array(left.length);
+    const rightCopy = new Float32Array(right.length);
     for (let i = 0; i < left.length; i++) {
       const v = left[i];
-      if (v !== v || v === Infinity || v === -Infinity) { left[i] = 0; }
-      else if (v > 1.0) { left[i] = 1.0; }
-      else if (v < -1.0) { left[i] = -1.0; }
+      leftCopy[i] = (v !== v || v === Infinity || v === -Infinity) ? 0
+        : v > 1.0 ? 1.0 : v < -1.0 ? -1.0 : v;
     }
     for (let i = 0; i < right.length; i++) {
       const v = right[i];
-      if (v !== v || v === Infinity || v === -Infinity) { right[i] = 0; }
-      else if (v > 1.0) { right[i] = 1.0; }
-      else if (v < -1.0) { right[i] = -1.0; }
+      rightCopy[i] = (v !== v || v === Infinity || v === -Infinity) ? 0
+        : v > 1.0 ? 1.0 : v < -1.0 ? -1.0 : v;
     }
-    // Transfer ownership to worklet thread (zero-copy, reduces GC pressure)
-    this.workletNode.port.postMessage({ left, right }, [left.buffer, right.buffer]);
+    // Transfer ownership to worklet thread (zero-copy)
+    this.workletNode.port.postMessage({ left: leftCopy, right: rightCopy }, [leftCopy.buffer, rightCopy.buffer]);
   }
 
   /**
