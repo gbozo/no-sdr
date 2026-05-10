@@ -94,6 +94,7 @@ function createStore() {
   const [muted, setMuted] = createSignal(false);
   const [squelch, setSquelch] = persist<number | null>('audio.squelch', null);
   const [signalLevel, setSignalLevel] = createSignal(-120); // dB
+  const [snr, setSnr] = createSignal(0); // dB, FFT-derived
   const [stereoDetected, setStereoDetected] = createSignal(false);
   const [stereoEnabled, setStereoEnabled] = persist<boolean>('audio.stereoEnabled', true);
   const [stereoThreshold, setStereoThreshold] = persist<number>('audio.stereoThreshold', -60);
@@ -260,6 +261,7 @@ function createStore() {
     muted, setMuted,
     squelch, setSquelch,
     signalLevel, setSignalLevel,
+    snr, setSnr,
     stereoDetected, setStereoDetected,
     stereoEnabled, setStereoEnabled,
     stereoThreshold, setStereoThreshold,

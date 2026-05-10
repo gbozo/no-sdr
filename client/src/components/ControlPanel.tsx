@@ -2111,12 +2111,18 @@ const SMeter: Component = () => {
     ctx.stroke();
     ctx.restore(); // needle shadow
 
-    // ── dB readout ──
+    // ── dB + SNR readout ──
+    const sigLvlInk = currentTheme === 'crt' ? 'rgba(0,50,10,0.65)'   : currentTheme === 'vfd' ? 'rgba(60,40,10,0.70)'  : 'rgba(20,45,100,0.65)';
+    const snrInk    = currentTheme === 'crt' ? 'rgba(0,50,10,0.50)'   : currentTheme === 'vfd' ? 'rgba(60,40,10,0.55)'  : 'rgba(20,45,100,0.50)';
     const readoutSize = Math.max(8, w * 0.032);
     ctx.font      = `${readoutSize}px "Arial", sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(60, 50, 35, 0.5)';
+    ctx.fillStyle = sigLvlInk;
     ctx.fillText(`${store.signalLevel().toFixed(0)} dBm`, cx, cy - radius * 0.32);
+    const snrSize = Math.max(6, w * 0.026);
+    ctx.font      = `${snrSize}px "Arial", sans-serif`;
+    ctx.fillStyle = snrInk;
+    ctx.fillText(`SNR ${store.snr().toFixed(0)} dB`, cx, cy - radius * 0.32 + readoutSize * 1.3);
 
     ctx.restore(); // content scale transform
 
@@ -2164,7 +2170,7 @@ const SMeter: Component = () => {
         <span>Signal</span>
         <Show when={!open()}>
           <span class="text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
-            {store.signalLevel().toFixed(0)} dBm
+            {store.signalLevel().toFixed(0)} dBm · SNR {store.snr().toFixed(0)} dB
           </span>
         </Show>
         <button
@@ -2181,7 +2187,10 @@ const SMeter: Component = () => {
         <Show when={store.meterStyle() === 'bar'}>
           <div class="flex justify-between text-[9px] text-text-dim font-mono mb-1">
             <span>S-Meter</span>
-            <span class="text-text-secondary">{store.signalLevel().toFixed(0)} dBm</span>
+            <span class="text-text-secondary">
+              {store.signalLevel().toFixed(0)} dBm
+              <span class="text-text-dim ml-2">SNR {store.snr().toFixed(0)} dB</span>
+            </span>
           </div>
           {/* Bar track */}
           <div class="h-3 bg-sdr-base rounded-sm border border-border overflow-hidden relative">

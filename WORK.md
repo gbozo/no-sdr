@@ -1,7 +1,7 @@
 # WORK.md — Active Work & Backlog
 
 *Consolidated from tasks.md, plan.md, TODO.md, and serverng/TASKS.md*
-*Last updated: v2.3.1*
+*Last updated: v2.6.7*
 
 ---
 
@@ -52,6 +52,22 @@
 ---
 
 ## Completed (reference)
+
+### v2.6.7
+- [x] SNR display in needle S-meter — theme-aware ink colors for dBm + SNR readouts
+- [x] Per-digit frequency tuning in FrequencyDisplay (click top/bottom half, scroll, touch per digit)
+- [x] Signal history graph below S-meter (4.8s ring buffer, accent filled area chart)
+- [x] Audio panel: L/R VU meter, stereo pilot blend bar, compressor gain reduction bar
+- [x] Band plan overlay on waterfall (embedded JSON, weekly GitHub refresh, tag-colored top strip)
+- [x] Click-to-tune waterfall overhaul: instant-jump outside band, nudge inside band, fine-tune drag
+- [x] SNR computed in fft-analysis worker (signal peak vs noise floor, EMA τ=200ms)
+- [x] Filter BW + Squelch sliders side-by-side; Volume + Balance sliders side-by-side
+- [x] Real IP header support for proxy/tunnel (CF-Connecting-IP, X-Forwarded-For, custom)
+- [x] Admin: open in new tab support (a href + navigate interceptor)
+- [x] SelectInput reactivity fix (selected per-option instead of select value= binding)
+- [x] DCOffsetRemoval fix: returned in GET /api/admin/dongles, applied live on SwitchProfile
+- [x] WS reconnect state restoration (hadPriorSubscription persists across reconnects)
+- [x] Monitor section shows realIp column when proxy header configured
 
 ### v2.3.x
 - [x] RDS station name in VFO frequency panel (absolute overlay, theme-aware)

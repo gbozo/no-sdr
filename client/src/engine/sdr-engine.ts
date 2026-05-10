@@ -193,8 +193,9 @@ export class SdrEngine {
       { type: 'module' },
     );
     this.fftAnalysisWorker.onmessage = (e: MessageEvent<FftAnalysisResult>) => {
-      const { signalLevel, newMin, newMax } = e.data;
+      const { signalLevel, snr, newMin, newMax } = e.data;
       store.setSignalLevel(signalLevel);
+      store.setSnr(snr);
       if (newMin !== undefined && newMax !== undefined) {
         if (newMin !== store.waterfallMin() || newMax !== store.waterfallMax()) {
           store.setWaterfallMin(newMin);
