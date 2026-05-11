@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 	"github.com/gbozo/no-sdr/serverng/internal/dongle"
+	"github.com/gbozo/no-sdr/serverng/internal/gpu"
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
 )
 
@@ -43,6 +46,21 @@ func main() {
 	slog.SetDefault(logger)
 
 	logger.Info("starting serverng", "version", version)
+
+	// Log build tags so it's obvious which binary is running.
+	if info, ok := debug.ReadBuildInfo(); ok {
+		var tags string
+		for _, s := range info.Settings {
+			if s.Key == "-tags" {
+				tags = s.Value
+				break
+			}
+		}
+		if tags == "" {
+			tags = "(none)"
+		}
+		logger.Info("build info", "tags", tags, "go", strings.TrimPrefix(info.GoVersion, "go"))
+	}
 
 	// Determine config path.
 	cfgPath := os.Getenv("CONFIG_PATH")
@@ -78,6 +96,9 @@ func main() {
 		"fft", cfg.Server.AllowedFftCodecs,
 		"iq", cfg.Server.AllowedIqCodecs,
 	)
+
+	// Log GPU capability at startup (probe is fast — no device init here).
+	gpu.LogCapability(gpu.Probe(), logger)
 
 	// Determine static files directory.
 	staticDir := os.Getenv("STATIC_DIR")

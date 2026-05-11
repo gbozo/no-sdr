@@ -5,7 +5,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  bin = "./tmp/serverng"
+  entrypoint = "./tmp/serverng"
   cmd = "go build -tags opus -o ./tmp/serverng ./cmd/serverng"
   delay = 500
   exclude_dir = ["tmp", "bin", "graphify-out", "node_modules"]

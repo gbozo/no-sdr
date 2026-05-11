@@ -50,8 +50,26 @@ var validModes = map[string]bool{
 }
 
 // Config is the top-level configuration.
+// GPUConfig controls GPU acceleration for DSP operations.
+// Requires the binary to be built with the `gpu_vulkan` build tag.
+type GPUConfig struct {
+	// Enabled controls whether GPU acceleration is attempted at startup.
+	// Default: false. Set to true to enable Vulkan device probe and GPU DSP.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// DeviceIndex selects a specific Vulkan physical device by index (0-based).
+	// -1 (default) means auto-select: discrete > integrated > virtual > cpu,
+	// with VRAM as tiebreaker.
+	DeviceIndex int `yaml:"deviceIndex" json:"deviceIndex"`
+
+	// MaxFFTBatchSize is the maximum number of FFT work groups submitted per
+	// vkQueueSubmit call. 0 means use the driver default.
+	MaxFFTBatchSize int `yaml:"maxFftBatchSize" json:"maxFftBatchSize"`
+}
+
 type Config struct {
 	Server    ServerConfig   `yaml:"server"`
+	GPU       GPUConfig      `yaml:"gpu"`
 	Dongles   []DongleConfig `yaml:"dongles"`
 	Bookmarks []Bookmark     `yaml:"bookmarks"`
 }
@@ -248,6 +266,14 @@ func applyDefaults(cfg *Config) {
 	// Zero-value in YAML means "not set", so we default here.
 	if cfg.Server.OpusComplexity == 0 {
 		cfg.Server.OpusComplexity = 5
+	}
+	// GPU: DeviceIndex -1 means auto-select (best available device).
+	// Only apply if the field is still zero-valued (not explicitly set in YAML).
+	// We can't distinguish "not set" vs "set to 0" for int, so 0 is a valid
+	// device index — use -1 as the sentinel for auto-select.
+	// The YAML default is 0, so we set -1 here only if not overridden.
+	if cfg.GPU.DeviceIndex == 0 {
+		cfg.GPU.DeviceIndex = -1
 	}
 	// Dongles default to enabled + autoStart (matches Node.js behavior)
 	for i := range cfg.Dongles {

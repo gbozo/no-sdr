@@ -18,6 +18,7 @@ import (
 	codecPkg "github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 	"github.com/gbozo/no-sdr/serverng/internal/dsp"
+	"github.com/gbozo/no-sdr/serverng/internal/gpu"
 	"github.com/gbozo/no-sdr/serverng/internal/history"
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
 )
@@ -63,6 +64,10 @@ type Manager struct {
 
 	// Debug counter for periodic logging
 	fftFrameCount int64
+
+	// gpuBackend is the optional GPU acceleration backend.
+	// nil when GPU is disabled or unavailable.
+	gpuBackend *gpu.Backend
 
 	mu sync.Mutex
 }
@@ -149,6 +154,26 @@ func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Man
 	m.wsMgr.SetDisconnectHandler(m.handleDisconnect)
 	// Register connect handler to send state_sync on new connections
 	m.wsMgr.SetConnectHandler(m.SendStateSync)
+
+	// GPU acceleration: probe and initialise if enabled in config.
+	if cfg.GPU.Enabled {
+		cap := gpu.Probe()
+		if cap.Available {
+			backend, err := gpu.NewBackend(cap)
+			if err != nil {
+				logger.Warn("gpu: backend init failed, using CPU fallback", "error", err)
+			} else {
+				m.gpuBackend = backend
+				logger.Info("gpu: backend ready",
+					"device", cap.DeviceName,
+					"type", cap.DeviceType,
+					"vram_mb", cap.VRAM/1024/1024,
+				)
+			}
+		}
+	} else {
+		logger.Debug("gpu: acceleration disabled in config")
+	}
 
 	return m
 }
@@ -289,6 +314,12 @@ func (m *Manager) Stop() {
 		}
 		cp.pmu.Unlock()
 		delete(m.clientPipelines, id)
+	}
+
+	// Release GPU resources.
+	if m.gpuBackend != nil {
+		m.gpuBackend.Close()
+		m.gpuBackend = nil
 	}
 }
 

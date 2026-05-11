@@ -25,6 +25,10 @@ server:
     acrcloudHost: identify-eu-west-1.acrcloud.com
     acrcloudAccessKey: 9233f967382c7a171794366539a2ff2b
     acrcloudAccessSecret: TM2aWry4BU6bnnR2lxNYZMdggZp7QjuJnwybut3O
+gpu:
+    enabled: true
+    deviceIndex: -1
+    maxFftBatchSize: 0
 dongles:
     - id: dongle-mooroo30
       name: Remote-GBserv
@@ -55,7 +59,7 @@ dongles:
           defaultBandwidth: 200000
           defaultMode: wfm
           gain: 23
-          fftSize: 4096
+          fftSize: 16384
           fftFps: 60
           defaultTuneOffset: 0
           tuningStep: 1000
@@ -104,5 +108,5 @@ dongles:
           dongleId: ""
           preFilterNb: true
           preFilterNbThreshold: 0
-          dcOffsetRemoval: null
+          dcOffsetRemoval: true
 bookmarks: []

@@ -43,3 +43,4 @@ graphify-out/cost.json
 .serena/
 scripts/*.bin
 serverng/tmp/
+serverng/tmp-gpu/
