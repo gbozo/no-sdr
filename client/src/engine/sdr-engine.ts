@@ -107,6 +107,15 @@ export class SdrEngine {
   // Seek-back: when > 0, waterfall is frozen N frames in the past
   private seekOffset = 0;
 
+  // RAF-gated spectrum rendering — buffers the latest FFT frame and draws once
+  // per animation frame to avoid clearRect being composited mid-draw on mobile.
+  private latestFftForSpectrum: Float32Array | null = null;
+  private spectrumRafId = 0;
+
+  // Tracks whether the active waterfall worker is the WebGL2 variant.
+  // Used to send dpr in resize messages (WebGL needs physical pixels; Canvas 2D does not).
+  private waterfallIsWebGL = false;
+
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
 
@@ -343,12 +352,43 @@ export class SdrEngine {
       this.waterfallWorker = null;
     }
 
-    // Spin up the waterfall worker and transfer canvas control
+    // Spin up the waterfall worker and transfer canvas control.
+    // Prefer WebGL2 ring-buffer worker for 600× less GPU bus traffic; fall back
+    // to Canvas 2D worker if WebGL2 is not available on this device.
+    const supportsWebGL2 = (() => {
+      try {
+        const probe = new OffscreenCanvas(1, 1);
+        const ctx = probe.getContext('webgl2');
+        return ctx !== null;
+      } catch {
+        return false;
+      }
+    })();
+
+    this.waterfallIsWebGL = supportsWebGL2;
     this.waterfallWorker = new Worker(
-      new URL('./waterfall.worker.ts', import.meta.url),
+      supportsWebGL2
+        ? new URL('./waterfall-webgl.worker.ts', import.meta.url)
+        : new URL('./waterfall.worker.ts', import.meta.url),
       { type: 'module' },
     );
 
+    // Listen for WebGL worker failure (e.g. context creation failed post-transfer)
+    // and fall back to Canvas 2D worker. This should be very rare but handles
+    // devices that advertise WebGL2 support but fail at OffscreenCanvas init.
+    this.waterfallWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'init-failed' && this.waterfallIsWebGL) {
+        console.warn('[sdr] WebGL2 waterfall init failed, reattaching with Canvas 2D fallback');
+        this.waterfallIsWebGL = false;
+        this.waterfallWorker?.terminate();
+        this.waterfallWorker = null;
+        // Re-attach with the same canvas element — transferControlToOffscreen
+        // can only be called once, so we need the canvas ref we already hold.
+        this._reattachCanvases2D(waterfallCanvas, spectrumCanvas);
+      }
+    }, { once: true });
+
+    const dpr = self.devicePixelRatio || 1;
     const offscreen = waterfallCanvas.transferControlToOffscreen();
     const rect = waterfallCanvas.getBoundingClientRect();
     this.waterfallWorker.postMessage(
@@ -357,6 +397,7 @@ export class SdrEngine {
         canvas: offscreen,
         width:  Math.round(rect.width)  || waterfallCanvas.clientWidth,
         height: Math.round(rect.height) || waterfallCanvas.clientHeight,
+        dpr:    supportsWebGL2 ? dpr : 1,
         theme:  store.waterfallTheme(),
         minDb:  store.waterfallMin(),
         maxDb:  store.waterfallMax(),
@@ -377,7 +418,31 @@ export class SdrEngine {
   }
 
   /**
-   * Send buffered waterfall history to the worker.
+   * Fallback: re-attach waterfall using the Canvas 2D worker.
+   * Called only when WebGL2 init fails after OffscreenCanvas was already transferred.
+   * NOTE: transferControlToOffscreen() can only be called once per canvas element.
+   * The canvas was already transferred to the failed WebGL worker, so we cannot
+   * transfer it again. In this case, the waterfall will not render until the user
+   * refreshes. The spectrum continues to work normally.
+   * In practice this code path should be extremely rare.
+   */
+  private _reattachCanvases2D(waterfallCanvas: HTMLCanvasElement, spectrumCanvas: HTMLCanvasElement): void {
+    // Canvas control was already transferred — we cannot use it again.
+    // Log the situation and leave waterfallWorker as null.
+    console.warn('[sdr] Cannot reattach waterfall canvas: already transferred to WebGL worker. Spectrum only mode until page reload.');
+    this.waterfallCanvas  = waterfallCanvas;
+    this.waterfallWorker  = null;
+    this.waterfallIsWebGL = false;
+    if (!this.spectrum) {
+      this.spectrum = new SpectrumRenderer(
+        spectrumCanvas,
+        store.waterfallMin(),
+        store.waterfallMax(),
+      );
+    }
+  }
+
+  /**
    * Must be called after handleResize() has given the worker real canvas dimensions.
    */
   flushPendingHistory(): void {
@@ -792,13 +857,24 @@ export class SdrEngine {
       );
     }
 
-    // Spectrum stays on main thread — needs synchronous lastPixelDb for tooltip
-    this.spectrum?.draw(fftData);
-    this.spectrum?.drawTuningIndicator(
-      store.tuneOffset(),
-      store.bandwidth(),
-      store.sampleRate(),
-    );
+    // Spectrum stays on main thread — needs synchronous lastPixelDb for tooltip.
+    // Buffer the latest frame and draw once per RAF tick to prevent the
+    // compositor from snapshotting a blank canvas between clearRect and the
+    // final stroke call (primary cause of flicker on Android Chrome/Firefox).
+    this.latestFftForSpectrum = fftData;
+    if (this.spectrumRafId === 0) {
+      this.spectrumRafId = requestAnimationFrame(() => {
+        this.spectrumRafId = 0;
+        if (this.latestFftForSpectrum) {
+          this.spectrum?.draw(this.latestFftForSpectrum);
+          this.spectrum?.drawTuningIndicator(
+            store.tuneOffset(),
+            store.bandwidth(),
+            store.sampleRate(),
+          );
+        }
+      });
+    }
   }
 
   /**
@@ -2079,7 +2155,8 @@ export class SdrEngine {
       const w = Math.round(rect.width);
       const h = Math.round(rect.height);
       if (w > 0 && h > 0) {
-        this.waterfallWorker.postMessage({ type: 'resize', width: w, height: h });
+        const dpr = this.waterfallIsWebGL ? (window.devicePixelRatio || 1) : 1;
+        this.waterfallWorker.postMessage({ type: 'resize', width: w, height: h, dpr });
       }
     }
     this.spectrum?.resize();
