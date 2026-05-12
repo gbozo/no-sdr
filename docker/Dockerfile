@@ -28,7 +28,7 @@ COPY client/ client/
 RUN npm run build --workspace=client
 
 # ---- RTL-SDR Build (Osmocom) ----
-FROM alpine:3.20 AS rtlsdr-builder
+FROM alpine:3.21 AS rtlsdr-builder
 
 RUN apk add --no-cache \
     git \
@@ -113,26 +113,26 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     fi
 
 # ---- Runtime ----
-FROM alpine:3.20
+# Must match go-builder's Alpine version (golang:1.23-alpine = Alpine 3.21)
+# to ensure shared lib soname versions match (libglslang, libSPIRV, etc.)
+FROM alpine:3.21
 
 # Runtime shared libraries
 # vulkan-loader provides libvulkan.so.1 — actual GPU drivers (ICD) are typically
 # mounted from the host via --device or nvidia-container-toolkit.
+# glslang-libs + spirv-tools-libs are needed at runtime for VkFFT's SPIR-V compilation.
 RUN apk add --no-cache \
     ca-certificates \
     libusb \
     opus \
-    vulkan-loader
-
-# Copy glslang + SPIRV shared libs from go-builder (exact versions the binary was linked against)
-COPY --from=go-builder /usr/lib/libglslang*.so* /usr/lib/
-COPY --from=go-builder /usr/lib/libSPIRV*.so* /usr/lib/
-COPY --from=go-builder /usr/lib/libSPVRemapper*.so* /usr/lib/
+    vulkan-loader \
+    glslang-libs \
+    spirv-tools-libs
 
 # Copy the Osmocom rtl-sdr .so and rtl_tcp binary (not in Alpine packages — built from source)
 COPY --from=rtlsdr-builder /usr/local/lib/librtlsdr.so*  /usr/local/lib/
 COPY --from=rtlsdr-builder /usr/local/bin/rtl_tcp         /usr/local/bin/rtl_tcp
-RUN ldconfig /usr/local/lib 2>/dev/null || ldconfig /usr/lib 2>/dev/null || true
+RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 WORKDIR /app
 
