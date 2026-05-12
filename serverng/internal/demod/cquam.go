@@ -267,6 +267,16 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 	c.gSampleCount = gCount
 	c.pilotMag = pilotMag
 
+	// DC blocker state
+	c.dcPrevL = dcPrevL
+	c.dcPrevOutL = dcPrevOutL
+	c.dcPrevR = dcPrevR
+	c.dcPrevOutR = dcPrevOutR
+
+	// AGC state
+	c.agcGainL = gainL
+	c.agcGainR = gainR
+
 	// Lock level based on pilot magnitude
 	const lockThreshold float32 = 0.01
 	if pilotMag > lockThreshold {
@@ -288,6 +298,12 @@ func (c *CquamDemod) Reset() {
 	c.gSampleCount = 0
 	c.pilotMag = 0
 	c.lockLevel = 0
+	c.dcPrevL = 0
+	c.dcPrevOutL = 0
+	c.dcPrevR = 0
+	c.dcPrevOutR = 0
+	c.agcGainL = 1.0
+	c.agcGainR = 1.0
 }
 
 // IsLocked returns true if the C-QUAM 25Hz pilot tone has been detected.
