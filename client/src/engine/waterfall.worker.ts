@@ -389,6 +389,10 @@ function clear(): void {
 function resize(newW: number, newH: number): void {
   if (!ctx) return;
 
+  // Guard: skip if dimensions are unchanged. ResizeObserver fires on every
+  // pixel of Android URL-bar animation — without this every tick clears the canvas.
+  if (newW === w && newH === h) return;
+
   // Snapshot existing content before resize clears it
   let snapshot: ImageBitmap | null = null;
   if (w > 0 && h > 0) {

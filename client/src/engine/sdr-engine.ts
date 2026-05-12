@@ -107,6 +107,11 @@ export class SdrEngine {
   // Seek-back: when > 0, waterfall is frozen N frames in the past
   private seekOffset = 0;
 
+  // RAF-gated spectrum rendering — buffers the latest FFT frame and draws once
+  // per animation frame to avoid clearRect being composited mid-draw on mobile.
+  private latestFftForSpectrum: Float32Array | null = null;
+  private spectrumRafId = 0;
+
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
 
@@ -377,7 +382,6 @@ export class SdrEngine {
   }
 
   /**
-   * Send buffered waterfall history to the worker.
    * Must be called after handleResize() has given the worker real canvas dimensions.
    */
   flushPendingHistory(): void {
@@ -792,13 +796,24 @@ export class SdrEngine {
       );
     }
 
-    // Spectrum stays on main thread — needs synchronous lastPixelDb for tooltip
-    this.spectrum?.draw(fftData);
-    this.spectrum?.drawTuningIndicator(
-      store.tuneOffset(),
-      store.bandwidth(),
-      store.sampleRate(),
-    );
+    // Spectrum stays on main thread — needs synchronous lastPixelDb for tooltip.
+    // Buffer the latest frame and draw once per RAF tick to prevent the
+    // compositor from snapshotting a blank canvas between clearRect and the
+    // final stroke call (primary cause of flicker on Android Chrome/Firefox).
+    this.latestFftForSpectrum = fftData;
+    if (this.spectrumRafId === 0) {
+      this.spectrumRafId = requestAnimationFrame(() => {
+        this.spectrumRafId = 0;
+        if (this.latestFftForSpectrum) {
+          this.spectrum?.draw(this.latestFftForSpectrum);
+          this.spectrum?.drawTuningIndicator(
+            store.tuneOffset(),
+            store.bandwidth(),
+            store.sampleRate(),
+          );
+        }
+      });
+    }
   }
 
   /**

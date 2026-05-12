@@ -85,7 +85,16 @@ const WaterfallDisplay: Component = () => {
     engine.setSpectrumSignalFill(store.spectrumSignalFill());
     engine.setSpectrumNoiseFloor(store.spectrumNoiseFloor());
     engine.setSpectrumAveraging(store.spectrumAveraging());
-    const observer = new ResizeObserver(() => engine.handleResize());
+    const observer = new ResizeObserver(() => {
+      // Debounce resize events — Android Chrome/Firefox fire on every pixel of
+      // URL-bar animation (up to 60×/sec), which would clear both canvases
+      // and cause severe flicker. Collapse into a single handleResize per 150ms.
+      if ((observer as any)._rafHandle) cancelAnimationFrame((observer as any)._rafHandle);
+      (observer as any)._rafHandle = requestAnimationFrame(() => {
+        (observer as any)._rafHandle = 0;
+        engine.handleResize();
+      });
+    });
     observer.observe(containerRef);
     requestAnimationFrame(() => {
       engine.handleResize();
@@ -566,6 +575,7 @@ const timer = setInterval(() => {
         <canvas
           ref={spectrumRef!}
           class={`absolute inset-0 w-full h-full ${spectrumCursor()}`}
+          style={{ "will-change": "transform" }}
           onMouseDown={handleSpectrumMouseDown}
           onMouseMove={handleSpectrumMouseMove}
           onMouseUp={handleSpectrumMouseUp}
@@ -690,7 +700,7 @@ const timer = setInterval(() => {
         <canvas
           ref={waterfallRef!}
           class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-          style={{ "image-rendering": "auto" }}
+          style={{ "image-rendering": "pixelated", "will-change": "transform" }}
           onClick={handleWaterfallClick}
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}

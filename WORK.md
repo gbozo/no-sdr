@@ -12,10 +12,6 @@
 - [ ] **T52 Graceful shutdown** — SIGINT/SIGTERM → drain connections (5s timeout) → close dongles → exit. Context propagation in `cmd/serverng/main.go`
 - [ ] **T53 Integration test** — Start serverng in demo mode, WS client, subscribe, verify FFT/IQ frames arrive in correct format (no browser needed)
 
-### Client Issues
-- [ ] **Audio not re-enabled after WS reconnect** — AudioWorklet state not restored on reconnect (audio starts silent until page reload)
-- [ ] **Spectral NR quality** — Wiener filter has robotic artifacts on AM/WFM; LMS ANR is the recommended alternative (already exists, Wiener should be disabled or removed)
-
 ---
 
 ## Future Features
@@ -27,7 +23,7 @@
 - [ ] Adaptive L-R LPF for WFM (cutoff proportional to stereo blend)
 
 ### Display & UI
-- [ ] WebGL waterfall (GPU rendering for large FFT + smooth zoom)
+- [x] WebGL waterfall (GPU ring-buffer texture, Phase 1+2 mobile flicker fixes)
 
 ### Infrastructure
 - [ ] IQ recording (SigMF format)
@@ -36,12 +32,46 @@
 - [ ] Docker cross-compile — linux/amd64, linux/arm64 (RPi), darwin/arm64 via multi-stage Dockerfile
 
 ### GPU Acceleration (see docs/gpu-offload-plan.md)
-- [ ] Create `serverng/internal/gpu/` package with Vulkan detection
-- [ ] Wrap VkFFT via CGO for GPU FFT offloading
-- [ ] GPU Butterworth + NCO + decimation in IQ extractor (compute shaders)
-- [ ] GPU FM Stereo FIR (2× 51-tap at 240 kHz)
-- [ ] Multi-client batching with Vulkan command buffers
-- [ ] Graceful CPU fallback when GPU unavailable
+
+Full plan written. Build tag: `gpu_vulkan`. CPU fallback is always the default.
+
+**Phase 0 — Skeleton + build infra** (1–2 h)
+- [ ] `serverng/internal/gpu/` package: `gpu.go` interface, `gpu_stub.go` CPU fallback
+- [ ] `GPUConfig` struct in `config/config.go` + `config.yaml` (disabled by default)
+- [ ] `build:go:gpu` npm script: `CGO_ENABLED=1 go build -tags gpu_vulkan`
+
+**Phase 1 — Vulkan device detection** (2–3 h)
+- [ ] `vulkan.go` + `device.go` (tag: `gpu_vulkan`): headless Vulkan init, device enumeration
+- [ ] `gpu.Probe()` returns `Capability{DeviceName, DeviceType, VRAM}`, logged on startup
+- [ ] Integration with `dongle/manager.go`: call `gpu.Probe()`, log result, no-op if unavailable
+
+**Phase 2 — VkFFT GPU FFT** (4–6 h) — highest single-operation impact (4–8× speedup)
+- [ ] Vendor `VkFFT/vkfft.h` to `internal/gpu/clib/`, write `vkfft_wrapper.c` CGO shim
+- [ ] `vkfft.go` (tag: `gpu_vulkan`): uint8 IQ → window → VkFFT → magnitude dB
+- [ ] `fft_processor.go`: add `SetGPUBackend(*gpu.Backend)`, GPU dispatch in `processOneFrame`
+- [ ] Unit test: GPU FFT output matches CPU FFT to within 0.1 dB for N = 1024..65536
+- [ ] Benchmark: `BenchmarkFFT_CPU_65536` vs `BenchmarkFFT_GPU_65536`
+
+**Phase 3 — GPU IQ pipeline: NCO + Butterworth + Decimate** (6–8 h) — scales with client count
+- [ ] Write `shaders/nco_butter_decimate.comp` GLSL compute shader
+- [ ] Pre-compile to `nco_butter_decimate.spv` via `glslangValidator`
+- [ ] `pipeline_iq.go`: batch dispatch all active clients in one `vkQueueSubmit`
+- [ ] `iq_extractor.go`: add `SetGPUBackend`, GPU path in `Process()`
+- [ ] Per-client filter state (NCO phase + 2× biquad) stored in device SSBO across frames
+- [ ] Integration test: 10 clients × 100 frames — output matches CPU reference
+
+**Phase 4 — GPU FM Stereo FIR** (4–6 h) — highest per-WFM-client impact (3–5 ms → <1 ms)
+- [ ] Write `shaders/fm_stereo_fir.comp` GLSL: pilot PLL + 2×51-tap L+R / L-R FIR
+- [ ] `pipeline_fm.go`: dispatch per active WFM Opus client
+- [ ] `demod/fm.go`: add GPU path in `processWfmStereo`
+
+**Phase 5 — Command buffer batching** (2–3 h)
+- [ ] `batch.go`: single `vkQueueSubmit` containing all client dispatches
+- [ ] Timeline semaphore: overlap GPU IQ processing with CPU ADPCM/Opus encoding
+
+**Phase 6 — iGPU zero-copy** (optional, 1–2 h)
+- [ ] Detect `DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT` memory type at init
+- [ ] Use persistent mapped buffer for dongle IQ → GPU input SSBO (no staging copy)
 
 ### Decoders
 - [ ] DMR/D-Star/YSF (digiham WASM)

@@ -342,9 +342,19 @@ export class AudioEngine {
       });
       // Worklet feeds into the processing chain (starts at panner)
       this.workletNode.connect(this.pannerNode);
+      // Ensure context is running before marking initialized.
+      // Firefox (Android) may leave AudioContext in 'suspended' state even after
+      // a user gesture. Without this, audio_enabled is sent to the server, IQ/Opus
+      // data arrives, worklet ring fills for ~12s, then overflows — silence.
+      if (this.audioCtx.state !== 'running') {
+        await this.audioCtx.resume();
+      }
       this.initialized = true;
     } finally {
-      URL.revokeObjectURL(url);
+      // Delay revocation: Firefox Android may still reference the blob URL in its
+      // worklet thread registry immediately after addModule() resolves.
+      // A short delay ensures the module is fully registered before we revoke.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
   }
 
