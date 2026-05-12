@@ -41,6 +41,8 @@ interface GpuStats {
   fmDispatches: number;
   iqPipelineReady: boolean;
   fmPipelineReady: boolean;
+  iqAsyncDispatches?: number;
+  iqAsyncDrops?: number;
 }
 
 // ---- Helpers ----
@@ -269,13 +271,18 @@ const MonitorSection: Component = () => {
                 </div>
                 <div>
                   <div class="text-[8px] font-mono text-text-dim/70 uppercase">IQ Dispatches</div>
-                  <div class="text-[11px] font-mono text-accent">{formatCount(g().iqDispatches)}</div>
+                  <div class="text-[11px] font-mono text-accent">{formatCount(g().iqAsyncDispatches ?? g().iqDispatches)}</div>
                 </div>
                 <div>
                   <div class="text-[8px] font-mono text-text-dim/70 uppercase">FM Dispatches</div>
                   <div class="text-[11px] font-mono text-accent">{formatCount(g().fmDispatches)}</div>
                 </div>
               </div>
+              {(g().iqAsyncDrops ?? 0) > 0 && (
+                <div class="text-[8px] font-mono text-amber-400/70 mt-1">
+                  IQ Drops (GPU busy): {formatCount(g().iqAsyncDrops!)}
+                </div>
+              )}
               <div class="flex gap-3 mt-2">
                 <span class={`text-[8px] font-mono ${g().iqPipelineReady ? 'text-green-400/70' : 'text-text-dim/40'}`}>
                   IQ Pipeline: {g().iqPipelineReady ? 'Ready' : 'N/A'}

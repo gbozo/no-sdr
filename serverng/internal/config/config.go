@@ -263,8 +263,8 @@ func applyDefaults(cfg *Config) {
 		cfg.Server.AllowedIqCodecs = append([]string(nil), DefaultIqCodecs...)
 	}
 	// OpusComplexity: default to 5 (balanced CPU vs quality for radio audio).
-	// Zero-value in YAML means "not set", so we default here.
-	if cfg.Server.OpusComplexity == 0 {
+	// Use -1 as sentinel for "not configured"; 0 is a valid libopus complexity level.
+	if cfg.Server.OpusComplexity < 0 {
 		cfg.Server.OpusComplexity = 5
 	}
 	// GPU: DeviceIndex -1 means auto-select (best available device).

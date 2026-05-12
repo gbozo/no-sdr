@@ -672,10 +672,12 @@ const ProfileEditor: Component<{
               <option value="4096">4096</option>
               <option value="8192">8192</option>
               <option value="16384">16384</option>
+              <option value="32768">32768</option>
+              <option value="65536">65536</option>
             </select>
           </FieldGroup>
           <FieldGroup label="FFT FPS">
-            <input type="number" value={local().fftFps || 25} min={1} max={60}
+            <input type="number" value={local().fftFps || 25} min={1} max={120}
               onInput={(e) => update('fftFps', parseInt(e.currentTarget.value) || 25)}
               class="admin-input w-20" />
           </FieldGroup>

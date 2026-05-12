@@ -10,6 +10,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"sync"
 	"unsafe"
 )
 
@@ -24,6 +25,7 @@ const MaxFmInputSamples = C.FM_MAX_INPUT_SAMPLES
 type FmStereoContext struct {
 	ptr     *C.FmStereoPipelineCtx
 	numTaps int
+	queueMu *sync.Mutex // shared with all GPU pipelines — protects vkQueueSubmit
 }
 
 // FmClientState holds per-client FM stereo processing state.
@@ -135,11 +137,15 @@ func (f *FmStereoContext) Process(
 		cStates[i].decimCounter = C.int32_t(s.DecimCounter)
 	}
 
-	// Allocate output buffers
-	maxOutPerClient := numSamples / decimFactor
+	// Allocate output buffers — use ceiling division to handle non-multiple chunk sizes.
+	maxOutPerClient := (numSamples + decimFactor - 1) / decimFactor
 	outAudio := make([]float32, numClients*maxOutPerClient*2)
 	outCounts := make([]uint32, numClients)
 
+	// Lock the shared Vulkan queue — only one pipeline can submit at a time.
+	if f.queueMu != nil {
+		f.queueMu.Lock()
+	}
 	rc := C.fm_stereo_process(
 		f.ptr,
 		&cStates[0],
@@ -152,6 +158,9 @@ func (f *FmStereoContext) Process(
 		(*C.float)(unsafe.Pointer(&outAudio[0])),
 		(*C.uint32_t)(unsafe.Pointer(&outCounts[0])),
 	)
+	if f.queueMu != nil {
+		f.queueMu.Unlock()
+	}
 	if rc != 0 {
 		return nil, fmt.Errorf("gpu: FM stereo process failed (rc=%d)", int(rc))
 	}

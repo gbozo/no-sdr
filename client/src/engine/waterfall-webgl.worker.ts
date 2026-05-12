@@ -392,6 +392,8 @@ function updateUniforms(): void {
 
 /**
  * Map one FFT frame to a w×1 RGBA pixel row using the current palette.
+ * Always maps the FULL bandwidth to the texture width — the fragment shader
+ * handles zoom via u_zoomStart/u_zoomEnd uniforms. This prevents double-zoom.
  */
 function fftToRow(fftData: Float32Array): Uint8Array {
   if (!rowPixels || rowPixels.length !== w * 4) {
@@ -399,13 +401,10 @@ function fftToRow(fftData: Float32Array): Uint8Array {
   }
   const range    = maxDb - minDb;
   const bins     = fftData.length;
-  const viewStart = zoomStart * bins;
-  const viewEnd   = zoomEnd   * bins;
-  const viewBins  = viewEnd - viewStart;
-  const binsPerPx = viewBins / w;
+  const binsPerPx = bins / w;
 
   for (let x = 0; x < w; x++) {
-    const binF = viewStart + (x / (w - 1)) * (viewBins - 1);
+    const binF = (x / (w - 1)) * (bins - 1);
     let db: number;
     if (binsPerPx <= 1) {
       const lo = Math.floor(binF);

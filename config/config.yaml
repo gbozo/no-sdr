@@ -19,7 +19,7 @@ server:
         - opus
         - opus-hq
         - opus-lo
-    opusComplexity: 5
+    opusComplexity: 0
     realIPHeader: ""
     auddApiKey: c63a4f2cf56674c6041b73f4feef055b
     acrcloudHost: identify-eu-west-1.acrcloud.com
@@ -59,8 +59,8 @@ dongles:
           defaultBandwidth: 200000
           defaultMode: wfm
           gain: 23
-          fftSize: 16384
-          fftFps: 60
+          fftSize: 8192
+          fftFps: 12
           defaultTuneOffset: 0
           tuningStep: 1000
           swapIQ: false
@@ -68,7 +68,7 @@ dongles:
           directSampling: 0
           description: FM radio 87.5–108 MHz (stereo, RDS)
           dongleId: ""
-          preFilterNb: true
+          preFilterNb: false
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
         - id: profile-mootuxy2

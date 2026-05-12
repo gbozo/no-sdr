@@ -197,7 +197,6 @@ func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
 	p.ringFill += len(data)
 
 	var emitted [][]float32
-	now := time.Now()
 
 	consumed := 0
 	for p.ringFill-consumed >= p.samplesNeed {
@@ -224,6 +223,9 @@ func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
 			}
 		}
 
+		// Check time per iteration (not once at top) so batched chunks
+		// can still emit multiple frames if enough wall-time has passed.
+		now := time.Now()
 		if now.Sub(p.lastEmit) >= p.minInterval {
 			frame := make([]float32, p.fftSize)
 			copy(frame, p.pendingBuf)

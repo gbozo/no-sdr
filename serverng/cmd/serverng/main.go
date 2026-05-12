@@ -23,7 +23,7 @@ import (
 )
 
 // version is set by ldflags at build time.
-var version = "2.9.0-beta.0"
+var version = "2.9.1"
 
 // goamd64 is set by ldflags at build time to indicate the GOAMD64 level
 // (v1, v2, v3, or v4) this binary was compiled for.

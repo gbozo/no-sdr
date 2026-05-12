@@ -7,6 +7,7 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/demod"
 	"github.com/gbozo/no-sdr/serverng/internal/dsp"
+	"github.com/gbozo/no-sdr/serverng/internal/gpu"
 )
 
 // OpusResult is one encoded Opus packet + optional RDS data.
@@ -25,7 +26,11 @@ type OpusPipelineConfig struct {
 	StereoEnabled *bool  // nil = default true; set false to start in mono from first frame
 	Quality       string // "opus-lo", "opus", or "opus-hq"
 	// Complexity is the Opus encoder complexity (0–10). 0 means use server default (5).
-	Complexity    int
+	Complexity int
+	// GpuFmPipeline is the shared GPU FM stereo FIR pipeline. Non-nil only for WFM mode
+	// when GPU acceleration is enabled. Multiple OpusPipelines share one FmStereoContext;
+	// each maintains its own FmClientState for independent FIR delay-line state.
+	GpuFmPipeline *gpu.FmStereoContext
 }
 
 // OpusPipeline performs server-side demodulation + Opus encoding.
@@ -72,8 +77,17 @@ type OpusPipeline struct {
 	pcmBuf     []int16     // float32 → int16 for Opus
 
 	// RDS decoder — only non-nil when mode=="wfm"
-	rdsDecoder   *demod.RdsDecoder
-	rdsLastJSON  []byte       // last JSON snapshot sent to the client (nil = never sent)
+	rdsDecoder  *demod.RdsDecoder
+	rdsLastJSON []byte // last JSON snapshot sent to the client (nil = never sent)
+
+	// GPU FM stereo pipeline — non-nil only for WFM when GPU acceleration is available.
+	// gpuFmPipeline is shared across all WFM OpusPipelines; gpuFmState is per-pipeline.
+	gpuFmPipeline    *gpu.FmStereoContext
+	gpuFmState       *gpu.FmClientState
+	onGpuFmDispatch  func() // called after each successful GPU FM dispatch (for counters)
+	// Scratch slices reused across frames for GPU FM dispatch
+	gpuFmLeftOut  []float32
+	gpuFmRightOut []float32
 
 	// PCM capture ring buffer for music recognition.
 	// Holds the last captureSecs seconds of decoded 48kHz Float32 audio (mono).
@@ -182,6 +196,12 @@ func NewOpusPipeline(cfg OpusPipelineConfig) (*OpusPipeline, error) {
 		p.rdsDecoder = demod.NewRdsDecoder(float64(cfg.SampleRate))
 	}
 
+	// Wire GPU FM FIR pipeline for WFM when available.
+	if mode == "wfm" && cfg.GpuFmPipeline != nil {
+		p.gpuFmPipeline = cfg.GpuFmPipeline
+		p.gpuFmState = gpu.NewFmClientState(cfg.SampleRate, 75e-6)
+	}
+
 	return p, nil
 }
 
@@ -224,7 +244,13 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 		p.audioBuf = p.audioBuf[:audioMaxSize]
 	}
 
-	written := p.demodulator.Process(p.complexBuf, p.audioBuf)
+	var written int
+
+	// GPU FM stereo path disabled — queue mutex contention with FFT goroutine causes
+	// audio gaps. CPU FM demod is fast enough (~230µs/frame on M4). Will be re-enabled
+	// when dedicated compute queue is available (Phase 6).
+	written = p.demodulator.Process(p.complexBuf, p.audioBuf)
+
 	if written == 0 {
 		return nil
 	}

@@ -9,6 +9,7 @@ package gpu
 import "C"
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 )
 
@@ -16,8 +17,9 @@ import (
 // dev is allocated on the C heap (C.malloc) so CGO can safely pass it to C
 // functions without triggering the "Go pointer to unpinned Go pointer" panic.
 type vulkanBackend struct {
-	cap Capability
-	dev *C.VkDeviceContext // C-heap allocated; never points into GC memory
+	cap    Capability
+	dev    *C.VkDeviceContext // C-heap allocated; never points into GC memory
+	queueMu sync.Mutex       // protects ALL vkQueueSubmit calls (Vulkan queues are NOT thread-safe)
 }
 
 func newVulkanBackend(cap Capability) (*vulkanBackend, error) {
@@ -53,14 +55,29 @@ func (b *vulkanBackend) maxClients() int {
 }
 
 func (b *vulkanBackend) newFFT(fftSize int) (*FFTContext, error) {
-	return b.NewFFT(fftSize)
+	ctx, err := b.NewFFT(fftSize)
+	if err != nil {
+		return nil, err
+	}
+	ctx.queueMu = &b.queueMu
+	return ctx, nil
 }
 
 func (b *vulkanBackend) newIqPipeline() (*IqPipelineContext, error) {
-	return b.NewIqPipeline()
+	ctx, err := b.NewIqPipeline()
+	if err != nil {
+		return nil, err
+	}
+	ctx.queueMu = &b.queueMu
+	return ctx, nil
 }
 
 func (b *vulkanBackend) newFmStereoPipeline(taps []float32) (*FmStereoContext, error) {
-	return b.NewFmStereoPipeline(taps)
+	ctx, err := b.NewFmStereoPipeline(taps)
+	if err != nil {
+		return nil, err
+	}
+	ctx.queueMu = &b.queueMu
+	return ctx, nil
 }
 

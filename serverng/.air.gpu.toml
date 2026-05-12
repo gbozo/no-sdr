@@ -13,7 +13,7 @@ tmp_dir = "tmp-gpu"
   exclude_dir = ["tmp", "tmp-gpu", "bin", "graphify-out", "node_modules"]
   exclude_regex = ["_test\\.go$"]
   include_ext = ["go", "c", "h"]
-  kill_delay = "1s"
+  kill_delay = "0s"
   send_interrupt = true
   stop_on_error = true
 

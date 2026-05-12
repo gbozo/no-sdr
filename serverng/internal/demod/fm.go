@@ -742,3 +742,160 @@ func (f *FmStereoDemod) PilotDetected() bool {
 // SetBandwidth is a no-op for WFM stereo: WFM is always full-band (200kHz RF, 15kHz audio).
 // The fixed 51-tap FIR LPF at 15kHz handles audio bandwidth limiting.
 func (f *FmStereoDemod) SetBandwidth(_ float64) {}
+
+// ProcessCPUStage runs the serial (non-parallelisable) portion of the FM stereo pipeline:
+// FM discriminator → PLL tracking → produces the three input buffers the GPU FIR shader needs.
+// Returns (lprIn, lrIn, blends, n) where n == len(in).
+// After this call GetComposite(), GetPilotPhases(), and PilotDetected() are valid.
+// Call ApplyGPUResult() with the GPU output to finish the frame.
+func (f *FmStereoDemod) ProcessCPUStage(in []complex64) (lprIn, lrIn, blends []float32, n int) {
+	n = len(in)
+
+	// Ensure composite buffer
+	if cap(f.composite) < n {
+		f.composite = make([]float32, n)
+	}
+	f.composite = f.composite[:n]
+
+	// Step 1: FM discriminator → composite baseband
+	f.mono.Process(in, f.composite)
+
+	// Grow scratch buffers
+	if cap(f.lprInBuf) < n {
+		f.lprInBuf = make([]float32, n)
+		f.lrInBuf = make([]float32, n)
+		f.lprOutBuf = make([]float32, n)
+		f.lrOutBuf = make([]float32, n)
+		f.blendBuf = make([]float32, n)
+	}
+	lprIn = f.lprInBuf[:n]
+	lrIn = f.lrInBuf[:n]
+	blends = f.blendBuf[:n]
+
+	// Pilot phase buffer for RDS
+	if cap(f.pilotPhases) < n {
+		f.pilotPhases = make([]float64, n)
+	}
+	f.pilotPhases = f.pilotPhases[:n]
+
+	// ---- Pass 1: PLL + build FIR inputs (identical to Process()) ----
+	pllSin := f.pllSin
+	pllCos := f.pllCos
+	pllFreq := f.pllFreq
+	pilotEnergy := f.pilotEnergy
+	noiseEnergy := f.noiseEnergy
+	energyAlpha := f.energyAlpha
+	blendFactor := f.blendFactor
+	pilotDetected := f.pilotDetected
+	holdCounter := f.holdCounter
+	renormCount := f.pllRenormCount
+	pilotPhase := f.pllPhase
+
+	for i := 0; i < n; i++ {
+		comp := f.composite[i]
+		pilotRef := float32(pllSin)
+		phaseErr := float64(comp * pilotRef)
+		pllFreq += f.pllBeta * phaseErr
+		dw := f.pllAlpha*phaseErr + pllFreq
+		sinDw, cosDw := sinCos5(dw)
+		pllSin, pllCos = pllSin*cosDw+pllCos*sinDw, pllCos*cosDw-pllSin*sinDw
+		renormCount++
+		if renormCount >= pllRenormInterval {
+			norm := 1.0 / math.Sqrt(pllSin*pllSin+pllCos*pllCos)
+			pllSin *= norm
+			pllCos *= norm
+			renormCount = 0
+		}
+		cosVal := float32(pllCos)
+		bpfOut := comp * cosVal
+		pilotEnergy = pilotEnergy*(1-energyAlpha) + bpfOut*bpfOut*energyAlpha
+		noiseEnergy = noiseEnergy*(1-energyAlpha) + comp*comp*energyAlpha
+		var snr float32
+		if noiseEnergy > 1e-12 {
+			snr = pilotEnergy / noiseEnergy
+		}
+		if snr > 0.006 {
+			pilotDetected = true
+			holdCounter = f.holdSamples
+		} else if snr < 0.002 {
+			if holdCounter > 0 {
+				holdCounter--
+			} else {
+				pilotDetected = false
+			}
+		} else if pilotDetected {
+			holdCounter = f.holdSamples
+		}
+		var targetBlend float32
+		if pilotDetected {
+			targetBlend = (snr - 0.002) / 0.01
+			if targetBlend < 0 {
+				targetBlend = 0
+			} else if targetBlend > 1 {
+				targetBlend = 1
+			}
+		}
+		var blendAlpha float32 = 0.003
+		if targetBlend > blendFactor {
+			blendAlpha = 0.015
+		}
+		blendFactor += blendAlpha * (targetBlend - blendFactor)
+		blends[i] = blendFactor
+		lprIn[i] = comp
+		carrier38 := 2*cosVal*cosVal - 1
+		lrIn[i] = 2.0 * comp * carrier38
+		pilotPhase += f.pllAlpha*phaseErr + pllFreq
+		if pilotPhase >= 2*math.Pi {
+			pilotPhase -= 2 * math.Pi
+		} else if pilotPhase < 0 {
+			pilotPhase += 2 * math.Pi
+		}
+		f.pilotPhases[i] = pilotPhase
+	}
+
+	f.pllSin = pllSin
+	f.pllCos = pllCos
+	f.pllFreq = pllFreq
+	f.pllRenormCount = renormCount
+	f.pllPhase = pilotPhase
+	f.pilotEnergy = pilotEnergy
+	f.noiseEnergy = noiseEnergy
+	f.blendFactor = blendFactor
+	f.pilotDetected = pilotDetected
+	f.holdCounter = holdCounter
+
+	return lprIn, lrIn, blends, n
+}
+
+// ApplyGPUResult takes the per-channel decimated output from the GPU FIR/matrix/deemph
+// shader and applies DC-blocking, then writes interleaved L,R into out.
+// leftOut and rightOut are at the decimated rate (len = n/decimFactor).
+// Returns the number of float32 values written (always 2 × len(leftOut)).
+func (f *FmStereoDemod) ApplyGPUResult(leftOut, rightOut, out []float32) int {
+	outIdx := len(leftOut)
+	if len(rightOut) < outIdx {
+		outIdx = len(rightOut)
+	}
+	actualOut := outIdx * 2
+	if len(out) < actualOut {
+		actualOut = len(out) / 2 * 2
+		outIdx = actualOut / 2
+	}
+	for i := 0; i < outIdx; i++ {
+		l := leftOut[i]
+		r := rightOut[i]
+		// DC block (identical to CPU path)
+		dcOutL := l - f.dcPrevL + 0.995*f.dcOutPrevL
+		f.dcPrevL = l
+		f.dcOutPrevL = dcOutL
+		dcOutR := r - f.dcPrevR + 0.995*f.dcOutPrevR
+		f.dcPrevR = r
+		f.dcOutPrevR = dcOutR
+		out[i*2] = dcOutL
+		out[i*2+1] = dcOutR
+	}
+	// Keep decimCounter in sync (GPU consumed all n samples in groups of decimFactor)
+	// After a full GPU batch the counter stays at 0 (GPU handles decimation internally).
+	f.decimCounter = 0
+	return actualOut
+}

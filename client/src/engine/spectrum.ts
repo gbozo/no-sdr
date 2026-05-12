@@ -15,8 +15,7 @@ export class SpectrumRenderer {
   private ready = false;
 
   // Throttle rendering to ~30fps (same as waterfall)
-  private lastDrawTime = 0;
-  private readonly minFrameInterval = 33; // ms (~30fps)
+  private lastDrawTime = 0; // kept for potential future use
 
   // Peak hold
   private peakHoldEnabled = false;
@@ -96,16 +95,11 @@ export class SpectrumRenderer {
   }
 
   /**
-   * Draw the spectrum for one FFT frame.
-   * Throttled to ~30fps to avoid excessive redraws.
+   * Main draw call — renders the spectrum line, grid, peak, noise floor.
+   * Draw rate is governed by requestAnimationFrame in sdr-engine.ts.
    */
   draw(fftData: Float32Array): void {
     if (fftData.length === 0) return;
-
-    // Throttle to ~30fps
-    const now = performance.now();
-    if (now - this.lastDrawTime < this.minFrameInterval) return;
-    this.lastDrawTime = now;
 
     if (!this.ready) {
       this.resize();

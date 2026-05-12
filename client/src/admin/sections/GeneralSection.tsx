@@ -97,6 +97,10 @@ const GeneralSection: Component = () => {
                   { value: '1024', label: '1024' },
                   { value: '2048', label: '2048' },
                   { value: '4096', label: '4096' },
+                  { value: '8192', label: '8192' },
+                  { value: '16384', label: '16384' },
+                  { value: '32768', label: '32768' },
+                  { value: '65536', label: '65536' },
                 ]}
               />
             </FieldRow>
@@ -243,13 +247,14 @@ const NumberInput: Component<{ value: number; onChange: (v: number) => void; min
 
 const SelectInput: Component<{ value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }> = (props) => (
   <select
+    value={props.value}
     onChange={(e) => props.onChange(e.currentTarget.value)}
     class="px-3 py-1.5 bg-sdr-base border border-border rounded-sm
            text-xs font-mono text-text-primary
            focus:outline-none focus:border-cyan transition-colors"
   >
     <For each={props.options}>
-      {(opt) => <option value={opt.value} selected={opt.value === props.value}>{opt.label}</option>}
+      {(opt) => <option value={opt.value}>{opt.label}</option>}
     </For>
   </select>
 );

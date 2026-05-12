@@ -95,6 +95,8 @@ export interface ServerConfig {
   allowedIqCodecs: string[];
   opusComplexity: number;
   realIPHeader: string;
+  // GPU acceleration
+  gpuEnabled: boolean;
   // Music identification
   auddApiKey: string;
   acrcloudHost: string;
@@ -116,6 +118,7 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   allowedIqCodecs: ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'],
   opusComplexity: 5,
   realIPHeader: '',
+  gpuEnabled: false,
   auddApiKey: '',
   acrcloudHost: '',
   acrcloudAccessKey: '',
@@ -233,6 +236,7 @@ function createAdminStore() {
           allowedIqCodecs: data.allowedIqCodecs ?? DEFAULT_SERVER_CONFIG.allowedIqCodecs,
           opusComplexity: data.opusComplexity ?? DEFAULT_SERVER_CONFIG.opusComplexity,
           realIPHeader: data.realIPHeader ?? '',
+          gpuEnabled: data.gpuEnabled ?? false,
           auddApiKey: data.auddApiKey ?? '',
           acrcloudHost: data.acrcloudHost ?? '',
           acrcloudAccessKey: data.acrcloudAccessKey ?? '',

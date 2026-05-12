@@ -9,13 +9,15 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"sync"
 	"unsafe"
 )
 
 // IqPipelineContext wraps the GPU IQ compute pipeline.
 // Supports batched processing of up to 64 concurrent clients.
 type IqPipelineContext struct {
-	ptr *C.IqPipelineCtx
+	ptr     *C.IqPipelineCtx
+	queueMu *sync.Mutex // shared with all GPU pipelines — protects vkQueueSubmit
 }
 
 // IqClientState holds per-client parameters and filter state.
@@ -190,6 +192,10 @@ func (p *IqPipelineContext) Process(rawIQ []byte, states []*IqClientState) ([][]
 	outBuf := make([]int16, numClients*maxOutPerClient*2)
 	outCounts := make([]uint32, numClients)
 
+	// Lock the shared Vulkan queue — only one pipeline can submit at a time.
+	if p.queueMu != nil {
+		p.queueMu.Lock()
+	}
 	rc := C.iq_pipeline_process(
 		p.ptr,
 		&params[0],
@@ -199,6 +205,9 @@ func (p *IqPipelineContext) Process(rawIQ []byte, states []*IqClientState) ([][]
 		(*C.int16_t)(unsafe.Pointer(&outBuf[0])),
 		(*C.uint32_t)(unsafe.Pointer(&outCounts[0])),
 	)
+	if p.queueMu != nil {
+		p.queueMu.Unlock()
+	}
 	if rc != 0 {
 		return nil, fmt.Errorf("gpu: iq_pipeline_process failed (rc=%d)", int(rc))
 	}

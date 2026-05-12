@@ -109,6 +109,10 @@ type activeDongle struct {
 	fftHistory *history.FftBuffer
 	cancel     context.CancelFunc
 
+	// fftCh feeds IQ chunks to the dedicated FFT goroutine.
+	// This decouples GPU FFT (which holds queue mutex ~4-8ms) from the IQ data loop.
+	fftCh chan []byte
+
 	// iqScratch is a reusable snapshot buffer for processClientIQ.
 	// Owned exclusively by the runDongle goroutine — no locking needed.
 	iqScratch []cpEntry
@@ -259,7 +263,8 @@ func (m *Manager) GetGPUStats() map[string]any {
 		}
 	}
 	m.mu.Unlock()
-	return map[string]any{
+
+	stats := map[string]any{
 		"active":          hasBackend && !disabled,
 		"fftFrames":       fftFrames,
 		"iqDispatches":    atomic.LoadInt64(&m.gpuIqDispatches),
@@ -267,11 +272,21 @@ func (m *Manager) GetGPUStats() map[string]any {
 		"iqPipelineReady": hasIq,
 		"fmPipelineReady": hasFm,
 	}
+
+	return stats
 }
 
 // gpuEnabled returns true if GPU should be used for processing (backend exists and not disabled).
 func (m *Manager) gpuEnabled() bool {
 	return m.gpuBackend != nil && !m.gpuDisabledRuntime
+}
+
+// gpuFmPipelineForMode returns the GPU FM stereo pipeline when mode=="wfm" and GPU is active.
+func (m *Manager) gpuFmPipelineForMode(mode string) *gpu.FmStereoContext {
+	if mode == "wfm" && m.gpuFmPipeline != nil && m.gpuEnabled() {
+		return m.gpuFmPipeline
+	}
+	return nil
 }
 
 // currentVersion returns the current config version, or 0 if not set.
@@ -1136,6 +1151,11 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 	// IQ data channel from the source
 	iqCh := make(chan []byte, 16)
 
+	// FFT processing runs in its own goroutine to avoid blocking the IQ data loop
+	// when GPU FFT holds the Vulkan queue mutex (~4-8ms per frame).
+	d.fftCh = make(chan []byte, 8)
+	go m.runFftLoop(ctx, d)
+
 	// Start the source in its own goroutine
 	go d.source.Run(ctx, iqCh)
 
@@ -1159,13 +1179,33 @@ func (m *Manager) runDongle(ctx context.Context, d *activeDongle) {
 			// Feed active IQ recorder (no-op when not recording)
 			m.Recorder.WriteIQ(d.id, iqChunk)
 
-			// Per-client IQ extraction — runs BEFORE FFT
+			// Per-client IQ extraction — synchronous, timing-critical for audio
 			m.processClientIQ(d, iqChunk)
 
-			// Feed IQ data to FFT processor
-			frames := d.fftProc.ProcessIqData(iqChunk)
+			// Send to FFT goroutine (non-blocking — drop if backed up)
+			select {
+			case d.fftCh <- iqChunk:
+			default:
+				// FFT goroutine is busy (GPU mutex contention) — skip this chunk.
+				// Waterfall tolerates dropped frames gracefully.
+			}
+		}
+	}
+}
 
-			// Broadcast each emitted FFT frame
+// runFftLoop processes FFT frames in a dedicated goroutine, decoupled from the
+// timing-critical IQ data loop. GPU FFT can hold the Vulkan queue mutex for
+// 4-8ms without causing audio gaps.
+func (m *Manager) runFftLoop(ctx context.Context, d *activeDongle) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case iqChunk, ok := <-d.fftCh:
+			if !ok {
+				return
+			}
+			frames := d.fftProc.ProcessIqData(iqChunk)
 			for _, frame := range frames {
 				d.fftHistory.Push(frame)
 				m.broadcastFftFrame(d, frame)
@@ -1200,42 +1240,15 @@ func (m *Manager) processClientIQ(d *activeDongle, iqChunk []byte) {
 		return
 	}
 
-	// Try GPU batch path: collect all GPU-eligible clients (non-NB with gpuIqState).
-	if m.gpuIqPipeline != nil && m.gpuEnabled() {
-		var gpuEntries []cpEntry
-		var cpuEntries []cpEntry
-		for _, e := range entries {
-			if e.cp.gpuIqState != nil && !e.cp.nbEnabled {
-				gpuEntries = append(gpuEntries, e)
-			} else {
-				cpuEntries = append(cpuEntries, e)
-			}
-		}
+	// GPU IQ path disabled — queue mutex contention with FFT goroutine causes
+	// variable latency (up to 8ms blocked) which exceeds the 10ms chunk budget
+	// and introduces half-second audio gaps. CPU IQ is fast enough (~200µs/client
+	// on M4) for typical client counts. GPU IQ will be re-enabled in Phase 6
+	// when a dedicated compute queue is available (no mutex sharing with FFT).
+	//
+	// GPU FFT runs in its own goroutine (runFftLoop) and tolerates latency.
 
-		if len(gpuEntries) > 0 {
-			m.processGpuBatch(gpuEntries, iqChunk)
-		}
-
-		// CPU fallback for NB-enabled or GPU-ineligible clients
-		if len(cpuEntries) > 0 {
-			if len(cpuEntries) == 1 {
-				m.processOneClient(cpuEntries[0].clientID, cpuEntries[0].cp, iqChunk)
-			} else {
-				var wg sync.WaitGroup
-				wg.Add(len(cpuEntries))
-				for _, entry := range cpuEntries {
-					go func(clientID string, cp *clientPipeline) {
-						defer wg.Done()
-						m.processOneClient(clientID, cp, iqChunk)
-					}(entry.clientID, entry.cp)
-				}
-				wg.Wait()
-			}
-		}
-		return
-	}
-
-	// No GPU — original CPU path.
+	// CPU path for all clients.
 	// Single client — fast path, no goroutine overhead.
 	if len(entries) == 1 {
 		m.processOneClient(entries[0].clientID, entries[0].cp, iqChunk)
@@ -1243,9 +1256,6 @@ func (m *Manager) processClientIQ(d *activeDongle, iqChunk []byte) {
 	}
 
 	// Multiple clients — parallel extraction.
-	// Each clientPipeline owns all its mutable state (extractor, demod, accumBuf,
-	// adpcmEnc, opusPipeline) so concurrent processing is safe.
-	// iqChunk is read-only across all goroutines.
 	var wg sync.WaitGroup
 	wg.Add(len(entries))
 	for _, entry := range entries {
@@ -2042,11 +2052,15 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 			Quality:       newCodec,
 			StereoEnabled: &cp.stereoEnabled,
 			Complexity:    m.opusComplexity(),
+			GpuFmPipeline: m.gpuFmPipelineForMode(mode),
 		})
 		if err != nil {
 			m.logger.Error("failed to create opus pipeline on codec switch",
 				"clientID", clientID, "error", err)
 			return
+		}
+		if mode == "wfm" && pipeline.gpuFmPipeline != nil {
+			pipeline.onGpuFmDispatch = func() { atomic.AddInt64(&m.gpuFmDispatches, 1) }
 		}
 
 		// Reset the extractor to clear any stale IIR state before feeding Opus pipeline.
@@ -2216,6 +2230,7 @@ func (m *Manager) createClientPipeline(clientID string) {
 			Quality:       iqCodec,
 			StereoEnabled: &cp.stereoEnabled,
 			Complexity:    m.opusComplexity(),
+			GpuFmPipeline: m.gpuFmPipelineForMode(mode),
 		})
 		if err != nil {
 			m.logger.Error("failed to create opus pipeline, falling back to adpcm",
@@ -2223,6 +2238,9 @@ func (m *Manager) createClientPipeline(clientID string) {
 			cp.iqCodec = "adpcm"
 		} else {
 			cp.opusPipeline = pipeline
+			if mode == "wfm" && pipeline.gpuFmPipeline != nil {
+				pipeline.onGpuFmDispatch = func() { atomic.AddInt64(&m.gpuFmDispatches, 1) }
+			}
 		}
 	}
 

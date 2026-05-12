@@ -93,7 +93,7 @@ func NewOpusEncoder(cfg OpusEncoderConfig) (*OpusEncoder, error) {
 // Encode takes PCM int16 samples (interleaved if stereo) and returns
 // zero or more Opus packets. Accumulates until a full 20ms frame.
 func (e *OpusEncoder) Encode(pcm []int16) []OpusPacket {
-	if e == nil || e.encoder == nil {
+	if e == nil || e.encoder == nil || e.outBuf == nil {
 		return nil
 	}
 
