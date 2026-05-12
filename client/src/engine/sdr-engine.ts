@@ -354,7 +354,24 @@ export class SdrEngine {
       { type: 'module' },
     );
 
-    const offscreen = waterfallCanvas.transferControlToOffscreen();
+    let offscreen: OffscreenCanvas;
+    try {
+      offscreen = waterfallCanvas.transferControlToOffscreen();
+    } catch (err) {
+      // transferControlToOffscreen() can fail if:
+      // - Browser doesn't support OffscreenCanvas (very old Firefox/Safari)
+      // - Canvas was already transferred (hot-reload / re-mount race)
+      console.warn('[sdr] transferControlToOffscreen() failed:', err);
+      this.waterfallWorker?.terminate();
+      this.waterfallWorker = null;      
+      // Spectrum still works — waterfall will be unavailable until reload
+      this.spectrum = new SpectrumRenderer(
+        spectrumCanvas,
+        store.waterfallMin(),
+        store.waterfallMax(),
+      );
+      return;
+    }
     const rect = waterfallCanvas.getBoundingClientRect();
     this.waterfallWorker.postMessage(
       {

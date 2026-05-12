@@ -108,6 +108,9 @@ const WaterfallDisplay: Component = () => {
     onCleanup(() => {
       observer.disconnect();
       clearInterval(bufferPoll);
+      // Clean up peak update timer if component unmounts while hovering
+      const timer = peakUpdateTimer();
+      if (timer !== null) clearInterval(timer);
     });
   });
 

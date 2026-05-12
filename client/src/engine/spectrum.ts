@@ -38,6 +38,9 @@ export class SpectrumRenderer {
 
   // Last computed per-pixel dB values — read by tooltip for dB readout
   private _lastPixelDb: Float32Array | null = null;
+  
+  // Pre-allocated per-pixel dB buffer — reused every frame to avoid 30Hz allocation
+  private _pixelDbBuf: Float32Array | null = null;
 
   /** Per-pixel dB values from the most recent draw — used by tooltip. */
   get lastPixelDb(): Float32Array | null { return this._lastPixelDb; }
@@ -58,11 +61,14 @@ export class SpectrumRenderer {
   // Tracks the true minimum dB seen in the last ~5 seconds (150 frames at 30fps).
   // Because we take the minimum, signal peaks never raise the floor estimate —
   // the floor only reflects the quietest moments at each frequency.
+  // Memory budget: capped at ~4 MB to prevent excessive RAM on high bin counts.
   private noiseFloorEnabled = false;
   private noiseFloorWindow: Float32Array[] | null = null; // circular buffer of frames
   private noiseFloorWindowPos = 0;
   private noiseFloorBins: Float32Array | null = null;     // current per-bin minimum
-  private readonly NOISE_FLOOR_WINDOW = 150;              // frames (~5s at 30fps)
+  private readonly NOISE_FLOOR_MAX_FRAMES = 150;          // ideal frames (~5s at 30fps)
+  private readonly NOISE_FLOOR_MAX_BYTES = 4 * 1024 * 1024; // 4 MB memory budget
+  private noiseFloorWindowSize = 150;                     // actual window (may be reduced)
 
   // Zoom viewport — fractions of full bandwidth [0, 1]
   private zoomStart = 0;
@@ -165,7 +171,9 @@ export class SpectrumRenderer {
     const viewEnd   = this.zoomEnd   * bins;
     const viewBins  = viewEnd - viewStart;
 
-    const pixelDb = new Float32Array(w);
+     const pixelDb = (!this._pixelDbBuf || this._pixelDbBuf.length !== w)
+      ? (this._pixelDbBuf = new Float32Array(w))
+      : this._pixelDbBuf;
     for (let x = 0; x < w; x++) {
       let db: number;
       // Map canvas pixel to bin within the zoom viewport
@@ -304,8 +312,13 @@ export class SpectrumRenderer {
     if (this.noiseFloorEnabled) {
       // Init or resize window buffer when bin count changes
       if (!this.noiseFloorWindow || this.noiseFloorWindow[0].length !== bins) {
+        // Compute window size within memory budget: bins * 4 bytes * windowSize <= budget
+        this.noiseFloorWindowSize = Math.max(10, Math.min(
+          this.NOISE_FLOOR_MAX_FRAMES,
+          Math.floor(this.NOISE_FLOOR_MAX_BYTES / (bins * 4)),
+        ));
         this.noiseFloorWindow = Array.from(
-          { length: this.NOISE_FLOOR_WINDOW },
+          { length: this.noiseFloorWindowSize },
           () => new Float32Array(bins).fill(0),
         );
         this.noiseFloorWindowPos = 0;
@@ -316,7 +329,7 @@ export class SpectrumRenderer {
 
       // Write current frame into the circular buffer
       this.noiseFloorWindow[this.noiseFloorWindowPos].set(data);
-      this.noiseFloorWindowPos = (this.noiseFloorWindowPos + 1) % this.NOISE_FLOOR_WINDOW;
+      this.noiseFloorWindowPos = (this.noiseFloorWindowPos + 1) % this.noiseFloorWindowSize;
 
       // Recompute per-bin minimum across the whole window.
       // Only recompute every 3 frames to keep CPU cost low (~10fps update rate).

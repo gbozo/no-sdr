@@ -68,15 +68,15 @@ type Bookmark struct {
 
 // ServerConfig holds HTTP server and admin settings.
 type ServerConfig struct {
-	Port                  int      `yaml:"port"                  json:"port"`
-	Host                  string   `yaml:"host"                  json:"host"`
-	AdminPassword         string   `yaml:"adminPassword"         json:"adminPassword"`
-	Callsign              string   `yaml:"callsign"              json:"callsign"`
-	Description           string   `yaml:"description"           json:"description"`
-	Location              string   `yaml:"location"              json:"location"`
-	DemoMode              bool     `yaml:"demoMode"              json:"demoMode"`
-	FftHistoryFftSize     int      `yaml:"fftHistoryFftSize"     json:"fftHistoryFftSize"`
-	FftHistoryCompression string   `yaml:"fftHistoryCompression" json:"fftHistoryCompression"`
+	Port                  int    `yaml:"port"                  json:"port"`
+	Host                  string `yaml:"host"                  json:"host"`
+	AdminPassword         string `yaml:"adminPassword"         json:"adminPassword"`
+	Callsign              string `yaml:"callsign"              json:"callsign"`
+	Description           string `yaml:"description"           json:"description"`
+	Location              string `yaml:"location"              json:"location"`
+	DemoMode              bool   `yaml:"demoMode"              json:"demoMode"`
+	FftHistoryFftSize     int    `yaml:"fftHistoryFftSize"     json:"fftHistoryFftSize"`
+	FftHistoryCompression string `yaml:"fftHistoryCompression" json:"fftHistoryCompression"`
 	// AllowedFftCodecs lists the FFT codecs the server will accept from clients.
 	// Defaults to all supported codecs. Admin can restrict or re-enable at runtime.
 	AllowedFftCodecs []string `yaml:"allowedFftCodecs" json:"allowedFftCodecs"`
@@ -124,10 +124,10 @@ type DongleConfig struct {
 
 // SourceConfig describes how to connect to the SDR hardware.
 type SourceConfig struct {
-	Type        string   `yaml:"type"        json:"type"`
-	Host        string   `yaml:"host"        json:"host"`
-	Port        int      `yaml:"port"        json:"port"`
-	DeviceIndex int      `yaml:"deviceIndex" json:"deviceIndex"`
+	Type        string `yaml:"type"        json:"type"`
+	Host        string `yaml:"host"        json:"host"`
+	Port        int    `yaml:"port"        json:"port"`
+	DeviceIndex int    `yaml:"deviceIndex" json:"deviceIndex"`
 	// Serial is the EEPROM serial string of the local RTL-SDR dongle.
 	// When set, the server resolves the device index at startup via librtlsdr
 	// so that a specific stick is always opened regardless of USB enumeration order.
@@ -161,7 +161,7 @@ type DongleProfile struct {
 	// DCOffsetRemoval enables the IIR high-pass DC offset blocker on raw IQ input.
 	// Removes the center-frequency DC spike common on RTL-SDR hardware. Default: true.
 	// Use a pointer so YAML explicit false is preserved (zero-value bool is ambiguous).
-	DCOffsetRemoval      *bool   `yaml:"dcOffsetRemoval"      json:"dcOffsetRemoval"`
+	DCOffsetRemoval *bool `yaml:"dcOffsetRemoval"      json:"dcOffsetRemoval"`
 }
 
 // Load reads the config file at path and returns a validated Config.
@@ -245,8 +245,8 @@ func applyDefaults(cfg *Config) {
 		cfg.Server.AllowedIqCodecs = append([]string(nil), DefaultIqCodecs...)
 	}
 	// OpusComplexity: default to 5 (balanced CPU vs quality for radio audio).
-	// Zero-value in YAML means "not set", so we default here.
-	if cfg.Server.OpusComplexity == 0 {
+	// Use -1 as sentinel for "not configured"; 0 is a valid libopus complexity level.
+	if cfg.Server.OpusComplexity < 0 {
 		cfg.Server.OpusComplexity = 5
 	}
 	// Dongles default to enabled + autoStart (matches Node.js behavior)
