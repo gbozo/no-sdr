@@ -7,7 +7,7 @@ package gpu
 #cgo darwin CFLAGS: -I/Users/I570173/VulkanSDK/1.4.341.1/macOS/include -I/Users/I570173/VulkanSDK/1.4.341.1/macOS/include/glslang/Include
 #cgo darwin LDFLAGS: -L/Users/I570173/VulkanSDK/1.4.341.1/macOS/lib -lvulkan -Wl,-rpath,/Users/I570173/VulkanSDK/1.4.341.1/macOS/lib
 #cgo linux CFLAGS: -I/usr/include -I/usr/include/glslang -I/usr/include/glslang/Include -I/usr/local/include -I/usr/local/include/glslang/Include
-#cgo linux LDFLAGS: -lvulkan
+#cgo linux LDFLAGS: -lvulkan -lm
 
 // glslang (needed by VkFFT for runtime SPIR-V compilation)
 #cgo darwin LDFLAGS: -lglslang -lglslang-default-resource-limits -lSPIRV
