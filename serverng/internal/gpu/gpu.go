@@ -143,9 +143,31 @@ func (b *Backend) MaxClients() int {
 	return b.impl.maxClients()
 }
 
+// NewIqPipeline creates a batched GPU IQ extraction pipeline.
+// Supports up to 64 concurrent clients processed in a single GPU dispatch.
+// Returns ErrNotAvailable if GPU IQ pipeline is not compiled in or init fails.
+func (b *Backend) NewIqPipeline() (*IqPipelineContext, error) {
+	if b == nil || b.impl == nil {
+		return nil, ErrNotAvailable
+	}
+	return b.impl.newIqPipeline()
+}
+
+// NewFFT creates a persistent GPU FFT context for the given FFT size.
+// fftSize must be a power of two (e.g. 65536).
+// Returns ErrNotAvailable if GPU FFT is not compiled in.
+func (b *Backend) NewFFT(fftSize int) (*FFTContext, error) {
+	if b == nil || b.impl == nil {
+		return nil, ErrNotAvailable
+	}
+	return b.impl.newFFT(fftSize)
+}
+
 // backendImpl is the internal interface implemented by the tag-selected backend.
 type backendImpl interface {
 	close()
 	fft(rawIQ []byte, fftSize int, window string, averaging float32) ([]float32, error)
 	maxClients() int
+	newFFT(fftSize int) (*FFTContext, error)
+	newIqPipeline() (*IqPipelineContext, error)
 }

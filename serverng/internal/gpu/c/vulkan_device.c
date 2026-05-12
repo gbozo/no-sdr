@@ -132,11 +132,27 @@ int vk_device_init(VkDeviceContext *ctx) {
         .queueCount       = 1,
         .pQueuePriorities = &queuePriority,
     };
+    /*
+     * On macOS, MoltenVK requires VK_KHR_portability_subset at device creation
+     * (Vulkan Portability Specification §4.1.1). Omitting it causes vkCreateDevice
+     * to succeed but later API calls to produce undefined behaviour / crashes.
+     */
+#ifdef __APPLE__
+    const char *devExts[] = { "VK_KHR_portability_subset" };
+    VkDeviceCreateInfo deviceCI = {
+        .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount    = 1,
+        .pQueueCreateInfos       = &queueCI,
+        .enabledExtensionCount   = 1,
+        .ppEnabledExtensionNames = devExts,
+    };
+#else
     VkDeviceCreateInfo deviceCI = {
         .sType                = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos    = &queueCI,
     };
+#endif
     if (vkCreateDevice(ctx->physicalDevice, &deviceCI, NULL, &ctx->device) != VK_SUCCESS) {
         vkDestroyInstance(ctx->instance, NULL);
         ctx->instance = VK_NULL_HANDLE;

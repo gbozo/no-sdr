@@ -382,8 +382,6 @@ export class SdrEngine {
         this.waterfallIsWebGL = false;
         this.waterfallWorker?.terminate();
         this.waterfallWorker = null;
-        // Re-attach with the same canvas element — transferControlToOffscreen
-        // can only be called once, so we need the canvas ref we already hold.
         this._reattachCanvases2D(waterfallCanvas, spectrumCanvas);
       }
     }, { once: true });

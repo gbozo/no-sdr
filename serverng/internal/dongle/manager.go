@@ -69,6 +69,10 @@ type Manager struct {
 	// nil when GPU is disabled or unavailable.
 	gpuBackend *gpu.Backend
 
+	// gpuIqPipeline is the batched GPU IQ extraction pipeline.
+	// nil when GPU IQ is not available. Processes up to 64 clients in one dispatch.
+	gpuIqPipeline *gpu.IqPipelineContext
+
 	mu sync.Mutex
 }
 
@@ -113,6 +117,11 @@ type clientPipeline struct {
 	nbThreshold  float32 // multiplier (default 10.0)
 	iqChunkCount int64   // debug counter
 	stereoEnabled bool   // remembered stereo preference, applied on pipeline creation
+
+	// GPU IQ pipeline state — nil when GPU unavailable or NB enabled.
+	// When non-nil, processClientIQ batches this client into the GPU dispatch
+	// instead of using the CPU extractor.
+	gpuIqState *gpu.IqClientState
 }
 
 // maxRetries is the number of retry attempts for dongle initialization.
@@ -169,6 +178,14 @@ func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Man
 					"type", cap.DeviceType,
 					"vram_mb", cap.VRAM/1024/1024,
 				)
+				// Create batched IQ pipeline for per-client extraction.
+				iqPipe, err := backend.NewIqPipeline()
+				if err != nil {
+					logger.Warn("gpu: IQ pipeline init failed, using CPU fallback", "error", err)
+				} else {
+					m.gpuIqPipeline = iqPipe
+					logger.Info("gpu: IQ pipeline ready", "max_clients", gpu.MaxIqClients)
+				}
 			}
 		}
 	} else {
@@ -317,6 +334,10 @@ func (m *Manager) Stop() {
 	}
 
 	// Release GPU resources.
+	if m.gpuIqPipeline != nil {
+		m.gpuIqPipeline.Close()
+		m.gpuIqPipeline = nil
+	}
 	if m.gpuBackend != nil {
 		m.gpuBackend.Close()
 		m.gpuBackend = nil
@@ -585,6 +606,17 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 	})
 	if err != nil {
 		return err
+	}
+
+	// Attach GPU FFT backend if available
+	if m.gpuBackend != nil {
+		gpuFFT, err := m.gpuBackend.NewFFT(profile.FftSize)
+		if err == nil {
+			fftProc.SetGPUBackend(gpuFFT)
+		} else {
+			m.logger.Warn("gpu: failed to create FFT context, using CPU",
+				"dongle", dcfg.ID, "err", err)
+		}
 	}
 
 	// Create deflate encoder (reusable, pools internal buffers)
@@ -923,6 +955,17 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 			return fmt.Errorf("rebuild FFT processor: %w", err)
 		}
 
+		// Attach GPU FFT backend if available
+		if m.gpuBackend != nil {
+			gpuFFT, err := m.gpuBackend.NewFFT(newProfile.FftSize)
+			if err == nil {
+				fftProc.SetGPUBackend(gpuFFT)
+			} else {
+				m.logger.Warn("gpu: failed to create FFT context on profile switch, using CPU",
+					"err", err)
+			}
+		}
+
 		m.mu.Lock()
 		d.fftProc = fftProc
 		d.deflateEnc = codecPkg.NewFftDeflateEncoder(newProfile.FftSize)
@@ -989,6 +1032,13 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 			cp.accumPos = 0
 			if cp.adpcmEnc != nil {
 				cp.adpcmEnc.Reset()
+			}
+			// Sync GPU IQ state with new profile parameters.
+			if cp.gpuIqState != nil {
+				inputRate := cp.extractor.InputSampleRate()
+				dcEnabled := newProfile.DCOffsetRemoval == nil || *newProfile.DCOffsetRemoval
+				cp.gpuIqState = gpu.NewIqClientState(inputRate, newRate, 0, dcEnabled)
+				cp.gpuIqState.SetBandwidth(newBw, inputRate)
 			}
 		}
 	}
@@ -1073,6 +1123,42 @@ func (m *Manager) processClientIQ(d *activeDongle, iqChunk []byte) {
 		return
 	}
 
+	// Try GPU batch path: collect all GPU-eligible clients (non-NB with gpuIqState).
+	if m.gpuIqPipeline != nil {
+		var gpuEntries []cpEntry
+		var cpuEntries []cpEntry
+		for _, e := range entries {
+			if e.cp.gpuIqState != nil && !e.cp.nbEnabled {
+				gpuEntries = append(gpuEntries, e)
+			} else {
+				cpuEntries = append(cpuEntries, e)
+			}
+		}
+
+		if len(gpuEntries) > 0 {
+			m.processGpuBatch(gpuEntries, iqChunk)
+		}
+
+		// CPU fallback for NB-enabled or GPU-ineligible clients
+		if len(cpuEntries) > 0 {
+			if len(cpuEntries) == 1 {
+				m.processOneClient(cpuEntries[0].clientID, cpuEntries[0].cp, iqChunk)
+			} else {
+				var wg sync.WaitGroup
+				wg.Add(len(cpuEntries))
+				for _, entry := range cpuEntries {
+					go func(clientID string, cp *clientPipeline) {
+						defer wg.Done()
+						m.processOneClient(clientID, cp, iqChunk)
+					}(entry.clientID, entry.cp)
+				}
+				wg.Wait()
+			}
+		}
+		return
+	}
+
+	// No GPU — original CPU path.
 	// Single client — fast path, no goroutine overhead.
 	if len(entries) == 1 {
 		m.processOneClient(entries[0].clientID, entries[0].cp, iqChunk)
@@ -1094,6 +1180,41 @@ func (m *Manager) processClientIQ(d *activeDongle, iqChunk []byte) {
 	wg.Wait()
 }
 
+// processGpuBatch dispatches IQ extraction for multiple clients in a single GPU compute dispatch.
+// After GPU returns int16 sub-band data, it feeds into the same accumulate/encode/send path
+// as the CPU path.
+func (m *Manager) processGpuBatch(entries []cpEntry, iqChunk []byte) {
+	states := make([]*gpu.IqClientState, len(entries))
+	for i, e := range entries {
+		states[i] = e.cp.gpuIqState
+	}
+
+	results, err := m.gpuIqPipeline.Process(iqChunk, states)
+	if err != nil {
+		// GPU failed — fall back to CPU for this chunk.
+		m.logger.Warn("gpu: IQ pipeline dispatch failed, falling back to CPU", "error", err, "clients", len(entries))
+		var wg sync.WaitGroup
+		wg.Add(len(entries))
+		for _, entry := range entries {
+			go func(clientID string, cp *clientPipeline) {
+				defer wg.Done()
+				m.processOneClient(clientID, cp, iqChunk)
+			}(entry.clientID, entry.cp)
+		}
+		wg.Wait()
+		return
+	}
+
+	// Distribute GPU results to each client's accumulate/send path.
+	for i, e := range entries {
+		subBand := results[i]
+		if len(subBand) == 0 {
+			continue
+		}
+		m.processClientSubBand(e.clientID, e.cp, subBand)
+	}
+}
+
 // processOneClient runs the full IQ extraction → demod/encode → send pipeline
 // for a single client. All mutable state lives on cp; iqChunk is read-only.
 // This function is safe to call concurrently for different clientPipelines.
@@ -1102,13 +1223,17 @@ func (m *Manager) processOneClient(clientID string, cp *clientPipeline, iqChunk 
 	if subBand == nil {
 		return
 	}
+	m.processClientSubBand(clientID, cp, subBand)
+}
 
+// processClientSubBand handles the post-extraction path: accumulation, encoding,
+// and WebSocket delivery. Used by both CPU (processOneClient) and GPU (processGpuBatch) paths.
+func (m *Manager) processClientSubBand(clientID string, cp *clientPipeline, subBand []int16) {
 	// Debug: log IQ flow every 500 chunks (~5s)
 	cp.iqChunkCount++
 	if cp.iqChunkCount%500 == 1 {
 		m.logger.Debug("IQ extraction",
 			"clientID", clientID,
-			"inputBytes", len(iqChunk),
 			"outputSamples", len(subBand),
 			"chunkSize", cp.chunkSize,
 			"accumPos", cp.accumPos,
@@ -1495,6 +1620,19 @@ func (m *Manager) handleSetPreFilterNb(clientID string, cmd *ws.ClientCommand) {
 		if cmd.Enabled != nil {
 			cp.nbEnabled = *cmd.Enabled
 			cp.extractor.SetNbEnabled(*cmd.Enabled)
+			// When NB is enabled, disable GPU IQ (GPU doesn't implement NB).
+			// When NB is disabled, re-enable GPU IQ if pipeline is available.
+			if *cmd.Enabled {
+				cp.gpuIqState = nil
+			} else if m.gpuIqPipeline != nil && cp.gpuIqState == nil {
+				// Re-create GPU state from current extractor parameters.
+				cp.gpuIqState = gpu.NewIqClientState(
+					cp.extractor.InputSampleRate(),
+					cp.extractor.OutputSampleRate(),
+					0, // tune offset will be synced via Reset
+					cp.extractor.DCOffsetRemovalEnabled(),
+				)
+			}
 		}
 	}
 	m.mu.Unlock()
@@ -1672,6 +1810,11 @@ func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 		if cp.adpcmEnc != nil {
 			cp.adpcmEnc.Reset()
 		}
+		// Sync GPU IQ state if available.
+		if cp.gpuIqState != nil {
+			cp.gpuIqState.SetTuneOffset(cmd.Offset, cp.extractor.InputSampleRate())
+			cp.gpuIqState.Reset()
+		}
 		m.logger.Debug("client tune offset updated", "clientID", clientID, "offset", cmd.Offset)
 	}
 }
@@ -1691,6 +1834,11 @@ func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	// Update IQ extractor's RF filter cutoff (bandwidth/2).
 	// This ensures the RF signal is properly band-limited before demodulation.
 	cp.extractor.SetBandwidth(cmd.Hz)
+
+	// Sync GPU IQ state if available.
+	if cp.gpuIqState != nil {
+		cp.gpuIqState.SetBandwidth(cmd.Hz, cp.extractor.InputSampleRate())
+	}
 
 	// Forward bandwidth to Opus pipeline demodulator if active (audio LPF).
 	cp.pmu.Lock()
@@ -1742,6 +1890,17 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 		cp.accumPos = 0
 		if cp.adpcmEnc != nil {
 			cp.adpcmEnc.Reset()
+		}
+
+		// Sync GPU IQ state: re-create with new output rate and bandwidth.
+		if cp.gpuIqState != nil {
+			inputRate := cp.extractor.InputSampleRate()
+			bw := cmd.Bandwidth
+			if bw <= 0 {
+				bw = defaultBandwidthForMode(cmd.Mode)
+			}
+			cp.gpuIqState = gpu.NewIqClientState(inputRate, rate, 0, cp.extractor.DCOffsetRemovalEnabled())
+			cp.gpuIqState.SetBandwidth(bw, inputRate)
 		}
 
 		m.logger.Debug("client mode updated", "clientID", clientID, "mode", cmd.Mode, "outputRate", rate, "bandwidth", cmd.Bandwidth)
@@ -1960,6 +2119,15 @@ func (m *Manager) createClientPipeline(clientID string) {
 		bw = defaultBandwidthForMode(mode)
 	}
 	cp.extractor.SetBandwidth(bw)
+
+	// GPU IQ state: create if GPU pipeline is available and NB is not enabled.
+	// When NB is enabled, the client must stay on CPU (GPU shader doesn't implement NB).
+	if m.gpuIqPipeline != nil && !cp.nbEnabled {
+		cp.gpuIqState = gpu.NewIqClientState(inputRate, outputRate, tuneOffset, d.profile.DCOffsetRemoval == nil || *d.profile.DCOffsetRemoval)
+		if bw > 0 {
+			cp.gpuIqState.SetBandwidth(bw, inputRate)
+		}
+	}
 
 	// Create Opus pipeline if codec is opus, opus-hq, or opus-lo
 	if iqCodec == "opus" || iqCodec == "opus-hq" || iqCodec == "opus-lo" {

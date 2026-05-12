@@ -2,10 +2,23 @@ package dsp
 
 import (
 	"errors"
+	"log/slog"
 	"math"
 	"time"
 	"unsafe"
 )
+
+// GPUFFTBackend is the interface that a GPU FFT provider must satisfy.
+// The gpu.FFTContext type satisfies this interface.
+type GPUFFTBackend interface {
+	// Process runs a C2C FFT on fftSize*2 uint8 IQ bytes.
+	// Returns fftSize float32 values: 10*log10(power) for each bin in natural FFT order.
+	// Caller applies FFT-shift and subtracts normDbVal.
+	// Returns a non-nil error on GPU failure — caller must fall back to CPU.
+	Process(iq []byte) ([]float32, error)
+	// Close releases the GPU resources.
+	Close()
+}
 
 // fastLog10Power computes an approximation of 10*log10(x) using the IEEE 754
 // bit representation of x. It extracts the binary exponent directly and uses
@@ -58,6 +71,9 @@ type FftProcessor struct {
 	fft       *FFT
 	window    []float32
 	normDbVal float32
+
+	// GPU FFT backend (optional — nil = CPU only)
+	gpuFFT GPUFFTBackend
 
 	// Pre-allocated work buffers (zero alloc in hot path)
 	complexBuf []float32 // interleaved complex input/output, length 2*fftSize
@@ -136,6 +152,22 @@ func NewFftProcessor(cfg FftProcessorConfig) (*FftProcessor, error) {
 	return p, nil
 }
 
+// SetGPUBackend attaches a GPU FFT backend to this processor.
+// Calling with nil removes the GPU backend and falls back to CPU.
+// Must not be called concurrently with ProcessIqData.
+func (p *FftProcessor) SetGPUBackend(g GPUFFTBackend) {
+	if p.gpuFFT != nil {
+		p.gpuFFT.Close()
+	}
+	p.gpuFFT = g
+	if g != nil {
+		slog.Info("fft_processor: GPU FFT backend attached",
+			"fft_size", p.fftSize)
+	} else {
+		slog.Info("fft_processor: GPU FFT backend removed, falling back to CPU")
+	}
+}
+
 // ProcessIqData accepts raw uint8 IQ data (interleaved I,Q,I,Q...)
 // and returns zero or more FFT magnitude frames ([]float32 in dB, length = FftSize).
 // May return 0 frames if rate cap hasn't elapsed or insufficient data accumulated.
@@ -201,8 +233,45 @@ func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
 }
 
 // processOneFrame converts one FFT-sized chunk of uint8 IQ into magnitude dB.
-// Result is written into p.magBuf. Zero allocations.
+// Result is written into p.magBuf. Zero allocations on CPU path.
+// If a GPU backend is attached, the GPU path is tried first with CPU fallback.
 func (p *FftProcessor) processOneFrame(rawIq []byte) {
+	// ── GPU path ──────────────────────────────────────────────────────────────
+	if p.gpuFFT != nil {
+		if gpuOut, err := p.gpuFFT.Process(rawIq); err == nil {
+			// GPU returns fftSize bins in natural FFT order (DC at bin 0).
+			// Apply FFT-shift (DC → center) and normalization — same as CPU path.
+			fftSize := p.fftSize
+			half := fftSize >> 1
+			normDb := p.normDbVal
+			mag := p.magBuf
+
+			for i := 0; i < fftSize; i++ {
+				srcIdx := (i + half) & (fftSize - 1)
+				mag[i] = gpuOut[srcIdx] - normDb
+			}
+
+			// Apply exponential averaging (same as CPU path)
+			if p.averaging > 0 {
+				if !p.avgInit {
+					copy(p.avgBuf, mag)
+					p.avgInit = true
+				} else {
+					a := p.averaging
+					b := 1 - a
+					avg := p.avgBuf
+					for i := 0; i < fftSize; i++ {
+						avg[i] = a*avg[i] + b*mag[i]
+					}
+				}
+				copy(mag, p.avgBuf)
+			}
+			return
+		}
+		// GPU failed — fall through to CPU path (do not disable GPU; transient errors are common)
+	}
+
+	// ── CPU path ──────────────────────────────────────────────────────────────
 	fftSize := p.fftSize
 	win := p.window
 	buf := p.complexBuf

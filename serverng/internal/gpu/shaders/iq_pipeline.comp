@@ -1,0 +1,191 @@
+// IQ Pipeline Compute Shader — Phase 3 GPU Offload
+//
+// Fused pipeline: uint8 IQ → complex float → NCO shift → Butterworth LPF → Decimate → Int16 output
+//
+// This shader processes ONE client's IQ chunk per workgroup invocation.
+// Multiple clients are batched by dispatching multiple workgroups.
+//
+// Architecture: Single-pass serial pipeline per client.
+// - NCO: compute phase analytically (initialPhase + i * phaseInc) — no serial dependency
+// - Butterworth: 4th-order IIR (2 biquad sections) — serial per channel
+// - Decimate: stride read — trivial
+//
+// The shader runs ONE thread per client (serial processing). While this doesn't
+// leverage GPU parallelism per-sample within a client, it DOES leverage it across
+// clients (up to 64 clients = 64 threads running in parallel on the GPU).
+// The GPU advantage: eliminates CPU→GPU copy for FFT (already there) + frees CPU cores.
+//
+// For IIR filters, parallel prefix approaches exist but add 2× the work and complexity.
+// With 50+ concurrent clients, the cross-client parallelism saturates the GPU.
+
+#version 450
+
+// Push constants: per-dispatch parameters
+layout(push_constant) uniform PushConstants {
+    uint numClients;        // number of active clients in this batch
+    uint inputSamples;      // samples per client (before decimation)
+};
+
+// Client parameters — one struct per client slot
+struct ClientParams {
+    // NCO
+    float phaseInit;        // initial phase for this chunk [0, 2π)
+    float phaseInc;         // 2π * offsetHz / sampleRate
+    // Butterworth coefficients (2 sections × 5 coeffs = 10)
+    float b0_0, b1_0, b2_0, a1_0, a2_0;  // section 0
+    float b0_1, b1_1, b2_1, a1_1, a2_1;  // section 1
+    // Butterworth state (2 sections × 2 states × 2 channels = 8)
+    float stI0_z1, stI0_z2, stI1_z1, stI1_z2;  // I channel
+    float stQ0_z1, stQ0_z2, stQ1_z1, stQ1_z2;  // Q channel
+    // Decimation
+    uint decimFactor;
+    // DC blocker (optional)
+    float dcAlpha;          // ~0.9999974
+    float dcI;              // running DC estimate I
+    float dcQ;              // running DC estimate Q
+    uint dcEnabled;         // 0 or 1
+    // Padding to align to 128 bytes
+    float _pad0;
+};
+
+// SSBO 0: Client parameters (read-write — state is updated)
+layout(std430, binding = 0) buffer ClientParamsBuffer {
+    ClientParams clients[];
+};
+
+// SSBO 1: Input uint8 IQ data — all clients share the SAME raw IQ chunk
+// Layout: inputSamples * 2 bytes (interleaved I, Q)
+layout(std430, binding = 1) readonly buffer InputBuffer {
+    uint inputData[];  // packed as uint32, 4 bytes each
+};
+
+// SSBO 2: Output int16 IQ data — per-client decimated output
+// Layout: clients[i] starts at offset i * maxOutputSamples * 2 * sizeof(int16)
+layout(std430, binding = 2) writeonly buffer OutputBuffer {
+    int outputData[];  // packed as int32 (2 × int16 per element)
+};
+
+// SSBO 3: Output metadata — how many samples each client produced
+layout(std430, binding = 3) writeonly buffer MetaBuffer {
+    uint outputCounts[];  // number of complex samples output per client
+};
+
+// Extract one byte from the packed uint32 input buffer
+float extractByte(uint byteIdx) {
+    uint wordIdx = byteIdx >> 2u;
+    uint shift = (byteIdx & 3u) << 3u;
+    uint raw = (inputData[wordIdx] >> shift) & 0xFFu;
+    return (float(raw) - 127.5) / 127.5;
+}
+
+// Clamp float to int16 range and pack
+int clampI16(float v) {
+    return int(clamp(v * 32767.0, -32768.0, 32767.0));
+}
+
+layout(local_size_x = 1) in;  // One thread per client
+
+void main() {
+    uint clientIdx = gl_GlobalInvocationID.x;
+    if (clientIdx >= numClients) return;
+
+    ClientParams p = clients[clientIdx];
+
+    uint decimFactor = p.decimFactor;
+    uint outSamples = inputSamples / decimFactor;
+    uint outOffset = clientIdx * (inputSamples / decimFactor);  // output slot per client
+
+    // Local filter state (load from SSBO, write back at end)
+    float sI0_z1 = p.stI0_z1, sI0_z2 = p.stI0_z2;
+    float sI1_z1 = p.stI1_z1, sI1_z2 = p.stI1_z2;
+    float sQ0_z1 = p.stQ0_z1, sQ0_z2 = p.stQ0_z2;
+    float sQ1_z1 = p.stQ1_z1, sQ1_z2 = p.stQ1_z2;
+
+    // DC blocker state
+    float dcI = p.dcI;
+    float dcQ = p.dcQ;
+    float dcAlpha = p.dcAlpha;
+    float dcBeta = 1.0 - dcAlpha;
+    bool dcOn = (p.dcEnabled != 0u);
+
+    // Butterworth coefficients
+    float b0_0 = p.b0_0, b1_0 = p.b1_0, b2_0 = p.b2_0, a1_0 = p.a1_0, a2_0 = p.a2_0;
+    float b0_1 = p.b0_1, b1_1 = p.b1_1, b2_1 = p.b2_1, a1_1 = p.a1_1, a2_1 = p.a2_1;
+
+    // NCO parameters
+    float phase = p.phaseInit;
+    float phaseInc = p.phaseInc;
+    float twoPi = 6.283185307;
+
+    uint outIdx = 0;
+
+    for (uint i = 0; i < inputSamples; i++) {
+        // 1. Extract uint8 → float
+        uint byteBase = i * 2u;
+        float iVal = extractByte(byteBase);
+        float qVal = extractByte(byteBase + 1u);
+
+        // 2. DC blocker (optional)
+        if (dcOn) {
+            dcI = dcAlpha * dcI + dcBeta * iVal;
+            dcQ = dcAlpha * dcQ + dcBeta * qVal;
+            iVal -= dcI;
+            qVal -= dcQ;
+        }
+
+        // 3. NCO frequency shift: (I+jQ) × (cos - j·sin)
+        float cosVal = cos(phase);
+        float sinVal = sin(phase);
+        float ncoI = iVal * cosVal + qVal * sinVal;
+        float ncoQ = qVal * cosVal - iVal * sinVal;
+        phase += phaseInc;
+
+        // 4. Butterworth LPF — 2 cascaded biquad sections (Direct Form II Transposed)
+        // I channel — section 0
+        float yI = b0_0 * ncoI + sI0_z1;
+        sI0_z1  = b1_0 * ncoI - a1_0 * yI + sI0_z2;
+        sI0_z2  = b2_0 * ncoI - a2_0 * yI;
+        // I channel — section 1
+        float yI2 = b0_1 * yI + sI1_z1;
+        sI1_z1   = b1_1 * yI - a1_1 * yI2 + sI1_z2;
+        sI1_z2   = b2_1 * yI - a2_1 * yI2;
+
+        // Q channel — section 0
+        float yQ = b0_0 * ncoQ + sQ0_z1;
+        sQ0_z1  = b1_0 * ncoQ - a1_0 * yQ + sQ0_z2;
+        sQ0_z2  = b2_0 * ncoQ - a2_0 * yQ;
+        // Q channel — section 1
+        float yQ2 = b0_1 * yQ + sQ1_z1;
+        sQ1_z1   = b1_1 * yQ - a1_1 * yQ2 + sQ1_z2;
+        sQ1_z2   = b2_1 * yQ - a2_1 * yQ2;
+
+        // 5. Decimate: keep every Nth sample
+        if ((i % decimFactor) == 0u) {
+            // 6. Scale to Int16 and pack
+            int iOut = clampI16(yI2);
+            int qOut = clampI16(yQ2);
+            // Pack two int16 into one int32: low=I, high=Q
+            outputData[outOffset + outIdx] = (qOut << 16) | (iOut & 0xFFFF);
+            outIdx++;
+        }
+    }
+
+    // Wrap NCO phase
+    phase = mod(phase, twoPi);
+
+    // Write back updated state to SSBO
+    clients[clientIdx].phaseInit = phase;
+    clients[clientIdx].stI0_z1 = sI0_z1;
+    clients[clientIdx].stI0_z2 = sI0_z2;
+    clients[clientIdx].stI1_z1 = sI1_z1;
+    clients[clientIdx].stI1_z2 = sI1_z2;
+    clients[clientIdx].stQ0_z1 = sQ0_z1;
+    clients[clientIdx].stQ0_z2 = sQ0_z2;
+    clients[clientIdx].stQ1_z1 = sQ1_z1;
+    clients[clientIdx].stQ1_z2 = sQ1_z2;
+    clients[clientIdx].dcI = dcI;
+    clients[clientIdx].dcQ = dcQ;
+
+    // Write output sample count
+    outputCounts[clientIdx] = outIdx;
+}

@@ -217,15 +217,17 @@ void main() {
 }`;
 
 const FRAG_SRC = `#version 300 es
-precision mediump float;
+precision highp float;
 
 // Ring-buffer texture: RGBA8, w × h.
 // Each row stores one FFT frame as RGBA pixels (palette already applied).
 uniform sampler2D u_data;
 
-// Write cursor: normalised row index of the NEXT row to be written.
-// The newest visible row is at (writeRow - 1 / h), wrapped.
-uniform float u_writeRow;
+// Integer ring-buffer state — avoids float precision issues entirely.
+uniform int u_newestRow;   // row index of the most recently written row (0..h-1)
+uniform int u_filledRows;  // number of rows written so far (0..h)
+uniform int u_texW;        // texture width in pixels
+uniform int u_texH;        // texture height in pixels
 
 // Zoom: which fraction of the spectrum to display [0, 1].
 uniform float u_zoomStart;
@@ -235,11 +237,27 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 void main() {
-  // Map horizontal UV through zoom window
-  float x = mix(u_zoomStart, u_zoomEnd, v_uv.x);
-  // Shift vertical UV by write cursor — newest row at top (v_uv.y = 0)
-  float y = fract(v_uv.y + u_writeRow);
-  fragColor = texture(u_data, vec2(x, y));
+  // Screen row 0 (top) = newest data, screen row (h-1) (bottom) = oldest.
+  // Convert screen-space Y [0,1] to an integer screen row index.
+  int screenRow = int(v_uv.y * float(u_texH));
+
+  // Clip rows beyond the filled portion — show black for unwritten ring slots.
+  if (screenRow >= u_filledRows) {
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  // Map screen row → ring buffer row using pure integer arithmetic.
+  // newestRow at top; walk backwards (modulo h) as screenRow increases.
+  int ringRow = (u_newestRow - screenRow + u_texH) % u_texH;
+
+  // Map horizontal UV through zoom window → integer texel column.
+  float xf  = mix(u_zoomStart, u_zoomEnd, v_uv.x);
+  int   col = int(xf * float(u_texW - 1) + 0.5);
+  col = clamp(col, 0, u_texW - 1);
+
+  // texelFetch: exact integer coordinate, no filtering, no UV precision loss.
+  fragColor = texelFetch(u_data, ivec2(col, ringRow), 0);
 }`;
 
 // ---- Worker state ----
@@ -247,16 +265,21 @@ void main() {
 let gl: WebGL2RenderingContext | null = null;
 let program: WebGLProgram | null = null;
 let dataTex: WebGLTexture | null = null;
+let offscreenCanvas: OffscreenCanvas | null = null;  // retained for resize()
 
 // Uniform locations
-let uWriteRow = -1 as WebGLUniformLocation | -1;
-let uZoomStart = -1 as WebGLUniformLocation | -1;
-let uZoomEnd = -1 as WebGLUniformLocation | -1;
+let uNewestRow  = -1 as WebGLUniformLocation | -1;
+let uFilledRows = -1 as WebGLUniformLocation | -1;
+let uTexW       = -1 as WebGLUniformLocation | -1;
+let uTexH       = -1 as WebGLUniformLocation | -1;
+let uZoomStart  = -1 as WebGLUniformLocation | -1;
+let uZoomEnd    = -1 as WebGLUniformLocation | -1;
 
 // Ring buffer state
 let w = 0;         // physical pixel width
 let h = 0;         // physical pixel height
 let writeRow = 0;  // next row index (0 .. h-1)
+let filledRows = 0; // rows written so far (capped at h); shader clips below this
 
 // dB range + display parameters
 let minDb = -60;
@@ -267,9 +290,9 @@ let zoomStart = 0;
 let zoomEnd = 1;
 let seekOffset = 0;
 
-// Throttle to ~30fps (matches server-side FFT push rate)
-let lastDrawTime = 0;
-const MIN_FRAME_INTERVAL = 33;
+// No client-side throttle — render every frame received from server.
+// WebGL upload cost is ~7 KB/frame (texSubImage2D of 1 row), negligible.
+// Server controls the actual FFT push rate via fft_fps config.
 
 // Buffer history if prefill-history arrives before we have canvas dimensions
 let pendingHistory: {
@@ -318,9 +341,9 @@ function createDataTexture(texW: number, texH: number): WebGLTexture {
   // NEAREST filtering — each row is a discrete FFT frame, no interpolation wanted
   gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, gl!.NEAREST);
   gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, gl!.NEAREST);
-  // CLAMP_TO_EDGE on both axes (the ring-buffer wrap is done in the shader)
+  // REPEAT on T axis — required for ring-buffer wraparound via fract() in the shader.
   gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_S, gl!.CLAMP_TO_EDGE);
-  gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE);
+  gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.REPEAT);
   // Allocate zeroed texture
   gl!.texImage2D(
     gl!.TEXTURE_2D, 0, gl!.RGBA,
@@ -348,15 +371,18 @@ function uploadRow(pixels: Uint8Array): void {
 
 function draw(): void {
   if (!gl || !program) return;
-  gl.clear(gl.COLOR_BUFFER_BIT);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
 function updateUniforms(): void {
   if (!gl || !program) return;
-  gl.uniform1f(uWriteRow as WebGLUniformLocation, writeRow / Math.max(1, h));
-  gl.uniform1f(uZoomStart as WebGLUniformLocation, zoomStart);
-  gl.uniform1f(uZoomEnd as WebGLUniformLocation, zoomEnd);
+  const newestRow = ((writeRow - 1) % h + h) % h;
+  gl.uniform1i(uNewestRow  as WebGLUniformLocation, newestRow);
+  gl.uniform1i(uFilledRows as WebGLUniformLocation, Math.min(filledRows, h));
+  gl.uniform1i(uTexW       as WebGLUniformLocation, w);
+  gl.uniform1i(uTexH       as WebGLUniformLocation, h);
+  gl.uniform1f(uZoomStart  as WebGLUniformLocation, zoomStart);
+  gl.uniform1f(uZoomEnd    as WebGLUniformLocation, zoomEnd);
 }
 
 // ---- DSP helpers (identical logic to Canvas 2D worker) ----
@@ -442,15 +468,12 @@ function historyFrameToRow(frame: Uint8Array, binCount: number, serverMinDb: num
 function drawRow(fftData: Float32Array): void {
   if (!gl || fftData.length === 0 || w < 1 || h < 2) return;
 
-  const now = performance.now();
-  if (now - lastDrawTime < MIN_FRAME_INTERVAL) return;
-  lastDrawTime = now;
-
   const pixels = fftToRow(fftData);
   uploadRow(pixels);
 
-  // Advance ring cursor — after upload, so this row appears at the newest position
+  // Advance ring cursor and track fill level
   writeRow = (writeRow + 1) % h;
+  if (filledRows < h) filledRows++;
 
   updateUniforms();
   draw();
@@ -460,10 +483,10 @@ function prefillFromBuffer(frames: Float32Array[]): void {
   if (!gl || frames.length === 0 || w < 1 || h < 1) return;
 
   const rowCount = Math.min(frames.length, h);
-  // Fill ring buffer: oldest frame at writeRow, newest at writeRow-1
+  // frames[frames.length - rowCount] = oldest, frames[frames.length - 1] = newest.
+  // Store oldest at writeRow+0, newest at writeRow+rowCount-1.
+  // After filling, writeRow advances so (writeRow-1) = newest = top of screen.
   for (let i = 0; i < rowCount; i++) {
-    // frames[frames.length - rowCount] = oldest, frames[frames.length - 1] = newest
-    // We want oldest at top (largest y offset from writeRow), newest just before writeRow
     const frameIdx  = frames.length - rowCount + i;
     const targetRow = (writeRow + i) % h;
     const pixels    = fftToRow(frames[frameIdx]);
@@ -473,10 +496,10 @@ function prefillFromBuffer(frames: Float32Array[]): void {
   }
   // Advance write cursor past filled rows
   writeRow = (writeRow + rowCount) % h;
+  filledRows = Math.min(filledRows + rowCount, h);
 
   updateUniforms();
   draw();
-  lastDrawTime = performance.now() - MIN_FRAME_INTERVAL;
 }
 
 function prefillHistory(
@@ -497,10 +520,10 @@ function prefillHistory(
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, targetRow, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels.slice());
   }
   writeRow = (writeRow + rowCount) % h;
+  filledRows = Math.min(filledRows + rowCount, h);
 
   updateUniforms();
   draw();
-  lastDrawTime = performance.now() - MIN_FRAME_INTERVAL;
 }
 
 function clear(): void {
@@ -509,7 +532,8 @@ function clear(): void {
   const zeros = new Uint8Array(w * h * 4);
   gl.bindTexture(gl.TEXTURE_2D, dataTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, zeros);
-  writeRow = 0;
+  writeRow   = 0;
+  filledRows = 0;
   updateUniforms();
   draw();
 }
@@ -523,13 +547,19 @@ function resize(newW: number, newH: number): void {
   w = newW;
   h = newH;
   writeRow   = 0;
+  filledRows = 0;
   rowPixels  = null;
 
-  // Update GL viewport
+  // Update the OffscreenCanvas backing store — MUST happen before viewport/texture
+  if (offscreenCanvas) {
+    offscreenCanvas.width  = w;
+    offscreenCanvas.height = h;
+  }
+
+  // Update GL viewport to match new canvas size
   gl.viewport(0, 0, w, h);
 
-  // Recreate ring-buffer texture at new size (old content is lost — acceptable,
-  // prefill will redraw from fftBuffer if needed)
+  // Recreate ring-buffer texture at new size (content cleared — prefill will refill)
   if (dataTex) gl.deleteTexture(dataTex);
   dataTex = createDataTexture(w, h);
 
@@ -544,6 +574,7 @@ function resize(newW: number, newH: number): void {
 // ---- Initialisation ----
 
 function initWebGL(canvas: OffscreenCanvas): void {
+  offscreenCanvas = canvas;
   const context = canvas.getContext('webgl2', {
     antialias: false,
     depth:     false,
@@ -590,9 +621,12 @@ function setupGLState(): void {
   gl.useProgram(program);
 
   // Bind data texture to unit 0
-  uWriteRow  = gl.getUniformLocation(program, 'u_writeRow')!;
-  uZoomStart = gl.getUniformLocation(program, 'u_zoomStart')!;
-  uZoomEnd   = gl.getUniformLocation(program, 'u_zoomEnd')!;
+  uNewestRow  = gl.getUniformLocation(program, 'u_newestRow')!;
+  uFilledRows = gl.getUniformLocation(program, 'u_filledRows')!;
+  uTexW       = gl.getUniformLocation(program, 'u_texW')!;
+  uTexH       = gl.getUniformLocation(program, 'u_texH')!;
+  uZoomStart  = gl.getUniformLocation(program, 'u_zoomStart')!;
+  uZoomEnd    = gl.getUniformLocation(program, 'u_zoomEnd')!;
 
   const uData = gl.getUniformLocation(program, 'u_data')!;
   gl.uniform1i(uData, 0);
