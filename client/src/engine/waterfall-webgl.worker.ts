@@ -680,7 +680,7 @@ self.onmessage = (e: MessageEvent) => {
         canvas.width  = w;
         canvas.height = h;
         // Set initial viewport + create texture after dimensions are known
-        if (gl) {
+        if (gl && w > 0 && h > 0) {
           gl.viewport(0, 0, w, h);
           dataTex = createDataTexture(w, h);
           gl.useProgram(program);

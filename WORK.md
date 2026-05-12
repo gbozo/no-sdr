@@ -1,7 +1,7 @@
 # WORK.md — Active Work & Backlog
 
 *Consolidated from tasks.md, plan.md, TODO.md, and serverng/TASKS.md*
-*Last updated: v2.6.7*
+*Last updated: v2.9.2*
 
 ---
 
@@ -83,7 +83,24 @@ Full plan written. Build tag: `gpu_vulkan`. CPU fallback is always the default.
 
 ## Completed (reference)
 
-### v2.6.7
+### v2.9.x — GPU Acceleration + WebGL Waterfall + Mobile Fixes
+- [x] WebGL2 ring-buffer waterfall (600× less GPU bus traffic, eliminates getImageData/putImageData)
+- [x] Mobile flicker fixes: RAF-gated spectrum, ResizeObserver debounce, will-change, pixelated rendering
+- [x] Firefox AudioContext race fix (resume() before audio_enabled)
+- [x] GPU Phase 0+1: Vulkan device detection, portability fix for macOS MoltenVK
+- [x] GPU Phase 2: VkFFT GPU FFT with FFT-shift normalization matching CPU output
+- [x] GPU Phase 3: Batched IQ compute shader (NCO + Butterworth + Decimate), async dispatch
+- [x] GPU Phase 4: FM Stereo FIR compute shader + CPU/GPU split (PLL on CPU, FIR on GPU)
+- [x] Admin: GPU toggle, GPU stats in monitor, CPU load display, two-row client list (IPv6 fix)
+- [x] Docker: Vulkan + glslang in CI/CD build, Alpine 3.21, GPU features page
+- [x] Debian build fixes: glslang include paths, -lm linker flag
+- [x] FFT FPS fix: time.Now() inside processOneFrame loop; 30fps throttle removed from spectrum.ts
+- [x] Waterfall double-zoom fix: fftToRow() maps full bandwidth, shader handles zoom exclusively
+- [x] WebGL init guard: skip createDataTexture when width/height=0 (prevents invalid GL state)
+- [x] ServerVersion now dynamic from main.go instead of hardcoded "2.6.2"
+- [x] 32768/65536 FFT bin size options in admin
+
+
 - [x] SNR display in needle S-meter — theme-aware ink colors for dBm + SNR readouts
 - [x] Per-digit frequency tuning in FrequencyDisplay (click top/bottom half, scroll, touch per digit)
 - [x] Signal history graph below S-meter (4.8s ring buffer, accent filled area chart)

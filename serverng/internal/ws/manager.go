@@ -33,6 +33,9 @@ type Manager struct {
 
 	// staleOnce ensures the stale-client checker is started exactly once.
 	staleOnce sync.Once
+
+	// serverVersion is sent to clients in the welcome message.
+	serverVersion string
 }
 
 // NewManager creates a new WebSocket connection manager.
@@ -90,6 +93,8 @@ func (m *Manager) SetAllowedCodecs(fft, iq []string) {
 }
 
 // SetRateLimiter sets the rate limiter for tracking connection IPs.
+func (m *Manager) SetVersion(v string) { m.serverVersion = v }
+
 func (m *Manager) SetRateLimiter(rl *RateLimiter) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -248,7 +253,7 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		Type:             "welcome",
 		ClientId:         persistentID,
 		ConnIndex:        connIndex,
-		ServerVersion:    "2.6.2",
+		ServerVersion:    m.serverVersion,
 		AllowedFftCodecs: allowedFft,
 		AllowedIqCodecs:  allowedIq,
 	})
