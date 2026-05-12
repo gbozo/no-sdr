@@ -383,8 +383,16 @@ export class SdrEngine {
         this.waterfallWorker?.terminate();
         this.waterfallWorker = null;
         this._reattachCanvases2D(waterfallCanvas, spectrumCanvas);
+        return;
       }
-    }, { once: true });
+      if (e.data?.type === 'context-restored' && this.waterfallWorker) {
+        console.info('[sdr] WebGL2 context restored, refilling waterfall');
+        if (this.fftBuffer.count > 0) {
+          const frames = this.fftBuffer.getFrames().map(f => f.slice());
+          this.waterfallWorker.postMessage({ type: 'prefill', frames });
+        }
+      }
+    });
 
     const dpr = self.devicePixelRatio || 1;
     let offscreen: OffscreenCanvas;
