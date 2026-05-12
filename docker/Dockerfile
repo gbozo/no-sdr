@@ -52,13 +52,17 @@ FROM golang:1.23-alpine AS go-builder
 
 ARG TARGETARCH
 
-# Build tools + CGO deps
+# Build tools + CGO deps (includes Vulkan for GPU acceleration)
 RUN apk add --no-cache \
     gcc \
     musl-dev \
     libusb-dev \
     opus-dev \
-    pkgconfig
+    pkgconfig \
+    vulkan-loader-dev \
+    vulkan-headers \
+    glslang-dev \
+    spirv-tools-dev
 
 # Copy the Osmocom rtl-sdr we just built
 COPY --from=rtlsdr-builder /usr/local/include/rtl-sdr*.h  /usr/local/include/
@@ -80,12 +84,14 @@ COPY serverng/ .
 # would be embedded into binaries meant to run on different hardware.
 # The -ldflags set the 'goamd64' variable so the binary knows which level it was built for.
 # Format: -X importpath.variable=value
+#
+# Build tags: opus (libopus), rtlsdr (native librtlsdr), gpu_vulkan (Vulkan compute)
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       for level in v1 v2 v3 v4; do \
         CGO_ENABLED=1 GOOS=linux GOAMD64=$level \
         PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
         go build \
-            -tags 'opus rtlsdr nolibopusfile' \
+            -tags 'opus rtlsdr gpu_vulkan nolibopusfile' \
             -ldflags="-s -w -X main.goamd64=$level" \
             -o /serverng-$level \
             ./cmd/serverng; \
@@ -94,7 +100,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
       CGO_ENABLED=1 GOOS=linux \
       PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
       go build \
-          -tags 'opus rtlsdr nolibopusfile' \
+          -tags 'opus rtlsdr gpu_vulkan nolibopusfile' \
           -ldflags="-s -w -X main.goamd64=" \
           -o /serverng-v1 \
           ./cmd/serverng; \
@@ -107,10 +113,13 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
 FROM alpine:3.20
 
 # Runtime shared libraries
+# vulkan-loader provides libvulkan.so.1 — actual GPU drivers (ICD) are typically
+# mounted from the host via --device or nvidia-container-toolkit.
 RUN apk add --no-cache \
     ca-certificates \
     libusb \
-    opus
+    opus \
+    vulkan-loader
 
 # Copy the Osmocom rtl-sdr .so and rtl_tcp binary (not in Alpine packages — built from source)
 COPY --from=rtlsdr-builder /usr/local/lib/librtlsdr.so*  /usr/local/lib/

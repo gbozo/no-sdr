@@ -791,6 +791,7 @@ func serverConfigHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 			"allowedIqCodecs":       cfg.Server.AllowedIqCodecs,
 			"opusComplexity":        cfg.Server.OpusComplexity,
 			"realIPHeader":          cfg.Server.RealIPHeader,
+			"gpuEnabled":            cfg.GPU.Enabled,
 			// Music identification API keys (never exposed in public meta, admin only)
 			"auddApiKey":           cfg.Server.AuddAPIKey,
 			"acrcloudHost":         cfg.Server.ACRCloudHost,
@@ -817,6 +818,7 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			AllowedFftCodecs      []string `json:"allowedFftCodecs"`
 			AllowedIqCodecs       []string `json:"allowedIqCodecs"`
 			OpusComplexity        *int     `json:"opusComplexity"`
+			GPUEnabled            *bool    `json:"gpuEnabled"`
 			// Music identification
 			AuddAPIKey           *string `json:"auddApiKey"`
 			ACRCloudHost         *string `json:"acrcloudHost"`
@@ -893,6 +895,12 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 			cfg.Server.RealIPHeader = *body.RealIPHeader
 			if SetRealIPHeaderFunc != nil {
 				SetRealIPHeaderFunc(*body.RealIPHeader)
+			}
+		}
+		if body.GPUEnabled != nil {
+			cfg.GPU.Enabled = *body.GPUEnabled
+			if SetGPUEnabledFunc != nil {
+				SetGPUEnabledFunc(*body.GPUEnabled)
 			}
 		}
 

@@ -60,3 +60,7 @@ func (b *vulkanBackend) newIqPipeline() (*IqPipelineContext, error) {
 	return b.NewIqPipeline()
 }
 
+func (b *vulkanBackend) newFmStereoPipeline(taps []float32) (*FmStereoContext, error) {
+	return b.NewFmStereoPipeline(taps)
+}
+

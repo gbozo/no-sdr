@@ -55,6 +55,47 @@ func (s *IqClientState) SetBandwidth(_ int, _ int) {}
 // Reset is a stub.
 func (s *IqClientState) Reset() {}
 
+// FmStereoContext is a stub type for non-GPU builds.
+// On GPU builds this type is defined in fm_pipeline.go.
+type FmStereoContext struct{}
+
+// Process is a stub that always returns ErrNotAvailable.
+func (f *FmStereoContext) Process(_, _, _ []float32, _ []*FmClientState, _, _ int) ([][]float32, error) {
+	return nil, ErrNotAvailable
+}
+
+// Close is a no-op stub.
+func (f *FmStereoContext) Close() {}
+
+// MaxFmClients is the maximum batch size for the FM stereo pipeline.
+const MaxFmClients = 32
+
+// MaxFmInputSamples is the maximum input samples per chunk.
+const MaxFmInputSamples = 8192
+
+// FmClientState holds per-client FM stereo state.
+// On GPU builds this is defined in fm_pipeline.go.
+type FmClientState struct {
+	LprBuf       [64]float32
+	LrBuf        [64]float32
+	LprPos       int
+	LrPos        int
+	DeemphL      float32
+	DeemphR      float32
+	DeemphAlpha  float32
+	DcPrevL      float32
+	DcOutPrevL   float32
+	DcPrevR      float32
+	DcOutPrevR   float32
+	DecimCounter int
+}
+
+// NewFmClientState is a stub constructor.
+func NewFmClientState(_ int, _ float64) *FmClientState { return &FmClientState{} }
+
+// Reset is a stub.
+func (s *FmClientState) Reset() {}
+
 // probe returns a zero Capability when the gpu_vulkan build tag is absent.
 func probe() Capability {
 	return Capability{Available: false}

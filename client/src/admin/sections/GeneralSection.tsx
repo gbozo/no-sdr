@@ -139,6 +139,12 @@ const GeneralSection: Component = () => {
                 onChange={(v) => adminStore.updateServerConfigField('demoMode', v)}
               />
             </FieldRow>
+            <FieldRow label="GPU Acceleration" help="Offload FFT and IQ processing to GPU (Vulkan). Disabling falls back to CPU instantly.">
+              <ToggleInput
+                value={cfg().gpuEnabled}
+                onChange={(v) => adminStore.updateServerConfigField('gpuEnabled', v)}
+              />
+            </FieldRow>
           </SettingsGroup>
 
           {/* Allowed Codecs */}

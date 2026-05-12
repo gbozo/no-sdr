@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -72,6 +74,18 @@ type Manager struct {
 	// gpuIqPipeline is the batched GPU IQ extraction pipeline.
 	// nil when GPU IQ is not available. Processes up to 64 clients in one dispatch.
 	gpuIqPipeline *gpu.IqPipelineContext
+
+	// gpuFmPipeline is the batched GPU FM stereo FIR + matrix + de-emphasis pipeline.
+	// nil when GPU FM stereo is not available.
+	gpuFmPipeline *gpu.FmStereoContext
+
+	// gpuDisabledRuntime is true when admin has disabled GPU at runtime.
+	// When set, GPU pipelines remain allocated but are not used.
+	gpuDisabledRuntime bool
+
+	// GPU stats counters (atomic-safe: only incremented by data goroutines, read by API)
+	gpuIqDispatches int64
+	gpuFmDispatches int64
 
 	mu sync.Mutex
 }
@@ -186,6 +200,16 @@ func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Man
 					m.gpuIqPipeline = iqPipe
 					logger.Info("gpu: IQ pipeline ready", "max_clients", gpu.MaxIqClients)
 				}
+
+				// Create batched FM stereo FIR pipeline (51-tap 15kHz LPF at 240kHz).
+				fmTaps := designFirTaps(51, 15000.0/240000.0)
+				fmPipe, err := backend.NewFmStereoPipeline(fmTaps)
+				if err != nil {
+					logger.Warn("gpu: FM stereo pipeline init failed, using CPU fallback", "error", err)
+				} else {
+					m.gpuFmPipeline = fmPipe
+					logger.Info("gpu: FM stereo pipeline ready", "max_clients", gpu.MaxFmClients, "taps", 51)
+				}
 			}
 		}
 	} else {
@@ -199,6 +223,55 @@ func NewManager(cfg *config.Config, wsMgr *ws.Manager, logger *slog.Logger) *Man
 // Called by main.go after the config version counter is created.
 func (m *Manager) SetVersionFunc(fn func() uint64) {
 	m.getVersion = fn
+}
+
+// SetGPUEnabled toggles GPU acceleration at runtime.
+// When disabled, GPU pipelines stay allocated but all processing falls through to CPU.
+func (m *Manager) SetGPUEnabled(enabled bool) {
+	m.mu.Lock()
+	m.gpuDisabledRuntime = !enabled
+	// Pause/resume all active FFT processors' GPU path
+	for _, d := range m.dongles {
+		if d.fftProc != nil {
+			d.fftProc.SetGPUPaused(!enabled)
+		}
+	}
+	m.mu.Unlock()
+	if enabled {
+		m.logger.Info("gpu: acceleration re-enabled by admin")
+	} else {
+		m.logger.Info("gpu: acceleration disabled by admin")
+	}
+}
+
+// GetGPUStats returns pipeline usage counters for the admin monitor.
+func (m *Manager) GetGPUStats() map[string]any {
+	m.mu.Lock()
+	disabled := m.gpuDisabledRuntime
+	hasBackend := m.gpuBackend != nil
+	hasIq := m.gpuIqPipeline != nil
+	hasFm := m.gpuFmPipeline != nil
+	// Sum FFT frames from all active dongles
+	var fftFrames int64
+	for _, d := range m.dongles {
+		if d.fftProc != nil {
+			fftFrames += d.fftProc.GPUFrames()
+		}
+	}
+	m.mu.Unlock()
+	return map[string]any{
+		"active":          hasBackend && !disabled,
+		"fftFrames":       fftFrames,
+		"iqDispatches":    atomic.LoadInt64(&m.gpuIqDispatches),
+		"fmDispatches":    atomic.LoadInt64(&m.gpuFmDispatches),
+		"iqPipelineReady": hasIq,
+		"fmPipelineReady": hasFm,
+	}
+}
+
+// gpuEnabled returns true if GPU should be used for processing (backend exists and not disabled).
+func (m *Manager) gpuEnabled() bool {
+	return m.gpuBackend != nil && !m.gpuDisabledRuntime
 }
 
 // currentVersion returns the current config version, or 0 if not set.
@@ -334,6 +407,10 @@ func (m *Manager) Stop() {
 	}
 
 	// Release GPU resources.
+	if m.gpuFmPipeline != nil {
+		m.gpuFmPipeline.Close()
+		m.gpuFmPipeline = nil
+	}
 	if m.gpuIqPipeline != nil {
 		m.gpuIqPipeline.Close()
 		m.gpuIqPipeline = nil
@@ -1124,7 +1201,7 @@ func (m *Manager) processClientIQ(d *activeDongle, iqChunk []byte) {
 	}
 
 	// Try GPU batch path: collect all GPU-eligible clients (non-NB with gpuIqState).
-	if m.gpuIqPipeline != nil {
+	if m.gpuIqPipeline != nil && m.gpuEnabled() {
 		var gpuEntries []cpEntry
 		var cpuEntries []cpEntry
 		for _, e := range entries {
@@ -1204,6 +1281,8 @@ func (m *Manager) processGpuBatch(entries []cpEntry, iqChunk []byte) {
 		wg.Wait()
 		return
 	}
+
+	atomic.AddInt64(&m.gpuIqDispatches, 1)
 
 	// Distribute GPU results to each client's accumulate/send path.
 	for i, e := range entries {
@@ -2305,4 +2384,34 @@ func (m *Manager) statsLoop(ctx context.Context) {
 			m.wsMgr.BroadcastAll(msg)
 		}
 	}
+}
+
+// designFirTaps computes sinc × Blackman-Harris LPF coefficients.
+// cutoff is normalised frequency (0..0.5), n is the number of taps.
+// Matches the algorithm in demod/fm.go simpleFir.design().
+func designFirTaps(n int, cutoff float64) []float32 {
+	taps := make([]float32, n)
+	m := float64(n-1) / 2.0
+	var sum float64
+	for i := 0; i < n; i++ {
+		x := float64(i) - m
+		var sinc float64
+		if math.Abs(x) < 1e-12 {
+			sinc = 2 * math.Pi * cutoff
+		} else {
+			sinc = math.Sin(2*math.Pi*cutoff*x) / x
+		}
+		fi := float64(i)
+		fn := float64(n - 1)
+		w := 0.35875 -
+			0.48829*math.Cos(2*math.Pi*fi/fn) +
+			0.14128*math.Cos(4*math.Pi*fi/fn) -
+			0.01168*math.Cos(6*math.Pi*fi/fn)
+		taps[i] = float32(sinc * w)
+		sum += float64(taps[i])
+	}
+	for i := range taps {
+		taps[i] = float32(float64(taps[i]) / sum)
+	}
+	return taps
 }

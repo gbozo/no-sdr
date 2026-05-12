@@ -30,6 +30,17 @@ interface SystemStats {
   goroutines: number;
   numGC: number;
   uptime: number;
+  cpuCores: number;
+  cpuUsage: number;
+}
+
+interface GpuStats {
+  active: boolean;
+  fftFrames: number;
+  iqDispatches: number;
+  fmDispatches: number;
+  iqPipelineReady: boolean;
+  fmPipelineReady: boolean;
 }
 
 // ---- Helpers ----
@@ -55,12 +66,18 @@ function formatFrequency(hz: number): string {
   return `${hz} Hz`;
 }
 
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 // ---- Sub-components ----
 
-const StatCard: Component<{ label: string; value: string; sub?: string }> = (props) => (
+const StatCard: Component<{ label: string; value: string; sub?: string; accent?: boolean }> = (props) => (
   <div class="p-2.5 border border-border/30 rounded-md bg-sdr-base/50">
     <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">{props.label}</div>
-    <div class="text-sm font-mono text-accent">{props.value}</div>
+    <div class={`text-sm font-mono ${props.accent ? 'text-green-400' : 'text-accent'}`}>{props.value}</div>
     <Show when={props.sub}>
       <div class="text-[8px] font-mono text-text-dim/50 mt-0.5">{props.sub}</div>
     </Show>
@@ -68,76 +85,83 @@ const StatCard: Component<{ label: string; value: string; sub?: string }> = (pro
 );
 
 const ClientRow: Component<{ client: ClientInfo }> = (props) => (
-  <div class="flex items-center gap-2 p-2 border border-border/20 rounded bg-sdr-base/30 hover:bg-sdr-base/50 transition-colors">
-    {/* Status LED */}
-    <div class="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+  <div class="p-2 border border-border/20 rounded bg-sdr-base/30 hover:bg-sdr-base/50 transition-colors">
+    {/* Row 1: Status + ID + Receiver/Profile + Mode + Codecs + Duration */}
+    <div class="flex items-center gap-2">
+      {/* Status LED */}
+      <div class="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
 
-    {/* Client ID (persistent, 8 chars + conn index) */}
-    <div class="w-20 shrink-0">
-      <span class="text-[9px] font-mono text-text-dim">
-        {props.client.persistentId?.slice(0, 8) || props.client.id.slice(0, 8)}
-        <Show when={props.client.connIndex > 0}>
-          <span class="text-text-dim/50">:{props.client.connIndex}</span>
-        </Show>
-      </span>
-    </div>
+      {/* Client ID (persistent, 8 chars + conn index) */}
+      <div class="w-20 shrink-0">
+        <span class="text-[9px] font-mono text-text-dim">
+          {props.client.persistentId?.slice(0, 8) || props.client.id.slice(0, 8)}
+          <Show when={props.client.connIndex > 0}>
+            <span class="text-text-dim/50">:{props.client.connIndex}</span>
+          </Show>
+        </span>
+      </div>
 
-    {/* IP */}
-    <div class="w-24 shrink-0">
-      <span class="text-[10px] font-mono text-text-primary">{props.client.realIp || props.client.ip}</span>
-      <Show when={props.client.realIp}>
-        <div class="text-[8px] font-mono text-text-dim/50 truncate" title={props.client.ip}>{props.client.ip}</div>
-      </Show>
-    </div>
-
-    {/* Dongle + Profile + Frequency */}
-    <div class="w-44 shrink-0">
-      <Show when={props.client.dongleName || props.client.dongleId} fallback={
-        <span class="text-[9px] font-mono text-text-dim/40">—</span>
-      }>
-        <div class="text-[9px] font-mono text-text-primary truncate">
-          {props.client.dongleName || props.client.dongleId}
-        </div>
-        <Show when={props.client.profileName || props.client.centerFrequency}>
-          <div class="text-[8px] font-mono text-accent/80 truncate">
-            {props.client.profileName || props.client.profileId}
-            <Show when={props.client.centerFrequency}>
-              {' '}<span class="text-text-dim">@ {formatFrequency(props.client.centerFrequency!)}</span>
-            </Show>
+      {/* Dongle + Profile + Frequency */}
+      <div class="w-44 shrink-0">
+        <Show when={props.client.dongleName || props.client.dongleId} fallback={
+          <span class="text-[9px] font-mono text-text-dim/40">—</span>
+        }>
+          <div class="text-[9px] font-mono text-text-primary truncate">
+            {props.client.dongleName || props.client.dongleId}
           </div>
+          <Show when={props.client.profileName || props.client.centerFrequency}>
+            <div class="text-[8px] font-mono text-accent/80 truncate">
+              {props.client.profileName || props.client.profileId}
+              <Show when={props.client.centerFrequency}>
+                {' '}<span class="text-text-dim">@ {formatFrequency(props.client.centerFrequency!)}</span>
+              </Show>
+            </div>
+          </Show>
         </Show>
-      </Show>
+      </div>
+
+      {/* Mode */}
+      <div class="w-10 shrink-0">
+        <Show when={props.client.mode}>
+          <span class="text-[9px] font-mono uppercase text-accent">{props.client.mode}</span>
+        </Show>
+      </div>
+
+      {/* Codecs */}
+      <div class="flex-1 flex gap-1.5 flex-wrap">
+        <Show when={props.client.fftCodec}>
+          <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
+            fft:{props.client.fftCodec}
+          </span>
+        </Show>
+        <Show when={props.client.iqCodec}>
+          <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
+            iq:{props.client.iqCodec}
+          </span>
+        </Show>
+        <Show when={props.client.audioEnabled}>
+          <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-green-400/20 text-green-400/80">
+            audio
+          </span>
+        </Show>
+      </div>
+
+      {/* Connected duration */}
+      <div class="w-16 shrink-0 text-right">
+        <span class="text-[9px] font-mono text-text-dim">{formatDuration(props.client.connectedAt)}</span>
+      </div>
     </div>
 
-    {/* Mode */}
-    <div class="w-10 shrink-0">
-      <Show when={props.client.mode}>
-        <span class="text-[9px] font-mono uppercase text-accent">{props.client.mode}</span>
-      </Show>
-    </div>
-
-    {/* Codecs */}
-    <div class="flex-1 flex gap-1.5 flex-wrap">
-      <Show when={props.client.fftCodec}>
-        <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
-          fft:{props.client.fftCodec}
+    {/* Row 2: IP address (full width, handles IPv6 gracefully) */}
+    <div class="flex items-center gap-2 mt-1 pl-[22px]">
+      <span class="text-[9px] font-mono text-text-dim/70 break-all">
+        {props.client.realIp || props.client.ip}
+      </span>
+      <Show when={props.client.realIp}>
+        <span class="text-[8px] font-mono text-text-dim/40 break-all">
+          (tcp: {props.client.ip})
         </span>
       </Show>
-      <Show when={props.client.iqCodec}>
-        <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
-          iq:{props.client.iqCodec}
-        </span>
-      </Show>
-      <Show when={props.client.audioEnabled}>
-        <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-green-400/20 text-green-400/80">
-          audio
-        </span>
-      </Show>
-    </div>
-
-    {/* Connected duration */}
-    <div class="w-16 shrink-0 text-right">
-      <span class="text-[9px] font-mono text-text-dim">{formatDuration(props.client.connectedAt)}</span>
     </div>
   </div>
 );
@@ -146,6 +170,7 @@ const ClientRow: Component<{ client: ClientInfo }> = (props) => (
 const MonitorSection: Component = () => {
   const [clients, setClients] = createSignal<ClientInfo[]>([]);
   const [stats, setStats] = createSignal<SystemStats | null>(null);
+  const [gpuStats, setGpuStats] = createSignal<GpuStats | null>(null);
   const [loading, setLoading] = createSignal(true);
   let pollInterval: ReturnType<typeof setInterval>;
 
@@ -167,7 +192,14 @@ const MonitorSection: Component = () => {
           goroutines: data.memory?.goroutines || 0,
           numGC: data.memory?.numGC || 0,
           uptime: data.uptime || 0,
+          cpuCores: data.cpu?.cores || 0,
+          cpuUsage: data.cpu?.usagePerc || 0,
         });
+        if (data.gpu?.stats) {
+          setGpuStats(data.gpu.stats);
+        } else {
+          setGpuStats(null);
+        }
       }
     } catch {}
     setLoading(false);
@@ -210,11 +242,48 @@ const MonitorSection: Component = () => {
         {/* Stats Grid */}
         <Show when={stats()}>
           {(s) => (
-            <div class="grid grid-cols-4 gap-2 mb-5">
+            <div class="grid grid-cols-5 gap-2 mb-5">
               <StatCard label="Clients" value={String(clients().length)} sub="connected" />
+              <StatCard label="CPU" value={`${s().cpuUsage.toFixed(0)}%`} sub={`${s().cpuCores} cores`} />
               <StatCard label="Memory" value={`${s().allocMB.toFixed(1)} MB`} sub={`${s().sysMB.toFixed(0)} MB sys`} />
               <StatCard label="Goroutines" value={String(s().goroutines)} />
               <StatCard label="Uptime" value={formatDuration(s().uptime)} sub={`${s().numGC} GCs`} />
+            </div>
+          )}
+        </Show>
+
+        {/* GPU Stats */}
+        <Show when={gpuStats()}>
+          {(g) => (
+            <div class="mb-5 p-3 border border-border/30 rounded-md bg-sdr-base/50">
+              <div class="flex items-center gap-2 mb-2">
+                <h3 class="text-[9px] font-mono uppercase tracking-wider text-text-dim">GPU Offload</h3>
+                <span class={`px-1.5 py-0.5 text-[8px] font-mono rounded border ${g().active ? 'bg-green-400/10 text-green-400 border-green-400/20' : 'bg-red-400/10 text-red-400 border-red-400/20'}`}>
+                  {g().active ? 'ACTIVE' : 'PAUSED'}
+                </span>
+              </div>
+              <div class="grid grid-cols-3 gap-3">
+                <div>
+                  <div class="text-[8px] font-mono text-text-dim/70 uppercase">FFT Frames</div>
+                  <div class="text-[11px] font-mono text-accent">{formatCount(g().fftFrames)}</div>
+                </div>
+                <div>
+                  <div class="text-[8px] font-mono text-text-dim/70 uppercase">IQ Dispatches</div>
+                  <div class="text-[11px] font-mono text-accent">{formatCount(g().iqDispatches)}</div>
+                </div>
+                <div>
+                  <div class="text-[8px] font-mono text-text-dim/70 uppercase">FM Dispatches</div>
+                  <div class="text-[11px] font-mono text-accent">{formatCount(g().fmDispatches)}</div>
+                </div>
+              </div>
+              <div class="flex gap-3 mt-2">
+                <span class={`text-[8px] font-mono ${g().iqPipelineReady ? 'text-green-400/70' : 'text-text-dim/40'}`}>
+                  IQ Pipeline: {g().iqPipelineReady ? 'Ready' : 'N/A'}
+                </span>
+                <span class={`text-[8px] font-mono ${g().fmPipelineReady ? 'text-green-400/70' : 'text-text-dim/40'}`}>
+                  FM Pipeline: {g().fmPipelineReady ? 'Ready' : 'N/A'}
+                </span>
+              </div>
             </div>
           )}
         </Show>
@@ -242,7 +311,6 @@ const MonitorSection: Component = () => {
             <div class="flex items-center gap-2 px-2 py-1 text-[8px] font-mono uppercase tracking-wider text-text-dim/50">
               <div class="w-1.5 shrink-0" />
               <div class="w-20 shrink-0">Client</div>
-              <div class="w-24 shrink-0">IP</div>
               <div class="w-44 shrink-0">Receiver / Profile</div>
               <div class="w-10 shrink-0">Mode</div>
               <div class="flex-1">Codecs</div>

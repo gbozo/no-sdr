@@ -20,12 +20,23 @@ interface SystemInfo {
   features: {
     opusSupport: boolean;
     rtlsdrNative: boolean;
+    gpuVulkan: boolean;
     allowedFftCodecs: string[];
     allowedIqCodecs: string[];
     supportedSources: string[];
     supportedModes: string[];
     supportedFftCodecs: string[];
     supportedIqCodecs: string[];
+  };
+  gpu: {
+    compiled: boolean;
+    available: boolean;
+    enabled: boolean;
+    deviceName: string;
+    deviceType: string;
+    vramMB: number;
+    unifiedMemory: boolean;
+    vkfft: boolean;
   };
   dongles: {
     configured: number;
@@ -208,7 +219,32 @@ const FeaturesSection: Component = () => {
               <div class="flex flex-wrap gap-2 py-1">
                 <FeatureBadge name="Opus (libopus)" enabled={data().features.opusSupport} />
                 <FeatureBadge name="RTL-SDR Native" enabled={data().features.rtlsdrNative} />
+                <FeatureBadge name="GPU Vulkan" enabled={data().features.gpuVulkan} />
               </div>
+            </InfoGroup>
+
+            {/* GPU Acceleration */}
+            <InfoGroup title="GPU Acceleration">
+              <InfoRow label="Compiled In" value={data().gpu.compiled ? 'Yes' : 'No'} accent={data().gpu.compiled} />
+              <InfoRow label="Device Available" value={data().gpu.available ? 'Yes' : 'No'} accent={data().gpu.available} />
+              <InfoRow label="Enabled (config)" value={data().gpu.enabled ? 'Yes' : 'No'} accent={data().gpu.enabled} />
+              <Show when={data().gpu.available}>
+                <InfoRow label="Device" value={data().gpu.deviceName} accent />
+                <InfoRow label="Type" value={data().gpu.deviceType} />
+                <InfoRow label="VRAM" value={`${data().gpu.vramMB} MB`} />
+                <InfoRow label="Unified Memory" value={data().gpu.unifiedMemory ? 'Yes' : 'No'} />
+                <InfoRow label="VkFFT Ready" value={data().gpu.vkfft ? 'Yes' : 'No'} accent={data().gpu.vkfft} />
+              </Show>
+              <Show when={!data().gpu.compiled}>
+                <div class="mt-1 text-[9px] font-mono text-text-dim/60 italic">
+                  Build with -tags gpu_vulkan to enable GPU acceleration
+                </div>
+              </Show>
+              <Show when={data().gpu.compiled && !data().gpu.available}>
+                <div class="mt-1 text-[9px] font-mono text-yellow-400/80 italic">
+                  No Vulkan device detected — falling back to CPU
+                </div>
+              </Show>
             </InfoGroup>
 
             {/* Codecs */}

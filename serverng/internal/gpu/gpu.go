@@ -163,6 +163,16 @@ func (b *Backend) NewFFT(fftSize int) (*FFTContext, error) {
 	return b.impl.newFFT(fftSize)
 }
 
+// NewFmStereoPipeline creates a GPU FM stereo FIR + matrix + de-emphasis pipeline.
+// taps: FIR filter coefficients (typically 51 taps, 15kHz LPF at 240kHz).
+// Returns ErrNotAvailable if not compiled with gpu_vulkan tag.
+func (b *Backend) NewFmStereoPipeline(taps []float32) (*FmStereoContext, error) {
+	if b == nil || b.impl == nil {
+		return nil, ErrNotAvailable
+	}
+	return b.impl.newFmStereoPipeline(taps)
+}
+
 // backendImpl is the internal interface implemented by the tag-selected backend.
 type backendImpl interface {
 	close()
@@ -170,4 +180,5 @@ type backendImpl interface {
 	maxClients() int
 	newFFT(fftSize int) (*FFTContext, error)
 	newIqPipeline() (*IqPipelineContext, error)
+	newFmStereoPipeline(taps []float32) (*FmStereoContext, error)
 }

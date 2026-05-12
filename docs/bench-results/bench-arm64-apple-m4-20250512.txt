@@ -1,0 +1,372 @@
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=44444.444444444445
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:44 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:44 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+time=2026-05-12T14:47:44.914+03:00 level=INFO msg="pipeline: initialized block" index=0 name=pass inRate=2.4e+06 outRate=2.4e+06
+time=2026-05-12T14:47:44.914+03:00 level=INFO msg="pipeline: initialized block" index=0 name=dec4 inRate=2.4e+06 outRate=600000
+time=2026-05-12T14:47:44.914+03:00 level=INFO msg="pipeline: initialized block" index=1 name=dec2 inRate=600000 outRate=300000
+time=2026-05-12T14:47:44.914+03:00 level=INFO msg="pipeline: initialized block" index=0 name=p1 inRate=48000 outRate=48000
+time=2026-05-12T14:47:44.914+03:00 level=INFO msg="pipeline: initialized block" index=1 name=p2 inRate=48000 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=44444.444444444445
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+time=2026-05-12T14:47:45.030+03:00 level=INFO msg="pipeline: initialized block" index=0 name=pass inRate=2.4e+06 outRate=2.4e+06
+time=2026-05-12T14:47:45.030+03:00 level=INFO msg="pipeline: initialized block" index=0 name=dec4 inRate=2.4e+06 outRate=600000
+time=2026-05-12T14:47:45.030+03:00 level=INFO msg="pipeline: initialized block" index=1 name=dec2 inRate=600000 outRate=300000
+time=2026-05-12T14:47:45.030+03:00 level=INFO msg="pipeline: initialized block" index=0 name=p1 inRate=48000 outRate=48000
+time=2026-05-12T14:47:45.030+03:00 level=INFO msg="pipeline: initialized block" index=1 name=p2 inRate=48000 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=44444.444444444445
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:45 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:45 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+time=2026-05-12T14:47:45.145+03:00 level=INFO msg="pipeline: initialized block" index=0 name=pass inRate=2.4e+06 outRate=2.4e+06
+time=2026-05-12T14:47:45.145+03:00 level=INFO msg="pipeline: initialized block" index=0 name=dec4 inRate=2.4e+06 outRate=600000
+time=2026-05-12T14:47:45.145+03:00 level=INFO msg="pipeline: initialized block" index=1 name=dec2 inRate=600000 outRate=300000
+time=2026-05-12T14:47:45.145+03:00 level=INFO msg="pipeline: initialized block" index=0 name=p1 inRate=48000 outRate=48000
+time=2026-05-12T14:47:45.145+03:00 level=INFO msg="pipeline: initialized block" index=1 name=p2 inRate=48000 outRate=48000
+goos: darwin
+goarch: arm64
+pkg: github.com/gbozo/no-sdr/serverng/internal/dsp
+cpu: Apple M4
+BenchmarkFullFFTPipeline-10        	    2781	    369933 ns/op	 129.75 MB/s	   95970 B/op	       0 allocs/op
+BenchmarkFullFFTPipeline-10        	    3248	    371033 ns/op	 129.37 MB/s	   95972 B/op	       0 allocs/op
+BenchmarkFullFFTPipeline-10        	    3270	    396283 ns/op	 121.13 MB/s	   95968 B/op	       0 allocs/op
+BenchmarkFullFFTPipeline4096-10    	    4574	    263167 ns/op	 182.39 MB/s	   96354 B/op	       8 allocs/op
+BenchmarkFullFFTPipeline4096-10    	    4574	    263212 ns/op	 182.36 MB/s	   96354 B/op	       8 allocs/op
+BenchmarkFullFFTPipeline4096-10    	    4573	    262930 ns/op	 182.56 MB/s	   96354 B/op	       8 allocs/op
+2026/05/12 14:47:52 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:52 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:52 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+BenchmarkIqExtractorNFM-10         	2026/05/12 14:47:52 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:52 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:52 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:52 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:52 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:52 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    6044	    197826 ns/op	 242.64 MB/s	      32 B/op	       0 allocs/op
+BenchmarkIqExtractorNFM-10         	2026/05/12 14:47:53 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:53 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:53 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:53 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:53 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:53 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:53 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:53 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:53 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    6024	    198001 ns/op	 242.42 MB/s	      32 B/op	       0 allocs/op
+BenchmarkIqExtractorNFM-10         	2026/05/12 14:47:54 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:54 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:54 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:54 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:54 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:54 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:47:54 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:54 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:54 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    6010	    199045 ns/op	 241.15 MB/s	      33 B/op	       0 allocs/op
+2026/05/12 14:47:56 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:56 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:56 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+BenchmarkIqExtractorWFM-10         	2026/05/12 14:47:56 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:56 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:56 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:56 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:56 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:56 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+    5938	    201306 ns/op	 238.44 MB/s	      34 B/op	       0 allocs/op
+BenchmarkIqExtractorWFM-10         	2026/05/12 14:47:57 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:57 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:57 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:57 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:57 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:57 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:57 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:57 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:57 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+    5941	    201350 ns/op	 238.39 MB/s	      34 B/op	       0 allocs/op
+BenchmarkIqExtractorWFM-10         	2026/05/12 14:47:58 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:58 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:58 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:58 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:58 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:58 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:47:58 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:58 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:58 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+    5901	    201350 ns/op	 238.39 MB/s	      34 B/op	       0 allocs/op
+2026/05/12 14:47:59 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:59 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:59 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+BenchmarkIqExtractorSSB-10         	2026/05/12 14:47:59 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:59 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:59 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+2026/05/12 14:47:59 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:59 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:47:59 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+    6049	    197512 ns/op	 243.02 MB/s	      32 B/op	       0 allocs/op
+BenchmarkIqExtractorSSB-10         	2026/05/12 14:48:01 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:01 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:01 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+2026/05/12 14:48:01 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:01 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:01 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+2026/05/12 14:48:01 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:01 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:01 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+    6052	    197491 ns/op	 243.05 MB/s	      32 B/op	       0 allocs/op
+BenchmarkIqExtractorSSB-10         	2026/05/12 14:48:02 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:02 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:02 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+2026/05/12 14:48:02 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:02 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:02 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+2026/05/12 14:48:02 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:02 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:02 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=24000
+    6060	    197437 ns/op	 243.12 MB/s	      32 B/op	       0 allocs/op
+BenchmarkDecimate-10               	    5730	    191523 ns/op	100248.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDecimate-10               	    6112	    190373 ns/op	100854.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDecimate-10               	    5872	    207964 ns/op	92323.61 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFFT65536-10               	    1429	    834320 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFFT65536-10               	    1437	    833968 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFFT65536-10               	    1434	    834138 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFFT4096-10                	   36086	     33240 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFFT4096-10                	   36104	     33221 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFFT4096-10                	   36079	     33231 ns/op	       0 B/op	       0 allocs/op
+BenchmarkButterworth-10            	    2674	    446196 ns/op	1175.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkButterworth-10            	    2677	    446005 ns/op	1175.52 MB/s	       0 B/op	       0 allocs/op
+BenchmarkButterworth-10            	    2682	    445826 ns/op	1175.99 MB/s	       0 B/op	       0 allocs/op
+2026/05/12 14:48:19 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:19 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:19 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+BenchmarkIqExtractor-10            	2026/05/12 14:48:19 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:19 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:19 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:48:19 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:19 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:19 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    5995	    197973 ns/op	 242.46 MB/s	      33 B/op	       0 allocs/op
+BenchmarkIqExtractor-10            	2026/05/12 14:48:20 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:20 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:20 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:48:20 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:20 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:20 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:48:20 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:20 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:20 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    5992	    197896 ns/op	 242.55 MB/s	      33 B/op	       0 allocs/op
+BenchmarkIqExtractor-10            	2026/05/12 14:48:21 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:21 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:21 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:48:21 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:21 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:21 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:48:21 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:21 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:21 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    5959	    198016 ns/op	 242.41 MB/s	      33 B/op	       0 allocs/op
+2026/05/12 14:48:22 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:22 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:22 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+BenchmarkIqExtractor_WFM-10        	2026/05/12 14:48:22 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:22 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:22 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:48:22 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:22 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:22 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+    5906	    201212 ns/op	 238.55 MB/s	      34 B/op	       0 allocs/op
+BenchmarkIqExtractor_WFM-10        	2026/05/12 14:48:24 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:24 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:24 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:48:24 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:24 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:24 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:48:24 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:24 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:24 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+    5925	    201969 ns/op	 237.66 MB/s	      34 B/op	       0 allocs/op
+BenchmarkIqExtractor_WFM-10        	2026/05/12 14:48:25 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:25 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:25 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:48:25 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:25 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:25 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+2026/05/12 14:48:25 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:25 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:48:25 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=240000
+    5895	    214483 ns/op	 223.79 MB/s	      35 B/op	       0 allocs/op
+BenchmarkNCO-10                    	     724	   1654034 ns/op	11607.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNCO-10                    	     724	   1652468 ns/op	11618.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNCO-10                    	     724	   1666463 ns/op	11521.41 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNoiseBlanker-10           	    6546	    180941 ns/op	2122.23 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNoiseBlanker-10           	    6628	    180542 ns/op	2126.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNoiseBlanker-10           	    6595	    180200 ns/op	2130.96 MB/s	       0 B/op	       0 allocs/op
+BenchmarkBlackmanHarris65536-10    	    2320	    515470 ns/op	  262144 B/op	       1 allocs/op
+BenchmarkBlackmanHarris65536-10    	    2293	    519005 ns/op	  262144 B/op	       1 allocs/op
+BenchmarkBlackmanHarris65536-10    	    2299	    516339 ns/op	  262144 B/op	       1 allocs/op
+PASS
+ok  	github.com/gbozo/no-sdr/serverng/internal/dsp	53.756s
+goos: darwin
+goarch: arm64
+pkg: github.com/gbozo/no-sdr/serverng/internal/codec
+cpu: Apple M4
+BenchmarkEncode-10                    	   28080	     42651 ns/op	 562.70 MB/s	       0 B/op	       0 allocs/op
+BenchmarkEncode-10                    	   27816	     42647 ns/op	 562.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkEncode-10                    	   28074	     42395 ns/op	 566.11 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDecode-10                    	   53156	     22629 ns/op	1060.57 MB/s	   24576 B/op	       1 allocs/op
+BenchmarkDecode-10                    	   53209	     22642 ns/op	1059.99 MB/s	   24576 B/op	       1 allocs/op
+BenchmarkDecode-10                    	   53023	     22618 ns/op	1061.11 MB/s	   24576 B/op	       1 allocs/op
+BenchmarkEncodeFftAdpcm-10            	   65301	     18267 ns/op	 896.93 MB/s	   14080 B/op	       3 allocs/op
+BenchmarkEncodeFftAdpcm-10            	   65293	     18064 ns/op	 907.00 MB/s	   14080 B/op	       3 allocs/op
+BenchmarkEncodeFftAdpcm-10            	   65674	     18424 ns/op	 889.27 MB/s	   14080 B/op	       3 allocs/op
+BenchmarkCompressFft65536-10          	   33814	     35512 ns/op	   65536 B/op	       1 allocs/op
+BenchmarkCompressFft65536-10          	   31008	     43666 ns/op	   65536 B/op	       1 allocs/op
+BenchmarkCompressFft65536-10          	   33536	     35537 ns/op	   65536 B/op	       1 allocs/op
+BenchmarkDeflateFft65536-10           	    1428	    827558 ns/op	  952706 B/op	      24 allocs/op
+BenchmarkDeflateFft65536-10           	    1446	    826755 ns/op	  952708 B/op	      24 allocs/op
+BenchmarkDeflateFft65536-10           	    1450	    822425 ns/op	  952709 B/op	      24 allocs/op
+BenchmarkFftDeflateEncoder65536-10    	    1501	    790998 ns/op	    2313 B/op	       1 allocs/op
+BenchmarkFftDeflateEncoder65536-10    	    1514	    790626 ns/op	    2313 B/op	       1 allocs/op
+BenchmarkFftDeflateEncoder65536-10    	    1515	    791225 ns/op	    2313 B/op	       1 allocs/op
+PASS
+ok  	github.com/gbozo/no-sdr/serverng/internal/codec	26.454s
+goos: darwin
+goarch: arm64
+pkg: github.com/gbozo/no-sdr/serverng/internal/demod
+cpu: Apple M4
+BenchmarkAmDemod-10             	  166755	      6803 ns/op	4816.40 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAmDemod-10             	  176131	      6813 ns/op	4809.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAmDemod-10             	  175482	      6816 ns/op	4807.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmMonoPipeline-10      	  340208	      3493 ns/op	2198.53 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmMonoPipeline-10      	  341386	      3503 ns/op	2192.70 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmMonoPipeline-10      	  341502	      3502 ns/op	2192.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmStereoPipeline-10    	    4352	    272487 ns/op	 140.92 MB/s	      39 B/op	       0 allocs/op
+BenchmarkFmStereoPipeline-10    	    4356	    272613 ns/op	 140.86 MB/s	      39 B/op	       0 allocs/op
+BenchmarkFmStereoPipeline-10    	    4363	    272568 ns/op	 140.88 MB/s	      39 B/op	       0 allocs/op
+BenchmarkAmPipeline-10          	  726776	      1626 ns/op	4723.92 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAmPipeline-10          	  735939	      1627 ns/op	4719.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAmPipeline-10          	  734599	      1628 ns/op	4718.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSsbPipeline-10         	 1490862	       803.9 ns/op	4776.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSsbPipeline-10         	 1492576	       804.0 ns/op	4775.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSsbPipeline-10         	 1491829	       807.5 ns/op	4755.50 MB/s	       0 B/op	       0 allocs/op
+2026/05/12 14:49:25 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:25 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:25 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+BenchmarkDemodPipeline-10       	2026/05/12 14:49:25 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:25 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:25 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:49:25 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:25 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:25 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    5940	    200643 ns/op	 239.23 MB/s	    4129 B/op	       1 allocs/op
+BenchmarkDemodPipeline-10       	2026/05/12 14:49:26 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:26 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:26 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:49:26 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:26 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:26 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:49:26 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:26 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:26 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    5846	    200522 ns/op	 239.38 MB/s	    4129 B/op	       1 allocs/op
+BenchmarkDemodPipeline-10       	2026/05/12 14:49:27 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:27 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:27 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:49:27 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:27 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:27 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+2026/05/12 14:49:28 INFO pipeline: initialized block index=0 name=nco inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:28 INFO pipeline: initialized block index=1 name=butterworth_lpf inRate=2.4e+06 outRate=2.4e+06
+2026/05/12 14:49:28 INFO pipeline: initialized block index=2 name=decimate inRate=2.4e+06 outRate=48000
+    5949	    201058 ns/op	 238.74 MB/s	    4129 B/op	       1 allocs/op
+BenchmarkRdsDecoder-10          	   40402	     30566 ns/op	 628.15 MB/s	      12 B/op	       0 allocs/op
+BenchmarkRdsDecoder-10          	   42466	     28214 ns/op	 680.50 MB/s	      12 B/op	       0 allocs/op
+BenchmarkRdsDecoder-10          	   42504	     28226 ns/op	 680.22 MB/s	      12 B/op	       0 allocs/op
+BenchmarkFmStereoWithRds-10     	    3933	    301452 ns/op	 127.38 MB/s	      62 B/op	       0 allocs/op
+BenchmarkFmStereoWithRds-10     	    3967	    300745 ns/op	 127.68 MB/s	      62 B/op	       0 allocs/op
+BenchmarkFmStereoWithRds-10     	    3962	    300641 ns/op	 127.73 MB/s	      62 B/op	       0 allocs/op
+BenchmarkFmMono-10              	   76743	     15638 ns/op	2095.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmMono-10              	   76698	     15639 ns/op	2095.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmMono-10              	   76540	     15643 ns/op	2094.70 MB/s	       0 B/op	       0 allocs/op
+BenchmarkFmStereo-10            	    5162	    232224 ns/op	 141.10 MB/s	      26 B/op	       0 allocs/op
+BenchmarkFmStereo-10            	    5170	    232285 ns/op	 141.07 MB/s	      26 B/op	       0 allocs/op
+BenchmarkFmStereo-10            	    5154	    232557 ns/op	 140.90 MB/s	      26 B/op	       0 allocs/op
+BenchmarkCwDemod-10             	    3440	    346551 ns/op	  94.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCwDemod-10             	    3452	    346364 ns/op	  94.61 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCwDemod-10             	    3465	    346209 ns/op	  94.65 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSsbDemod-10            	  192534	      6206 ns/op	5279.89 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSsbDemod-10            	  193158	      6207 ns/op	5279.26 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSsbDemod-10            	  192744	      6208 ns/op	5278.59 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gbozo/no-sdr/serverng/internal/demod	48.153s

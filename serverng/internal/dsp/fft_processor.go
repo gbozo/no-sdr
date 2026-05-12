@@ -73,7 +73,9 @@ type FftProcessor struct {
 	normDbVal float32
 
 	// GPU FFT backend (optional — nil = CPU only)
-	gpuFFT GPUFFTBackend
+	gpuFFT       GPUFFTBackend
+	gpuPaused    bool  // when true, GPU path is skipped (admin disabled)
+	gpuFrames    int64 // count of frames processed by GPU
 
 	// Pre-allocated work buffers (zero alloc in hot path)
 	complexBuf []float32 // interleaved complex input/output, length 2*fftSize
@@ -168,6 +170,16 @@ func (p *FftProcessor) SetGPUBackend(g GPUFFTBackend) {
 	}
 }
 
+// SetGPUPaused pauses/resumes the GPU FFT path without tearing down the backend.
+func (p *FftProcessor) SetGPUPaused(paused bool) {
+	p.gpuPaused = paused
+}
+
+// GPUFrames returns the number of FFT frames processed by the GPU backend.
+func (p *FftProcessor) GPUFrames() int64 {
+	return p.gpuFrames
+}
+
 // ProcessIqData accepts raw uint8 IQ data (interleaved I,Q,I,Q...)
 // and returns zero or more FFT magnitude frames ([]float32 in dB, length = FftSize).
 // May return 0 frames if rate cap hasn't elapsed or insufficient data accumulated.
@@ -237,7 +249,7 @@ func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
 // If a GPU backend is attached, the GPU path is tried first with CPU fallback.
 func (p *FftProcessor) processOneFrame(rawIq []byte) {
 	// ── GPU path ──────────────────────────────────────────────────────────────
-	if p.gpuFFT != nil {
+	if p.gpuFFT != nil && !p.gpuPaused {
 		if gpuOut, err := p.gpuFFT.Process(rawIq); err == nil {
 			// GPU returns fftSize bins in natural FFT order (DC at bin 0).
 			// Apply FFT-shift (DC → center) and normalization — same as CPU path.
@@ -266,6 +278,7 @@ func (p *FftProcessor) processOneFrame(rawIq []byte) {
 				}
 				copy(mag, p.avgBuf)
 			}
+			p.gpuFrames++
 			return
 		}
 		// GPU failed — fall through to CPU path (do not disable GPU; transient errors are common)

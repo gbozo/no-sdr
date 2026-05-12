@@ -98,7 +98,17 @@ func main() {
 	)
 
 	// Log GPU capability at startup (probe is fast — no device init here).
-	gpu.LogCapability(gpu.Probe(), logger)
+	gpuCap := gpu.Probe()
+	gpu.LogCapability(gpuCap, logger)
+
+	// Expose GPU capability to admin API.
+	api.GPUCapability.Available = gpuCap.Available
+	api.GPUCapability.Enabled = cfg.GPU.Enabled
+	api.GPUCapability.DeviceName = gpuCap.DeviceName
+	api.GPUCapability.DeviceType = string(gpuCap.DeviceType)
+	api.GPUCapability.VRAM = gpuCap.VRAM
+	api.GPUCapability.UnifiedMemory = gpuCap.UnifiedMemory
+	api.GPUCapability.VkFFTAvailable = gpuCap.VkFFTAvailable
 
 	// Determine static files directory.
 	staticDir := os.Getenv("STATIC_DIR")
@@ -175,6 +185,10 @@ func main() {
 	api.NotifyProfilesReorderedFunc = dongleMgr.NotifyProfilesReordered
 	api.NotifyServerConfigUpdatedFunc = dongleMgr.NotifyServerConfigUpdated
 	api.NotifyConfigSavedFunc = dongleMgr.NotifyConfigSaved
+
+	// Wire GPU runtime enable/disable and stats
+	api.SetGPUEnabledFunc = dongleMgr.SetGPUEnabled
+	api.GetGPUStatsFunc = dongleMgr.GetGPUStats
 
 	// Config version counter for optimistic concurrency (Phase 2)
 	cfgVersion := config.NewConfigVersion()
