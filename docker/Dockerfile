@@ -122,13 +122,17 @@ RUN apk add --no-cache \
     ca-certificates \
     libusb \
     opus \
-    vulkan-loader \
-    glslang-libs
+    vulkan-loader
+
+# Copy glslang + SPIRV shared libs from go-builder (exact versions the binary was linked against)
+COPY --from=go-builder /usr/lib/libglslang*.so* /usr/lib/
+COPY --from=go-builder /usr/lib/libSPIRV*.so* /usr/lib/
+COPY --from=go-builder /usr/lib/libSPVRemapper*.so* /usr/lib/
 
 # Copy the Osmocom rtl-sdr .so and rtl_tcp binary (not in Alpine packages — built from source)
 COPY --from=rtlsdr-builder /usr/local/lib/librtlsdr.so*  /usr/local/lib/
 COPY --from=rtlsdr-builder /usr/local/bin/rtl_tcp         /usr/local/bin/rtl_tcp
-RUN ldconfig /usr/local/lib 2>/dev/null || true
+RUN ldconfig /usr/local/lib 2>/dev/null || ldconfig /usr/lib 2>/dev/null || true
 
 WORKDIR /app
 
