@@ -56,8 +56,6 @@ FROM golang:1.23-alpine AS go-builder
 ARG TARGETARCH
 
 # Build tools + CGO deps (includes Vulkan for GPU acceleration)
-# Note: g++ adds libstdc++ which is needed for C++ code linking
-# Note: pkgconf provides pkg-config for library discovery
 RUN apk add --no-cache \
     gcc \
     g++ \
@@ -92,13 +90,14 @@ COPY serverng/ .
 # Format: -X importpath.variable=value
 #
 # Build tags: opus (libopus), rtlsdr (native librtlsdr), gpu_vulkan (Vulkan compute)
-# GPU build uses glslang shared libs from /usr/lib
+# GPU build with custom alpine tag to signal musl target.
+# Build tags: opus (libopus), rtlsdr (native librtlsdr), gpu_vulkan (Vulkan compute), alpine (musl target)
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       for level in v1 v2 v3 v4; do \
         CGO_ENABLED=1 GOOS=linux GOAMD64=$level \
         PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig \
         go build \
-            -tags 'opus rtlsdr gpu_vulkan nolibopusfile' \
+            -tags 'opus rtlsdr gpu_vulkan alpine nolibopusfile' \
             -ldflags="-s -w -X main.goamd64=$level" \
             -o /serverng-$level \
             ./cmd/serverng; \
@@ -107,7 +106,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
       CGO_ENABLED=1 GOOS=linux \
       PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig \
       go build \
-          -tags 'opus rtlsdr gpu_vulkan nolibopusfile' \
+          -tags 'opus rtlsdr gpu_vulkan alpine nolibopusfile' \
           -ldflags="-s -w -X main.goamd64=" \
           -o /serverng-v1 \
           ./cmd/serverng; \
