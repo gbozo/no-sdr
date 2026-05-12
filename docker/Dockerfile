@@ -122,7 +122,8 @@ RUN apk add --no-cache \
     ca-certificates \
     libusb \
     opus \
-    vulkan-loader
+    vulkan-loader \
+    glslang-libs
 
 # Copy the Osmocom rtl-sdr .so and rtl_tcp binary (not in Alpine packages — built from source)
 COPY --from=rtlsdr-builder /usr/local/lib/librtlsdr.so*  /usr/local/lib/
