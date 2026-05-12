@@ -8,7 +8,7 @@ tmp_dir = "tmp-gpu"
 
 [build]
   entrypoint = "./tmp-gpu/serverng"
-  cmd = "go build -tags \"gpu_vulkan opus\" -o ./tmp-gpu/serverng ./cmd/serverng"
+  cmd = "go build -tags \"gpu_vulkan\" -ldflags=\"-s -w\" -o ./tmp-gpu/serverng ./cmd/serverng"
   delay = 500
   exclude_dir = ["tmp", "tmp-gpu", "bin", "graphify-out", "node_modules"]
   exclude_regex = ["_test\\.go$"]
@@ -20,7 +20,6 @@ tmp_dir = "tmp-gpu"
 [build.env]
   STATIC_DIR = "../client/dist"
   CONFIG_PATH = "../config/config.yaml"
-  VK_ICD_FILENAMES = "/Users/I570173/VulkanSDK/1.4.341.1/macOS/share/vulkan/icd.d/MoltenVK_icd.json"
 
 [log]
   time = false

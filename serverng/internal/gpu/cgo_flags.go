@@ -1,20 +1,13 @@
-//go:build gpu_vulkan
+//go:build gpu_vulkan && linux && !musl
 
 package gpu
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/c -I${SRCDIR}/c/vkFFT
-#cgo darwin CFLAGS: -I/Users/I570173/VulkanSDK/1.4.341.1/macOS/include -I/Users/I570173/VulkanSDK/1.4.341.1/macOS/include/glslang/Include
-#cgo darwin LDFLAGS: -L/Users/I570173/VulkanSDK/1.4.341.1/macOS/lib -lvulkan -Wl,-rpath,/Users/I570173/VulkanSDK/1.4.341.1/macOS/lib
-#cgo linux CFLAGS: -I/usr/include -I/usr/include/glslang -I/usr/include/glslang/Include -I/usr/local/include -I/usr/local/include/glslang/Include
-#cgo linux LDFLAGS: -lvulkan -lm
+#cgo CFLAGS: -I${SRCDIR}/c -I${SRCDIR}/c/vkFFT -I/usr/include/glslang/Include
 
-// glslang (needed by VkFFT for runtime SPIR-V compilation)
-#cgo darwin LDFLAGS: -lglslang -lglslang-default-resource-limits -lSPIRV
-#cgo linux  LDFLAGS: -lglslang -lglslang-default-resource-limits -lSPIRV
+// Debian/Ubuntu use static libs (.a) requiring linker groups for circular deps.
+#cgo LDFLAGS: -Wl,--start-group -lglslang -lMachineIndependent -lOSDependent -lHLSL -lOGLCompiler -lGenericCodeGen -lSPVRemapper -lglslang-default-resource-limits -lSPIRV-Tools-opt -lSPIRV-Tools -lSPIRV -lglslang -lpthread -Wl,--end-group -lvulkan -lm -lstdc++
 
-// Unity build: compile all C source files in a single translation unit.
-// vulkan_probe.c must come first as it defines device_type_priority().
 #include "c/vulkan_probe.c"
 #include "c/vulkan_device.c"
 #include "c/vkfft_wrapper.c"
