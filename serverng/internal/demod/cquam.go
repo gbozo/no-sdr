@@ -49,10 +49,33 @@ type CquamDemod struct {
 	gSampleCount int
 	pilotMag     float32
 	lockLevel    float32
+
+	// DC blocking filter per channel: y = x - x_prev + 0.995 * y_prev
+	dcPrevL, dcPrevOutL float32
+	dcPrevR, dcPrevOutR float32
+
+	// AGC per channel (same params as AmDemod: target=0.3)
+	agcGainL, agcGainR float32
+	agcTarget          float32
+	agcAttack          float32
+	agcDecay           float32
+	agcMax             float32
+
+	// Audio LPF per channel (post-AGC, bandwidth-limiting)
+	audioLpfL       *simpleFir
+	audioLpfR       *simpleFir
+	audioLpfEnabled bool
 }
 
 func NewCquamDemod() *CquamDemod {
-	return &CquamDemod{}
+	return &CquamDemod{
+		agcGainL:  1.0,
+		agcGainR:  1.0,
+		agcTarget: 0.3,
+		agcAttack: 0.01,
+		agcDecay:  0.0001,
+		agcMax:    100.0,
+	}
 }
 
 func (c *CquamDemod) Name() string                            { return "cquam" }
@@ -89,6 +112,16 @@ func (c *CquamDemod) Init(ctx dsp.BlockContext) error {
 	c.pilotMag = 0
 	c.lockLevel = 0
 
+	// DC blockers
+	c.dcPrevL = 0
+	c.dcPrevOutL = 0
+	c.dcPrevR = 0
+	c.dcPrevOutR = 0
+
+	// AGC
+	c.agcGainL = 1.0
+	c.agcGainR = 1.0
+
 	return nil
 }
 
@@ -107,6 +140,20 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 	gS2 := c.gS2
 	gCount := c.gSampleCount
 	pilotMag := c.pilotMag
+
+	// DC blocker state
+	dcPrevL := c.dcPrevL
+	dcPrevOutL := c.dcPrevOutL
+	dcPrevR := c.dcPrevR
+	dcPrevOutR := c.dcPrevOutR
+
+	// AGC state
+	gainL := c.agcGainL
+	gainR := c.agcGainR
+	target := c.agcTarget
+	attack := c.agcAttack
+	decay := c.agcDecay
+	maxGain := c.agcMax
 
 	for i := 0; i < n; i++ {
 		inRe := real(in[i])
@@ -130,8 +177,6 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 		newIm := vcoRe*sinD + vcoIm*cosD
 
 		// Normalize VCO magnitude to prevent drift.
-		// invSqrt32 is faster than 1/math.Sqrt(float64(...)) — avoids SQRTSD+DIVSD.
-		// ~0.175% error is sufficient; PLL corrects residual within a few samples.
 		mag := invSqrt32(newRe*newRe + newIm*newIm)
 		vcoRe = newRe * mag
 		vcoIm = newIm * mag
@@ -148,8 +193,50 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 		left := (lPlusR + lMinusR) * 0.5
 		right := (lPlusR - lMinusR) * 0.5
 
-		out[2*i] = left
-		out[2*i+1] = right
+		// DC block L: y = x - x_prev + 0.995*y_prev
+		dcOutL := left - dcPrevL + 0.995*dcPrevOutL
+		dcPrevL = left
+		dcPrevOutL = dcOutL
+
+		// DC block R: y = x - x_prev + 0.995*y_prev
+		dcOutR := right - dcPrevR + 0.995*dcPrevOutR
+		dcPrevR = right
+		dcPrevOutR = dcOutR
+
+		// AGC L
+		absL := dcOutL * gainL
+		if absL < 0 {
+			absL = -absL
+		}
+		if absL > target {
+			gainL *= (1 - attack)
+		} else {
+			gainL *= (1 + decay)
+		}
+		if gainL > maxGain {
+			gainL = maxGain
+		} else if gainL < 0.001 {
+			gainL = 0.001
+		}
+
+		// AGC R
+		absR := dcOutR * gainR
+		if absR < 0 {
+			absR = -absR
+		}
+		if absR > target {
+			gainR *= (1 - attack)
+		} else {
+			gainR *= (1 + decay)
+		}
+		if gainR > maxGain {
+			gainR = maxGain
+		} else if gainR < 0.001 {
+			gainR = 0.001
+		}
+
+		out[2*i] = dcOutL * gainL
+		out[2*i+1] = dcOutR * gainR
 
 		// 25Hz Goertzel on L-R signal for pilot detection
 		s0 := lMinusR + c.gCoeff*gS1 - gS2
@@ -159,7 +246,6 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 
 		if gCount >= c.gBlockSize {
 			// Compute magnitude from Goertzel power output.
-			// math.Abs guards against tiny negative values from float rounding.
 			power := gS1*gS1 + gS2*gS2 - c.gCoeff*gS1*gS2
 			if power < 0 {
 				power = -power
@@ -174,11 +260,20 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 	c.vcoRe = vcoRe
 	c.vcoIm = vcoIm
 	c.omega2 = omega2
-	// c.cosGamma is intentionally not updated here — retain last computed value
 	c.gS1 = gS1
 	c.gS2 = gS2
 	c.gSampleCount = gCount
 	c.pilotMag = pilotMag
+
+	// Save DC blocker state
+	c.dcPrevL = dcPrevL
+	c.dcPrevOutL = dcPrevOutL
+	c.dcPrevR = dcPrevR
+	c.dcPrevOutR = dcPrevOutR
+
+	// Save AGC state
+	c.agcGainL = gainL
+	c.agcGainR = gainR
 
 	// Lock level based on pilot magnitude
 	const lockThreshold float32 = 0.01
@@ -188,7 +283,16 @@ func (c *CquamDemod) Process(in []complex64, out []float32) int {
 		c.lockLevel = 0.99 * c.lockLevel
 	}
 
-	return 2 * n
+	// Apply post-AGC audio LPF if enabled
+	written := 2 * n
+	if c.audioLpfEnabled && c.audioLpfL != nil && c.audioLpfR != nil {
+		for i := 0; i < n; i++ {
+			out[2*i] = c.audioLpfL.process(out[2*i])
+			out[2*i+1] = c.audioLpfR.process(out[2*i+1])
+		}
+	}
+
+	return written
 }
 
 func (c *CquamDemod) Reset() {
@@ -201,6 +305,46 @@ func (c *CquamDemod) Reset() {
 	c.gSampleCount = 0
 	c.pilotMag = 0
 	c.lockLevel = 0
+	c.dcPrevL = 0
+	c.dcPrevOutL = 0
+	c.dcPrevR = 0
+	c.dcPrevOutR = 0
+	c.agcGainL = 1.0
+	c.agcGainR = 1.0
+	if c.audioLpfL != nil {
+		c.audioLpfL.reset()
+	}
+	if c.audioLpfR != nil {
+		c.audioLpfR.reset()
+	}
+}
+
+// SetBandwidth sets the post-AGC audio low-pass filter cutoff.
+// Matches AmDemod.SetBandwidth: cutoff = min(hz/2, 5000) Hz.
+func (c *CquamDemod) SetBandwidth(hz float64) {
+	if hz <= 0 || c.sampleRate <= 0 {
+		c.audioLpfEnabled = false
+		return
+	}
+	cutoffHz := hz / 2.0
+	if cutoffHz > 5000 {
+		cutoffHz = 5000
+	}
+	norm := cutoffHz / c.sampleRate
+	if norm >= 0.5 {
+		c.audioLpfEnabled = false
+		return
+	}
+	if c.audioLpfL == nil {
+		c.audioLpfL = newSimpleFir(31, norm)
+		c.audioLpfR = newSimpleFir(31, norm)
+	} else {
+		c.audioLpfL.design(norm, 31)
+		c.audioLpfL.reset()
+		c.audioLpfR.design(norm, 31)
+		c.audioLpfR.reset()
+	}
+	c.audioLpfEnabled = true
 }
 
 // IsLocked returns true if the C-QUAM 25Hz pilot tone has been detected.

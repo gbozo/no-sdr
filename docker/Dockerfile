@@ -8,7 +8,10 @@
 # ============================================
 
 # ---- Client Build ----
-FROM node:22-slim AS client-builder
+# Pin to build platform — client produces platform-independent static assets (HTML/JS/CSS).
+# Avoids QEMU emulation issues with rollup native bindings on cross-platform builds.
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM node:22-slim AS client-builder
 
 WORKDIR /app
 

@@ -305,6 +305,9 @@ let pendingHistory: {
 // Row pixel buffer — reused every frame (w × 1 RGBA8)
 let rowPixels: Uint8Array | null = null;
 
+// GPU texture size limit — queried once at init, used to clamp dimensions
+let maxTextureSize = 4096;
+
 // ---- WebGL helpers ----
 
 function compileShader(type: number, src: string): WebGLShader {
@@ -492,7 +495,8 @@ function prefillFromBuffer(frames: Float32Array[]): void {
     const pixels    = fftToRow(frames[frameIdx]);
     if (!gl || !dataTex) return;
     gl.bindTexture(gl.TEXTURE_2D, dataTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, targetRow, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels.slice());
+    // texSubImage2D copies pixel data synchronously — no need to .slice()
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, targetRow, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
   }
   // Advance write cursor past filled rows
   writeRow = (writeRow + rowCount) % h;
@@ -517,7 +521,8 @@ function prefillHistory(
     const pixels    = historyFrameToRow(frames[frameIdx], binCount, serverMinDb, serverMaxDb);
     if (!gl || !dataTex) return;
     gl.bindTexture(gl.TEXTURE_2D, dataTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, targetRow, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels.slice());
+    // texSubImage2D copies pixel data synchronously — no need to .slice()
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, targetRow, w, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
   }
   writeRow = (writeRow + rowCount) % h;
   filledRows = Math.min(filledRows + rowCount, h);
@@ -528,10 +533,10 @@ function prefillHistory(
 
 function clear(): void {
   if (!gl || !dataTex) return;
-  // Clear texture to black by uploading zeroed data
-  const zeros = new Uint8Array(w * h * 4);
+  // Re-allocate texture with null data — GL spec guarantees zero-fill.
+  // Avoids allocating a transient w*h*4 Uint8Array (up to 9.6 MB).
   gl.bindTexture(gl.TEXTURE_2D, dataTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, zeros);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
   writeRow   = 0;
   filledRows = 0;
   updateUniforms();
@@ -540,6 +545,10 @@ function clear(): void {
 
 function resize(newW: number, newH: number): void {
   if (!gl) return;
+
+  // Clamp to GPU's maximum texture size to prevent silent failures on mobile
+  newW = Math.min(newW, maxTextureSize);
+  newH = Math.min(newH, maxTextureSize);
 
   // Guard: skip if dimensions haven't changed
   if (newW === w && newH === h) return;
@@ -589,6 +598,9 @@ function initWebGL(canvas: OffscreenCanvas): void {
   }
 
   gl = context as WebGL2RenderingContext;
+
+  // Query max texture size to prevent oversized texture allocation on mobile
+  maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number || 4096;
 
   // Handle context loss/restore
   canvas.addEventListener('webglcontextlost', (e) => {
@@ -655,8 +667,6 @@ self.onmessage = (e: MessageEvent) => {
       const dpr    = (msg.dpr as number) || 1;
       w = Math.round((msg.width  as number) * dpr);
       h = Math.round((msg.height as number) * dpr);
-      canvas.width  = w;
-      canvas.height = h;
 
       minDb   = msg.minDb  ?? -60;
       maxDb   = msg.maxDb  ?? -10;
@@ -665,6 +675,11 @@ self.onmessage = (e: MessageEvent) => {
 
       try {
         initWebGL(canvas);
+        // After initWebGL, maxTextureSize is known — clamp dimensions
+        w = Math.min(w, maxTextureSize);
+        h = Math.min(h, maxTextureSize);
+        canvas.width  = w;
+        canvas.height = h;
         // Set initial viewport + create texture after dimensions are known
         if (gl) {
           gl.viewport(0, 0, w, h);

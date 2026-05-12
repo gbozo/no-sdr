@@ -795,7 +795,10 @@ const AudioControls: Component = () => {
           >
             Loudness
           </button>
-          <Show when={store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo'}>
+          <Show when={
+            store.mode() === 'wfm' || store.mode() === 'am-stereo' ||
+            (store.mode() === 'am' && store.iqCodec() !== 'opus' && store.iqCodec() !== 'opus-hq' && store.iqCodec() !== 'opus-lo')
+          }>
             <button
               class={`mil-btn flex-1 ${store.stereoEnabled() ? 'active' : ''}`}
               onClick={() => engine.setStereoEnabled(!store.stereoEnabled())}
