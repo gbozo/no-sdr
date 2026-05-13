@@ -259,7 +259,7 @@ function drawRow(fftData: Float32Array): void {
       db = fftData[lo] + (binF - lo) * (fftData[hi] - fftData[lo]);
     } else {
       const bs = Math.max(0, Math.floor(binF));
-      const be = Math.min(bins, Math.floor(binF + binsPerPx));
+      const be = Math.min(bins, Math.ceil(binF + binsPerPx));
       db = fftData[bs];
       for (let b = bs + 1; b < be; b++) if (fftData[b] > db) db = fftData[b];
     }
