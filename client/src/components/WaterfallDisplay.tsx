@@ -336,7 +336,7 @@ const timer = setInterval(() => {
     engine.setSpectrumZoom(newStart, newEnd);
   };
 
-  const handleSpectrumDblClick = () => engine.resetSpectrumZoom();
+  // const handleSpectrumDblClick = () => engine.resetSpectrumZoom();
 
   const handleMouseLeave = () => {
     setHoverFreq(null);
@@ -583,7 +583,7 @@ const timer = setInterval(() => {
           onMouseMove={handleSpectrumMouseMove}
           onMouseUp={handleSpectrumMouseUp}
           onMouseLeave={handleMouseLeave}
-          onDblClick={handleSpectrumDblClick}
+          // onDblClick={handleSpectrumDblClick}
           onWheel={handleSpectrumWheel}
           onTouchStart={handleSpectrumTouchStart}
           onTouchMove={handleSpectrumTouchMove}
@@ -606,7 +606,7 @@ const timer = setInterval(() => {
                    flex items-center text-[8px] font-mono rounded-sm
                    border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
                    hover:bg-[var(--sdr-accent)]/10 transition-colors"
-            title="Reset zoom (double-click spectrum)"
+            title="Reset zoom"
             onClick={() => engine.resetSpectrumZoom()}
           >
             ×zoom
@@ -812,7 +812,7 @@ const FrequencyScale: Component = () => {
       <div class="absolute top-0 left-0 right-0 h-5 pointer-events-none z-10 overflow-hidden">
         <For each={visibleBands()}>
           {(b) => {
-            const borderColor = TAG_BORDER_COLORS[b.tags?.[0] ?? ''] ?? 'rgba(150,150,150,0.35)';
+            const borderColor = TAG_BORDER_COLORS[b.tags?.[0] ?? ''] ?? 'rgba(238, 238, 238, 0.9)';
             return (
               <div
                 class="absolute top-0 bottom-0"
@@ -833,7 +833,7 @@ const FrequencyScale: Component = () => {
           {(b) => (
             <span
               class="absolute top-0 bottom-0 flex items-center justify-center
-                     text-[7px] font-mono text-white overflow-hidden whitespace-nowrap"
+                     text-[10px] font-mono text-white overflow-hidden whitespace-nowrap"
               style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%`,
                        'text-shadow': '0 0 3px rgba(0,0,0,0.9)' }}
             >
@@ -844,8 +844,8 @@ const FrequencyScale: Component = () => {
       </div>
       {/* Frequency labels + signal markers — bottom of spectrum */}
       <div class="absolute bottom-0 left-0 right-0 pointer-events-none">
-        <div class="relative flex items-center h-5 bg-sdr-base/80 border-t border-border/50">
-          <div class="relative flex justify-between w-full px-1 text-[8px] font-mono text-text-dim">
+        <div class="relative flex items-center h-3 bg-sdr-base/80 border-t border-border/50">
+          <div class="relative flex justify-between w-full px-1 text-[9px] font-mono text-text-dim">
             <For each={viewHz()}>
               {(hz, i) => (
                 <span class={i() === 2 ? 'text-text-secondary' : ''}>{formatFreq(hz)}</span>

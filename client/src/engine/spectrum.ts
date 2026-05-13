@@ -414,7 +414,7 @@ export class SpectrumRenderer {
     const left=centerX - halfBw;
     const right=centerX + halfBw
     // Draw bandwidth edges
-    ctx.strokeStyle = 'rgba(255, 252, 98, 0.8)';
+    ctx.strokeStyle = 'rgba(255, 252, 98, 0.4)';
     ctx.lineWidth = 0.8;
     ctx.beginPath();
     ctx.moveTo(left, 0);
@@ -424,14 +424,14 @@ export class SpectrumRenderer {
     ctx.stroke();
     const range = this.maxDb - this.minDb;
     // dB labels
-    ctx.fillStyle = '#ffffff85';
-    ctx.font = '12px monospace';
+    ctx.fillStyle = '#ffffff65';
+    ctx.font = '9px monospace';
     ctx.textAlign = 'center';
     
     for (let db = Math.ceil(this.minDb / 20) * 20; db <= this.maxDb; db += 10) {
       const y = h - ((db - this.minDb) / range) * h;
-      ctx.fillText(`${db}`, left - 12, y - 2);
-      ctx.fillText(`${db}`, right + 12, y - 2);
+      ctx.fillText(`${db}`, right + 9, y - 2);
+      // ctx.fillText(`${db}`, right + 12, y - 2);
     }
   }
 

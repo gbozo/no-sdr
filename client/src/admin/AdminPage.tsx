@@ -232,12 +232,19 @@ const LoginForm: Component<{ password: string; setPassword: (v: string) => void;
         </svg>
         <h2 class="text-sm font-mono uppercase tracking-wider text-text-primary">Admin Login</h2>
       </div>
-
+      <input
+        id="username"
+        type="text"
+        name="username"
+        autocomplete="username"
+        class="hidden"        
+      />
       <input
         type="password"
         value={props.password}
         onInput={(e) => props.setPassword(e.currentTarget.value)}
         placeholder="Enter admin password"
+        autocomplete="current-password"
         class="w-full px-3 py-2 bg-sdr-base border border-border rounded-sm
                text-xs font-mono text-text-primary placeholder-text-dim
                focus:outline-none focus:border-cyan transition-colors"
