@@ -16,7 +16,7 @@ export class SpectrumRenderer {
 
   // Throttle rendering to ~30fps (same as waterfall)
   private lastDrawTime = 0;
-  private readonly minFrameInterval = 33; // ms (~30fps)
+  private readonly minFrameInterval = 16; // ms (~60fps)
 
   // Peak hold
   private peakHoldEnabled = false;
@@ -386,6 +386,9 @@ export class SpectrumRenderer {
   drawTuningIndicator(offset: number, bandwidth: number, sampleRate: number): void {
     if (!this.ready || this.paused) return;
 
+    const now = performance.now();
+    if (now - this.lastDrawTime < this.minFrameInterval) return;
+
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
@@ -398,29 +401,45 @@ export class SpectrumRenderer {
     const halfBwNorm = (bandwidth / sampleRate / 2) / (this.zoomEnd - this.zoomStart);
     const halfBw     = halfBwNorm * w;
 
-    // Draw bandwidth rectangle
-    ctx.fillStyle = 'rgba(74, 163, 255, 0.08)';
-    ctx.fillRect(centerX - halfBw, 0, halfBw * 2, h);
+    // Tuning grid frame around the selected bandwidth
+    const leftX  = centerX - halfBw;
+    const rightX = centerX + halfBw;
 
-    // Draw center line
-    ctx.strokeStyle = this.accentColor;
+    // Full frame outline
+    ctx.strokeStyle = 'rgba(74, 163, 255, 0.35)';
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
+    ctx.strokeRect(leftX, 0, halfBw * 2, h);
+    ctx.setLineDash([]);
+
+    // Center line — solid, slightly brighter
+    ctx.strokeStyle = this.accentColor;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(centerX, 0);
     ctx.lineTo(centerX, h);
     ctx.stroke();
-    ctx.setLineDash([]);
 
-    // Draw bandwidth edges
-    ctx.strokeStyle = 'rgba(74, 163, 255, 0.4)';
-    ctx.lineWidth = 0.5;
+    // Tick marks at edges
+    ctx.strokeStyle = 'rgba(74, 163, 255, 0.5)';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(centerX - halfBw, 0);
-    ctx.lineTo(centerX - halfBw, h);
-    ctx.moveTo(centerX + halfBw, 0);
-    ctx.lineTo(centerX + halfBw, h);
+    ctx.moveTo(leftX,  0); ctx.lineTo(leftX,  h);
+    ctx.moveTo(rightX, 0); ctx.lineTo(rightX, h);
     ctx.stroke();
+
+    // Frequency label at top
+    ctx.fillStyle = 'rgba(74, 163, 255, 0.8)';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    const labelFreq = offset;
+    const labelSign = labelFreq >= 0 ? '+' : '';
+    ctx.fillText(`${labelSign}${(labelFreq / 1e3).toFixed(1)}k`, centerX, 10);
+
+    // Bandwidth label
+    ctx.fillStyle = 'rgba(74, 163, 255, 0.5)';
+    ctx.font = '7px monospace';
+    ctx.fillText(`${(bandwidth / 1e3).toFixed(0)}kHz`, centerX, 20);
   }
 
   /**
