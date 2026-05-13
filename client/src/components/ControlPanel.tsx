@@ -2188,11 +2188,11 @@ const SMeter: Component = () => {
       <Show when={open()}>
         <div class="p-3">
         <Show when={store.meterStyle() === 'bar'}>
-          <div class="flex justify-between text-[9px] text-text-dim font-mono mb-1">
+          <div class="flex justify-between text-[10px] text-text-primary font-mono mb-1">
             <span>S-Meter</span>
             <span class="text-text-secondary">
               {store.signalLevel().toFixed(0)} dBm
-              <span class="text-text-dim ml-2">SNR {store.snr().toFixed(0)} dB</span>
+              <span class="text-text-primary ml-2">SNR {store.snr().toFixed(0)} dB</span>
             </span>
           </div>
           {/* Bar track */}
@@ -2222,7 +2222,7 @@ const SMeter: Component = () => {
             />
           </div>
           {/* Scale labels aligned to fixed dB positions */}
-          <div class="relative text-[7px] text-text-muted font-mono mt-0.5 h-3">
+          <div class="relative text-[9px] text-text-primary font-mono mt-0.5 h-3">
             <span class="absolute -translate-x-1/2" style={{ left:  '0%' }}>S1</span>
             <span class="absolute -translate-x-1/2" style={{ left: '14.3%' }}>3</span>
             <span class="absolute -translate-x-1/2" style={{ left: '28.6%' }}>5</span>
@@ -2251,9 +2251,9 @@ const SMeter: Component = () => {
 
         {/* Signal history graph — always visible below the meter */}
         <div class="mt-2">
-          <div class="text-[7px] font-mono uppercase tracking-[0.12em] text-text-muted mb-0.5">
+          {/* <div class="text-[7px] font-mono uppercase tracking-[0.12em] text-text-muted mb-0.5">
             History
-          </div>
+          </div> */}
           <canvas
             ref={(el) => { graphCanvasRef = el; }}
             class="w-full rounded-sm"

@@ -26,10 +26,10 @@ var embeddedBandsR3 []byte
 
 // upstream URLs for weekly refresh (OpenWebRX GitHub raw content).
 const (
-	bandsURL   = "https://raw.githubusercontent.com/jketterl/openwebrx/master/htdocs/static/bands/bands.json"
-	bandsR1URL = "https://raw.githubusercontent.com/jketterl/openwebrx/master/htdocs/static/bands/bands-r1.json"
-	bandsR2URL = "https://raw.githubusercontent.com/jketterl/openwebrx/master/htdocs/static/bands/bands-r2.json"
-	bandsR3URL = "https://raw.githubusercontent.com/jketterl/openwebrx/master/htdocs/static/bands/bands-r3.json"
+	bandsURL   = "https://raw.githubusercontent.com/luarvique/openwebrx/refs/heads/master/bands.json"
+	bandsR1URL = "https://raw.githubusercontent.com/luarvique/openwebrx/refs/heads/master/bands-r1.json"
+	bandsR2URL = "https://raw.githubusercontent.com/luarvique/openwebrx/refs/heads/master/bands-r2.json"
+	bandsR3URL = "https://raw.githubusercontent.com/luarvique/openwebrx/refs/heads/master/bands-r3.json"
 )
 
 // BandEntry is a single frequency band allocation entry.

@@ -20,10 +20,10 @@ interface BandPlanResponse {
 
 // Tag → colour mapping for band overlay
 const TAG_COLORS: Record<string, string> = {
-  hamradio:  'rgba(56, 193, 128, 0.18)',   // accent green
-  broadcast: 'rgba(255, 160, 30,  0.15)',   // amber
-  service:   'rgba(80,  160, 255, 0.13)',   // blue
-  public:    'rgba(200, 100, 255, 0.12)',   // purple
+  hamradio:  'rgba(56, 193, 128, 0.26)',   // accent green
+  broadcast: 'rgba(255, 160, 30,  0.25)',   // amber
+  service:   'rgba(80,  160, 255, 0.23)',   // blue
+  public:    'rgba(200, 100, 255, 0.22)',   // purple
 };
 
 export const TAG_BORDER_COLORS: Record<string, string> = {
