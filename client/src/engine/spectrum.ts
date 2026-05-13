@@ -430,8 +430,7 @@ export class SpectrumRenderer {
     
     for (let db = Math.ceil(this.minDb / 20) * 20; db <= this.maxDb; db += 10) {
       const y = h - ((db - this.minDb) / range) * h;
-      ctx.fillText(`${db}`, right + 9, y - 2);
-      // ctx.fillText(`${db}`, right + 12, y - 2);
+      ctx.fillText(`${db}`, right + 9, y - 2);      
     }
   }
 
