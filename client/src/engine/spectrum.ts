@@ -16,7 +16,7 @@ export class SpectrumRenderer {
 
   // Throttle rendering to ~30fps (same as waterfall)
   private lastDrawTime = 0;
-  private readonly minFrameInterval = 16; // ms (~60fps)
+  private readonly minFrameInterval = 16; // ms (~30fps)
 
   // Peak hold
   private peakHoldEnabled = false;
@@ -88,7 +88,7 @@ export class SpectrumRenderer {
     this.accentColor = '#4aa3ff';
     this.fillColor = 'rgba(74,163,255,0.12)';
     this.signalFillColor = 'rgba(74,163,255,0.25)';
-    this.gridColor = 'rgba(38, 50, 70, 0.5)';
+    this.gridColor = 'rgba(254, 254, 254, 0.4)';
     this.resize();
     // Apply the actual current theme color (may differ from default if page loaded with a saved theme)
     const themeColor = getComputedStyle(document.documentElement)
@@ -148,7 +148,7 @@ export class SpectrumRenderer {
 
     // Grid lines (every 10 dB)
     ctx.strokeStyle = this.gridColor;
-    ctx.lineWidth = 0.5;
+    ctx.lineWidth = 0.4;
     for (let db = Math.ceil(this.minDb / 10) * 10; db <= this.maxDb; db += 10) {
       const y = h - ((db - this.minDb) / range) * h;
       ctx.beginPath();
@@ -159,7 +159,7 @@ export class SpectrumRenderer {
 
     // dB labels
     ctx.fillStyle = '#6f7f94';
-    ctx.font = '9px monospace';
+    ctx.font = '10px monospace';
     ctx.textAlign = 'left';
     for (let db = Math.ceil(this.minDb / 20) * 20; db <= this.maxDb; db += 20) {
       const y = h - ((db - this.minDb) / range) * h;
@@ -398,44 +398,41 @@ export class SpectrumRenderer {
     const halfBwNorm = (bandwidth / sampleRate / 2) / (this.zoomEnd - this.zoomStart);
     const halfBw     = halfBwNorm * w;
 
-    // Tuning grid frame around the selected bandwidth
-    const leftX  = centerX - halfBw;
-    const rightX = centerX + halfBw;
+    // Draw bandwidth rectangle
+    ctx.fillStyle = 'rgba(74, 163, 255, 0.22)';
+    ctx.fillRect(centerX - halfBw, 0, halfBw * 2, h);
 
-    // Full frame outline — bright cyan, always visible regardless of theme
-    ctx.strokeStyle = 'rgba(74, 163, 255, 0.7)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([5, 5]);
-    ctx.strokeRect(leftX, 0, halfBw * 2, h);
-    ctx.setLineDash([]);
-
-    // Center line — solid, full brightness
-    ctx.strokeStyle = '#4ab4ff';
-    ctx.lineWidth = 1.5;
+    // Draw center line
+    ctx.strokeStyle = this.accentColor;
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 2]);
     ctx.beginPath();
     ctx.moveTo(centerX, 0);
     ctx.lineTo(centerX, h);
     ctx.stroke();
-
-    // Tick marks at edges
-    ctx.strokeStyle = 'rgba(74, 178, 255, 0.85)';
-    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    const left=centerX - halfBw;
+    const right=centerX + halfBw
+    // Draw bandwidth edges
+    ctx.strokeStyle = 'rgba(255, 252, 98, 0.8)';
+    ctx.lineWidth = 0.8;
     ctx.beginPath();
-    ctx.moveTo(leftX,  0); ctx.lineTo(leftX,  h);
-    ctx.moveTo(rightX, 0); ctx.lineTo(rightX, h);
+    ctx.moveTo(left, 0);
+    ctx.lineTo(left, h);
+    ctx.moveTo(right, 0);
+    ctx.lineTo(right, h);
     ctx.stroke();
-
-    // Frequency label at top
-    ctx.fillStyle = '#4ab4ff';
-    ctx.font = '9px monospace';
+    const range = this.maxDb - this.minDb;
+    // dB labels
+    ctx.fillStyle = '#ffffff85';
+    ctx.font = '12px monospace';
     ctx.textAlign = 'center';
-    const labelSign = offset >= 0 ? '+' : '';
-    ctx.fillText(`${labelSign}${(offset / 1e3).toFixed(1)}k`, centerX, 12);
-
-    // Bandwidth label below
-    ctx.fillStyle = 'rgba(74, 178, 255, 0.65)';
-    ctx.font = '7px monospace';
-    ctx.fillText(`${(bandwidth / 1e3).toFixed(0)}kHz`, centerX, 22);
+    
+    for (let db = Math.ceil(this.minDb / 20) * 20; db <= this.maxDb; db += 10) {
+      const y = h - ((db - this.minDb) / range) * h;
+      ctx.fillText(`${db}`, left - 12, y - 2);
+      ctx.fillText(`${db}`, right + 12, y - 2);
+    }
   }
 
   /**

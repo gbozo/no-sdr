@@ -2177,7 +2177,7 @@ const SMeter: Component = () => {
           </span>
         </Show>
         <button
-          class="ml-auto text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors uppercase tracking-wider"
+          class="ml-auto text-[9px] font-mono text-text-dim hover:text-text-secondary transition-colors uppercase tracking-wider"
           onClick={(e) => { e.stopPropagation(); toggleStyle(); }}
           title={`Switch to ${store.meterStyle() === 'bar' ? 'needle' : 'bar'} meter`}
         >

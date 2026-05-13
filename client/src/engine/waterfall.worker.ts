@@ -211,7 +211,7 @@ let panSnapshot: OffscreenCanvas | null = null;
 
 // Throttle: ~30fps
 let lastDrawTime = 0;
-const MIN_FRAME_INTERVAL = 33;
+const MIN_FRAME_INTERVAL = 16;
 
 // Buffer history until we have real canvas dimensions (w > 0, h > 0).
 // Happens when prefill-history arrives before the first resize message.
