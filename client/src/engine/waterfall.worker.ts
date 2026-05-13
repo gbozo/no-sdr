@@ -234,9 +234,8 @@ function drawRow(fftData: Float32Array): void {
   const range = maxDb - minDb;
   if (range === 0) return;
 
-  // Scroll existing content down by 1px
-  const existing = ctx.getImageData(0, 0, w, h - 1);
-  ctx.putImageData(existing, 0, 1);
+  // GPU-side scroll (avoids CPU readback of entire canvas)
+  ctx.drawImage(ctx.canvas, 0, 1);
 
   // Build new top row
   if (!rowImageData || rowImageData.width !== w) {
@@ -307,7 +306,7 @@ function prefillFromBuffer(frames: Float32Array[]): void {
         db = frame[lo] + (binF - lo) * (frame[hi] - frame[lo]);
       } else {
         const bs = Math.max(0, Math.floor(binF));
-        const be = Math.min(binCount, Math.floor(binF + binsPerPx));
+        const be = Math.min(binCount, Math.ceil(binF + binsPerPx));
         db = frame[bs];
         for (let b = bs + 1; b < be; b++) if (frame[b] > db) db = frame[b];
       }
@@ -359,7 +358,7 @@ function prefillHistory(
         u8 = Math.round(frame[lo] + (binIdx - lo) * (frame[hi] - frame[lo]));
       } else {
         const bs = Math.floor(x * binsPerPixel);
-        const be = Math.min(Math.floor((x + 1) * binsPerPixel), binCount);
+        const be = Math.min(Math.ceil((x + 1) * binsPerPixel), binCount);
         u8 = frame[bs];
         for (let b = bs + 1; b < be; b++) if (frame[b] > u8) u8 = frame[b];
       }
