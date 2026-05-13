@@ -703,7 +703,7 @@ const timer = setInterval(() => {
         <canvas
           ref={waterfallRef!}
           class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-          style={{ "image-rendering": "pixelated", "will-change": "transform" }}
+          style={{ "will-change": "transform" }}
           onClick={handleWaterfallClick}
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}
