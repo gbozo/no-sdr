@@ -386,9 +386,6 @@ export class SpectrumRenderer {
   drawTuningIndicator(offset: number, bandwidth: number, sampleRate: number): void {
     if (!this.ready || this.paused) return;
 
-    const now = performance.now();
-    if (now - this.lastDrawTime < this.minFrameInterval) return;
-
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
@@ -405,15 +402,15 @@ export class SpectrumRenderer {
     const leftX  = centerX - halfBw;
     const rightX = centerX + halfBw;
 
-    // Full frame outline
-    ctx.strokeStyle = 'rgba(74, 163, 255, 0.35)';
+    // Full frame outline — bright cyan, always visible regardless of theme
+    ctx.strokeStyle = 'rgba(74, 163, 255, 0.7)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
+    ctx.setLineDash([5, 5]);
     ctx.strokeRect(leftX, 0, halfBw * 2, h);
     ctx.setLineDash([]);
 
-    // Center line — solid, slightly brighter
-    ctx.strokeStyle = this.accentColor;
+    // Center line — solid, full brightness
+    ctx.strokeStyle = '#4ab4ff';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(centerX, 0);
@@ -421,7 +418,7 @@ export class SpectrumRenderer {
     ctx.stroke();
 
     // Tick marks at edges
-    ctx.strokeStyle = 'rgba(74, 163, 255, 0.5)';
+    ctx.strokeStyle = 'rgba(74, 178, 255, 0.85)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(leftX,  0); ctx.lineTo(leftX,  h);
@@ -429,17 +426,16 @@ export class SpectrumRenderer {
     ctx.stroke();
 
     // Frequency label at top
-    ctx.fillStyle = 'rgba(74, 163, 255, 0.8)';
-    ctx.font = '8px monospace';
+    ctx.fillStyle = '#4ab4ff';
+    ctx.font = '9px monospace';
     ctx.textAlign = 'center';
-    const labelFreq = offset;
-    const labelSign = labelFreq >= 0 ? '+' : '';
-    ctx.fillText(`${labelSign}${(labelFreq / 1e3).toFixed(1)}k`, centerX, 10);
+    const labelSign = offset >= 0 ? '+' : '';
+    ctx.fillText(`${labelSign}${(offset / 1e3).toFixed(1)}k`, centerX, 12);
 
-    // Bandwidth label
-    ctx.fillStyle = 'rgba(74, 163, 255, 0.5)';
+    // Bandwidth label below
+    ctx.fillStyle = 'rgba(74, 178, 255, 0.65)';
     ctx.font = '7px monospace';
-    ctx.fillText(`${(bandwidth / 1e3).toFixed(0)}kHz`, centerX, 20);
+    ctx.fillText(`${(bandwidth / 1e3).toFixed(0)}kHz`, centerX, 22);
   }
 
   /**
