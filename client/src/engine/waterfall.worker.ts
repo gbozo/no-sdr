@@ -428,7 +428,7 @@ self.onmessage = (e: MessageEvent) => {
   switch (msg.type) {
     case 'init': {
       const canvas = msg.canvas as OffscreenCanvas;
-      ctx = canvas.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
+      ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
       w = msg.width;
       h = msg.height;
       canvas.width  = w;

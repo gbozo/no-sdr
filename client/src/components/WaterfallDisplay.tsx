@@ -82,15 +82,16 @@ const WaterfallDisplay: Component = () => {
     engine.setSpectrumSignalFill(store.spectrumSignalFill());
     engine.setSpectrumNoiseFloor(store.spectrumNoiseFloor());
     engine.setSpectrumAveraging(store.spectrumAveraging());
+    let resizeTimer: number | null = null;
     const observer = new ResizeObserver(() => {
-      // Debounce resize events — Android Chrome/Firefox fire on every pixel of
+      // Throttle resize events — Android Chrome/Firefox fire on every pixel of
       // URL-bar animation (up to 60×/sec), which would clear both canvases
       // and cause severe flicker. Collapse into a single handleResize per 150ms.
-      if ((observer as any)._rafHandle) cancelAnimationFrame((observer as any)._rafHandle);
-      (observer as any)._rafHandle = requestAnimationFrame(() => {
-        (observer as any)._rafHandle = 0;
+      if (resizeTimer !== null) return;
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
         engine.handleResize();
-      });
+      }, 150);
     });
     observer.observe(containerRef);
     requestAnimationFrame(() => {
@@ -102,9 +103,16 @@ const WaterfallDisplay: Component = () => {
     // Poll buffer count so the scrub range max stays current
     const bufferPoll = setInterval(() => setBufferCount(engine.fftBufferCount), 500);
 
+    // Attach passive:false for wheel events — touch is handled via JSX + touch-action:none CSS
+    const wheelOpts = { passive: false } as AddEventListenerOptions;
+    spectrumRef.addEventListener('wheel', handleSpectrumWheel as EventListener, wheelOpts);
+    waterfallRef.addEventListener('wheel', handleWaterfallWheel as EventListener, wheelOpts);
+
     onCleanup(() => {
       observer.disconnect();
       clearInterval(bufferPoll);
+      spectrumRef.removeEventListener('wheel', handleSpectrumWheel as EventListener, wheelOpts);
+      waterfallRef.removeEventListener('wheel', handleWaterfallWheel as EventListener, wheelOpts);
     });
   });
 
@@ -381,7 +389,6 @@ const WaterfallDisplay: Component = () => {
     Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
 
   const handleSpectrumTouchStart = (e: TouchEvent) => {
-    e.preventDefault();
     if (e.touches.length === 1) {
       touchPanAnchor = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
       touchPinchDist = null;
@@ -396,7 +403,6 @@ const WaterfallDisplay: Component = () => {
   };
 
   const handleSpectrumTouchMove = (e: TouchEvent) => {
-    e.preventDefault();
     const [zs, ze] = store.spectrumZoom();
     const span = ze - zs;
     if (e.touches.length === 1 && touchPanAnchor !== null) {
@@ -435,7 +441,6 @@ const WaterfallDisplay: Component = () => {
   };
 
   const handleWaterfallTouchStart = (e: TouchEvent) => {
-    e.preventDefault();
     if (e.touches.length === 1) {
       touchPanAnchor = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
       engine.beginWaterfallPan();
@@ -443,7 +448,6 @@ const WaterfallDisplay: Component = () => {
   };
 
   const handleWaterfallTouchMove = (e: TouchEvent) => {
-    e.preventDefault();
     if (e.touches.length !== 1 || touchPanAnchor === null) return;
     const [zs, ze] = store.spectrumZoom();
     const span = ze - zs;
@@ -507,13 +511,12 @@ const WaterfallDisplay: Component = () => {
         <canvas
           ref={spectrumRef!}
           class={`absolute inset-0 w-full h-full ${spectrumCursor()}`}
-          style={{ "will-change": "transform" }}
+          style={{ 'touch-action': 'none' }}
           onMouseDown={handleSpectrumMouseDown}
           onMouseMove={handleSpectrumMouseMove}
           onMouseUp={handleSpectrumMouseUp}
           onMouseLeave={handleMouseLeave}
           // onDblClick={handleSpectrumDblClick}
-          onWheel={handleSpectrumWheel}
           onTouchStart={handleSpectrumTouchStart}
           onTouchMove={handleSpectrumTouchMove}
           onTouchEnd={handleSpectrumTouchEnd}
@@ -632,11 +635,10 @@ const WaterfallDisplay: Component = () => {
         <canvas
           ref={waterfallRef!}
           class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-          style={{ "will-change": "transform" }}
+          style={{ 'touch-action': 'none' }}
           onClick={handleWaterfallClick}
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}
-          onWheel={handleWaterfallWheel}
           onTouchStart={handleWaterfallTouchStart}
           onTouchMove={handleWaterfallTouchMove}
           onTouchEnd={handleWaterfallTouchEnd}

@@ -40,7 +40,7 @@ export class WaterfallRenderer {
     minDb: number = -60,
     maxDb: number = -10,
   ) {
-    this.ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    this.ctx = canvas.getContext('2d')!;
     this.palette = getPalette(theme);
     this.minDb = minDb;
     this.maxDb = maxDb;

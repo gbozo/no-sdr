@@ -737,36 +737,44 @@ export class SdrEngine {
               };
             }
 
-            // Populate client FFT buffer (zoom/seek uses this).
-            // Upsample from history binCount → live fftSize using linear interpolation
-            // so seek-back renders at full live resolution.
+            // Defer FFT buffer population in batches to keep the main thread
+            // responsive during connect. Processing hundreds of frames with
+            // interpolation can block for 135-180ms; batching at ~20 frames
+            // per tick keeps each chunk under ~8ms.
+            const BATCH_SIZE = 20;
             const liveBinCount = store.fftSize();
             this.fftBuffer.reset();
-            for (let i = 0; i < frameCount; i++) {
-              const off = i * binCount;
-              if (liveBinCount === binCount) {
-                // 1:1 — no interpolation needed
-                const f32 = new Float32Array(binCount);
-                for (let b = 0; b < binCount; b++) {
-                  f32[b] = minDb + (allFrames[off + b] / 255) * serverRange;
+            let batchIdx = 0;
+            const processBatch = () => {
+              const end = Math.min(batchIdx + BATCH_SIZE, frameCount);
+              for (; batchIdx < end; batchIdx++) {
+                const off = batchIdx * binCount;
+                if (liveBinCount === binCount) {
+                  const f32 = new Float32Array(binCount);
+                  for (let b = 0; b < binCount; b++) {
+                    f32[b] = minDb + (allFrames[off + b] / 255) * serverRange;
+                  }
+                  this.fftBuffer.push(f32);
+                } else {
+                  const f32 = new Float32Array(liveBinCount);
+                  const scale = (binCount - 1) / (liveBinCount - 1);
+                  for (let b = 0; b < liveBinCount; b++) {
+                    const src = b * scale;
+                    const lo  = Math.floor(src);
+                    const hi  = Math.min(lo + 1, binCount - 1);
+                    const t   = src - lo;
+                    const dbLo = minDb + (allFrames[off + lo] / 255) * serverRange;
+                    const dbHi = minDb + (allFrames[off + hi] / 255) * serverRange;
+                    f32[b] = dbLo + t * (dbHi - dbLo);
+                  }
+                  this.fftBuffer.push(f32);
                 }
-                this.fftBuffer.push(f32);
-              } else {
-                // Upsample via linear interpolation
-                const f32 = new Float32Array(liveBinCount);
-                const scale = (binCount - 1) / (liveBinCount - 1);
-                for (let b = 0; b < liveBinCount; b++) {
-                  const src = b * scale;
-                  const lo  = Math.floor(src);
-                  const hi  = Math.min(lo + 1, binCount - 1);
-                  const t   = src - lo;
-                  const dbLo = minDb + (allFrames[off + lo] / 255) * serverRange;
-                  const dbHi = minDb + (allFrames[off + hi] / 255) * serverRange;
-                  f32[b] = dbLo + t * (dbHi - dbLo);
-                }
-                this.fftBuffer.push(f32);
               }
-            }
+              if (batchIdx < frameCount) {
+                setTimeout(processBatch, 0);
+              }
+            };
+            processBatch();
           }
         } catch (e) {
           console.error('[FFT_HISTORY] decode error:', e);
