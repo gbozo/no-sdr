@@ -1,11 +1,12 @@
 // ============================================================
-// node-sdr — Spectrum Renderer (Canvas 2D)
+// node-sdr — Spectrum Renderer (OffscreenCanvas 2D)
 // ============================================================
 // Draws the FFT spectrum as a line graph above/below the waterfall.
+// Operates entirely in a Web Worker via OffscreenCanvas.
 // ============================================================
 
 export class SpectrumRenderer {
-  private ctx: CanvasRenderingContext2D;
+  private ctx: OffscreenCanvasRenderingContext2D;
   private minDb: number;
   private maxDb: number;
   private accentColor: string;
@@ -13,6 +14,8 @@ export class SpectrumRenderer {
   private signalFillColor: string;
   private gridColor: string;
   private ready = false;
+  private w = 0;
+  private h = 0;
 
   // Throttle rendering to ~30fps (same as waterfall)
   private lastDrawTime = 0;
@@ -36,26 +39,8 @@ export class SpectrumRenderer {
   private smoothingAlpha = 0;
   private smoothedDb: Float32Array | null = null;
 
-  // Last computed per-pixel dB values — read by tooltip for dB readout
-  private _lastPixelDb: Float32Array | null = null;
-  
   // Pre-allocated per-pixel dB buffer — reused every frame to avoid 30Hz allocation
   private _pixelDbBuf: Float32Array | null = null;
-
-  /** Per-pixel dB values from the most recent draw — used by tooltip. */
-  get lastPixelDb(): Float32Array | null { return this._lastPixelDb; }
-
-  /** Peak dB values per pixel — used for tooltip peak display (and spectrum peak hold when enabled). */
-  get peakDbValues(): Float32Array | null { return this._peakDb; }
-
-  // Tooltip peak: tracks max dB over last N frames for variation display
-  private tooltipPeakFrames: Float32Array[] | null = null;
-  private tooltipPeakPos = 0;
-  private readonly TOOLTIP_PEAK_FRAMES = 30; // ~1 sec at 30fps
-  private _tooltipPeak: Float32Array | null = null;
-
-  /** Max dB over last ~1 second — used for tooltip peak display. */
-  get tooltipPeakDb(): Float32Array | null { return this._tooltipPeak; }
 
   // Noise floor estimation using a rolling minimum window per bin.
   // Tracks the true minimum dB seen in the last ~5 seconds (150 frames at 30fps).
@@ -78,22 +63,18 @@ export class SpectrumRenderer {
   getZoom(): [number, number] { return [this.zoomStart, this.zoomEnd]; }
 
   constructor(
-    private canvas: HTMLCanvasElement,
+    private canvas: OffscreenCanvas,
     minDb: number = -120,
     maxDb: number = -40,
+    accentColor?: string,
   ) {
-    this.ctx = canvas.getContext('2d', { alpha: true })!;
+    this.ctx = canvas.getContext('2d', { alpha: true }) as OffscreenCanvasRenderingContext2D;
     this.minDb = minDb;
     this.maxDb = maxDb;
-    this.accentColor = '#4aa3ff';
+    this.accentColor = accentColor ?? '#4aa3ff';
     this.fillColor = 'rgba(74,163,255,0.12)';
     this.signalFillColor = 'rgba(74,163,255,0.25)';
     this.gridColor = 'rgba(254, 254, 254, 0.4)';
-    this.resize();
-    // Apply the actual current theme color (may differ from default if page loaded with a saved theme)
-    const themeColor = getComputedStyle(document.documentElement)
-      .getPropertyValue('--sdr-freq-color').trim();
-    if (themeColor) this.setAccentColor(themeColor);
   }
 
   /**
@@ -101,17 +82,12 @@ export class SpectrumRenderer {
    * Throttled to ~30fps to avoid excessive redraws.
    */
   draw(fftData: Float32Array): void {
-    if (fftData.length === 0) return;
+    if (fftData.length === 0 || !this.ready) return;
 
     // Throttle to ~30fps
     const now = performance.now();
     if (now - this.lastDrawTime < this.minFrameInterval) return;
     this.lastDrawTime = now;
-
-    if (!this.ready) {
-      this.resize();
-      if (!this.ready) return;
-    }
 
     // Pause: freeze on the last frame, stop updating
     if (this.paused) {
@@ -193,31 +169,6 @@ export class SpectrumRenderer {
         }
       }
       pixelDb[x] = db;
-    }
-
-    // Store for tooltip dB readout
-    this._lastPixelDb = pixelDb;
-
-    // Track tooltip peak: max dB over last ~1 second (30 frames)
-    if (!this.tooltipPeakFrames || this.tooltipPeakFrames[0].length !== w) {
-      this.tooltipPeakFrames = Array.from(
-        { length: this.TOOLTIP_PEAK_FRAMES },
-        () => new Float32Array(w).fill(this.minDb),
-      );
-      this._tooltipPeak = new Float32Array(w).fill(this.minDb);
-      this.tooltipPeakPos = 0;
-    }
-    // Store current frame in circular buffer
-    this.tooltipPeakFrames[this.tooltipPeakPos].set(pixelDb);
-    this.tooltipPeakPos = (this.tooltipPeakPos + 1) % this.TOOLTIP_PEAK_FRAMES;
-    // Compute max across all buffered frames
-    for (let x = 0; x < w; x++) {
-      let maxDb = this.minDb;
-      for (let f = 0; f < this.TOOLTIP_PEAK_FRAMES; f++) {
-        const val = this.tooltipPeakFrames[f][x];
-        if (val > maxDb) maxDb = val;
-      }
-      this._tooltipPeak![x] = maxDb;
     }
 
     // Spectrum line + fill
@@ -514,27 +465,33 @@ export class SpectrumRenderer {
   }
 
   /**
-   * Resize canvas to match container
+   * Resize canvas to given dimensions (already scaled by devicePixelRatio).
+   * Called from the worker message handler with CSS-pixel dimensions * dpr.
    */
-  resize(): void {
-    const rect = this.canvas.getBoundingClientRect();
-    const w = Math.round(rect.width);
-    const h = Math.round(rect.height);
-
-    if (w < 1 || h < 1) {
+  resize(width: number, height: number): void {
+    if (width < 1 || height < 1) {
       this.ready = false;
       return;
     }
 
-    const dpr = window.devicePixelRatio || 1;
-    const newW = Math.round(w * dpr);
-    const newH = Math.round(h * dpr);
-
-    if (this.canvas.width !== newW || this.canvas.height !== newH) {
-      this.canvas.width = newW;
-      this.canvas.height = newH;
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+      this._peakDb = null;
+      this._pixelDbBuf = null;
     }
 
+    this.w = width;
+    this.h = height;
     this.ready = true;
+  }
+
+  /**
+   * Clear the canvas
+   */
+  clear(): void {
+    if (!this.ctx) return;
+    this.ctx.fillStyle = '#000';
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 }

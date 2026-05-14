@@ -35,7 +35,6 @@ import {
 } from '~/shared';
 import { inflateSync } from 'fflate';
 import { OpusDecoder } from 'opus-decoder';
-import { SpectrumRenderer } from './spectrum.js';
 import type { FftDecodeRequest, FftDecodeResult } from './fft-decode.worker.js';
 import type { FftAnalysisFrame, FftAnalysisResult } from './fft-analysis.worker.js';
 import { AudioEngine } from './audio.js';
@@ -56,7 +55,8 @@ export class SdrEngine {
   // The main thread keeps a reference to the canvas element only.
   private waterfallWorker: Worker | null = null;
   private waterfallCanvas: HTMLCanvasElement | null = null;
-  private spectrum: SpectrumRenderer | null = null;
+  private spectrumWorker: Worker | null = null;
+  private spectrumCanvas: HTMLCanvasElement | null = null;
   private audio: AudioEngine;
   private demodulator: Demodulator;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -107,10 +107,7 @@ export class SdrEngine {
   // Seek-back: when > 0, waterfall is frozen N frames in the past
   private seekOffset = 0;
 
-  // RAF-gated spectrum rendering — buffers the latest FFT frame and draws once
-  // per animation frame to avoid clearRect being composited mid-draw on mobile.
-  private latestFftForSpectrum: Float32Array | null = null;
-  private spectrumRafId = 0;
+
 
   // ADPCM decoder for IQ sub-band (stateful, streaming)
   private iqAdpcmDecoder = new ImaAdpcmDecoder();
@@ -206,7 +203,7 @@ export class SdrEngine {
           store.setWaterfallMin(newMin);
           store.setWaterfallMax(newMax);
           this.waterfallWorker?.postMessage({ type: 'set-range', minDb: newMin, maxDb: newMax });
-          this.spectrum?.setRange(newMin, newMax);
+          this.spectrumWorker?.postMessage({ type: 'set-range', minDb: newMin, maxDb: newMax });
         }
       }
     };
@@ -331,24 +328,21 @@ export class SdrEngine {
     return { left: resLeft, right: resRight };
   }
 
-  /**
-   * Attach canvas elements for rendering
-   */
-  /**
-   * Attach canvas elements for rendering.
-   * The waterfall canvas is transferred to the WaterfallWorker via OffscreenCanvas.
-   * The spectrum canvas stays on the main thread (needs synchronous tooltip reads).
-   */
-    attachCanvases(waterfallCanvas: HTMLCanvasElement, spectrumCanvas: HTMLCanvasElement): void {
+  attachCanvases(waterfallCanvas: HTMLCanvasElement, spectrumCanvas: HTMLCanvasElement): void {
     this.waterfallCanvas = waterfallCanvas;
+    this.spectrumCanvas = spectrumCanvas;
 
-    // FIX: Terminate existing worker before creating new one (remount case)
+    // Terminate existing workers before creating new ones (remount case)
     if (this.waterfallWorker) {
       this.waterfallWorker.terminate();
       this.waterfallWorker = null;
     }
+    if (this.spectrumWorker) {
+      this.spectrumWorker.terminate();
+      this.spectrumWorker = null;
+    }
 
-    // Spin up the waterfall worker and transfer canvas control
+    // ---- Waterfall worker ----
     this.waterfallWorker = new Worker(
       new URL('./waterfall.worker.ts', import.meta.url),
       { type: 'module' },
@@ -358,18 +352,9 @@ export class SdrEngine {
     try {
       offscreen = waterfallCanvas.transferControlToOffscreen();
     } catch (err) {
-      // transferControlToOffscreen() can fail if:
-      // - Browser doesn't support OffscreenCanvas (very old Firefox/Safari)
-      // - Canvas was already transferred (hot-reload / re-mount race)
-      console.warn('[sdr] transferControlToOffscreen() failed:', err);
+      console.warn('[sdr] waterfall transferControlToOffscreen() failed:', err);
       this.waterfallWorker?.terminate();
-      this.waterfallWorker = null;      
-      // Spectrum still works — waterfall will be unavailable until reload
-      this.spectrum = new SpectrumRenderer(
-        spectrumCanvas,
-        store.waterfallMin(),
-        store.waterfallMax(),
-      );
+      this.waterfallWorker = null;
       return;
     }
     const rect = waterfallCanvas.getBoundingClientRect();
@@ -387,10 +372,46 @@ export class SdrEngine {
       [offscreen],
     );
 
-    this.spectrum = new SpectrumRenderer(
-      spectrumCanvas,
-      store.waterfallMin(),
-      store.waterfallMax(),
+    // ---- Spectrum worker ----
+    this.spectrumWorker = new Worker(
+      new URL('./spectrum.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+
+    let spectrumOffscreen: OffscreenCanvas;
+    try {
+      spectrumOffscreen = spectrumCanvas.transferControlToOffscreen();
+    } catch (err) {
+      console.warn('[sdr] spectrum transferControlToOffscreen() failed:', err);
+      this.spectrumWorker?.terminate();
+      this.spectrumWorker = null;
+      return;
+    }
+
+    const sRect = spectrumCanvas.getBoundingClientRect();
+    const sW = Math.round(sRect.width);
+    const sH = Math.round(sRect.height);
+    const dpr = window.devicePixelRatio || 1;
+    const themeColor = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sdr-freq-color').trim();
+
+    this.spectrumWorker.postMessage(
+      {
+        type: 'init',
+        canvas: spectrumOffscreen,
+        width: sW,
+        height: sH,
+        dpr,
+        minDb: store.waterfallMin(),
+        maxDb: store.waterfallMax(),
+        accentColor: themeColor || undefined,
+        peakHold: store.spectrumPeakHold(),
+        signalFill: store.spectrumSignalFill(),
+        noiseFloor: store.spectrumNoiseFloor(),
+        smoothingAlpha: store.spectrumAveraging() === 'slow' ? 0.7
+                      : store.spectrumAveraging() === 'med' ? 0.4 : 0,
+      },
+      [spectrumOffscreen],
     );
 
     // Flush any history that arrived before the worker was ready.
@@ -798,7 +819,7 @@ export class SdrEngine {
 
   /**
    * Render one decoded FFT frame: push to client buffer, draw waterfall row,
-   * draw spectrum, draw tuning indicator. Single call site for all four codecs.
+   * draw spectrum + tuning indicator. Single call site for all four codecs.
    */
   private renderFftFrame(fftData: Float32Array): void {
     this.fftBuffer.push(fftData);
@@ -813,23 +834,20 @@ export class SdrEngine {
       );
     }
 
-    // Spectrum stays on main thread — needs synchronous lastPixelDb for tooltip.
-    // Buffer the latest frame and draw once per RAF tick to prevent the
-    // compositor from snapshotting a blank canvas between clearRect and the
-    // final stroke call (primary cause of flicker on Android Chrome/Firefox).
-    this.latestFftForSpectrum = fftData;
-    if (this.spectrumRafId === 0) {
-      this.spectrumRafId = requestAnimationFrame(() => {
-        this.spectrumRafId = 0;
-        if (this.latestFftForSpectrum) {
-          this.spectrum?.draw(this.latestFftForSpectrum);
-          this.spectrum?.drawTuningIndicator(
-            store.tuneOffset(),
-            store.bandwidth(),
-            store.sampleRate(),
-          );
-        }
-      });
+    // Spectrum: post frame to worker (zero-copy transfer).
+    // Worker draws the spectrum + tuning indicator immediately.
+    if (this.spectrumWorker) {
+      const frame = fftData.slice(); // clone — fftBuffer owns the original
+      this.spectrumWorker.postMessage(
+        {
+          type: 'frame',
+          fftData: frame,
+          tuneOffset: store.tuneOffset(),
+          bandwidth: store.bandwidth(),
+          sampleRate: store.sampleRate(),
+        },
+        [frame.buffer],
+      );
     }
   }
 
@@ -1858,7 +1876,7 @@ export class SdrEngine {
     store.setWaterfallMin(minDb);
     store.setWaterfallMax(maxDb);
     this.waterfallWorker?.postMessage({ type: 'set-range', minDb, maxDb });
-    this.spectrum?.setRange(minDb, maxDb);
+    this.spectrumWorker?.postMessage({ type: 'set-range', minDb, maxDb });
   }
 
   setWaterfallGamma(gamma: number): void {
@@ -1868,52 +1886,30 @@ export class SdrEngine {
 
   setSpectrumPeakHold(enabled: boolean): void {
     store.setSpectrumPeakHold(enabled);
-    this.spectrum?.setPeakHold(enabled);
+    this.spectrumWorker?.postMessage({ type: 'set-peak-hold', enabled });
   }
 
   setSpectrumSignalFill(enabled: boolean): void {
     store.setSpectrumSignalFill(enabled);
-    this.spectrum?.setSignalFill(enabled);
+    this.spectrumWorker?.postMessage({ type: 'set-signal-fill', enabled });
   }
 
   setSpectrumPaused(enabled: boolean): void {
     store.setSpectrumPaused(enabled);
-    this.spectrum?.setPause(enabled);
+    this.spectrumWorker?.postMessage({ type: 'set-pause', enabled });
   }
 
   setSpectrumAveraging(speed: 'fast' | 'med' | 'slow'): void {
     store.setSpectrumAveraging(speed);
     const alpha = speed === 'slow' ? 0.7 : speed === 'med' ? 0.4 : 0;
-    this.spectrum?.setSmoothing(alpha);
+    this.spectrumWorker?.postMessage({ type: 'set-smoothing', alpha });
   }
 
-  /** Get the dB value at a canvas X pixel on the spectrum — used by tooltip. */
-  getSpectrumDbAtPixel(canvasX: number): number | null {
-    const pd = this.spectrum?.lastPixelDb;
-    if (!pd) return null;
-    const idx = Math.max(0, Math.min(pd.length - 1, Math.round(canvasX)));
-    return pd[idx];
-  }
 
-  /** Get the peak dB value at a canvas X pixel on the spectrum — used by tooltip. */
-  getSpectrumPeakDbAtPixel(canvasX: number): number | null {
-    const pd = this.spectrum?.peakDbValues;
-    if (!pd) return null;
-    const idx = Math.max(0, Math.min(pd.length - 1, Math.round(canvasX)));
-    return pd[idx];
-  }
-
-  /** Get the max dB over last ~1 second at a canvas X pixel — used by tooltip. */
-  getSpectrumTooltipPeakDbAtPixel(canvasX: number): number | null {
-    const pd = this.spectrum?.tooltipPeakDb;
-    if (!pd) return null;
-    const idx = Math.max(0, Math.min(pd.length - 1, Math.round(canvasX)));
-    return pd[idx];
-  }
 
   setSpectrumNoiseFloor(enabled: boolean): void {
     store.setSpectrumNoiseFloor(enabled);
-    this.spectrum?.setNoiseFloor(enabled);
+    this.spectrumWorker?.postMessage({ type: 'set-noise-floor', enabled });
   }
 
   /**
@@ -1924,7 +1920,7 @@ export class SdrEngine {
   setSpectrumAccentColor(): void {
     const color = getComputedStyle(document.documentElement)
       .getPropertyValue('--sdr-freq-color').trim();
-    if (color) this.spectrum?.setAccentColor(color);
+    if (color) this.spectrumWorker?.postMessage({ type: 'set-accent-color', color });
   }
 
   /**
@@ -1933,7 +1929,7 @@ export class SdrEngine {
    */
   setSpectrumZoom(start: number, end: number): void {
     store.setSpectrumZoom([start, end]);
-    this.spectrum?.setZoom(start, end);
+    this.spectrumWorker?.postMessage({ type: 'set-zoom', start, end });
     this.waterfallWorker?.postMessage({ type: 'set-zoom', start, end });
     // Defer waterfall prefill to next rAF — multiple wheel events within one
     // frame collapse into a single redraw instead of blocking on every tick.
@@ -1942,7 +1938,7 @@ export class SdrEngine {
 
   resetSpectrumZoom(): void {
     store.setSpectrumZoom([0, 1]);
-    this.spectrum?.resetZoom();
+    this.spectrumWorker?.postMessage({ type: 'reset-zoom' });
     this.waterfallWorker?.postMessage({ type: 'reset-zoom' });
     this.scheduleWaterfallPrefill();
   }
@@ -2114,7 +2110,15 @@ export class SdrEngine {
         this.waterfallWorker.postMessage({ type: 'resize', width: w, height: h });
       }
     }
-    this.spectrum?.resize();
+    if (this.spectrumCanvas && this.spectrumWorker) {
+      const rect = this.spectrumCanvas.getBoundingClientRect();
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      const dpr = window.devicePixelRatio || 1;
+      if (w > 0 && h > 0) {
+        this.spectrumWorker.postMessage({ type: 'resize', width: w, height: h, dpr });
+      }
+    }
   }
 
   // ---- Admin ----

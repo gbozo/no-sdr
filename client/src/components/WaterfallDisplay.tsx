@@ -12,13 +12,10 @@ const WaterfallDisplay: Component = () => {
   let spectrumRef!: HTMLCanvasElement;
   let containerRef!: HTMLDivElement;
 
-  // Tooltip state
+  // Tooltip state (frequency only — no dB readout, spectrum is in worker)
   const [hoverFreq, setHoverFreq] = createSignal<string | null>(null);
-  const [hoverPeakDb, setHoverPeakDb] = createSignal<string | null>(null);
   const [cursorX,   setCursorX]   = createSignal(0);
   const [cursorY,   setCursorY]   = createSignal(0);
-  const [lastHoverX, setLastHoverX] = createSignal<number>(-1);
-  const [peakUpdateTimer, setPeakUpdateTimer] = createSignal<number | null>(null);
 
   // Zoom drag state (range select mode)
   const [dragStart,  setDragStart]  = createSignal<number | null>(null);
@@ -108,9 +105,6 @@ const WaterfallDisplay: Component = () => {
     onCleanup(() => {
       observer.disconnect();
       clearInterval(bufferPoll);
-      // Clean up peak update timer if component unmounts while hovering
-      const timer = peakUpdateTimer();
-      if (timer !== null) clearInterval(timer);
     });
   });
 
@@ -194,34 +188,7 @@ const WaterfallDisplay: Component = () => {
   const handleSpectrumMouseMove = (e: MouseEvent) => {
     setCursorX(e.clientX);
     setCursorY(e.clientY);
-    const isHovering = hoverFreq() === null;
     setHoverFreq(freqFromEvent(e));
-    // Start peak update timer on mouse enter (first move after hover was inactive)
-    if (isHovering) {
-      setLastHoverX(-1); // force update
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const canvasX = Math.round((e.clientX - rect.left) * dpr);
-      setLastHoverX(canvasX);
-      const peakDb = engine.getSpectrumTooltipPeakDbAtPixel(canvasX);
-      setHoverPeakDb(peakDb !== null ? `${peakDb.toFixed(1)} dB` : null);
-const timer = setInterval(() => {
-        const x = lastHoverX();
-        if (x >= 0) {
-          const pk = engine.getSpectrumTooltipPeakDbAtPixel(x);
-          setHoverPeakDb(pk !== null ? `${pk.toFixed(1)} dB` : null);
-        }
-      }, 1000);
-      setPeakUpdateTimer(timer);
-    } else {
-      // Update peak while hovering (already active)
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const canvasX = Math.round((e.clientX - rect.left) * dpr);
-      setLastHoverX(canvasX);
-      const peakDb = engine.getSpectrumTooltipPeakDbAtPixel(canvasX);
-      setHoverPeakDb(peakDb !== null ? `${peakDb.toFixed(1)} dB` : null);
-    }
     if (isDragging()) {
       setDragEnd(spectrumRelX(e));
     } else if (panAnchor() !== null) {
@@ -340,13 +307,6 @@ const timer = setInterval(() => {
 
   const handleMouseLeave = () => {
     setHoverFreq(null);
-    setHoverPeakDb(null);
-    setLastHoverX(-1);
-    const timer = peakUpdateTimer();
-    if (timer !== null) {
-      clearInterval(timer);
-      setPeakUpdateTimer(null);
-    }
     if (panAnchor() !== null) {
       setPanAnchor(null);
       engine.endWaterfallPan();
@@ -385,35 +345,7 @@ const timer = setInterval(() => {
   const handleWaterfallMouseMove = (e: MouseEvent) => {
     setCursorX(e.clientX);
     setCursorY(e.clientY);
-    const isHovering = hoverFreq() === null;
     setHoverFreq(freqFromEvent(e));
-    setHoverPeakDb(null);
-    // Start peak update timer on mouse enter (first move after hover was inactive)
-    if (isHovering) {
-      setLastHoverX(-1); // force update
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const canvasX = Math.round((e.clientX - rect.left) * dpr);
-      setLastHoverX(canvasX);
-      const peakDb = engine.getSpectrumTooltipPeakDbAtPixel(canvasX);
-      setHoverPeakDb(peakDb !== null ? `${peakDb.toFixed(1)} dB` : null);
-const timer = setInterval(() => {
-        const x = lastHoverX();
-        if (x >= 0) {
-          const pk = engine.getSpectrumTooltipPeakDbAtPixel(x);
-          setHoverPeakDb(pk !== null ? `${pk.toFixed(1)} dB` : null);
-        }
-      }, 1000);
-      setPeakUpdateTimer(timer);
-    } else {
-      // Update peak while already hovering - same as spectrum handling
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const canvasX = Math.round((e.clientX - rect.left) * dpr);
-      setLastHoverX(canvasX);
-      const peakDb = engine.getSpectrumTooltipPeakDbAtPixel(canvasX);
-      setHoverPeakDb(peakDb !== null ? `${peakDb.toFixed(1)} dB` : null);
-    }
   };
 
   // Waterfall wheel — horizontal scroll pans, vertical scroll zooms spectrum
@@ -556,20 +488,17 @@ const timer = setInterval(() => {
   return (
     <div ref={containerRef!} class="flex flex-col flex-1 min-h-0 relative">
 
-      {/* Frequency + dB tooltip */}
+      {/* Frequency tooltip (dB readout removed — spectrum is in worker) */}
       <Show when={hoverFreq() !== null}>
         <div
           class="fixed z-50 pointer-events-none
                  px-2 py-0.5 rounded
                  bg-black/80 border border-white/10
                  text-[10px] font-mono text-white/90
-                 whitespace-nowrap flex items-center gap-2"
+                 whitespace-nowrap"
           style={{ left: `${cursorX() + 14}px`, top: `${cursorY() - 10}px` }}
         >
-          <span>{hoverFreq()}</span>
-          <Show when={hoverPeakDb() !== null}>
-            <span class="text-amber ml-1">{hoverPeakDb()}</span>
-          </Show>
+          {hoverFreq()}
         </div>
       </Show>
 
