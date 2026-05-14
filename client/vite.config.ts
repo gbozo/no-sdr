@@ -28,6 +28,7 @@ export default defineConfig({
         description: 'Multi-user WebSDR receiver for RTL-SDR dongles',
         start_url: '/',
         display: 'standalone',
+        display_override: ['standalone', 'minimal-ui'],
         orientation: 'any',
         background_color: '#07090e',
         theme_color: '#07090e',

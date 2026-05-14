@@ -202,7 +202,7 @@ const FrequencyDisplay: Component = () => {
         );
       })()}
 
-      <div class="p-3">
+      <div class="p-2">
         <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">
           <span>VFO Frequency</span>
         </div>

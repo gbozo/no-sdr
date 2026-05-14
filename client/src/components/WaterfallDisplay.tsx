@@ -82,6 +82,21 @@ const WaterfallDisplay: Component = () => {
     engine.setSpectrumSignalFill(store.spectrumSignalFill());
     engine.setSpectrumNoiseFloor(store.spectrumNoiseFloor());
     engine.setSpectrumAveraging(store.spectrumAveraging());
+    // Make the container scrollable when content overflows viewport.
+    // This is critical on mobile landscape where the viewport is too short
+    // to show both spectrum and waterfall simultaneously.
+    const updateScrollable = () => {
+      const top = containerRef.getBoundingClientRect().top;
+      const availHeight = window.innerHeight - top - 4;
+      if (containerRef.scrollHeight > availHeight) {
+        containerRef.style.maxHeight = `${availHeight}px`;
+        containerRef.style.overflowY = 'auto';
+      } else {
+        containerRef.style.maxHeight = '';
+        containerRef.style.overflowY = '';
+      }
+    };
+
     let resizeTimer: number | null = null;
     const observer = new ResizeObserver(() => {
       // Throttle resize events — Android Chrome/Firefox fire on every pixel of
@@ -91,6 +106,7 @@ const WaterfallDisplay: Component = () => {
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null;
         engine.handleResize();
+        updateScrollable();
       }, 150);
     });
     observer.observe(containerRef);
@@ -98,6 +114,7 @@ const WaterfallDisplay: Component = () => {
       engine.handleResize();
       // Now the worker has real canvas dimensions — safe to send buffered history
       engine.flushPendingHistory();
+      updateScrollable();
     });
 
     // Poll buffer count so the scrub range max stays current
@@ -507,11 +524,11 @@ const WaterfallDisplay: Component = () => {
       </Show>
 
       {/* Spectrum */}
-      <div class="relative h-[180px] min-h-[120px] border-b border-border">
+      <div class="relative h-[120px] min-h-[120px] border-b border-border">
         <canvas
           ref={spectrumRef!}
           class={`absolute inset-0 w-full h-full ${spectrumCursor()}`}
-          style={{ 'touch-action': 'none' }}
+          style={{ 'touch-action': 'pan-y' }}
           onMouseDown={handleSpectrumMouseDown}
           onMouseMove={handleSpectrumMouseMove}
           onMouseUp={handleSpectrumMouseUp}
@@ -631,11 +648,11 @@ const WaterfallDisplay: Component = () => {
       </div>
 
       {/* Waterfall */}
-      <div class="relative flex-1 min-h-0">
+      <div class="relative flex-1 min-h-[240px]">
         <canvas
           ref={waterfallRef!}
           class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-          style={{ 'touch-action': 'none' }}
+          style={{ 'touch-action': 'pan-y' }}
           onClick={handleWaterfallClick}
           onMouseMove={handleWaterfallMouseMove}
           onMouseLeave={handleMouseLeave}

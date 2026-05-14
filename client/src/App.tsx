@@ -213,13 +213,6 @@ const App: Component = () => {
           </div>
         </div>
 
-        {/* Theme Selector */}
-        <div class="flex items-center gap-1">
-          <ThemeButton theme="default" label="LCD" />
-          <ThemeButton theme="crt" label="CRT" />
-          <ThemeButton theme="vfd" label="VFD" />
-        </div>
-
         {/* Enable Audio button — shown until first interaction */}
         <Show when={!store.audioStarted()}>
           <button
@@ -252,6 +245,21 @@ const App: Component = () => {
           <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
             <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
             <path d="M13.3 10a1.1 1.1 0 00.2 1.2l.04.04a1.34 1.34 0 11-1.9 1.9l-.04-.04a1.1 1.1 0 00-1.2-.2 1.1 1.1 0 00-.67 1.01v.11a1.34 1.34 0 11-2.68 0v-.06a1.1 1.1 0 00-.72-1.01 1.1 1.1 0 00-1.2.2l-.04.04a1.34 1.34 0 11-1.9-1.9l.04-.04a1.1 1.1 0 00.2-1.2 1.1 1.1 0 00-1.01-.67h-.11a1.34 1.34 0 110-2.68h.06a1.1 1.1 0 001.01-.72 1.1 1.1 0 00-.2-1.2l-.04-.04a1.34 1.34 0 111.9-1.9l.04.04a1.1 1.1 0 001.2.2h.05a1.1 1.1 0 00.67-1.01v-.11a1.34 1.34 0 112.68 0v.06a1.1 1.1 0 00.72 1.01 1.1 1.1 0 001.2-.2l.04-.04a1.34 1.34 0 111.9 1.9l-.04.04a1.1 1.1 0 00-.2 1.2v.05a1.1 1.1 0 001.01.67h.11a1.34 1.34 0 110 2.68h-.06a1.1 1.1 0 00-1.01.72z"/>
+          </svg>
+        </a>
+
+        {/* GitHub link */}
+        <a
+          href="https://github.com/gbozo/no-sdr"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ml-4 p-1.5 border border-border rounded-sm
+                 text-text-dim hover:text-cyan hover:border-cyan
+                 transition-colors inline-flex items-center"
+          title="View source on GitHub"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
           </svg>
         </a>
       </header>
@@ -294,8 +302,30 @@ const App: Component = () => {
           <span class="hidden sm:inline">
             BW: <span class="text-text-secondary">{(store.bandwidth() / 1000).toFixed(1)}k</span>
           </span>
-          <span class="hidden sm:inline">
-            Vol: <span class="text-text-secondary">{Math.round(store.volume() * 100)}%</span>
+          <span class="flex items-center gap-1">
+            <button
+              onClick={() => engine.setMuted(!store.muted())}
+              class="flex items-center justify-center w-3.5 h-3.5 rounded-sm
+                     hover:bg-white/5 transition-colors"
+              title={store.muted() ? 'Unmute' : 'Mute'}
+            >
+              <svg viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
+                {store.muted()
+                  ? <path d="M3 5H1v6h2l4 4V1L3 5zm8.5 3A2.5 2.5 0 009 5.5v1a1.5 1.5 0 010 3v1a2.5 2.5 0 002.5-2.5zM12 8a3 3 0 00-3-3v1a2 2 0 010 4v1a3 3 0 003-3zm4 0a6 6 0 00-6-6v1a5 5 0 010 10v1a6 6 0 006-6z"/>
+                  : <><path d="M3 5H1v6h2l4 4V1L3 5zm5 3a2 2 0 114 0 2 2 0 01-4 0zm5 0a4 4 0 00-4-4v1a3 3 0 010 6v1a4 4 0 004-4z"/><line x1="14" y1="2" x2="2" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></>
+                }
+              </svg>
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={store.volume()}
+              onInput={e => engine.setVolume(parseFloat(e.currentTarget.value))}
+              class="w-14 h-1 accent-[var(--sdr-accent)] cursor-pointer"
+              title={store.muted() ? 'Muted' : `${Math.round(store.volume() * 100)}%`}
+            />
           </span>
           <Show when={store.squelch() !== null}>
             <span class="hidden sm:inline">
@@ -322,8 +352,15 @@ const App: Component = () => {
             <ServerStatsMeter />
           </div>
 
+          {/* Theme Selector */}
+          <div class="flex items-center gap-1 ml-2">
+            <ThemeButton theme="default" label="LCD" />
+            <ThemeButton theme="crt" label="CRT" />
+            <ThemeButton theme="vfd" label="VFD" />
+          </div>
+
           <Show when={store.isAdmin()}>
-            <span class="text-amber">ADMIN</span>
+            <span class="text-amber ml-2">ADMIN</span>
           </Show>
         </div>
       </footer>

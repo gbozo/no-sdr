@@ -1,14 +1,18 @@
 package api
 
 import (
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
+func init() {
+	mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
+
 // SPAHandler serves static files with SPA fallback.
-// For paths that don't match an existing file, it serves index.html.
 func SPAHandler(staticDir string) http.HandlerFunc {
 	fs := http.Dir(staticDir)
 

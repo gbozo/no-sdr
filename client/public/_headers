@@ -32,6 +32,11 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# --- Web manifest: must be served with correct content-type for PWA install ---
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
 # --- Icons and other static assets: long cache, revalidate on change ---
 /icons/*
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
