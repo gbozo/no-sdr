@@ -393,7 +393,6 @@ function resize(newW: number, newH: number): void {
   if (newW === w && newH === h) return;
 
   // Snapshot existing content before resize clears it
-  let snapshot: ImageBitmap | null = null;
   if (w > 0 && h > 0) {
     // createImageBitmap is available in workers
     // We do this synchronously via getImageData since createImageBitmap is async
@@ -419,7 +418,6 @@ function resize(newW: number, newH: number): void {
   rowImageData = null;
   w = newW;
   h = newH;
-  void snapshot; // suppress unused warning
 }
 
 // ---- Message handler ----

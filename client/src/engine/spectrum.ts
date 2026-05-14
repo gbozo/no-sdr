@@ -14,8 +14,6 @@ export class SpectrumRenderer {
   private signalFillColor: string;
   private gridColor: string;
   private ready = false;
-  private w = 0;
-  private h = 0;
 
   // Throttle rendering to ~30fps (same as waterfall)
   private lastDrawTime = 0;
@@ -81,12 +79,12 @@ export class SpectrumRenderer {
    * Draw the spectrum for one FFT frame.
    * Throttled to ~30fps to avoid excessive redraws.
    */
-  draw(fftData: Float32Array): void {
-    if (fftData.length === 0 || !this.ready) return;
+  draw(fftData: Float32Array): boolean {
+    if (fftData.length === 0 || !this.ready) return false;
 
     // Throttle to ~30fps
     const now = performance.now();
-    if (now - this.lastDrawTime < this.minFrameInterval) return;
+    if (now - this.lastDrawTime < this.minFrameInterval) return false;
     this.lastDrawTime = now;
 
     // Pause: freeze on the last frame, stop updating
@@ -329,6 +327,8 @@ export class SpectrumRenderer {
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     }
+
+    return true;
   }
 
   /**
@@ -481,8 +481,6 @@ export class SpectrumRenderer {
       this._pixelDbBuf = null;
     }
 
-    this.w = width;
-    this.h = height;
     this.ready = true;
   }
 

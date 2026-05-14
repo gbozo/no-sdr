@@ -38,8 +38,6 @@ import { SpectrumRenderer } from './spectrum.js';
 // ---- Worker state ----
 
 let renderer: SpectrumRenderer | null = null;
-let w = 0;
-let h = 0;
 let dpr = 1;
 
 // ---- Message handler ----
@@ -51,24 +49,21 @@ self.onmessage = (e: MessageEvent) => {
     case 'init': {
       const canvas = msg.canvas as OffscreenCanvas;
       dpr = msg.dpr ?? 1;
-      w = msg.width;
-      h = msg.height;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
+      canvas.width = msg.width * dpr;
+      canvas.height = msg.height * dpr;
       renderer = new SpectrumRenderer(canvas, msg.minDb ?? -120, msg.maxDb ?? -40, msg.accentColor);
       if (msg.peakHold) renderer.setPeakHold(true);
       if (msg.signalFill) renderer.setSignalFill(true);
       if (msg.noiseFloor) renderer.setNoiseFloor(true);
       if (msg.smoothingAlpha) renderer.setSmoothing(msg.smoothingAlpha);
-      // Mark ready — draw() checks this
-      renderer.resize(w * dpr, h * dpr);
+      renderer.resize(msg.width * dpr, msg.height * dpr);
       break;
     }
 
     case 'frame': {
       if (!renderer) break;
       const fftData = msg.fftData as Float32Array;
-      renderer.draw(fftData);
+      if (!renderer.draw(fftData)) break;
       renderer.drawTuningIndicator(
         msg.tuneOffset as number,
         msg.bandwidth as number,
@@ -124,9 +119,7 @@ self.onmessage = (e: MessageEvent) => {
 
     case 'resize': {
       dpr = msg.dpr ?? dpr;
-      w = msg.width;
-      h = msg.height;
-      renderer?.resize(w * dpr, h * dpr);
+      renderer?.resize(msg.width * dpr, msg.height * dpr);
       break;
     }
 
