@@ -11,6 +11,7 @@ const WaterfallDisplay: Component = () => {
   let waterfallRef!: HTMLCanvasElement;
   let spectrumRef!: HTMLCanvasElement;
   let containerRef!: HTMLDivElement;
+  let tuneOverlayRef!: HTMLCanvasElement;
 
   // Tooltip state (frequency only — no dB readout, spectrum is in worker)
   const [hoverFreq, setHoverFreq] = createSignal<string | null>(null);
@@ -76,6 +77,60 @@ const WaterfallDisplay: Component = () => {
   let scrubAnchorX: number | null = null;        // clientX at mousedown (to detect freq-click intent)
   let scrubAnchorOffset = 0;                     // seekOffset value at drag start
   const [isScrubbing, setIsScrubbing] = createSignal(false); // true once vertical threshold crossed
+
+  // Tune indicator overlay — drawn on a separate transparent canvas layered over the waterfall.
+  // Redraws reactively whenever tune offset, bandwidth, sample rate, or zoom changes.
+  // This avoids compositing artefacts on the worker-owned waterfall canvas.
+  createEffect(() => {
+    const canvas = tuneOverlayRef;
+    if (!canvas) return;
+
+    const tuneOffset  = store.tuneOffset();
+    const bandwidth   = store.bandwidth();
+    const sampleRate  = store.sampleRate();
+    const [zs, ze]    = store.spectrumZoom();
+
+    const w = canvas.offsetWidth;
+    const h = canvas.offsetHeight;
+    if (w < 1 || h < 1) return;
+
+    canvas.width  = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Compute center pixel and half-bandwidth in pixels (zoom-aware)
+    const viewSpan   = ze - zs;
+    const normFull   = (tuneOffset / sampleRate) + 0.5;
+    const normZoomed = (normFull - zs) / viewSpan;
+    const centerX    = normZoomed * w;
+    const halfBwNorm = (bandwidth / sampleRate / 2) / viewSpan;
+    const halfBw     = halfBwNorm * w;
+    const left       = centerX - halfBw;
+    const right      = centerX + halfBw;
+
+    // Bandwidth edge lines (yellow-ish, matching spectrum.ts)
+    ctx.strokeStyle = 'rgba(255,252,98,0.55)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(left,  0); ctx.lineTo(left,  h);
+    ctx.moveTo(right, 0); ctx.lineTo(right, h);
+    ctx.stroke();
+
+    // Centre dashed line — red, sparse
+    ctx.strokeStyle = 'rgba(0,0,0,0.50)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([3, 9]);
+    ctx.beginPath();
+    ctx.moveTo(centerX, 0);
+    ctx.lineTo(centerX, h);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
 
   onMount(() => {
     engine.attachCanvases(waterfallRef, spectrumRef);
@@ -826,6 +881,12 @@ const WaterfallDisplay: Component = () => {
           onTouchStart={handleWaterfallTouchStart}
           onTouchMove={handleWaterfallTouchMove}
           onTouchEnd={handleWaterfallTouchEnd}
+        />
+        {/* Tune indicator overlay — transparent canvas, pointer-events:none */}
+        <canvas
+          ref={tuneOverlayRef!}
+          class="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ background: 'transparent' }}
         />
         {/* <div class="sdr-scanlines" /> */}
         <RdsOverlay />

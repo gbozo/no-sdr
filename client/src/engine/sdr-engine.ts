@@ -343,6 +343,9 @@ export class SdrEngine {
     }
 
     // ---- Waterfall worker ----
+    const themeColor = getComputedStyle(document.documentElement)
+      .getPropertyValue('--sdr-freq-color').trim();
+
     this.waterfallWorker = new Worker(
       new URL('./waterfall.worker.ts', import.meta.url),
       { type: 'module' },
@@ -392,8 +395,6 @@ export class SdrEngine {
     const sW = Math.round(sRect.width);
     const sH = Math.round(sRect.height);
     const dpr = window.devicePixelRatio || 1;
-    const themeColor = getComputedStyle(document.documentElement)
-      .getPropertyValue('--sdr-freq-color').trim();
 
     this.spectrumWorker.postMessage(
       {
