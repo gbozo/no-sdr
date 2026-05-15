@@ -960,7 +960,28 @@ const FrequencyScale: Component = () => {
     return `${(hz / 1000).toFixed(1)} k`;
   };
 
-  // Derive 5 label frequencies across the current zoom viewport
+  const [labelCount, setLabelCount] = createSignal(5);
+  let scaleBarRef!: HTMLDivElement;
+
+  onMount(() => {
+    const updateCount = (width: number) => {
+      // Odd numbers keep the centre label perfectly centred
+      if (width >= 1200) setLabelCount(15);
+      else if (width >= 900) setLabelCount(11);
+      else if (width >= 600) setLabelCount(9);
+      else if (width >= 400) setLabelCount(7);
+      else setLabelCount(5);
+    };
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width ?? scaleBarRef.offsetWidth;
+      updateCount(w);
+    });
+    ro.observe(scaleBarRef);
+    updateCount(scaleBarRef.offsetWidth);
+    onCleanup(() => ro.disconnect());
+  });
+
+  // Derive N evenly-spaced label frequencies across the current zoom viewport
   const viewHz = () => {
     const [zs, ze] = store.spectrumZoom();
     const sr = store.sampleRate();
@@ -968,7 +989,8 @@ const FrequencyScale: Component = () => {
     const lo = cf + (zs - 0.5) * sr;
     const hi = cf + (ze - 0.5) * sr;
     const span = hi - lo;
-    return [lo, lo + span * 0.25, lo + span * 0.5, lo + span * 0.75, hi];
+    const n = labelCount();
+    return Array.from({ length: n }, (_, i) => lo + span * (i / (n - 1)));
   };
 
   // Signal markers visible within zoom viewport
@@ -1044,26 +1066,57 @@ const FrequencyScale: Component = () => {
           )}
         </For>
       </div>
-      {/* Frequency labels + signal markers — bottom of spectrum */}
+      {/* Frequency labels + ticks + signal markers — bottom of spectrum */}
       <div class="absolute bottom-0 left-0 right-0 pointer-events-none">
-        <div class="relative flex items-center h-3 bg-sdr-base/80 border-t border-border/50">
-          <div class="relative flex justify-between w-full px-1 text-[9px] font-mono text-text-dim">
-            <For each={viewHz()}>
-              {(hz, i) => (
-                <span class={i() === 2 ? 'text-text-secondary' : ''}>{formatFreq(hz)}</span>
-              )}
-            </For>
-            {/* Signal marker ticks */}
-            <For each={visibleMarkers()}>
-              {(m) => (
-                <div
-                  class="absolute top-0 bottom-0 w-px bg-amber opacity-70"
-                  style={{ left: `${m.pct}%` }}
-                  title={formatFreq(m.hz)}
-                />
-              )}
-            </For>
-          </div>
+        <div ref={scaleBarRef!} class="relative h-4 bg-sdr-base/80 border-t border-border/50">
+          <For each={viewHz()}>
+            {(hz, i) => {
+              const n = labelCount();
+              const pct = (i() / (n - 1)) * 100;
+              const isCentre = i() === Math.floor(n / 2);
+              const isMinor = i() % 2 !== 0; // odd indices = minor tick, no label
+              return (
+                <>
+                  {/* Tick mark */}
+                  <div
+                    class="absolute bottom-0 w-px"
+                    style={{
+                      left: `${pct}%`,
+                      height: isMinor ? '4px' : '6px',
+                      background: isCentre
+                        ? 'var(--color-text-secondary, rgba(200,200,200,0.9))'
+                        : 'rgba(150,150,150,0.5)',
+                    }}
+                  />
+                  {/* Label — major ticks only */}
+                  <Show when={!isMinor}>
+                    <span
+                      class="absolute bottom-[7px] text-[9px] font-mono leading-none"
+                      style={{
+                        left: `${pct}%`,
+                        transform: 'translateX(-50%)',
+                        color: isCentre
+                          ? 'var(--color-text-secondary, rgba(200,200,200,0.9))'
+                          : 'var(--color-text-dim, rgba(120,120,120,0.8))',
+                      }}
+                    >
+                      {formatFreq(hz)}
+                    </span>
+                  </Show>
+                </>
+              );
+            }}
+          </For>
+          {/* Signal marker ticks */}
+          <For each={visibleMarkers()}>
+            {(m) => (
+              <div
+                class="absolute top-0 bottom-0 w-px bg-amber opacity-70"
+                style={{ left: `${m.pct}%` }}
+                title={formatFreq(m.hz)}
+              />
+            )}
+          </For>
         </div>
       </div>
     </>

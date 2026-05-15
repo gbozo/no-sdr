@@ -105,4 +105,10 @@ dongles:
           preFilterNb: true
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
-bookmarks: []
+bookmarks:
+    - id: bm_mp7dfk7l_4qv3b
+      name: Nostos
+      frequency: 100600000
+      mode: wfm
+      bandwidth: 200000
+      description: Cool sttion
