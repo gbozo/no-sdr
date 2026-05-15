@@ -26,8 +26,10 @@ const ControlPanel: Component = () => {
       {/* Mode Selector */}
       <ModeSelector />
 
-      {/* Music Identification */}
-      <IdentifyPanel />
+      {/* Music Identification — only meaningful for broadcast/music modes */}
+      <Show when={(['wfm', 'nfm', 'am', 'am-stereo', 'sam'] as DemodMode[]).includes(store.mode())}>
+        <IdentifyPanel />
+      </Show>
 
       {/* Audio Controls */}
       <AudioControls />

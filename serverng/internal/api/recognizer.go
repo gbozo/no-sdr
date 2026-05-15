@@ -85,24 +85,12 @@ func encodeWAV(pcm []float32, channels, sampleRate int) []byte {
 		}
 	}
 
-	// Resample 48kHz → 22050Hz (recognition APIs work fine at 22kHz, ~halves file size)
+	// Resample to targetRate using a windowed-sinc (Lanczos) resampler.
+	// Recognition APIs work fine at 22050 Hz and it roughly halves the upload size.
+	// We use a Lanczos-3 kernel (a=3) which gives much better frequency response
+	// than linear interpolation, especially for the non-integer 48000→22050 ratio.
 	const targetRate = 22050
-	ratio := float64(sampleRate) / float64(targetRate)
-	outLen := int(float64(len(mono)) / ratio)
-	resampled := make([]int16, outLen)
-	for i := range resampled {
-		srcIdx := float64(i) * ratio
-		lo := int(srcIdx)
-		hi := lo + 1
-		if hi >= len(mono) {
-			hi = len(mono) - 1
-		}
-		frac := float32(srcIdx - float64(lo))
-		s := mono[lo]*(1-frac) + mono[hi]*frac
-		// Clamp and scale to Int16
-		s = float32(math.Max(-1.0, math.Min(1.0, float64(s))))
-		resampled[i] = int16(s * 32767.0)
-	}
+	resampled := resampleLanczos(mono, sampleRate, targetRate)
 
 	// Build WAV: RIFF header + PCM data
 	dataSize := len(resampled) * 2
@@ -112,6 +100,80 @@ func encodeWAV(pcm []float32, channels, sampleRate int) []byte {
 		binary.Write(buf, binary.LittleEndian, s)
 	}
 	return buf.Bytes()
+}
+
+// resampleLanczos resamples src from srcRate to dstRate using a Lanczos-3 windowed-sinc kernel.
+// This handles non-integer ratios (e.g. 48000→22050) with high quality: good stopband
+// attenuation, minimal aliasing, and well-preserved passband up to ~Nyquist of dstRate.
+func resampleLanczos(src []float32, srcRate, dstRate int) []int16 {
+	if srcRate == dstRate {
+		out := make([]int16, len(src))
+		for i, s := range src {
+			s = float32(math.Max(-1.0, math.Min(1.0, float64(s))))
+			out[i] = int16(s * 32767.0)
+		}
+		return out
+	}
+
+	const a = 3 // Lanczos parameter: kernel spans [-a, a] input samples
+
+	ratio := float64(srcRate) / float64(dstRate)
+	outLen := int(math.Round(float64(len(src)) / ratio))
+	out := make([]int16, outLen)
+	srcLen := len(src)
+
+	// When downsampling, the kernel must be widened to avoid aliasing.
+	// We scale the sinc argument so the cutoff is at dstRate/2.
+	cutoffScale := 1.0
+	if dstRate < srcRate {
+		cutoffScale = float64(dstRate) / float64(srcRate) // < 1.0 when downsampling
+	}
+
+	for i := range out {
+		// Ideal input position corresponding to output sample i
+		center := float64(i) * ratio
+
+		// Sum Lanczos-weighted input samples within the kernel window
+		var acc float64
+		var wsum float64
+
+		// Kernel window in input-sample units: [-a/cutoffScale, +a/cutoffScale]
+		kRadius := float64(a) / cutoffScale
+		jStart := int(math.Ceil(center - kRadius))
+		jEnd := int(math.Floor(center + kRadius))
+
+		for j := jStart; j <= jEnd; j++ {
+			if j < 0 || j >= srcLen {
+				continue // zero-pad boundaries
+			}
+			x := (float64(j) - center) * cutoffScale // normalised argument
+			w := lanczos(x, a)
+			acc += float64(src[j]) * w
+			wsum += w
+		}
+
+		var s float64
+		if wsum != 0 {
+			s = acc / wsum
+		}
+		s = math.Max(-1.0, math.Min(1.0, s))
+		out[i] = int16(s * 32767.0)
+	}
+	return out
+}
+
+// lanczos returns the Lanczos window value for argument x with lobe count a.
+// lanczos(0, a) = 1; zero crossings at non-zero integers; zero outside [-a, a].
+func lanczos(x float64, a int) float64 {
+	if x == 0 {
+		return 1.0
+	}
+	fa := float64(a)
+	if x <= -fa || x >= fa {
+		return 0.0
+	}
+	px := math.Pi * x
+	return (math.Sin(px) / px) * (math.Sin(px/fa) / (px / fa))
 }
 
 func writeWAVHeader(w io.Writer, channels, sampleRate, dataSize int) {
