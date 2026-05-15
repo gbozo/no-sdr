@@ -1,7 +1,7 @@
 # WORK.md — Active Work & Backlog
 
 *Consolidated from tasks.md, plan.md, TODO.md, and serverng/TASKS.md*
-*Last updated: v2.6.7*
+*Last updated: v2.7.0*
 
 ---
 
@@ -17,7 +17,7 @@
 ## Future Features
 
 ### Audio & DSP
-- [ ] Audio time-shift / seek-back (client ring buffer synced to waterfall scrub)
+- [x] Audio time-shift / seek-back (waterfall drag-to-scrub with FFT history ring buffer)
 - [ ] Kaiser window + slow-scan FFT (configurable window + multi-frame integration)
 - [ ] FM-IF spectral NR (SDR++ approach — FFT on IQ before demod)
 - [ ] Adaptive L-R LPF for WFM (cutoff proportional to stereo blend)
@@ -82,6 +82,18 @@ Full plan written. Build tag: `gpu_vulkan`. CPU fallback is always the default.
 ---
 
 ## Completed (reference)
+
+### v2.7.0
+- [x] Identify song: Lanczos-3 windowed-sinc resampler replacing linear interpolation (48 kHz → 22050 Hz, `recognizer.go`)
+- [x] Waterfall drag-to-scrub: vertical mousedown/drag rewinds history; `↶ LIVE` return button overlay; touch direction-lock (vertical=scrub, horizontal=pan); wheel seeks history when buffer available
+- [x] Waterfall tune indicator: transparent overlay `<canvas>` on main thread; bandwidth edge lines + dashed centre line; reactive to tune/bw/sr/zoom; no waterfall worker changes
+- [x] Adaptive frequency scale: `ResizeObserver`-driven label count (5–15 steps); alternating major/minor ticks; absolute positioning for accurate spacing
+- [x] BookmarkRibbon component: sankey bezier stems with tick marks; stacked banners with greedy left-to-right collision avoidance; band plan strips moved from FrequencyScale into ribbon; toggle button (persisted); theme accent colours throughout; z-order (left banners on top)
+- [x] File-based bookmarks backend: `bookmark_files.go` walks `bookmarks/` dir, maps `modulation→mode`, stable SHA256 IDs, `implemented` flag for unsupported modes; public `/api/bookmarks` merges config + file bookmarks
+- [x] Docker: `bookmarks/` dir copied into image (`docker/Dockerfile`)
+- [x] Audio resume button: `audioRunning` non-persisted signal; **Enable Audio** → **Resume Audio** → hidden progression; returning users see Resume instead of silence
+- [x] Bookmark click → `initAudio()`: bookmark recall (waterfall ribbon + ControlPanel) initialises AudioContext on first interaction if not yet started
+- [x] Admin save → client bookmark refresh: `config_saved` WS event triggers `fetchAdminBookmarks()` on all connected clients
 
 ### v2.6.7
 - [x] SNR display in needle S-meter — theme-aware ink colors for dBm + SNR readouts

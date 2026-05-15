@@ -105,6 +105,25 @@ dongles:
           preFilterNb: true
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
+        - id: profile-mp7f9a3s
+          name: Shortwave Broadcast
+          centerFrequency: 6050000
+          sampleRate: 2400000
+          defaultBandwidth: 10000
+          defaultMode: am
+          gain: 0
+          fftSize: 4096
+          fftFps: 15
+          defaultTuneOffset: 0
+          tuningStep: 1000
+          swapIQ: false
+          oscillatorOffset: 0
+          directSampling: 2
+          description: International shortwave 5.9–6.2 MHz (requires direct sampling)
+          dongleId: ""
+          preFilterNb: false
+          preFilterNbThreshold: 0
+          dcOffsetRemoval: null
 bookmarks:
     - id: bm_mp7dfk7l_4qv3b
       name: Nostos
@@ -112,3 +131,9 @@ bookmarks:
       mode: wfm
       bandwidth: 200000
       description: Cool sttion
+    - id: bm_mp7dwr3m_wp5rh
+      name: Nachos
+      frequency: 100560000
+      mode: wfm
+      bandwidth: 200000
+      description: lala
