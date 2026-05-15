@@ -2437,8 +2437,8 @@ const Bookmarks: Component = () => {
     setLabel('');
   };
 
-  const handleRecall = (bm: Bookmark) => {
-    engine.recallBookmark(bm);
+  const handleRecall = async (bm: Bookmark) => {
+    await engine.recallBookmark(bm);
   };
 
   const handleDelete = (id: string) => {

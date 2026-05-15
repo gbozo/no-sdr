@@ -2,7 +2,7 @@
 // node-sdr — Waterfall + Spectrum Component
 // ============================================================
 
-import { Component, onMount, onCleanup, Show, createSignal, For, createEffect } from 'solid-js';
+import { Component, onMount, onCleanup, Show, createSignal, For, createEffect, createMemo } from 'solid-js';
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 import { bands, tagColor, TAG_BORDER_COLORS } from '../store/bandplan.js';
@@ -70,6 +70,9 @@ const WaterfallDisplay: Component = () => {
   // Seek-back scrub
   const [seekOffset, setSeekOffset] = createSignal(0);
   const [bufferCount, setBufferCount] = createSignal(0);
+
+  // Bookmark ribbon width (tracked via ResizeObserver on containerRef)
+  const [ribbonWidth, setRibbonWidth] = createSignal(0);
 
   // Waterfall drag-to-scrub state
   // mousedown starts potential scrub; only activates after vertical threshold
@@ -169,6 +172,7 @@ const WaterfallDisplay: Component = () => {
         resizeTimer = null;
         engine.handleResize();
         updateScrollable();
+        setRibbonWidth(containerRef.clientWidth);
       }, 150);
     });
     observer.observe(containerRef);
@@ -177,6 +181,7 @@ const WaterfallDisplay: Component = () => {
       // Now the worker has real canvas dimensions — safe to send buffered history
       engine.flushPendingHistory();
       updateScrollable();
+      setRibbonWidth(containerRef.clientWidth);
     });
 
     // Poll buffer count so the scrub range max stays current
@@ -740,6 +745,9 @@ const WaterfallDisplay: Component = () => {
         </div>
       </Show>
 
+      {/* Bookmark Ribbon — admin + user bookmarks with sankey stems */}
+      <BookmarkRibbon width={ribbonWidth()} />
+
       {/* Spectrum */}
       <div class="relative h-[120px] min-h-[120px] border-b border-border">
         <canvas
@@ -951,6 +959,291 @@ const WaterfallDisplay: Component = () => {
   );
 };
 
+// ============================================================
+// BookmarkRibbon — shows admin + user bookmarks above spectrum
+// with sankey-style stem lines and stacked collision-free labels.
+// ============================================================
+const RIBBON_H = 24;       // total ribbon height px
+const BANNER_H = 11;       // each label banner height px
+const BANNER_MIN_W = 40;   // minimum banner width px
+const MIN_CHAR_PX = 5.5;   // approx px per char at 9px mono
+const BANNER_MIN_VISIBLE = 20; // min px of banner that must remain unobscured
+// Sankey stem extends this many px below ribbon into the spectrum area
+const STEM_OVERSHOOT = 8;
+
+interface RibbonItem {
+  hz: number;
+  label: string;
+  mode: string;
+  bandwidth: number;
+  source: 'admin' | 'user';
+  /** false when the server-side mode cannot be demodulated by this client */
+  implemented: boolean;
+}
+
+const BookmarkRibbon: Component<{ width: number }> = (props) => {
+  // Band plan entries visible in current zoom viewport
+  const visibleBands = createMemo(() => {
+    const [zs, ze] = store.spectrumZoom();
+    const sr = store.sampleRate();
+    const cf = store.centerFrequency();
+    const loHz = cf + (zs - 0.5) * sr;
+    const hiHz = cf + (ze - 0.5) * sr;
+    const span = hiHz - loHz;
+    if (span <= 0) return [];
+    return bands()
+      .filter(b => b.upper_bound > loHz && b.lower_bound < hiHz)
+      .map(b => {
+        const clampedLo = Math.max(b.lower_bound, loHz);
+        const clampedHi = Math.min(b.upper_bound, hiHz);
+        return {
+          ...b,
+          leftPct:  ((clampedLo - loHz) / span) * 100,
+          widthPct: ((clampedHi - clampedLo) / span) * 100,
+        };
+      });
+  });
+
+  // Merge admin + user bookmarks visible in current zoom viewport
+  const items = createMemo<RibbonItem[]>(() => {
+    const [zs, ze] = store.spectrumZoom();
+    const sr = store.sampleRate();
+    const cf = store.centerFrequency();
+    const loHz = cf + (zs - 0.5) * sr;
+    const hiHz = cf + (ze - 0.5) * sr;
+    const w = props.width;
+    if (w === 0 || hiHz === loHz) return [];
+
+    const all: RibbonItem[] = [
+      ...store.adminBookmarks()
+        .filter(b => b.frequency >= loHz && b.frequency <= hiHz)
+        .map(b => ({ hz: b.frequency, label: b.name, mode: b.mode, bandwidth: b.bandwidth ?? 0, source: 'admin' as const, implemented: b.implemented !== false })),
+      ...store.bookmarks()
+        .filter(b => b.hz >= loHz && b.hz <= hiHz)
+        .map(b => ({ hz: b.hz, label: b.label, mode: b.mode, bandwidth: b.bandwidth, source: 'user' as const, implemented: true })),
+    ];
+    // Sort left→right
+    return all.sort((a, b) => a.hz - b.hz);
+  });
+
+  // Compute placed banners: greedy left-to-right, allow overlap but shift
+  // each banner just enough so at least BANNER_MIN_VISIBLE px is unobscured.
+  const placed = createMemo(() => {
+    const [zs, ze] = store.spectrumZoom();
+    const sr = store.sampleRate();
+    const cf = store.centerFrequency();
+    const loHz = cf + (zs - 0.5) * sr;
+    const hiHz = cf + (ze - 0.5) * sr;
+    const span = hiHz - loHz;
+    // Content width: subtract toggle button column
+    const w = Math.max(0, props.width - RIBBON_H);
+    if (w === 0 || span === 0) return [];
+
+    let rightEdge = -Infinity; // rightmost placed banner right edge
+
+    return items().map(item => {
+      const stemX = ((item.hz - loHz) / span) * w;
+      const bannerW = Math.max(BANNER_MIN_W, Math.ceil(item.label.length * MIN_CHAR_PX) + 10);
+
+      // Ideal: centre banner on stemX, clamped to ribbon bounds
+      let bx = Math.max(0, Math.min(w - bannerW, stemX - bannerW / 2));
+
+      // If this banner would hide more than (bannerW - BANNER_MIN_VISIBLE) px of the
+      // previous one, push it right so the previous banner's right edge minus
+      // BANNER_MIN_VISIBLE is still visible.
+      const minStart = rightEdge - (bannerW - BANNER_MIN_VISIBLE);
+      if (bx < minStart) bx = Math.min(w - bannerW, minStart);
+      bx = Math.max(0, bx);
+
+      rightEdge = bx + bannerW;
+
+      // All banners sit on the same single row at the top of the ribbon
+      const bannerY = 0;
+
+      return { ...item, stemX, bannerX: bx, bannerW, bannerY };
+    });
+  });
+
+  const formatBw = (hz: number) => {
+    if (!hz) return '';
+    if (hz >= 1000) return ` ${(hz / 1000).toFixed(1)}k`;
+    return ` ${hz}`;
+  };
+
+  // Persisted show/hide toggle
+  const STORAGE_KEY = 'node-sdr:ribbon-visible';
+  const [showBanners, setShowBanners] = createSignal(
+    localStorage.getItem(STORAGE_KEY) !== 'false'
+  );
+  const toggleBanners = () => {
+    const next = !showBanners();
+    setShowBanners(next);
+    localStorage.setItem(STORAGE_KEY, String(next));
+  };
+
+  // Render ribbon when there are bookmarks OR visible band plan entries
+  const hasItems = () => items().length > 0 || visibleBands().length > 0;
+
+  return (
+    <Show when={hasItems()}>
+      <div
+        class="relative w-full select-none flex items-center"
+        style={{ height: `${RIBBON_H}px`, 'flex-shrink': '0', overflow: 'visible', background: '#000' }}
+      >
+        {/* Band plan strips — fills entire ribbon bottom, behind banners */}
+        <div class="absolute bottom-0 left-0 right-0 pointer-events-none overflow-hidden"
+          style={{ height: `${RIBBON_H}px` }}
+        >
+          <For each={visibleBands()}>
+            {(b) => {
+              const borderColor = TAG_BORDER_COLORS[b.tags?.[0] ?? ''] ?? 'rgba(238,238,238,0.9)';
+              return (
+                <div
+                  class="absolute top-0 bottom-0"
+                  style={{
+                    left: `${b.leftPct}%`,
+                    width: `${b.widthPct}%`,
+                    background: `linear-gradient(to top, transparent 0%, ${tagColor(b.tags)} 100%)`,
+                    'border-left': `1px solid ${borderColor}`,
+                    'border-right': `1px solid ${borderColor}`,
+                  }}
+                  title={`${b.name}${b.tags?.length ? ' · ' + b.tags.join(', ') : ''}`}
+                />
+              );
+            }}
+          </For>
+          {/* Band name labels for wide enough bands */}
+          <For each={visibleBands().filter(b => b.widthPct > 3)}>
+            {(b) => (
+              <span
+                class="absolute bottom-0 flex items-end justify-center
+                       text-[9px] font-mono text-white overflow-hidden whitespace-nowrap pb-px"
+                style={{
+                  left: `${b.leftPct}%`,
+                  width: `${b.widthPct}%`,
+                  'text-shadow': '0 0 3px rgba(0,0,0,0.9)',
+                }}
+              >
+                {b.name}
+              </span>
+            )}
+          </For>
+        </div>
+
+        {/* Toggle button — rightmost, always visible */}
+        <button
+          onClick={toggleBanners}
+          title={showBanners() ? 'Hide bookmarks' : 'Show bookmarks'}
+          class="absolute flex items-center justify-center shrink-0 cursor-pointer z-10"
+          style={{
+            right: '0',
+            top: '0',
+            width: `${RIBBON_H}px`,
+            height: `${RIBBON_H}px`,
+            background: 'transparent',
+            border: 'none',
+            padding: '0',
+            color: showBanners() ? 'rgba(160,220,255,0.85)' : 'rgba(160,220,255,0.35)',
+          }}
+        >
+          {/* Bookmark icon */}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill={showBanners() ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+          </svg>
+        </button>
+
+        <Show when={showBanners()}>
+          {/* SVG: sankey curves extend STEM_OVERSHOOT px below ribbon into spectrum */}
+          <svg
+            class="absolute inset-0 pointer-events-none"
+            style={{
+              left: '0',
+              width: `calc(100% - ${RIBBON_H}px)`,
+              height: `${RIBBON_H + STEM_OVERSHOOT}px`,
+              overflow: 'visible',
+              top: '0',
+            }}
+          >
+            <For each={placed()}>
+              {(p) => {
+                const bCentreX = p.bannerX + p.bannerW / 2;
+                const bBottom = BANNER_H;
+                const stemEnd = RIBBON_H + STEM_OVERSHOOT;
+                const cp1Y = bBottom + (stemEnd - bBottom) * 0.35;
+                const cp2Y = bBottom + (stemEnd - bBottom) * 0.75;
+                const path = `M ${bCentreX} ${bBottom} C ${bCentreX} ${cp1Y}, ${p.stemX} ${cp2Y}, ${p.stemX} ${stemEnd}`;
+                const stroke = p.implemented
+                  ? 'var(--sdr-accent)'
+                  : 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)';
+
+                return (
+                  <>
+                   <path d={path} fill="none" stroke={stroke} stroke-width="1" />
+                   <line x1={p.stemX} y1={stemEnd - 4} x2={p.stemX} y2={stemEnd} stroke={stroke} stroke-width="1" />
+                  </>
+                );
+              }}
+            </For>
+          </svg>
+
+          {/* Banner labels — lower freq rendered on top (higher z-index) */}
+          <For each={placed()}>
+            {(p, i) => {
+              const modeLabel = p.mode.toUpperCase();
+              const unimplemented = !p.implemented;
+              const tooltip = `${p.label}\n${(p.hz / 1e6).toFixed(4)} MHz  •  ${modeLabel}${p.bandwidth ? '  •  ' + formatBw(p.bandwidth) + ' Hz BW' : ''}${unimplemented ? '\n⚠ Mode not supported' : ''}`;
+              // Lower frequency = lower index = higher z-index (rendered on top)
+              const zIdx = placed().length - i();
+
+              return (
+                <div
+                  class="absolute flex items-center justify-center"
+                  style={{
+                    cursor: unimplemented ? 'not-allowed' : 'pointer',
+                    left: `${p.bannerX}px`,
+                    top: `${p.bannerY}px`,
+                    width: `${p.bannerW}px`,
+                    height: `${BANNER_H}px`,
+                    background: '#000',
+                    border: `1px solid ${unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : 'var(--sdr-accent)'}`,
+                    'border-radius': '2px',
+                    'font-size': '9px',
+                    'font-family': 'JetBrains Mono, monospace',
+                    color: unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : 'var(--sdr-accent)',
+                    overflow: 'hidden',
+                    'white-space': 'nowrap',
+                    'text-overflow': 'ellipsis',
+                    padding: '0 3px',
+                    'pointer-events': 'auto',
+                    'z-index': `${zIdx}`,
+                  }}
+                  title={tooltip}
+                  onClick={async () => {
+                    if (!p.implemented) return; // unimplemented mode — tooltip shows warning
+                    if (p.source === 'user') {
+                      const bm = store.bookmarks().find(b => b.hz === p.hz && b.label === p.label);
+                      if (bm) await engine.recallBookmark(bm);
+                      else engine.tune(Math.round(p.hz - store.centerFrequency()));
+                    } else {
+                      if (!engine.isAudioInitialized) await engine.initAudio();
+                      const ab = store.adminBookmarks().find(b => b.frequency === p.hz && b.name === p.label);
+                      if (ab?.mode) engine.setMode(ab.mode as import('../shared/index.js').DemodMode);
+                      if (ab?.bandwidth) engine.setBandwidth(ab.bandwidth);
+                      engine.tune(Math.round(p.hz - store.centerFrequency()));
+                    }
+                  }}
+                >
+                  {p.label}
+                </div>
+              );
+            }}
+          </For>
+        </Show>
+      </div>
+    </Show>
+  );
+};
+
 // Frequency scale — zoom-aware, with signal markers and band plan overlay
 const FrequencyScale: Component = () => {
   const formatFreq = (hz: number): string => {
@@ -1008,64 +1301,8 @@ const FrequencyScale: Component = () => {
       }));
   };
 
-  // Band plan entries clipped to the current zoom viewport
-  const visibleBands = () => {
-    const [zs, ze] = store.spectrumZoom();
-    const sr = store.sampleRate();
-    const cf = store.centerFrequency();
-    const loHz = cf + (zs - 0.5) * sr;
-    const hiHz = cf + (ze - 0.5) * sr;
-    const span = hiHz - loHz;
-    if (span <= 0) return [];
-    return bands()
-      .filter(b => b.upper_bound > loHz && b.lower_bound < hiHz)
-      .map(b => {
-        const clampedLo = Math.max(b.lower_bound, loHz);
-        const clampedHi = Math.min(b.upper_bound, hiHz);
-        return {
-          ...b,
-          leftPct:  ((clampedLo - loHz) / span) * 100,
-          widthPct: ((clampedHi - clampedLo) / span) * 100,
-        };
-      });
-  };
-
   return (
     <>
-      {/* Band plan colour strips — overlaid at top of spectrum canvas */}
-      <div class="absolute top-0 left-0 right-0 h-5 pointer-events-none z-10 overflow-hidden">
-        <For each={visibleBands()}>
-          {(b) => {
-            const borderColor = TAG_BORDER_COLORS[b.tags?.[0] ?? ''] ?? 'rgba(238, 238, 238, 0.9)';
-            return (
-              <div
-                class="absolute top-0 bottom-0"
-                style={{
-                  left: `${b.leftPct}%`,
-                  width: `${b.widthPct}%`,
-                  background: `linear-gradient(to top, transparent 0%, ${tagColor(b.tags)} 100%)`,
-                  'border-left': `1px solid ${borderColor}`,
-                  'border-right': `1px solid ${borderColor}`,
-                }}
-                title={`${b.name}${b.tags?.length ? ' · ' + b.tags.join(', ') : ''}`}
-              />
-            );
-          }}
-        </For>
-        {/* Band name labels for wide enough bands */}
-        <For each={visibleBands().filter(b => b.widthPct > 3)}>
-          {(b) => (
-            <span
-              class="absolute top-0 bottom-0 flex items-center justify-center
-                     text-[10px] font-mono text-white overflow-hidden whitespace-nowrap"
-              style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%`,
-                       'text-shadow': '0 0 3px rgba(0,0,0,0.9)' }}
-            >
-              {b.name}
-            </span>
-          )}
-        </For>
-      </div>
       {/* Frequency labels + ticks + signal markers — bottom of spectrum */}
       <div class="absolute bottom-0 left-0 right-0 pointer-events-none">
         <div ref={scaleBarRef!} class="relative h-4 bg-sdr-base/80 border-t border-border/50">

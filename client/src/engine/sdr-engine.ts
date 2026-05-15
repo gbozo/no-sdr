@@ -460,6 +460,8 @@ export class SdrEngine {
       }
       console.log('[SDR] WebSocket connected');
       // state_sync from server provides the full dongle list — no REST fallback needed
+      // Fetch public bookmarks (admin-configured) for bookmark ribbon display
+      this.fetchAdminBookmarks();
     };
 
     this.ws.onmessage = (event) => {
@@ -1405,6 +1407,7 @@ export class SdrEngine {
       case 'config_saved':
         if (meta.version) store.setConfigVersion(meta.version);
         console.log('[SDR] Config saved (version:', meta.version, ')');
+        this.fetchAdminBookmarks();
         break;
 
       case 'dongle_disconnected':
@@ -2050,8 +2053,22 @@ export class SdrEngine {
     store.setBookmarks([...store.bookmarks(), bm]);
   }
 
+  /** Fetch admin-configured bookmarks from the public API and populate the store. */
+  async fetchAdminBookmarks(): Promise<void> {
+    try {
+      const res = await fetch('/api/bookmarks');
+      if (!res.ok) return;
+      const data = await res.json() as { id: string; name: string; frequency: number; mode: string; bandwidth?: number; description?: string }[];
+      store.setAdminBookmarks(Array.isArray(data) ? data : []);
+    } catch {
+      // silently ignore — admin bookmarks are optional
+    }
+  }
+
   /** Recall a bookmark: tune, set mode and bandwidth. */
-  recallBookmark(bm: Bookmark): void {
+  async recallBookmark(bm: Bookmark): Promise<void> {
+    // Ensure audio is started (user gesture satisfies autoplay policy)
+    if (!this.audio.isInitialized) await this.initAudio();
     // Set mode first (may change IQ rate)
     if (bm.mode !== store.mode()) this.setMode(bm.mode);
     if (bm.bandwidth !== store.bandwidth()) this.setBandwidth(bm.bandwidth);

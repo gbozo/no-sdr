@@ -23,13 +23,27 @@ import type {
 const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate', 'deflate-floor'];
 const ALL_IQ_CODECS: IqCodecType[] = ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'];
 
-// ---- Bookmark type ----
+// ---- Bookmark type (client localStorage) ----
 export interface Bookmark {
   id: string;
   label: string;
   hz: number;
   mode: DemodMode;
   bandwidth: number;
+}
+
+// ---- Admin bookmark type (server config, fetched from /api/bookmarks) ----
+export interface AdminBookmark {
+  id: string;
+  name: string;
+  frequency: number; // Hz
+  mode: string;
+  bandwidth?: number;
+  description?: string;
+  /** "config" = from config.yaml, "file" = from bookmarks directory */
+  source?: 'config' | 'file';
+  /** Whether the client can actually demodulate this mode */
+  implemented?: boolean;
 }
 
 // ---- localStorage persistence helper ----
@@ -168,6 +182,9 @@ function createStore() {
   const bookmarks = bookmarksRaw;
   // Init markers from stored bookmarks on load
   setSignalMarkers(bookmarksRaw().map(b => b.hz));
+
+  // ---- Admin Bookmarks (fetched from /api/bookmarks after connect) ----
+  const [adminBookmarks, setAdminBookmarks] = createSignal<AdminBookmark[]>([]);
 
   // ---- Codec Preferences (localStorage-persisted) ----
   const [fftCodec, setFftCodec] = persist<FftCodecType>('codec.fft', 'deflate-floor');
@@ -319,6 +336,7 @@ function createStore() {
     spectrumRangeSelect, setSpectrumRangeSelect,
     signalMarkers, setSignalMarkers,
     bookmarks, setBookmarks,
+    adminBookmarks, setAdminBookmarks,
 
     // Codec Preferences
     fftCodec, setFftCodec,

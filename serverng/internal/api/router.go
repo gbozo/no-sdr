@@ -18,6 +18,10 @@ var startTime = time.Now()
 // BandPlanSvc is set by main.go before NewRouterWithPath is called.
 var BandPlanSvc *BandPlanService
 
+// BookmarksDir is the path to the bookmarks directory containing JSON bookmark files.
+// Set by main.go before NewRouterWithPath is called. If empty, only config bookmarks are served.
+var BookmarksDir string
+
 // NewRouter creates the chi router with all routes.
 func NewRouter(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logger, staticDir string) http.Handler {
 	return NewRouterWithPath(wsMgr, cfg, logger, staticDir, "", nil)
@@ -88,7 +92,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 			r.Put("/dongles/{id}/profiles/{profileId}", updateProfileHandler(cfg, cfgVersion))
 			r.Delete("/dongles/{id}/profiles/{profileId}", deleteProfileHandler(cfg, cfgVersion))
 			r.Put("/dongles/{id}/profiles-order", reorderProfilesHandler(cfg, cfgVersion))
-			r.Get("/bookmarks", bookmarksHandler(cfg))
+			r.Get("/bookmarks", adminBookmarksHandler(cfg))
 			r.Post("/bookmarks", createBookmarkHandler(cfg, cfgVersion))
 			r.Put("/bookmarks/{id}", updateBookmarkHandler(cfg, cfgVersion))
 			r.Delete("/bookmarks/{id}", deleteBookmarkHandler(cfg, cfgVersion))

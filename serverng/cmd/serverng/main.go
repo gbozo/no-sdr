@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -183,6 +184,14 @@ func main() {
 	bandPlanSvc := api.NewBandPlanService(logger)
 	bandPlanSvc.StartScheduler()
 	api.BandPlanSvc = bandPlanSvc
+
+	// Bookmarks directory — adjacent to the config file, or overridden via env.
+	bookmarksDir := os.Getenv("BOOKMARKS_DIR")
+	if bookmarksDir == "" {
+		bookmarksDir = filepath.Join(filepath.Dir(cfgPath), "..", "bookmarks")
+	}
+	api.BookmarksDir = bookmarksDir
+	logger.Info("bookmarks directory", "path", bookmarksDir)
 
 	// Create chi router with all routes.
 	router := api.NewRouterWithPath(wsMgr, cfg, logger, staticDir, cfgPath, cfgVersion)

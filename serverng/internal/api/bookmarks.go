@@ -8,9 +8,45 @@ import (
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 )
 
-// bookmarksHandler returns all bookmarks.
-// GET /api/admin/bookmarks
+// bookmarksHandler returns all bookmarks: config.yaml bookmarks merged with
+// file-sourced bookmarks from BookmarksDir. Public, read-only.
+// GET /api/bookmarks
 func bookmarksHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var result []PublicBookmark
+
+		// Config.yaml bookmarks come first.
+		for _, bm := range cfg.Bookmarks {
+			result = append(result, PublicBookmark{
+				ID:          bm.ID,
+				Name:        bm.Name,
+				Frequency:   bm.Frequency,
+				Mode:        bm.Mode,
+				Bandwidth:   bm.Bandwidth,
+				Description: bm.Description,
+				Source:      "config",
+				Implemented: implementedModes[bm.Mode],
+			})
+		}
+
+		// File-sourced bookmarks from the bookmarks directory.
+		if BookmarksDir != "" {
+			fileBms, err := LoadFileBookmarks(BookmarksDir)
+			if err == nil {
+				result = append(result, fileBms...)
+			}
+		}
+
+		if result == nil {
+			result = []PublicBookmark{}
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// adminBookmarksHandler returns only config.yaml bookmarks (admin-only view).
+// GET /api/admin/bookmarks
+func adminBookmarksHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bm := cfg.Bookmarks
 		if bm == nil {
@@ -19,6 +55,8 @@ func bookmarksHandler(cfg *config.Config) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, bm)
 	}
 }
+
+
 
 // createBookmarkHandler adds a new bookmark.
 // POST /api/admin/bookmarks
