@@ -129,15 +129,13 @@ const App: Component = () => {
     });
   });
 
-  // Start audio on first user interaction
+  // Start audio on first user interaction, or resume for returning users
   const handleStartAudio = async () => {
-    if (!store.audioStarted()) {
-      try {
-        await engine.initAudio();
-        store.setAudioStarted(true);
-      } catch (err) {
-        alert((err as Error).message);
-      }
+    try {
+      await engine.initAudio();
+      store.setAudioStarted(true);
+    } catch (err) {
+      alert((err as Error).message);
     }
   };
 
@@ -213,17 +211,44 @@ const App: Component = () => {
           </div>
         </div>
 
-        {/* Enable Audio button — shown until first interaction */}
-        <Show when={!store.audioStarted()}>
-          <button
-            class="ml-4 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
-                   rounded-sm border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
-                   hover:bg-[var(--sdr-accent)] hover:text-text-inverse
-                   transition-colors animate-pulse-glow"
-            onClick={handleStartAudio}
+        {/* Audio button — "Enable Audio" for new users, "Resume Audio" for returning users */}
+        <Show when={!store.audioRunning()}>
+          <Show
+            when={store.audioStarted()}
+            fallback={
+              /* New user — pulsing accent button */
+              <button
+                class="ml-4 flex items-center gap-1.5 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
+                       rounded-sm border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
+                       hover:bg-[var(--sdr-accent)] hover:text-text-inverse
+                       transition-colors animate-pulse-glow"
+                onClick={handleStartAudio}
+                title="Enable audio"
+              >
+                {/* Speaker with waves icon */}
+                <svg viewBox="0 0 16 16" class="w-3 h-3 fill-current shrink-0" aria-hidden="true">
+                  <path d="M9 1.5v13l-5-4H1V5.5h3l5-4zm2.5 2.3a5 5 0 0 1 0 8.4l-.9-.9a3.75 3.75 0 0 0 0-6.6l.9-.9zm1.8-1.8a7.5 7.5 0 0 1 0 12l-.9-.9a6.25 6.25 0 0 0 0-10.2l.9-.9z"/>
+                </svg>
+                Enable Audio
+              </button>
+            }
           >
-            Enable Audio
-          </button>
+            {/* Returning user — muted styling, play icon */}
+            <button
+              class="ml-4 flex items-center gap-1.5 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
+                     rounded-sm border border-border text-text-dim
+                     hover:border-[var(--sdr-accent)] hover:text-[var(--sdr-accent)]
+                     transition-colors"
+              onClick={handleStartAudio}
+              title="Resume audio from previous session"
+            >
+              {/* Play triangle icon */}
+              <svg viewBox="0 0 16 16" class="w-3 h-3 fill-current shrink-0" aria-hidden="true">
+                <path d="M3 2.5l11 5.5-11 5.5V2.5z"/>
+              </svg>
+              Resume Audio
+            </button>
+          </Show>
         </Show>
 
         {/* Admin Button */}

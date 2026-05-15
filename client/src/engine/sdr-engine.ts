@@ -2083,6 +2083,7 @@ export class SdrEngine {
 
   async initAudio(): Promise<void> {
     await this.audio.init();
+    store.setAudioRunning(true);
     // Apply all persisted audio settings to the Web Audio graph
     this.audio.setVolume(store.volume());
     this.audio.setBalance(store.balance());

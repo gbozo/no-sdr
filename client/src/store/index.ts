@@ -153,6 +153,8 @@ function createStore() {
   // ---- Audio Start State ----
   // Persisted so HMR/reconnect can restore audio without another user gesture.
   const [audioStarted, setAudioStarted] = persist<boolean>('audio.started', false);
+  // Non-persisted: true only once AudioContext is actually running this session.
+  const [audioRunning, setAudioRunning] = createSignal(false);
 
   // ---- UI State ----
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
@@ -321,6 +323,7 @@ function createStore() {
 
     // UI State
     audioStarted, setAudioStarted,
+    audioRunning, setAudioRunning,
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     isAdmin, setIsAdmin,

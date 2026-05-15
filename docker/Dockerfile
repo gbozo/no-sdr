@@ -135,6 +135,9 @@ COPY --from=client-builder /app/client/dist /app/static
 # Default config (can be overridden by volume mount)
 COPY config/ /app/config/
 
+# Bookmark files (read-only, can be supplemented by volume mount)
+COPY bookmarks/ /app/bookmarks/
+
 EXPOSE 3000
 
 ENV STATIC_DIR=/app/static
