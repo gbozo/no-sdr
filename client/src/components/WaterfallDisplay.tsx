@@ -68,7 +68,14 @@ const WaterfallDisplay: Component = () => {
 
   // Seek-back scrub
   const [seekOffset, setSeekOffset] = createSignal(0);
-  const [bufferCount, setBufferCount] = createSignal(0); // viewport fraction at drag start
+  const [bufferCount, setBufferCount] = createSignal(0);
+
+  // Waterfall drag-to-scrub state
+  // mousedown starts potential scrub; only activates after vertical threshold
+  let scrubAnchorY: number | null = null;        // clientY at mousedown
+  let scrubAnchorX: number | null = null;        // clientX at mousedown (to detect freq-click intent)
+  let scrubAnchorOffset = 0;                     // seekOffset value at drag start
+  const [isScrubbing, setIsScrubbing] = createSignal(false); // true once vertical threshold crossed
 
   onMount(() => {
     engine.attachCanvases(waterfallRef, spectrumRef);
@@ -125,11 +132,48 @@ const WaterfallDisplay: Component = () => {
     spectrumRef.addEventListener('wheel', handleSpectrumWheel as EventListener, wheelOpts);
     waterfallRef.addEventListener('wheel', handleWaterfallWheel as EventListener, wheelOpts);
 
+    // Global mouseup catches releases outside the waterfall canvas during a scrub drag
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const wasScrubbing = isScrubbing();
+      if (wasScrubbing || scrubAnchorY !== null) {
+        scrubAnchorY = null;
+        scrubAnchorX = null;
+        setIsScrubbing(false);
+        // Do NOT tune on out-of-canvas release — user was scrolling
+      }
+    };
+    // Global mousemove continues scrub when cursor leaves the canvas bounds
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (scrubAnchorY === null) return;
+      const dy = e.clientY - scrubAnchorY;
+      const dx = Math.abs(e.clientX - (scrubAnchorX ?? e.clientX));
+      if (!isScrubbing() && Math.abs(dy) >= SCRUB_THRESHOLD_PX && Math.abs(dy) > dx) {
+        setIsScrubbing(true);
+      }
+      if (isScrubbing()) {
+        const canvasH = waterfallRef?.getBoundingClientRect().height || 300;
+        const framesPerPx = bufferCount() / canvasH;
+        scrubAccum += -dy * framesPerPx;
+        const frames = Math.trunc(scrubAccum);
+        if (frames !== 0) {
+          scrubAccum -= frames;
+          const newOffset = Math.max(0, Math.min(bufferCount(), seekOffset() + frames));
+          setSeekOffset(newOffset);
+        }
+        scrubAnchorY = e.clientY;
+      }
+    };
+    document.addEventListener('mouseup', handleGlobalMouseUp);
+    document.addEventListener('mousemove', handleGlobalMouseMove);
+
     onCleanup(() => {
       observer.disconnect();
       clearInterval(bufferPoll);
       spectrumRef.removeEventListener('wheel', handleSpectrumWheel as EventListener, wheelOpts);
       waterfallRef.removeEventListener('wheel', handleWaterfallWheel as EventListener, wheelOpts);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
     });
   });
 
@@ -348,44 +392,111 @@ const WaterfallDisplay: Component = () => {
   };
 
   // ---- Waterfall mouse handlers ----
+  // Left-click (no drag): tune frequency + snap to live.
+  // Left-click + vertical drag: scrub waterfall history.
+  //   Drag UP   → go further back in time (seekOffset increases).
+  //   Drag DOWN → come forward in time (seekOffset decreases).
+  // Sensitivity: dragging the full canvas height covers the full buffer.
 
-  const handleWaterfallClick = async (e: MouseEvent) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
+  const SCRUB_THRESHOLD_PX = 6; // pixels before scrub activates
 
-    // Snap back to live if currently seeking
-    if (seekOffset() > 0) setSeekOffset(0);
+  // Fractional accumulator — absorbs sub-frame pixel increments between mousemove events
+  let scrubAccum = 0;
 
-    // Start audio if not yet initialised (waterfall/spectrum click = intent to listen)
-    if (!engine.isAudioInitialized) {
-      try {
-        await engine.initAudio();
-        store.setAudioStarted(true);
-      } catch (err) {
-        alert((err as Error).message);
-      }
-    }
+  const handleWaterfallMouseDown = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    scrubAnchorY = e.clientY;
+    scrubAnchorX = e.clientX;
+    scrubAnchorOffset = seekOffset();
+    scrubAccum = 0;
+    setIsScrubbing(false);
   };
 
   const handleWaterfallMouseMove = (e: MouseEvent) => {
     setCursorX(e.clientX);
     setCursorY(e.clientY);
     setHoverFreq(freqFromEvent(e));
+
+    if (scrubAnchorY === null) return;
+
+    const dy = e.clientY - scrubAnchorY;
+    const dx = Math.abs(e.clientX - (scrubAnchorX ?? e.clientX));
+
+    // Activate scrub only if vertical movement dominates and exceeds threshold
+    if (!isScrubbing() && Math.abs(dy) >= SCRUB_THRESHOLD_PX && Math.abs(dy) > dx) {
+      setIsScrubbing(true);
+    }
+
+    if (isScrubbing()) {
+      // Incremental model: consume per-move delta, not total displacement.
+      // Sensitivity: full canvas height = full buffer. Clamped to [0, bufferCount].
+      const canvasH = waterfallRef?.getBoundingClientRect().height || 300;
+      const framesPerPx = bufferCount() / canvasH;
+      // dy < 0 = moving up = going back in time
+      scrubAccum += -dy * framesPerPx;
+      const frames = Math.trunc(scrubAccum);
+      if (frames !== 0) {
+        scrubAccum -= frames; // keep remainder
+        const newOffset = Math.max(0, Math.min(bufferCount(), seekOffset() + frames));
+        setSeekOffset(newOffset);
+      }
+      // Update anchor to current position for next delta
+      scrubAnchorY = e.clientY;
+    }
   };
 
-  // Waterfall wheel — horizontal scroll pans, vertical scroll zooms spectrum
+  const handleWaterfallMouseUp = async (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    const wasScrubbing = isScrubbing();
+    const hadAnchor = scrubAnchorY !== null;
+    scrubAnchorY = null;
+    scrubAnchorX = null;
+    setIsScrubbing(false);
+
+    // If no meaningful vertical drag occurred, treat as a plain frequency-click
+    if (hadAnchor && !wasScrubbing) {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      engine.tune(Math.round(xFracToHz((e.clientX - rect.left) / rect.width) - store.centerFrequency()));
+      if (seekOffset() > 0) setSeekOffset(0);
+      if (!engine.isAudioInitialized) {
+        try {
+          await engine.initAudio();
+          store.setAudioStarted(true);
+        } catch (err) {
+          alert((err as Error).message);
+        }
+      }
+    }
+  };
+
+  const handleWaterfallMouseLeaveInner = (e: MouseEvent) => {
+    // Cancel scrub if mouse leaves while dragging (treat as release without tune)
+    scrubAnchorY = null;
+    scrubAnchorX = null;
+    setIsScrubbing(false);
+    handleMouseLeave(e);
+  };
+
+  // Waterfall wheel — horizontal scroll pans, vertical scroll seeks in time
   const handleWaterfallWheel = (e: WheelEvent) => {
     e.preventDefault();
     const [zs, ze] = store.spectrumZoom();
     const span = ze - zs;
     const rawDelta  = e.deltaMode === 1 ? e.deltaY  * 40 : e.deltaY;
     const rawDeltaX = e.deltaMode === 1 ? e.deltaX  * 40 : e.deltaX;
-    // Horizontal trackpad swipe → pan
+    // Horizontal trackpad swipe → pan frequency viewport
     if (Math.abs(rawDeltaX) > Math.abs(rawDelta)) {
       pan(rawDeltaX * 0.001 * span);
     } else {
-      // Vertical → pan (waterfall has no frequency axis to zoom against)
-      pan(rawDelta * 0.001 * span);
+      // Vertical scroll → seek through waterfall history
+      // Scroll up (rawDelta < 0) = go back in time; scroll down = forward
+      if (bufferCount() > 0) {
+        const step = Math.round(rawDelta * 0.1);
+        setSeekOffset(Math.max(0, Math.min(bufferCount(), seekOffset() + step)));
+      } else {
+        // No history yet — fall back to panning
+        pan(rawDelta * 0.001 * span);
+      }
     }
   };
 
@@ -459,24 +570,75 @@ const WaterfallDisplay: Component = () => {
 
   const handleWaterfallTouchStart = (e: TouchEvent) => {
     if (e.touches.length === 1) {
-      touchPanAnchor = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
-      engine.beginWaterfallPan();
+      const t = e.touches[0];
+      touchPanAnchor = touchRelX(t, e.currentTarget as HTMLElement);
+      // Track Y for vertical-scrub detection
+      scrubAnchorY = t.clientY;
+      scrubAnchorX = t.clientX;
+      scrubAnchorOffset = seekOffset();
+      setIsScrubbing(false);
+      // Don't start a waterfall pan yet — we need to decide direction first
     }
   };
 
+  // Touch direction lock: once committed to horizontal pan or vertical scrub,
+  // stay in that mode for the duration of the touch gesture.
+  let touchDirectionLocked: 'pan' | 'scrub' | null = null;
+  const TOUCH_DIRECTION_THRESHOLD = 8; // px before direction is committed
+
   const handleWaterfallTouchMove = (e: TouchEvent) => {
-    if (e.touches.length !== 1 || touchPanAnchor === null) return;
-    const [zs, ze] = store.spectrumZoom();
-    const span = ze - zs;
-    const rx = touchRelX(e.touches[0], e.currentTarget as HTMLElement);
-    pan((touchPanAnchor - rx) * span);
-    touchPanAnchor = rx;
-    engine.drawWaterfallPan();
+    if (e.touches.length !== 1 || scrubAnchorY === null) return;
+
+    const t = e.touches[0];
+    const dx = t.clientX - (scrubAnchorX ?? t.clientX);
+    const dy = t.clientY - scrubAnchorY;
+
+    // Determine direction lock if not yet set
+    if (touchDirectionLocked === null) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < TOUCH_DIRECTION_THRESHOLD) return;
+      touchDirectionLocked = Math.abs(dy) > Math.abs(dx) ? 'scrub' : 'pan';
+      if (touchDirectionLocked === 'pan') {
+        engine.beginWaterfallPan();
+        touchPanAnchor = touchRelX(t, e.currentTarget as HTMLElement);
+      } else {
+        setIsScrubbing(true);
+        // Prevent page scroll while scrubbing vertically
+        e.preventDefault();
+      }
+    }
+
+    if (touchDirectionLocked === 'scrub') {
+      e.preventDefault();
+      const canvasH = waterfallRef?.getBoundingClientRect().height || 300;
+      const framesPerPx = bufferCount() / canvasH;
+      scrubAccum += -dy * framesPerPx;
+      const frames = Math.trunc(scrubAccum);
+      if (frames !== 0) {
+        scrubAccum -= frames;
+        const newOffset = Math.max(0, Math.min(bufferCount(), seekOffset() + frames));
+        setSeekOffset(newOffset);
+      }
+      scrubAnchorY = t.clientY;
+    } else if (touchDirectionLocked === 'pan' && touchPanAnchor !== null) {
+      const [zs, ze] = store.spectrumZoom();
+      const span = ze - zs;
+      const rx = touchRelX(t, e.currentTarget as HTMLElement);
+      pan((touchPanAnchor - rx) * span);
+      touchPanAnchor = rx;
+      engine.drawWaterfallPan();
+    }
   };
 
   const handleWaterfallTouchEnd = () => {
+    const wasScrubbingTouch = touchDirectionLocked === 'scrub';
+    if (touchDirectionLocked === 'pan') {
+      engine.endWaterfallPan();
+    }
     touchPanAnchor = null;
-    engine.endWaterfallPan();
+    scrubAnchorY = null;
+    scrubAnchorX = null;
+    touchDirectionLocked = null;
+    if (wasScrubbingTouch) setIsScrubbing(false);
   };
 
   // ---- Toolbar helpers ----
@@ -651,48 +813,79 @@ const WaterfallDisplay: Component = () => {
       <div class="relative flex-1 min-h-[240px]">
         <canvas
           ref={waterfallRef!}
-          class={`absolute inset-0 w-full h-full ${panAnchor() !== null ? 'cursor-grabbing' : 'cursor-crosshair'}`}
-          style={{ 'touch-action': 'pan-y' }}
-          onClick={handleWaterfallClick}
+          class={`absolute inset-0 w-full h-full ${
+            isScrubbing() ? 'cursor-ns-resize' :
+            panAnchor() !== null ? 'cursor-grabbing' :
+            'cursor-crosshair'
+          }`}
+          style={{ 'touch-action': 'none' }}
+          onMouseDown={handleWaterfallMouseDown}
           onMouseMove={handleWaterfallMouseMove}
-          onMouseLeave={handleMouseLeave}
+          onMouseUp={handleWaterfallMouseUp}
+          onMouseLeave={handleWaterfallMouseLeaveInner}
           onTouchStart={handleWaterfallTouchStart}
           onTouchMove={handleWaterfallTouchMove}
           onTouchEnd={handleWaterfallTouchEnd}
         />
         {/* <div class="sdr-scanlines" /> */}
         <RdsOverlay />
+
+        {/* Seek position indicator — right-edge progress bar + badges */}
+        <Show when={bufferCount() > 0 && seekOffset() > 0}>
+          {/* Right-edge vertical progress bar showing position in history */}
+          <div class="absolute right-0 top-0 bottom-0 w-1 pointer-events-none"
+               style={{ background: 'rgba(0,0,0,0.35)' }}>
+            <div
+              class="absolute right-0 w-1 transition-none"
+              style={{
+                background: 'var(--sdr-accent)',
+                opacity: '0.7',
+                bottom: '0',
+                height: `${(seekOffset() / bufferCount()) * 100}%`,
+              }}
+            />
+          </div>
+
+          {/* ▶ LIVE button — top-right, prominent, always visible while scrubbing */}
+          <button
+            class="absolute top-2 right-3
+                   flex items-center gap-1.5
+                   px-2.5 py-1 rounded
+                   bg-black/75 border border-[var(--sdr-accent)]/60
+                   text-[var(--sdr-accent)] font-mono text-[9px] font-bold tracking-widest uppercase
+                   hover:bg-[var(--sdr-accent)]/15 hover:border-[var(--sdr-accent)]
+                   transition-colors cursor-pointer"
+            onClick={() => setSeekOffset(0)}
+            title="Return to live"
+          >
+            {/* Filled triangle play icon */}
+            <svg viewBox="0 0 8 8" class="w-2 h-2 fill-current" aria-hidden="true">
+              <polygon points="0,0 8,4 0,8"/>
+            </svg>
+            LIVE
+          </button>
+
+          {/* Time-offset badge — bottom-right */}
+          <div class="absolute bottom-2 right-3 pointer-events-none
+                      px-2 py-0.5 rounded
+                      bg-black/70 border border-[var(--sdr-accent)]/30">
+            <span class="text-[9px] font-mono text-[var(--sdr-accent)]/70 tabular-nums">
+              -{seekOffset()}s
+            </span>
+          </div>
+        </Show>
+
+        {/* Scrub hint — shown only when live AND buffer has frames (first visit) */}
+        <Show when={bufferCount() > 0 && seekOffset() === 0 && !isScrubbing()}>
+          <div class="absolute bottom-2 left-2 pointer-events-none
+                      px-1.5 py-0.5 rounded opacity-30
+                      text-[7px] font-mono text-text-muted tracking-wide uppercase">
+            drag ↕ to rewind
+          </div>
+        </Show>
       </div>
 
-      {/* Seek-back scrub bar */}
-      <Show when={bufferCount() > 0}>
-        <div class="shrink-0 h-5 flex items-center gap-2 px-2
-                    bg-sdr-surface border-t border-border">
-          <span class={`text-[8px] font-mono shrink-0 w-7 text-right
-                        ${seekOffset() > 0 ? 'text-amber' : 'text-text-muted'}`}>
-            {seekOffset() > 0 ? `-${seekOffset()}` : 'LIVE'}
-          </span>
-          <input
-            type="range"
-            aria-label="Waterfall playback position"
-            min={0}
-            max={bufferCount()}
-            step={1}
-            value={seekOffset()}
-            class="flex-1 h-1 accent-[var(--sdr-accent)] cursor-pointer"
-            onInput={e => setSeekOffset(parseInt(e.currentTarget.value))}
-          />
-          <Show when={seekOffset() > 0}>
-            <button
-              class="text-[8px] font-mono text-text-muted hover:text-[var(--sdr-accent)]
-                     transition-colors shrink-0"
-              onClick={() => setSeekOffset(0)}
-            >
-              ↩ live
-            </button>
-          </Show>
-        </div>
-      </Show>
+      {/* Seek-back scrub bar removed — drag/scroll on waterfall to seek */}
     </div>
   );
 };
