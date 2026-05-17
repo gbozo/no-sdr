@@ -5,7 +5,8 @@
 <h1 align="center">no-sdr</h1>
 
 <p align="center">
-  <strong>No SDR hardware on your desk? No problem.<br/>Multi-user web receiver with real-time waterfall, stereo FM, and digital mode decoding — all served from Node.js to your browser.</strong>
+  <strong>No SDR hardware on your desk? No problem.<br/>Multi-user web receiver with real-time waterfall, stereo FM, and digital mode decoding — all served from Go backend to your browser.</strong>
+  <strong>**** Next Major Release 3.0.0 will add Vulkan support for CPU offloading ****</strong>
 </p>
 
 <p align="center">
