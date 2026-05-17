@@ -180,7 +180,7 @@ RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
                                                          │
                     ┌────────────────────────────────────┘
                     ▼
-             Server (Node.js)
+             Server (Go)
              ├─ FFT (shared) ──────────────► WebSocket ──► All clients (waterfall)
              └─ IQ sub-band (per user) ─┐
                 NCO shift + Butterworth ├──► WebSocket ──► One client
@@ -328,7 +328,7 @@ Digital decoders are optional — install the binaries you need. The server auto
 
 ## Deployment
 
-### Docker
+### run Docker Compose from this Repo
 
 ```bash
 cd docker
@@ -337,19 +337,25 @@ docker compose up -d
 
 The Dockerfile uses a multi-stage build and includes `rtl-sdr`, `dump1090`, and `multimon-ng` in the runtime image. USB passthrough requires `privileged: true` on Linux.
 
-### Docker Compose with rtl_tcp Sidecar
+### Docker Compose (spin your own)
 
 ```yaml
 services:
   no-sdr:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    image: ghcr.io/gbozo/no-sdr:latest
     ports:
-      - "3000:3000"
-    volumes:
-      - ../config:/app/config:ro   
+      - "3000:3000"    
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+    # Required for USB access on Linux
+    privileged: true
+    devices:
+      - /dev:/dev
     restart: unless-stopped
+    volumes:
+      - ../config:/app/config   
+    
 ```
 
 Configure the dongle source as `rtl_tcp` with `host: rtl_tcp` and `port: 1234`.
