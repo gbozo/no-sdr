@@ -1035,17 +1035,19 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
     const loHz = cf + (zs - 0.5) * sr;
     const hiHz = cf + (ze - 0.5) * sr;
     const span = hiHz - loHz;
-    // Content width: subtract toggle button column
+    // Content width: subtract toggle button column (for banner clamping only)
     const w = Math.max(0, props.width - RIBBON_H);
+    // Full width for frequency→pixel mapping so stems align with the spectrum canvas
+    const fw = Math.max(0, props.width);
     if (w === 0 || span === 0) return [];
 
     let rightEdge = -Infinity; // rightmost placed banner right edge
 
     return items().map(item => {
-      const stemX = ((item.hz - loHz) / span) * w;
+      const stemX = ((item.hz - loHz) / span) * fw;
       const bannerW = Math.max(BANNER_MIN_W, Math.ceil(item.label.length * MIN_CHAR_PX) + 10);
 
-      // Ideal: centre banner on stemX, clamped to ribbon bounds
+      // Ideal: centre banner on stemX, clamped to ribbon bounds (excluding toggle button area)
       let bx = Math.max(0, Math.min(w - bannerW, stemX - bannerW / 2));
 
       // If this banner would hide more than (bannerW - BANNER_MIN_VISIBLE) px of the
@@ -1158,7 +1160,7 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
             class="absolute inset-0 pointer-events-none"
             style={{
               left: '0',
-              width: `calc(100% - ${RIBBON_H}px)`,
+              width: '100%',
               height: `${RIBBON_H + STEM_OVERSHOOT}px`,
               overflow: 'visible',
               top: '0',
