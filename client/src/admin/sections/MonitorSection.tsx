@@ -21,6 +21,7 @@ interface ClientInfo {
   tuneOffset: number;
   bandwidth: number;
   audioEnabled: boolean;
+  stereoEnabled?: boolean;
   connectedAt: string;
 }
 
@@ -67,80 +68,122 @@ const StatCard: Component<{ label: string; value: string; sub?: string }> = (pro
   </div>
 );
 
-const ClientRow: Component<{ client: ClientInfo }> = (props) => (
-  <div class="flex items-center gap-2 p-2 border border-border/20 rounded bg-sdr-base/30 hover:bg-sdr-base/50 transition-colors">
-    {/* Status LED */}
-    <div class="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+const ClientRow: Component<{ client: ClientInfo }> = (props) => {
+  const tunedFreq = () => {
+    if (props.client.centerFrequency == null) return null;
+    return props.client.centerFrequency + (props.client.tuneOffset || 0);
+  };
+  const displayIp = () => props.client.realIp || props.client.ip;
+  const tcpIp = () => props.client.realIp ? props.client.ip : null;
 
-    {/* Client ID (persistent, 8 chars + conn index) */}
-    <div class="w-20 shrink-0">
-      <span class="text-[9px] font-mono text-text-dim">
-        {props.client.persistentId?.slice(0, 8) || props.client.id.slice(0, 8)}
-        <Show when={props.client.connIndex > 0}>
-          <span class="text-text-dim/50">:{props.client.connIndex}</span>
-        </Show>
-      </span>
-    </div>
+  return (
+    <div class="p-2 border border-border/20 rounded bg-sdr-base/30 hover:bg-sdr-base/50 transition-colors">
+      {/* ── Row 1: LED · Client ID · IP · Receiver/Profile · Duration ── */}
+      <div class="flex items-start gap-2">
+        {/* Status LED */}
+        <div class="w-1.5 h-1.5 mt-1 rounded-full bg-green-400 shrink-0" />
 
-    {/* IP */}
-    <div class="w-24 shrink-0">
-      <span class="text-[10px] font-mono text-text-primary">{props.client.realIp || props.client.ip}</span>
-      <Show when={props.client.realIp}>
-        <div class="text-[8px] font-mono text-text-dim/50 truncate" title={props.client.ip}>{props.client.ip}</div>
-      </Show>
-    </div>
-
-    {/* Dongle + Profile + Frequency */}
-    <div class="w-44 shrink-0">
-      <Show when={props.client.dongleName || props.client.dongleId} fallback={
-        <span class="text-[9px] font-mono text-text-dim/40">—</span>
-      }>
-        <div class="text-[9px] font-mono text-text-primary truncate">
-          {props.client.dongleName || props.client.dongleId}
-        </div>
-        <Show when={props.client.profileName || props.client.centerFrequency}>
-          <div class="text-[8px] font-mono text-accent/80 truncate">
-            {props.client.profileName || props.client.profileId}
-            <Show when={props.client.centerFrequency}>
-              {' '}<span class="text-text-dim">@ {formatFrequency(props.client.centerFrequency!)}</span>
+        {/* Client ID */}
+        <div class="w-20 shrink-0">
+          <span class="text-[9px] font-mono text-text-dim">
+            {props.client.persistentId?.slice(0, 8) || props.client.id.slice(0, 8)}
+            <Show when={props.client.connIndex > 0}>
+              <span class="text-text-dim/50">:{props.client.connIndex}</span>
             </Show>
-          </div>
+          </span>
+        </div>
+
+        {/* IP — full IPv6 allowed to wrap */}
+        <div class="w-36 shrink-0 min-w-0">
+          <div class="text-[10px] font-mono text-text-primary break-all leading-tight">{displayIp()}</div>
+          <Show when={tcpIp()}>
+            <div class="text-[8px] font-mono text-text-dim/50 break-all leading-tight" title="TCP address">{tcpIp()}</div>
+          </Show>
+        </div>
+
+        {/* Dongle + Profile */}
+        <div class="flex-1 min-w-0">
+          <Show when={props.client.dongleName || props.client.dongleId} fallback={
+            <span class="text-[9px] font-mono text-text-dim/40">—</span>
+          }>
+            <div class="text-[9px] font-mono text-text-primary truncate">
+              {props.client.dongleName || props.client.dongleId}
+            </div>
+            <Show when={props.client.profileName || props.client.profileId}>
+              <div class="text-[8px] font-mono text-accent/70 truncate">
+                {props.client.profileName || props.client.profileId}
+                <Show when={props.client.centerFrequency != null}>
+                  {' '}<span class="text-text-dim/60">@ {formatFrequency(props.client.centerFrequency!)}</span>
+                </Show>
+              </div>
+            </Show>
+          </Show>
+        </div>
+
+        {/* Duration */}
+        <div class="w-14 shrink-0 text-right">
+          <span class="text-[9px] font-mono text-text-dim">{formatDuration(props.client.connectedAt)}</span>
+        </div>
+      </div>
+
+      {/* ── Row 2: spacer · Mode · Tuned freq · Codecs ── */}
+      <div class="flex items-center gap-2 mt-1 ml-3.5">
+        {/* align under Client ID column */}
+        <div class="w-20 shrink-0" />
+
+        {/* Mode badge */}
+        <Show when={props.client.mode}>
+          <span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded border border-accent/30 text-accent leading-none">
+            {props.client.mode}
+          </span>
         </Show>
-      </Show>
-    </div>
 
-    {/* Mode */}
-    <div class="w-10 shrink-0">
-      <Show when={props.client.mode}>
-        <span class="text-[9px] font-mono uppercase text-accent">{props.client.mode}</span>
-      </Show>
-    </div>
+        {/* Tuned frequency (centerFreq + tuneOffset) */}
+        <Show when={tunedFreq() != null}>
+          <span class="text-[8px] font-mono text-accent/90 leading-none">
+            {formatFrequency(tunedFreq()!)}
+          </span>
+          <Show when={(props.client.tuneOffset || 0) !== 0}>
+            <span class="text-[8px] font-mono text-text-dim/50 leading-none">
+              ({props.client.tuneOffset > 0 ? '+' : ''}{formatFrequency(props.client.tuneOffset)} offset)
+            </span>
+          </Show>
+        </Show>
 
-    {/* Codecs */}
-    <div class="flex-1 flex gap-1.5 flex-wrap">
-      <Show when={props.client.fftCodec}>
-        <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
-          fft:{props.client.fftCodec}
-        </span>
-      </Show>
-      <Show when={props.client.iqCodec}>
-        <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim">
-          iq:{props.client.iqCodec}
-        </span>
-      </Show>
-      <Show when={props.client.audioEnabled}>
-        <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-green-400/20 text-green-400/80">
-          audio
-        </span>
-      </Show>
-    </div>
+        {/* Bandwidth */}
+        <Show when={props.client.bandwidth > 0}>
+          <span class="text-[8px] font-mono text-text-dim/60 leading-none">
+            bw:{formatFrequency(props.client.bandwidth)}
+          </span>
+        </Show>
 
-    {/* Connected duration */}
-    <div class="w-16 shrink-0 text-right">
-      <span class="text-[9px] font-mono text-text-dim">{formatDuration(props.client.connectedAt)}</span>
+        {/* Codecs */}
+        <div class="flex gap-1 flex-wrap ml-auto">
+          <Show when={props.client.fftCodec}>
+            <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim leading-none">
+              fft:{props.client.fftCodec}
+            </span>
+          </Show>
+          <Show when={props.client.iqCodec}>
+            <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-border/20 text-text-dim leading-none">
+              iq:{props.client.iqCodec}
+            </span>
+          </Show>
+          <Show when={props.client.audioEnabled}>
+            <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-green-400/20 text-green-400/80 leading-none">
+              audio
+            </span>
+          </Show>
+          <Show when={props.client.stereoEnabled}>
+            <span class="text-[8px] font-mono px-1 py-0.5 rounded border border-accent/20 text-accent/70 leading-none">
+              stereo
+            </span>
+          </Show>
+        </div>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ---- Main Section ----
 const MonitorSection: Component = () => {
@@ -242,11 +285,9 @@ const MonitorSection: Component = () => {
             <div class="flex items-center gap-2 px-2 py-1 text-[8px] font-mono uppercase tracking-wider text-text-dim/50">
               <div class="w-1.5 shrink-0" />
               <div class="w-20 shrink-0">Client</div>
-              <div class="w-24 shrink-0">IP</div>
-              <div class="w-44 shrink-0">Receiver / Profile</div>
-              <div class="w-10 shrink-0">Mode</div>
-              <div class="flex-1">Codecs</div>
-              <div class="w-16 shrink-0 text-right">Duration</div>
+              <div class="w-36 shrink-0">IP</div>
+              <div class="flex-1">Receiver / Profile</div>
+              <div class="w-14 shrink-0 text-right">Duration</div>
             </div>
           </Show>
 
