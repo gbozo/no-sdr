@@ -636,3 +636,72 @@
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Tuning Dial ───────────────────────────────────────────── */
+
+.tuning-dial-container {
+  width: 100%;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tuning-dial-housing {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  /* Outer machined frame */
+  background: linear-gradient(180deg,
+    #1c2535 0%,
+    #0e1420 30%,
+    #0e1420 70%,
+    #1c2535 100%
+  );
+  border: 1px solid var(--color-border);
+  border-top-color: rgba(255,255,255,0.10);
+  border-bottom-color: rgba(0,0,0,0.60);
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    inset 0 -1px 0 rgba(0,0,0,0.5),
+    0 2px 8px rgba(0,0,0,0.5),
+    0 0 0 1px rgba(0,0,0,0.4);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Left/right side arrow labels */
+.tuning-dial-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--sdr-accent);
+  opacity: 0.45;
+  padding: 0 6px;
+  pointer-events: none;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.tuning-dial-label-left  { text-shadow: -1px 0 4px var(--sdr-accent); }
+.tuning-dial-label-right { text-shadow:  1px 0 4px var(--sdr-accent); }
+
+.tuning-dial-canvas {
+  flex: 1;
+  display: block;
+  min-width: 0;
+  touch-action: none; /* prevent page scroll on drag */
+}
+
+/* Bottom TUNE label */
+.tuning-dial-footer {
+  text-align: center;
+  margin-top: 0;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  opacity: 0.5;
+  pointer-events: none;
+}

@@ -5,6 +5,7 @@
 import { Component, createMemo, For, Show, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
 import { formatFrequencyDotted } from '~/shared';
+import TuningDial from './TuningDial.js';
 
 /** Common tuning step options in Hz */
 const TUNING_STEPS = [
@@ -180,13 +181,13 @@ const FrequencyDisplay: Component = () => {
       <div class="sdr-scanlines" />
       <div class="sdr-dot-grid" />
 
-      {/* RDS info — absolute top-right */}
+      {/* RDS info — absolute bottom-right */}
       {(() => {
         const clean = (s: string) => s.replace(/[\x00-\x1f]/g, '').trim();
         const label = () => clean(store.rdsPs()) || clean(store.rdsRt()) || clean(store.rdsPty());
         return (
           <Show when={label()}>
-            <div class="absolute top-2 right-3 z-10 pointer-events-none select-none max-w-[55%]">
+            <div class="absolute bottom-2 right-3 z-10 pointer-events-none select-none max-w-[55%]">
               <span
                 class="font-mono text-[10px] tracking-[0.15em] uppercase truncate block"
                 style={{
@@ -203,89 +204,96 @@ const FrequencyDisplay: Component = () => {
       })()}
 
       <div class="p-2">
-        <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim mb-1">
-          <span>VFO Frequency</span>
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim shrink-0">
+            VFO Frequency
+          </div>
+          <span class="text-border text-[8px]">|</span>
+          <span class="text-[8px] font-mono text-text-dim shrink-0">
+            {formatFrequencyDotted(store.centerFrequency())} Hz
+          </span>
+          <span class="text-border text-[8px]">|</span>
+          <span class="text-[8px] font-mono text-text-dim shrink-0">
+            {store.tuneOffset() >= 0 ? '+' : ''}{(store.tuneOffset() / 1000).toFixed(1)} kHz
+          </span>
+          <span class="text-border text-[8px]">|</span>
+          <select
+            class="bg-transparent border-none text-text-dim hover:text-text-secondary focus:text-cyan
+                   focus:outline-none cursor-pointer text-[8px] font-mono uppercase tracking-[0.1em]
+                   px-0.5 py-0 shrink-0"
+            value={store.tuningStep()}
+            onChange={(e) => {
+              store.setTuningStep(parseInt(e.currentTarget.value) || 0);
+              e.currentTarget.blur();
+            }}
+          >
+            <For each={TUNING_STEPS}>
+              {(opt) => (
+                <option value={opt.value}>
+                  {opt.value === 0 ? `Auto (${formatStep(store.bandwidth())})` : opt.label}
+                </option>
+              )}
+            </For>
+          </select>
         </div>
 
-        {/* Frequency digits — one <span> per character */}
-        <div
-          class="font-display text-4xl tracking-wider leading-none select-none"
-          style={{ color: 'var(--sdr-freq-color)' }}
-        >
-          <For each={freqEntries()}>
-            {(entry) => (
-              <Show
-                when={entry.kind === 'digit'}
-                fallback={
-                  /* dot separator */
-                  <span class="text-text-dim mx-0.5">.</span>
-                }
-              >
-                {/* individual digit */}
-                <span
-                  class="inline-block touch-none hover:text-white transition-colors duration-75"
-                  style={{
-                    cursor: 'ns-resize',
-                    'text-shadow': '0 0 8px var(--sdr-accent-dim)',
-                  }}
-                  onWheel={(e) => handleDigitWheel((entry as DigitEntry).posFromRight, e)}
-                  onMouseMove={handleDigitMouseMove}
-                  onMouseLeave={handleDigitMouseLeave}
-                  onClick={(e) => handleDigitClick((entry as DigitEntry).posFromRight, e)}
-                  onTouchStart={(e) => handleDigitTouchStart((entry as DigitEntry).posFromRight, e)}
-                  onTouchMove={(e) => handleDigitTouchMove((entry as DigitEntry).posFromRight, e)}
-                  onTouchEnd={handleDigitTouchEnd}
+        {/* Frequency digits + tuning dial — constrained to digits width */}
+        <div class="inline-flex flex-col">
+          {/* Frequency digits — one <span> per character */}
+          <div
+            class="font-display text-4xl tracking-wider leading-none select-none"
+            style={{ color: 'var(--sdr-freq-color)' }}
+          >
+            <For each={freqEntries()}>
+              {(entry) => (
+                <Show
+                  when={entry.kind === 'digit'}
+                  fallback={
+                    /* dot separator */
+                    <span class="text-text-dim mx-0.5">.</span>
+                  }
                 >
-                  {(entry as DigitEntry).char}
+                  {/* individual digit */}
+                  <span
+                    class="inline-block touch-none hover:text-white transition-colors duration-75"
+                    style={{
+                      cursor: 'ns-resize',
+                      'text-shadow': '0 0 8px var(--sdr-accent-dim)',
+                    }}
+                    onWheel={(e) => handleDigitWheel((entry as DigitEntry).posFromRight, e)}
+                    onMouseMove={handleDigitMouseMove}
+                    onMouseLeave={handleDigitMouseLeave}
+                    onClick={(e) => handleDigitClick((entry as DigitEntry).posFromRight, e)}
+                    onTouchStart={(e) => handleDigitTouchStart((entry as DigitEntry).posFromRight, e)}
+                    onTouchMove={(e) => handleDigitTouchMove((entry as DigitEntry).posFromRight, e)}
+                    onTouchEnd={handleDigitTouchEnd}
+                  >
+                    {(entry as DigitEntry).char}
+                  </span>
+                </Show>
+              )}
+            </For>
+
+            <span class="relative inline-block text-sm text-text-secondary ml-2 font-mono">
+              Hz
+              <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
+                <span
+                  class="absolute bottom-full left-0 mb-0.5 text-[6px] font-mono font-bold tracking-wider
+                         px-1 py-px rounded whitespace-nowrap
+                         text-green border border-green/40 bg-green-dim shadow-[0_0_4px_rgba(56,193,128,0.3)]"
+                >
+                  STEREO
                 </span>
               </Show>
-            )}
-          </For>
+            </span>
+          </div>
 
-          <span class="relative inline-block text-sm text-text-secondary ml-2 font-mono">
-            Hz
-            <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
-              <span
-                class="absolute bottom-full left-0 mb-0.5 text-[6px] font-mono font-bold tracking-wider
-                       px-1 py-px rounded whitespace-nowrap
-                       text-green border border-green/40 bg-green-dim shadow-[0_0_4px_rgba(56,193,128,0.3)]"
-              >
-                STEREO
-              </span>
-            </Show>
-          </span>
+          {/* Tuning Dial — matches digits width via inline-flex parent */}
+          <div class="mt-2 mb-1 w-full">
+            <TuningDial onTune={(deltaHz) => engine_tune_stepped(deltaHz)} />
+          </div>
         </div>
 
-        {/* Info row: center, offset, step */}
-        <div class="mt-1 flex items-center gap-0 text-[9px] font-mono text-text-dim">
-          <span>Center: {formatFrequencyDotted(store.centerFrequency())} Hz</span>
-          <span class="mx-2 text-border">|</span>
-          <span>Offset: {store.tuneOffset() >= 0 ? '+' : ''}{(store.tuneOffset() / 1000).toFixed(1)} kHz</span>
-          <span class="mx-2 text-border">|</span>
-          <span class="flex items-center gap-1">
-            Step:
-            <select
-              class="bg-transparent border-none text-text-secondary focus:text-cyan focus:outline-none
-                     cursor-pointer text-[9px] font-mono px-0.5 py-0 -my-0.5"
-              value={store.tuningStep()}
-              onChange={(e) => {
-                store.setTuningStep(parseInt(e.currentTarget.value) || 0);
-                e.currentTarget.blur();
-              }}
-            >
-              <For each={TUNING_STEPS}>
-                {(opt) => (
-                  <option value={opt.value}>
-                    {opt.value === 0 ? `Auto (${formatStep(store.bandwidth())})` : opt.label}
-                  </option>
-                )}
-              </For>
-            </select>
-          </span>
-          <span class="ml-auto text-[8px] text-text-muted" title="Left/Right: step, Up/Down: 10x step">
-            ←→ tune
-          </span>
-        </div>
       </div>
     </div>
   );
