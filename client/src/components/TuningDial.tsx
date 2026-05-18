@@ -226,8 +226,15 @@ const TuningDial: Component<TuningDialProps> = (props) => {
       angle    += velocity;
       velocity *= FRICTION;
       decode();
+      draw();
+      animRef = requestAnimationFrame(tick);
     }
-    draw();
+    // Loop stops when velocity decays below threshold.
+    // Restarted on the next interaction via startTick().
+  };
+
+  const startTick = () => {
+    cancelAnimationFrame(animRef);
     animRef = requestAnimationFrame(tick);
   };
 
@@ -259,6 +266,7 @@ const TuningDial: Component<TuningDialProps> = (props) => {
     dragging = false;
     // Launch momentum from last drag delta
     velocity = (lastDragDx / PX_PER_REV) * 0.7;
+    startTick();
   };
 
   // If pointer leaves without a pointerup, end drag but preserve existing momentum.
@@ -267,6 +275,7 @@ const TuningDial: Component<TuningDialProps> = (props) => {
     dragging = false;
     // Keep whatever velocity was built up — don't zero it out
     velocity = (lastDragDx / PX_PER_REV) * 0.7;
+    startTick();
   };
 
   // ── Touch handlers (fallback for older iOS / Android) ────────
@@ -306,6 +315,7 @@ const TuningDial: Component<TuningDialProps> = (props) => {
     touchActive = false;
     dragging    = false;
     velocity    = (lastDragDx / PX_PER_REV) * 0.7;
+    startTick();
   };
 
   const onTouchCancel = (_e: TouchEvent) => {
@@ -313,7 +323,9 @@ const TuningDial: Component<TuningDialProps> = (props) => {
     touchActive = false;
     dragging    = false;
     velocity    = (lastDragDx / PX_PER_REV) * 0.7;
+    startTick();
   };
+
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     const step = store.tuningStep() > 0 ? store.tuningStep() : 100;
@@ -326,6 +338,7 @@ const TuningDial: Component<TuningDialProps> = (props) => {
     props.onTune(detents * step);
     lastDetent = Math.trunc(angle * NOTCHES_PER_REV);
     draw();
+    startTick();
   };
 
   // ── Resize ───────────────────────────────────────────────────
@@ -336,16 +349,25 @@ const TuningDial: Component<TuningDialProps> = (props) => {
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const dpr  = window.devicePixelRatio || 1;
-    canvas.width  = Math.round(rect.width  * dpr);
-    canvas.height = Math.round(rect.height * dpr);
-    const ctx = canvas.getContext('2d');
-    if (ctx) ctx.scale(dpr, dpr);
+    const newW = Math.round(rect.width  * dpr);
+    const newH = Math.round(rect.height * dpr);
+
+    // Only assign when dimensions actually change to prevent
+    // ResizeObserver feedback loop (canvas.width assignment may
+    // trigger re-layout in flex containers → ResizeObserver → loop).
+    if (newW !== canvas.width || newH !== canvas.height) {
+      canvas.width  = newW;
+      canvas.height = newH;
+      // Setting width/height resets the context; re-apply HiDPI scale
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.scale(dpr, dpr);
+    }
     draw();
   };
 
   onMount(() => {
     resize();
-    animRef = requestAnimationFrame(tick);
+    startTick();
     if (canvasRef) {
       resizeObs = new ResizeObserver(resize);
       resizeObs.observe(canvasRef);
