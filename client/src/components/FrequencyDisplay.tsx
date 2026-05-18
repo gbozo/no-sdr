@@ -5,7 +5,6 @@
 import { Component, createMemo, For, Show, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
 import { formatFrequencyDotted } from '~/shared';
-import TuningDial from './TuningDial.js';
 
 /** Common tuning step options in Hz */
 const TUNING_STEPS = [
@@ -288,10 +287,7 @@ const FrequencyDisplay: Component = () => {
             </span>
           </div>
 
-          {/* Tuning Dial — matches digits width via inline-flex parent */}
-          <div class="mt-2 mb-1 w-full">
-            <TuningDial onTune={(deltaHz) => engine_tune_stepped(deltaHz)} />
-          </div>
+
         </div>
 
       </div>
