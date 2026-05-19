@@ -236,7 +236,7 @@ const FrequencyDisplay: Component = () => {
           </select>
         </div>
 
-        {/* Frequency digits + tuning dial — constrained to digits width */}
+        {/* Frequency digits — constrained to digits width */}
         <div class="inline-flex flex-col">
           {/* Frequency digits — one <span> per character */}
           <div

@@ -64,7 +64,7 @@ dongles:
           directSampling: 0
           description: FM radio 87.5–108 MHz (stereo, RDS)
           dongleId: ""
-          preFilterNb: true
+          preFilterNb: false
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
         - id: profile-mootuxy2
@@ -83,7 +83,7 @@ dongles:
           directSampling: 0
           description: Airband 118–137 MHz — tower, approach, ATIS
           dongleId: ""
-          preFilterNb: true
+          preFilterNb: false
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
         - id: profile-mp07v3bz
@@ -102,7 +102,7 @@ dongles:
           directSampling: 2
           description: Medium wave 530–1700 kHz (requires direct sampling)
           dongleId: ""
-          preFilterNb: true
+          preFilterNb: false
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
         - id: profile-mp7f9a3s
@@ -123,7 +123,7 @@ dongles:
           dongleId: ""
           preFilterNb: false
           preFilterNbThreshold: 0
-          dcOffsetRemoval: null
+          dcOffsetRemoval: true
 bookmarks:
     - id: bm_mp7dfk7l_4qv3b
       name: Nostos

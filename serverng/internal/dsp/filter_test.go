@@ -69,10 +69,10 @@ func TestButterworth_HighFreqAttenuation(t *testing.T) {
 	rmsOut = math.Sqrt(rmsOut / 1024.0)
 
 	attenuationDB := 20.0 * math.Log10(rmsOut/rmsIn)
-	// 4th-order Butterworth at 2× cutoff: -24 dB per octave, at 1 octave above → -24 dB
-	// Allow some tolerance
-	if attenuationDB > -20.0 {
-		t.Fatalf("expected >20dB attenuation at 2× cutoff, got %.1f dB", attenuationDB)
+	// 8th-order Butterworth at 2× cutoff: -48 dB per octave, at 1 octave above → -48 dB
+	// Allow some tolerance for transient settling
+	if attenuationDB > -30.0 {
+		t.Fatalf("expected >30dB attenuation at 2× cutoff, got %.1f dB", attenuationDB)
 	}
 	t.Logf("Attenuation at 2× cutoff: %.1f dB", attenuationDB)
 }
@@ -117,11 +117,11 @@ func TestButterworth_Reset(t *testing.T) {
 
 	bw.Reset()
 
-	if bw.stateI[0].z1 != 0 || bw.stateI[0].z2 != 0 ||
-		bw.stateI[1].z1 != 0 || bw.stateI[1].z2 != 0 ||
-		bw.stateQ[0].z1 != 0 || bw.stateQ[0].z2 != 0 ||
-		bw.stateQ[1].z1 != 0 || bw.stateQ[1].z2 != 0 {
-		t.Fatal("all state should be zero after Reset")
+	for i := 0; i < 4; i++ {
+		if bw.stateI[i].z1 != 0 || bw.stateI[i].z2 != 0 ||
+			bw.stateQ[i].z1 != 0 || bw.stateQ[i].z2 != 0 {
+			t.Fatalf("section %d state should be zero after Reset", i)
+		}
 	}
 }
 

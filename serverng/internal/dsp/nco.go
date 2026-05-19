@@ -6,6 +6,8 @@ const ncoTableSize = 4096
 const ncoTableMask = ncoTableSize - 1
 
 // NCOBlock shifts the frequency of complex IQ samples by mixing with a local oscillator.
+// Uses a 4096-entry sin/cos lookup table with linear interpolation to eliminate
+// phase truncation spurs that would otherwise degrade signal quality.
 type NCOBlock struct {
 	offsetHz   float64
 	sampleRate float64
@@ -29,7 +31,6 @@ func (n *NCOBlock) Init(ctx BlockContext) error {
 	n.phaseInc = 2.0 * math.Pi * n.offsetHz / n.sampleRate
 	n.phase = 0
 
-	// Build sin/cos lookup tables
 	for i := 0; i < ncoTableSize; i++ {
 		angle := 2.0 * math.Pi * float64(i) / float64(ncoTableSize)
 		n.sinTable[i] = float32(math.Sin(angle))
@@ -39,22 +40,26 @@ func (n *NCOBlock) Init(ctx BlockContext) error {
 }
 
 // ProcessComplex frequency-shifts each sample: out[i] = in[i] * exp(-j*phase).
-// Uses lookup table for sin/cos.
+// Uses lookup table with linear interpolation for higher precision.
 func (n *NCOBlock) ProcessComplex(in []complex64, out []complex64) int {
 	phase := n.phase
 	phaseInc := n.phaseInc
 	tableScale := float64(ncoTableSize) / (2.0 * math.Pi)
 
 	for i, s := range in {
-		// Lookup table index
-		idx := int(phase*tableScale) & ncoTableMask
-		if idx < 0 {
-			idx += ncoTableSize
-		}
-		cosVal := n.cosTable[idx]
-		sinVal := n.sinTable[idx]
+		phaseScaled := phase * tableScale
+		idx := int(phaseScaled) & ncoTableMask
+		frac := float32(phaseScaled - float64(int(phaseScaled)))
 
-		// Multiply: (a+jb) * (cos - j*sin) = (a*cos + b*sin) + j*(b*cos - a*sin)
+		cos0 := n.cosTable[idx]
+		sin0 := n.sinTable[idx]
+		nextIdx := (idx + 1) & ncoTableMask
+		cos1 := n.cosTable[nextIdx]
+		sin1 := n.sinTable[nextIdx]
+
+		cosVal := cos0 + frac*(cos1-cos0)
+		sinVal := sin0 + frac*(sin1-sin0)
+
 		re := real(s)
 		im := imag(s)
 		out[i] = complex(re*cosVal+im*sinVal, im*cosVal-re*sinVal)
@@ -62,7 +67,6 @@ func (n *NCOBlock) ProcessComplex(in []complex64, out []complex64) int {
 		phase += phaseInc
 	}
 
-	// Wrap phase to [0, 2*pi) to prevent float drift
 	phase = math.Mod(phase, 2.0*math.Pi)
 	if phase < 0 {
 		phase += 2.0 * math.Pi

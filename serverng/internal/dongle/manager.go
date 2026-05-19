@@ -2029,7 +2029,7 @@ func defaultBandwidthForMode(mode string) int {
 	case "usb", "lsb":
 		return 2400
 	case "cw":
-		return 500
+		return 1500
 	default:
 		return 12500
 	}

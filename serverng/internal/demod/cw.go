@@ -34,8 +34,8 @@ func (c *CwDemod) Init(ctx dsp.BlockContext) error {
 	c.sampleRate = ctx.SampleRate
 	c.phaseInc = 2.0 * math.Pi * c.bfoHz / c.sampleRate
 	c.phase = 0
-	// Default 500Hz audio LPF (matching Node.js 127-tap FIR at 500/inputRate)
-	norm := 500.0 / c.sampleRate
+	// Default 1500Hz audio LPF (wide enough to pass 700 Hz BFO tone)
+	norm := 1500.0 / c.sampleRate
 	if c.audioLpf == nil {
 		c.audioLpf = newSimpleFir(127, norm)
 	} else {

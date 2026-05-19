@@ -40,7 +40,7 @@ func TestNoiseBlanker_ImpulseBlanked(t *testing.T) {
 	nb.Process(normalData)
 
 	// Now inject an impulse spike
-	data := make([]complex64, 10)
+	data := make([]complex64, 15)
 	for i := range data {
 		data[i] = complex(0.1, 0.1) // normal level
 	}
@@ -54,16 +54,16 @@ func TestNoiseBlanker_ImpulseBlanked(t *testing.T) {
 		t.Errorf("impulse at index 3 was not blanked: %v", data[3])
 	}
 
-	// Guard window: 3 more samples after the impulse should be blanked (indices 4, 5, 6)
-	for i := 4; i <= 6; i++ {
+	// Guard window: 8 more samples after the impulse should be blanked (indices 4-11)
+	for i := 4; i <= 11; i++ {
 		if data[i] != 0 {
 			t.Errorf("guard sample at index %d was not blanked: %v", i, data[i])
 		}
 	}
 
-	// At least 4 samples blanked (impulse + 3 guard)
-	if blanked < 4 {
-		t.Errorf("expected at least 4 blanked, got %d", blanked)
+	// At least 9 samples blanked (impulse + 8 guard)
+	if blanked < 9 {
+		t.Errorf("expected at least 9 blanked, got %d", blanked)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestNoiseBlanker_GuardWindow(t *testing.T) {
 	nb.Process(warmup)
 
 	// Inject spike followed by normal samples
-	data := make([]complex64, 10)
+	data := make([]complex64, 15)
 	for i := range data {
 		data[i] = complex(0.1, 0.0)
 	}
@@ -92,15 +92,15 @@ func TestNoiseBlanker_GuardWindow(t *testing.T) {
 	if data[0] != 0 {
 		t.Errorf("spike at index 0 not blanked: %v", data[0])
 	}
-	// Indices 1, 2, 3: guard window
-	for i := 1; i <= 3; i++ {
+	// Indices 1-8: guard window (guard size = 8)
+	for i := 1; i <= 8; i++ {
 		if data[i] != 0 {
 			t.Errorf("guard at index %d not blanked: %v", i, data[i])
 		}
 	}
-	// Index 4 should NOT be blanked (guard size = 3)
-	if data[4] == 0 {
-		t.Errorf("sample at index 4 should not be blanked")
+	// Index 9 should NOT be blanked (guard size = 8, so index 9 is first non-guard)
+	if data[9] == 0 {
+		t.Errorf("sample at index 9 should not be blanked")
 	}
 }
 

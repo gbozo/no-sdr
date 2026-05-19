@@ -2,15 +2,17 @@ package dsp
 
 import "math"
 
-// ButterworthBlock is a 4th-order Butterworth low-pass IIR filter
-// implemented as 2 cascaded biquad sections.
+// ButterworthBlock is an 8th-order Butterworth low-pass IIR filter
+// implemented as 4 cascaded biquad sections (up from 2 in older versions).
 // I and Q channels are filtered independently.
+// The steeper rolloff (48 dB/oct vs 24 dB/oct for 4th-order) provides
+// significantly better anti-aliasing protection before decimation.
 type ButterworthBlock struct {
 	cutoffHz   float64
 	sampleRate float64
-	sections   [2]biquadCoeffs
-	stateI     [2]biquadState
-	stateQ     [2]biquadState
+	sections   [4]biquadCoeffs
+	stateI     [4]biquadState
+	stateQ     [4]biquadState
 }
 
 type biquadCoeffs struct {
@@ -19,10 +21,10 @@ type biquadCoeffs struct {
 }
 
 type biquadState struct {
-	z1, z2 float64 // Direct Form II transposed state variables
+	z1, z2 float64
 }
 
-// NewButterworthBlock creates a 4th-order Butterworth LPF with the given cutoff.
+// NewButterworthBlock creates an 8th-order Butterworth LPF with the given cutoff.
 func NewButterworthBlock(cutoffHz float64) *ButterworthBlock {
 	return &ButterworthBlock{cutoffHz: cutoffHz}
 }
@@ -30,52 +32,46 @@ func NewButterworthBlock(cutoffHz float64) *ButterworthBlock {
 func (b *ButterworthBlock) Name() string                            { return "butterworth_lpf" }
 func (b *ButterworthBlock) SampleRateOut(inputRate float64) float64 { return inputRate }
 
-// Init computes biquad coefficients using bilinear transform with pre-warping.
 func (b *ButterworthBlock) Init(ctx BlockContext) error {
 	b.sampleRate = ctx.SampleRate
 	b.computeCoeffs()
 	return nil
 }
 
-// computeCoeffs calculates biquad coefficients for both sections.
-// 4th-order Butterworth = 2 biquad sections with specific Q values.
+// computeCoeffs calculates biquad coefficients for all 4 sections.
+// 8th-order Butterworth = 4 biquad sections with Q values derived from
+// pole positions at angles (2k+1)*pi/16 for k = 0..3.
 func (b *ButterworthBlock) computeCoeffs() {
-	// Q values for 4th-order Butterworth (poles at pi/8 and 3*pi/8)
-	q1 := 1.0 / (2.0 * math.Cos(math.Pi/8.0))   // ≈ 0.5412
-	q2 := 1.0 / (2.0 * math.Cos(3.0*math.Pi/8.0)) // ≈ 1.3066
-
-	b.sections[0] = computeBiquad(b.cutoffHz, b.sampleRate, q1)
-	b.sections[1] = computeBiquad(b.cutoffHz, b.sampleRate, q2)
+	for k := 0; k < 4; k++ {
+		theta := (2.0*float64(k) + 1.0) * math.Pi / 16.0
+		q := 1.0 / (2.0 * math.Cos(theta))
+		b.sections[k] = computeBiquad(b.cutoffHz, b.sampleRate, q)
+	}
 }
 
 // computeBiquad computes coefficients for a single 2nd-order section.
 // Uses bilinear transform with frequency pre-warping.
 func computeBiquad(cutoffHz, sampleRate, q float64) biquadCoeffs {
-	// Pre-warp the cutoff frequency
 	K := math.Tan(math.Pi * cutoffHz / sampleRate)
 	K2 := K * K
-
-	// Normalize
 	norm := 1.0 + K/q + K2
 
-	b0 := K2 / norm
-	b1 := 2.0 * K2 / norm
-	b2 := K2 / norm
-	a1 := 2.0 * (K2 - 1.0) / norm
-	a2 := (1.0 - K/q + K2) / norm
-
-	return biquadCoeffs{b0: b0, b1: b1, b2: b2, a1: a1, a2: a2}
+	return biquadCoeffs{
+		b0: K2 / norm,
+		b1: 2.0 * K2 / norm,
+		b2: K2 / norm,
+		a1: 2.0 * (K2 - 1.0) / norm,
+		a2: (1.0 - K/q + K2) / norm,
+	}
 }
 
-// ProcessComplex filters I and Q channels independently through both biquad sections.
+// ProcessComplex filters I and Q channels independently through all 4 biquad sections.
 func (b *ButterworthBlock) ProcessComplex(in []complex64, out []complex64) int {
 	for i, s := range in {
 		reIn := float64(real(s))
 		imIn := float64(imag(s))
 
-		// Filter I channel through both sections
 		reOut := b.filterSample(reIn, &b.stateI)
-		// Filter Q channel through both sections
 		imOut := b.filterSample(imIn, &b.stateQ)
 
 		out[i] = complex(float32(reOut), float32(imOut))
@@ -83,14 +79,10 @@ func (b *ButterworthBlock) ProcessComplex(in []complex64, out []complex64) int {
 	return len(in)
 }
 
-// filterSample processes a single real sample through both biquad sections.
-// Direct Form II Transposed:
-//   y = b0*x + z1
-//   z1 = b1*x - a1*y + z2
-//   z2 = b2*x - a2*y
-func (b *ButterworthBlock) filterSample(x float64, states *[2]biquadState) float64 {
+// filterSample processes a single real sample through all 4 biquad sections.
+func (b *ButterworthBlock) filterSample(x float64, states *[4]biquadState) float64 {
 	val := x
-	for sec := 0; sec < 2; sec++ {
+	for sec := 0; sec < 4; sec++ {
 		c := &b.sections[sec]
 		st := &states[sec]
 
@@ -103,13 +95,12 @@ func (b *ButterworthBlock) filterSample(x float64, states *[2]biquadState) float
 	return val
 }
 
-// Reset zeroes all filter state (removes transient history).
 func (b *ButterworthBlock) Reset() {
-	b.stateI = [2]biquadState{}
-	b.stateQ = [2]biquadState{}
+	b.stateI = [4]biquadState{}
+	b.stateQ = [4]biquadState{}
 }
 
-// SetCutoff recomputes coefficients for a new cutoff frequency.
+// SetCutoff recomputes coefficients for a new cutoff frequency and resets state.
 func (b *ButterworthBlock) SetCutoff(hz float64) {
 	b.cutoffHz = hz
 	if b.sampleRate > 0 {

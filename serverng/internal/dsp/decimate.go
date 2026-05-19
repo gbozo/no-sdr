@@ -1,12 +1,23 @@
 package dsp
 
-// DecimateBlock reduces sample rate by an integer factor.
-// Outputs every Nth sample from the input.
+import "math"
+
+// DecimateBlock performs decimation with proper anti-aliasing FIR filtering.
+// Uses a Blackman-Harris windowed-sinc lowpass filter designed for each
+// decimation ratio, with a circular delay line for correct sample alignment.
 type DecimateBlock struct {
-	factor int
+	factor  int
+	taps    []float32
+	buf     []complex64
+	pos     int
+	bufMask int
+
+	// Total samples processed across all calls. Needed to maintain correct
+	// decimation phase across chunk boundaries — without this, the condition
+	// check resets on every ProcessComplex call, dropping output samples.
+	totalIn int64
 }
 
-// NewDecimateBlock creates a decimation block with the given factor.
 func NewDecimateBlock(factor int) *DecimateBlock {
 	return &DecimateBlock{factor: factor}
 }
@@ -17,16 +28,122 @@ func (d *DecimateBlock) SampleRateOut(inputRate float64) float64 {
 	return inputRate / float64(d.factor)
 }
 
-func (d *DecimateBlock) Init(ctx BlockContext) error { return nil }
+func (d *DecimateBlock) Init(ctx BlockContext) error {
+	if d.factor <= 1 {
+		d.taps = nil
+		return nil
+	}
 
-// ProcessComplex outputs every Nth sample: out[j] = in[j*factor].
+	numTaps := d.estimateTapCount()
+	d.taps = d.designAntiAliasFir(numTaps)
+
+	bufSize := 1
+	for bufSize < numTaps {
+		bufSize <<= 1
+	}
+	d.buf = make([]complex64, bufSize)
+	d.bufMask = bufSize - 1
+	d.pos = 0
+	d.totalIn = 0
+
+	return nil
+}
+
+// ProcessComplex filters through the FIR anti-aliasing filter and decimates.
+// Uses a persistent totalIn counter so decimation phase is correct across
+// chunk boundaries. The FIR output y[t] = sum_{k=0}^{numTaps-1} h[k] * x[t-k]
+// is evaluated at every factor-th sample index t.
+//
+// Reads the delay line DURING the write phase so the circular buffer always
+// contains the most recent numTaps samples at each position.
 func (d *DecimateBlock) ProcessComplex(in []complex64, out []complex64) int {
+	if d.factor <= 1 || d.taps == nil {
+		copy(out, in)
+		return len(in)
+	}
+
 	f := d.factor
-	n := len(in) / f
-	for j := 0; j < n; j++ {
-		out[j] = in[j*f]
+	n := len(in)
+	taps := d.taps
+	numTaps := len(taps)
+	buf := d.buf
+	mask := d.bufMask
+	pos := d.pos
+
+	outIdx := 0
+	firstOut := int64(numTaps - 1)
+
+	for i := 0; i < n; i++ {
+		buf[pos] = in[i]
+
+		totalIdx := d.totalIn + int64(i)
+		if totalIdx >= firstOut {
+			rem := (totalIdx - firstOut) % int64(f)
+			if rem == 0 {
+				var sum complex64
+				idx := pos
+				for k := 0; k < numTaps; k++ {
+					coeff := taps[k]
+					sum += complex(real(buf[idx])*coeff, imag(buf[idx])*coeff)
+					idx = (idx - 1) & mask
+				}
+				out[outIdx] = sum
+				outIdx++
+			}
+		}
+
+		pos = (pos + 1) & mask
+	}
+
+	d.pos = pos
+	d.totalIn += int64(n)
+
+	return outIdx
+}
+
+func (d *DecimateBlock) Reset() {
+	if d.buf != nil {
+		for i := range d.buf {
+			d.buf[i] = 0
+		}
+	}
+	d.pos = 0
+	d.totalIn = 0
+}
+
+func (d *DecimateBlock) estimateTapCount() int {
+	n := d.factor*5 + 1
+	if n < 31 {
+		n = 31
+	}
+	if n%2 == 0 {
+		n++
 	}
 	return n
 }
 
-func (d *DecimateBlock) Reset() {}
+func (d *DecimateBlock) designAntiAliasFir(numTaps int) []float32 {
+	cutoff := 0.5 / float64(d.factor)
+	taps := make([]float32, numTaps)
+	m := float64(numTaps - 1) / 2.0
+	var sum float64
+	for i := 0; i < numTaps; i++ {
+		x := float64(i) - m
+		var sinc float64
+		if math.Abs(x) < 1e-12 {
+			sinc = 2 * math.Pi * cutoff
+		} else {
+			sinc = math.Sin(2*math.Pi*cutoff*x) / x
+		}
+		fi := float64(i)
+		fn := float64(numTaps - 1)
+		w := 0.35875 - 0.48829*math.Cos(2*math.Pi*fi/fn) +
+			0.14128*math.Cos(4*math.Pi*fi/fn) - 0.01168*math.Cos(6*math.Pi*fi/fn)
+		taps[i] = float32(sinc * w)
+		sum += float64(taps[i])
+	}
+	for i := range taps {
+		taps[i] = float32(float64(taps[i]) / sum)
+	}
+	return taps
+}

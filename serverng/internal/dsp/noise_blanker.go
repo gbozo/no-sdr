@@ -3,27 +3,41 @@ package dsp
 // NoiseBlanker blanks impulse noise from complex IQ samples.
 // Operates BEFORE filtering to prevent filter ringing on short impulses.
 //
-// Optimization: tracks avgMagSq (average of I²+Q²) and compares
-// squared magnitudes directly — no sqrt needed in the hot path.
+// Dual-threshold detection:
+//   - Above "blank" threshold: sample is impulse, blank immediately.
+//   - Above "detect" threshold but below "blank": probable impulse,
+//     blank with confidence proportional to excess.
+//   - Below both: pass through.
+//
+// Guard window blanks additional samples after each impulse to account
+// for the filter's transient recovery time.
 type NoiseBlanker struct {
-	enabled    bool
-	threshold  float32 // multiplier over average magnitude (default 10.0)
-	thresholdSq float32 // threshold² — precomputed for squared comparison
-	avgMagSq   float32 // EMA of squared signal magnitude (I²+Q²)
-	alpha      float32 // EMA coefficient (fast tracking)
-	blankCount int     // remaining samples to blank (guard window)
-	guardSize  int     // samples to blank after impulse detection
+	enabled       bool
+	threshold     float32 // high threshold: definite impulse blanking (default 10.0)
+	thresholdLow  float32 // low threshold: probable impulse (default 4.0)
+	thresholdSq   float32 // high threshold squared
+	thresholdLowSq float32 // low threshold squared
+	avgMagSq      float32 // EMA of squared signal magnitude (I²+Q²)
+	alpha         float32 // EMA coefficient (fast tracking)
+	blankCount    int     // remaining samples to blank (guard window)
+	guardSize     int     // samples to blank after impulse detection
 }
 
-// NewNoiseBlanker creates a noise blanker with the given threshold multiplier.
+// NewNoiseBlanker creates a noise blanker with the given high threshold multiplier.
 // The blanker is disabled by default — call SetEnabled(true) to activate.
 func NewNoiseBlanker(threshold float32) *NoiseBlanker {
+	lowThresh := threshold * 0.4
+	if lowThresh < 3.0 {
+		lowThresh = 3.0
+	}
 	return &NoiseBlanker{
-		enabled:     false,
-		threshold:   threshold,
-		thresholdSq: threshold * threshold,
-		alpha:       0.01, // fast EMA — tracks average in ~100 samples
-		guardSize:   3,    // blank 3 additional samples after impulse
+		enabled:        false,
+		threshold:      threshold,
+		thresholdLow:   lowThresh,
+		thresholdSq:    threshold * threshold,
+		thresholdLowSq: lowThresh * lowThresh,
+		alpha:          0.01,
+		guardSize:      8,
 	}
 }
 
@@ -31,9 +45,16 @@ func NewNoiseBlanker(threshold float32) *NoiseBlanker {
 func (nb *NoiseBlanker) SetEnabled(enabled bool) { nb.enabled = enabled }
 
 // SetThreshold sets the impulse detection threshold (multiplier over average magnitude).
+// The low threshold is automatically set to 40% of this value.
 func (nb *NoiseBlanker) SetThreshold(t float32) {
 	nb.threshold = t
 	nb.thresholdSq = t * t
+	lowThresh := t * 0.4
+	if lowThresh < 3.0 {
+		lowThresh = 3.0
+	}
+	nb.thresholdLow = lowThresh
+	nb.thresholdLowSq = lowThresh * lowThresh
 }
 
 // IsEnabled returns whether the noise blanker is active.
@@ -48,25 +69,31 @@ func (nb *NoiseBlanker) Process(data []complex64) int {
 
 	blanked := 0
 	threshSq := nb.thresholdSq
+	threshLowSq := nb.thresholdLowSq
+	guard := nb.guardSize
+
 	for i := range data {
 		re := real(data[i])
 		im := imag(data[i])
 		magSq := re*re + im*im
 
-		// Update EMA of squared magnitude — no sqrt needed
 		nb.avgMagSq = nb.avgMagSq + nb.alpha*(magSq-nb.avgMagSq)
 
 		if nb.blankCount > 0 {
-			// Still in guard window — blank this sample
 			data[i] = 0
 			nb.blankCount--
 			blanked++
 		} else if nb.avgMagSq > 0 && magSq > nb.avgMagSq*threshSq {
-			// Impulse detected — blank this sample + start guard window
-			// Equivalent to: mag > avgMag*threshold, but avoids two sqrts
 			data[i] = 0
-			nb.blankCount = nb.guardSize
+			nb.blankCount = guard
 			blanked++
+		} else if nb.avgMagSq > 0 && magSq > nb.avgMagSq*threshLowSq {
+			excess := (magSq - nb.avgMagSq*threshLowSq) / (nb.avgMagSq * (threshSq - threshLowSq))
+			if excess > 0.5 {
+				data[i] = 0
+				nb.blankCount = guard
+				blanked++
+			}
 		}
 	}
 	return blanked

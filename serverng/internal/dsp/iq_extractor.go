@@ -16,7 +16,7 @@ type IqExtractorConfig struct {
 }
 
 // IqExtractor extracts a narrow sub-band from wideband IQ data.
-// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Butterworth LPF → Decimate → scale to Int16
+// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Butterworth LPF → Decimate → normalize → scale to Int16
 type IqExtractor struct {
 	nco      *NCOBlock
 	filter   *ButterworthBlock
@@ -30,6 +30,17 @@ type IqExtractor struct {
 	outputRate int
 	factor     int       // decimation factor
 	bandwidth  int       // RF filter bandwidth in Hz (0 = use outputRate/2)
+
+	// Output level normalization — maintains consistent output amplitude
+	// regardless of input signal strength.
+	normalize      bool
+	normGain       float32 // current gain applied
+	normTarget     float32 // target RMS (0.0..1.0, 0.5 = -6 dBFS)
+	normAvgMag     float32 // EMA of output magnitude
+	normAlpha      float32 // attack rate
+	normRelease    float32 // release rate (slower than attack)
+	normMaxGain    float32 // max gain to prevent noise amplification
+	normMinSignal  float32 // minimum signal to track (avoid amplifying silence)
 
 	logger *slog.Logger
 
@@ -83,6 +94,17 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 		outputRate:   actualOutputRate,
 		factor:       factor,
 		logger:       logger,
+
+		// Output level normalization defaults (disabled — downstream demodulators
+		// have their own AGC; enabling this would fight those AGI loops)
+		normalize:     false,
+		normGain:      1.0,
+		normTarget:    0.5,
+		normAvgMag:    0,
+		normAlpha:     0.002,
+		normRelease:   0.0002,
+		normMaxGain:   10.0,
+		normMinSignal: 0.001,
 	}
 
 	return e, nil
@@ -123,6 +145,28 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 		return nil
 	}
 
+	// Output level normalization — maintains consistent levels
+	if e.normalize {
+		for i := range out {
+			mag := float32(math.Sqrt(float64(real(out[i])*real(out[i]) + imag(out[i])*imag(out[i]))))
+			e.normAvgMag += e.normAlpha * (mag - e.normAvgMag)
+
+			if e.normAvgMag > e.normMinSignal {
+				desiredGain := e.normTarget / e.normAvgMag
+				if desiredGain > e.normMaxGain {
+					desiredGain = e.normMaxGain
+				}
+				if desiredGain > e.normGain {
+					e.normGain += (desiredGain - e.normGain) * e.normAlpha
+				} else {
+					e.normGain += (desiredGain - e.normGain) * e.normRelease
+				}
+			}
+
+			out[i] = complex(real(out[i])*e.normGain, imag(out[i])*e.normGain)
+		}
+	}
+
 	// Scale to Int16 interleaved I,Q
 	outLen := len(out) * 2
 	if cap(e.int16Out) < outLen {
@@ -137,6 +181,20 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 	}
 
 	return e.int16Out
+}
+
+// SetNormalizationEnabled enables or disables output level normalization.
+func (e *IqExtractor) SetNormalizationEnabled(enabled bool) {
+	e.normalize = enabled
+	if !enabled {
+		e.normGain = 1.0
+		e.normAvgMag = 0
+	}
+}
+
+// NormalizationEnabled returns whether output normalization is active.
+func (e *IqExtractor) NormalizationEnabled() bool {
+	return e.normalize
 }
 
 // SetTuneOffset changes the NCO frequency at runtime.
@@ -202,6 +260,8 @@ func (e *IqExtractor) Reset() {
 	e.pipeline.Reset()
 	e.noiseBlanker.Reset()
 	e.dcBlocker.Reset()
+	e.normGain = 1.0
+	e.normAvgMag = 0
 }
 
 // SetNbEnabled enables or disables the pre-filter noise blanker.
@@ -241,10 +301,8 @@ func findDecimationFactor(inputRate, targetRate int) int {
 		return 1
 	}
 
-	// Ideal (possibly non-integer) factor
 	idealFactor := float64(inputRate) / float64(targetRate)
 
-	// Try floor and ceil, pick the one closest to the target rate
 	floorFactor := int(math.Floor(idealFactor))
 	ceilFactor := int(math.Ceil(idealFactor))
 

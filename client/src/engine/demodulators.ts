@@ -1647,8 +1647,8 @@ class CwDemodulator implements Demodulator {
     this.bfoFreq = 700; // 700 Hz CW offset tone
     this.bfoPhaseDelta = (2 * Math.PI * this.bfoFreq) / this.inputSampleRate;
 
-    // Narrow filter for CW
-    this.lpFilter = new FirFilter(127, 500 / this.inputSampleRate);
+    // Default CW audio passband: 1500 Hz (BFO is 700 Hz, so this lets the tone through)
+    this.lpFilter = new FirFilter(127, 1500 / this.inputSampleRate);
     this.agc = new Agc(0.3, 0.01, 0.0005, 300);
     this.dcBlocker = new DcBlocker();
   }
