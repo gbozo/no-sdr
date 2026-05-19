@@ -256,6 +256,8 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 							"rt", rdsData.RT,
 							"pi", rdsData.PI,
 							"pty", rdsData.PTY,
+							"PTYN", rdsData.PTYN,
+							"PtyName", rdsData.PtyName,
 						)
 						rdsJSON = b
 						p.rdsLastJSON = b

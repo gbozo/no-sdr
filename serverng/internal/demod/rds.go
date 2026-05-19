@@ -18,21 +18,21 @@ var ptyNames = [32]string{
 // RdsData holds decoded RDS information from an FM broadcast.
 // Field names and types match the TypeScript RdsData interface consumed by the client.
 type RdsData struct {
-	PS      string   `json:"ps"`      // Station name (up to 8 chars)
-	RT      string   `json:"rt"`      // Radio text (up to 64 chars)
-	PI      uint16   `json:"pi"`      // Programme Identification code (always present)
-	PTY     uint8    `json:"pty"`     // Programme type code
-	PtyName string   `json:"ptyName"` // Human-readable PTY label
-	Synced  bool     `json:"synced"`  // Block sync acquired
-	ECC     *uint8   `json:"ecc"`     // Extended Country Code (group 1A); nil if not yet received
-	PTYN    string   `json:"ptyn"`    // Programme Type Name 8-char (group 10A)
-	EON     []EonEntry `json:"eon"`   // Enhanced Other Networks (group 14A)
+	PS      string     `json:"ps"`      // Station name (up to 8 chars)
+	RT      string     `json:"rt"`      // Radio text (up to 64 chars)
+	PI      uint16     `json:"pi"`      // Programme Identification code (always present)
+	PTY     uint8      `json:"pty"`     // Programme type code
+	PtyName string     `json:"ptyName"` // Human-readable PTY label
+	Synced  bool       `json:"synced"`  // Block sync acquired
+	ECC     *uint8     `json:"ecc"`     // Extended Country Code (group 1A); nil if not yet received
+	PTYN    string     `json:"ptyn"`    // Programme Type Name 8-char (group 10A)
+	EON     []EonEntry `json:"eon"`     // Enhanced Other Networks (group 14A)
 }
 
 // EonEntry holds data for one Enhanced Other Network (group 14A).
 type EonEntry struct {
-	PI uint16   `json:"pi"` // PI of the other network
-	PS string   `json:"ps"` // PS name of the other network
+	PI uint16    `json:"pi"` // PI of the other network
+	PS string    `json:"ps"` // PS name of the other network
 	AF []float32 `json:"af"` // Alternative frequencies (MHz)
 }
 
@@ -94,10 +94,10 @@ type symbolSync struct {
 	sampleCount      int
 
 	// Gardner TED state
-	prevSymbolValue  float64
-	midSample        float64
-	halfSymbolPhase  float64
-	midCaptured      bool
+	prevSymbolValue float64
+	midSample       float64
+	halfSymbolPhase float64
+	midCaptured     bool
 
 	// PI loop filter for timing
 	loopGain   float64 // proportional
@@ -194,7 +194,7 @@ func (b *biphaseDecoder) push(sym float64) (bool, bool) {
 	idx := b.clock % biphaseWindow
 	b.history[idx] = energy
 
-	isDataPhase := (b.clock%2) == b.clockPolarity
+	isDataPhase := (b.clock % 2) == b.clockPolarity
 	b.clock++
 
 	// Periodically re-evaluate clock polarity
@@ -698,10 +698,10 @@ const (
 // Matches the TypeScript RdsDecoder algorithm exactly.
 type RdsDecoder struct {
 	// BPF at 57kHz (two cascaded biquads for sharper selectivity)
-	bpf1     biquadCoeffs
-	bpf1s    biquadState
-	bpf2     biquadCoeffs
-	bpf2s    biquadState
+	bpf1  biquadCoeffs
+	bpf1s biquadState
+	bpf2  biquadCoeffs
+	bpf2s biquadState
 
 	// NCO for mix-down
 	ncoPhase float64
@@ -731,10 +731,10 @@ func NewRdsDecoder(sampleRate float64) *RdsDecoder {
 	decimatedRate := sampleRate / rdsDecimate
 
 	r := &RdsDecoder{
-		bpf1:    bandpassCoeffs(rdsSubcarrierHz, 10, sampleRate),
-		bpf2:    bandpassCoeffs(rdsSubcarrierHz, 10, sampleRate),
-		ncoInc:  2.0 * math.Pi * rdsSubcarrierHz / sampleRate,
-		lpfI:    lowpassCoeffs(2400, 0.707, decimatedRate),
+		bpf1:     bandpassCoeffs(rdsSubcarrierHz, 10, sampleRate),
+		bpf2:     bandpassCoeffs(rdsSubcarrierHz, 10, sampleRate),
+		ncoInc:   2.0 * math.Pi * rdsSubcarrierHz / sampleRate,
+		lpfI:     lowpassCoeffs(2400, 0.707, decimatedRate),
 		symSync:  newSymbolSync(decimatedRate),
 		blkSync:  newBlockSync(),
 		grpParse: newGroupParser(),
