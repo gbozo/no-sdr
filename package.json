@@ -11,8 +11,8 @@
   "scripts": {
     "dev": "concurrently --raw -k \"npm run dev:go\" \"npm run dev --workspace=client\"",
     "dev:demo": "concurrently --raw -k \"npm run dev:go:demo\" \"npm run dev --workspace=client\"",
-    "dev:go": "cd serverng && PATH=\"$PATH:$HOME/go/bin\" air",
-    "dev:go:demo": "cd serverng && PATH=\"$PATH:$HOME/go/bin\" NODE_SDR_DEMO=1 air",
+    "dev:go": "cd serverng && PATH=\"$PATH:$HOME/go/bin\" LOG_LEVEL=debug air",
+    "dev:go:demo": "cd serverng && PATH=\"$PATH:$HOME/go/bin\" NODE_SDR_DEMO=1 LOG_LEVEL=debug air",
     "dev:client": "npm run dev --workspace=client",
     "build": "npm run build:client && npm run build:go",
     "build:client": "npm run build --workspace=client",

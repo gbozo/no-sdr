@@ -64,7 +64,7 @@ dongles:
           directSampling: 0
           description: FM radio 87.5–108 MHz (stereo, RDS)
           dongleId: ""
-          preFilterNb: false
+          preFilterNb: true
           preFilterNbThreshold: 0
           dcOffsetRemoval: true
         - id: profile-mootuxy2
@@ -131,9 +131,3 @@ bookmarks:
       mode: wfm
       bandwidth: 200000
       description: Cool sttion
-    - id: bm_mp7dwr3m_wp5rh
-      name: Nachos
-      frequency: 100560000
-      mode: wfm
-      bandwidth: 200000
-      description: lala

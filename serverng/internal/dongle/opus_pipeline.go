@@ -3,6 +3,7 @@ package dongle
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/gbozo/no-sdr/serverng/internal/codec"
 	"github.com/gbozo/no-sdr/serverng/internal/demod"
@@ -25,7 +26,7 @@ type OpusPipelineConfig struct {
 	StereoEnabled *bool  // nil = default true; set false to start in mono from first frame
 	Quality       string // "opus-lo", "opus", or "opus-hq"
 	// Complexity is the Opus encoder complexity (0–10). 0 means use server default (5).
-	Complexity    int
+	Complexity int
 }
 
 // OpusPipeline performs server-side demodulation + Opus encoding.
@@ -72,16 +73,16 @@ type OpusPipeline struct {
 	pcmBuf     []int16     // float32 → int16 for Opus
 
 	// RDS decoder — only non-nil when mode=="wfm"
-	rdsDecoder   *demod.RdsDecoder
-	rdsLastJSON  []byte       // last JSON snapshot sent to the client (nil = never sent)
+	rdsDecoder  *demod.RdsDecoder
+	rdsLastJSON []byte // last JSON snapshot sent to the client (nil = never sent)
 
 	// PCM capture ring buffer for music recognition.
 	// Holds the last captureSecs seconds of decoded 48kHz Float32 audio (mono).
-	captureRing   []float32
-	capturePos    int
-	captureLen    int  // samples currently valid (0 → captureCap)
-	captureCap    int  // total ring capacity = captureSecs * 48000
-	captureChans  int  // channel count of last frame written
+	captureRing  []float32
+	capturePos   int
+	captureLen   int // samples currently valid (0 → captureCap)
+	captureCap   int // total ring capacity = captureSecs * 48000
+	captureChans int // channel count of last frame written
 }
 
 const stereoHoldFrames = 10
@@ -237,9 +238,9 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 	if p.rdsDecoder != nil {
 		if stereoDemod, ok := p.demodulator.(*demod.FmStereoDemod); ok {
 			composite := stereoDemod.GetComposite()
-			// Use pilot-locked RDS demodulation when pilot is detected (coherent, no drift)
 			var rdsData *demod.RdsData
-			if stereoDemod.PilotDetected() {
+			pilotOk := stereoDemod.PilotDetected()
+			if pilotOk {
 				pilotPhases := stereoDemod.GetPilotPhases()
 				rdsData = p.rdsDecoder.ProcessWithPilot(composite, pilotPhases)
 			} else {
@@ -248,6 +249,14 @@ func (p *OpusPipeline) Process(iqInt16 []int16) []OpusResult {
 			if rdsData != nil {
 				if b, err := json.Marshal(rdsData); err == nil {
 					if string(b) != string(p.rdsLastJSON) {
+						slog.Debug("[RDS] data changed",
+							"pilot", pilotOk,
+							"synced", rdsData.Synced,
+							"ps", rdsData.PS,
+							"rt", rdsData.RT,
+							"pi", rdsData.PI,
+							"pty", rdsData.PTY,
+						)
 						rdsJSON = b
 						p.rdsLastJSON = b
 					}
@@ -519,11 +528,11 @@ func (p *OpusPipeline) SetMode(mode string) error {
 			p.rdsDecoder.Reset()
 		}
 		p.rdsLastJSON = nil
-		
+
 	} else {
 		p.rdsDecoder = nil
 		p.rdsLastJSON = nil
-		
+
 	}
 
 	return nil

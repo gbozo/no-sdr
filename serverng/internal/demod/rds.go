@@ -487,11 +487,11 @@ func (b *blockSync) reset() {
 // ---- Group parser ----
 
 type groupParser struct {
-	psChars  [8]byte
-	rtChars  [64]byte
-	rtAbFlag int
+	psChars   [8]byte
+	rtChars   [64]byte
+	rtAbFlag  int
 	ptynChars [8]byte
-	eonMap   map[uint16]*EonEntry // keyed by ON PI
+	eonMap    map[uint16]*EonEntry // keyed by ON PI
 }
 
 func newGroupParser() *groupParser {
@@ -551,8 +551,8 @@ func (gp *groupParser) parse(group [4]int32, data *RdsData) {
 				gp.psChars[idx] = rdsChar(byte((blockD >> 8) & 0xFF))
 				gp.psChars[idx+1] = rdsChar(byte(blockD & 0xFF))
 			}
+			data.PS = strings.TrimRight(string(gp.psChars[:]), " \x00")
 		}
-		data.PS = strings.TrimRight(string(gp.psChars[:]), " \x00")
 
 	case 1:
 		// Type 1A: Programme Item Number + Extended Country Code
@@ -563,7 +563,11 @@ func (gp *groupParser) parse(group [4]int32, data *RdsData) {
 
 	case 2:
 		// Type 2A/2B: RadioText
-		segment := int(blockB & 0x0F)
+		segBits := 0x0F
+		if versionB {
+			segBits = 0x1F
+		}
+		segment := int(blockB & int32(segBits))
 		abFlag := int((blockB >> 4) & 1)
 		if gp.rtAbFlag != abFlag {
 			for i := range gp.rtChars {

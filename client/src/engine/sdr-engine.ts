@@ -245,8 +245,8 @@ export class SdrEngine {
   /** Attach RDS callback to current demodulator if it supports RDS */
   private attachRdsCallback(): void {
     if (this.demodulator.setRdsCallback) {
-      this.demodulator.setRdsCallback((data: RdsData) => {
-        store.setRdsPs(data.ps);
+      this.demodulator.setRdsCallback((data: RdsData) => {        
+        if (data.ps) store.setRdsPs(data.ps);
         store.setRdsRt(data.rt);
         store.setRdsPty(data.ptyName);
         store.setRdsPi(data.pi !== null ? data.pi.toString(16).toUpperCase().padStart(4, '0') : '');
@@ -805,7 +805,7 @@ export class SdrEngine {
         try {
           const text = new TextDecoder().decode(payload);
           const rds = JSON.parse(text);
-          if (rds.ps !== undefined) store.setRdsPs(rds.ps);
+          if (rds.ps) store.setRdsPs(rds.ps);
           if (rds.rt !== undefined) store.setRdsRt(rds.rt);
           if (rds.ptyName !== undefined) store.setRdsPty(rds.ptyName);
           if (rds.pi !== null && rds.pi !== undefined) {
