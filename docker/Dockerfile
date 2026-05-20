@@ -37,7 +37,8 @@ RUN apk add --no-cache \
     pkgconfig
 
 # Clone Osmocom rtl-sdr (no_eeprom_write, active maintenance branch)
-RUN git clone https://gitea.osmocom.org/sdr/rtl-sdr.git /rtl-sdr \
+# original source https://gitea.osmocom.org/sdr/rtl-sdr.git
+RUN git clone https://github.com/gbozo/rtl-sdr.git /rtl-sdr \
     --depth=1 --branch master
 
 RUN cmake -S /rtl-sdr -B /rtl-sdr/build \
