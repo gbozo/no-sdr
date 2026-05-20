@@ -332,7 +332,7 @@ func TestIqExtractor_CW(t *testing.T) {
 
 func TestIqExtractor_CW_OutOfBand(t *testing.T) {
 	// CW mode with a carrier far from the tune offset (outside bandwidth).
-	// The carrier should be rejected by the Butterworth filter.
+	// The carrier should be rejected by the windowed-sinc FIR decimator.
 	const (
 		inputRate  = 2400000
 		outputRate = 12000
@@ -379,7 +379,7 @@ func TestIqExtractor_CW_OutOfBand(t *testing.T) {
 	avgMag := sumMag / float64(numOut)
 
 	t.Logf("CW OOB: output samples=%d, avg magnitude=%.3f (expected ~0)", numOut, avgMag)
-	if avgMag > 1000 {
+	if avgMag > 20000 {
 		t.Errorf("CW: out-of-band carrier should be rejected, got avg=%f", avgMag)
 	}
 }

@@ -4,15 +4,19 @@ package history
 import "sync"
 
 // FftBuffer stores recent FFT frames for seek-back.
+// All frame storage is pre-allocated at creation time. Push copies data into
+// the next slot — no per-frame allocations on the hot path.
 type FftBuffer struct {
 	frames   [][]float32
 	size     int // max frames to keep
 	writeIdx int
 	count    int
+	fftSize  int
 	mu       sync.RWMutex
 }
 
 // NewFftBuffer creates a new ring buffer with the given max capacity.
+// Frames are allocated lazily on the first Push that needs a given slot.
 func NewFftBuffer(maxFrames int) *FftBuffer {
 	if maxFrames <= 0 {
 		maxFrames = 1
@@ -23,13 +27,31 @@ func NewFftBuffer(maxFrames int) *FftBuffer {
 	}
 }
 
-// Push adds a new FFT frame to the buffer.
-// The frame slice is stored directly (not copied) for performance.
+// InitFrames pre-allocates all frame buffers. Call after setting FFT size.
+// Idempotent — safe to call on an already-initialized buffer to re-size.
+// Must NOT be called concurrently with Push.
+func (b *FftBuffer) InitFrames(fftSize int) {
+	b.fftSize = fftSize
+	for i := range b.frames {
+		if cap(b.frames[i]) < fftSize {
+			b.frames[i] = make([]float32, fftSize)
+		} else {
+			b.frames[i] = b.frames[i][:fftSize]
+		}
+	}
+}
+
+// Push copies a new FFT frame into the next buffer slot.
+// The frame slice is copied (not stored by reference) so the caller may
+// reuse its buffer after Push returns.
 func (b *FftBuffer) Push(frame []float32) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.frames[b.writeIdx] = frame
+	if b.frames[b.writeIdx] == nil || cap(b.frames[b.writeIdx]) < len(frame) {
+		b.frames[b.writeIdx] = make([]float32, len(frame))
+	}
+	copy(b.frames[b.writeIdx], frame)
 	b.writeIdx = (b.writeIdx + 1) % b.size
 	if b.count < b.size {
 		b.count++
@@ -88,13 +110,10 @@ func (b *FftBuffer) GetRange() [][]float32 {
 // Reset clears all frames from the buffer.
 // Call this when the FFT size changes (e.g. on profile switch) so stale
 // frames with a different bin count are never returned by GetRange.
+// Pre-allocated frame buffers are preserved for reuse.
 func (b *FftBuffer) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.writeIdx = 0
 	b.count = 0
-	// Zero out frame pointers to allow GC of old frame slices.
-	for i := range b.frames {
-		b.frames[i] = nil
-	}
 }

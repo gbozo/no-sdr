@@ -70,7 +70,7 @@ func BenchmarkFullFFTPipeline4096(b *testing.B) {
 	}
 }
 
-// BenchmarkIqExtractorNFM benchmarks NCO+filter+decimate for NFM (2.4M→48k).
+// BenchmarkIqExtractorNFM benchmarks NCO+decimate for NFM (2.4M→48k).
 func BenchmarkIqExtractorNFM(b *testing.B) {
 	const inputRate = 2400000
 	const outputRate = 48000
@@ -101,7 +101,7 @@ func BenchmarkIqExtractorNFM(b *testing.B) {
 	}
 }
 
-// BenchmarkIqExtractorWFM benchmarks NCO+filter+decimate for WFM (2.4M→240k).
+// BenchmarkIqExtractorWFM benchmarks NCO+decimate for WFM (2.4M→240k).
 func BenchmarkIqExtractorWFM(b *testing.B) {
 	const inputRate = 2400000
 	const outputRate = 240000
@@ -132,7 +132,7 @@ func BenchmarkIqExtractorWFM(b *testing.B) {
 	}
 }
 
-// BenchmarkIqExtractorSSB benchmarks NCO+filter+decimate for SSB (2.4M→24k).
+// BenchmarkIqExtractorSSB benchmarks NCO+decimate for SSB (2.4M→24k).
 func BenchmarkIqExtractorSSB(b *testing.B) {
 	const inputRate = 2400000
 	const outputRate = 24000

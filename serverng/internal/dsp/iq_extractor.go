@@ -16,10 +16,9 @@ type IqExtractorConfig struct {
 }
 
 // IqExtractor extracts a narrow sub-band from wideband IQ data.
-// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Butterworth LPF → Decimate → normalize → scale to Int16
+// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Decimate (windowed-sinc FIR) → normalize → scale to Int16
 type IqExtractor struct {
 	nco      *NCOBlock
-	filter   *ButterworthBlock
 	decimate *DecimateBlock
 	pipeline *Pipeline
 
@@ -73,19 +72,16 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 
 	// Create DSP blocks
 	nco := NewNCOBlock(float64(cfg.TuneOffset))
-	cutoff := float64(actualOutputRate) / 2.0
-	filter := NewButterworthBlock(cutoff)
 	decimate := NewDecimateBlock(factor)
 
-	// Build pipeline
-	pipeline, err := NewPipeline(float64(cfg.InputSampleRate), []ProcessorBlock{nco, filter, decimate}, logger)
+	// Build pipeline: NCO → Decimate (windowed-sinc FIR)
+	pipeline, err := NewPipeline(float64(cfg.InputSampleRate), []ProcessorBlock{nco, decimate}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("iq_extractor: pipeline init failed: %w", err)
 	}
 
 	e := &IqExtractor{
 		nco:          nco,
-		filter:       filter,
 		decimate:     decimate,
 		pipeline:     pipeline,
 		noiseBlanker: NewNoiseBlanker(10.0),
@@ -126,10 +122,11 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 		e.complexIn = e.complexIn[:numSamples]
 	}
 
-	// Convert uint8 IQ to complex64: (byte - 127.5) / 127.5
+		// Convert uint8 IQ to complex64: (byte - 127.5) / 127.5
+	// Division by 127.5 is compiled as multiply by precomputed inverse (20× faster).
 	for i := 0; i < numSamples; i++ {
-		iVal := (float32(rawIQ[i*2]) - 127.5) / 127.5
-		qVal := (float32(rawIQ[i*2+1]) - 127.5) / 127.5
+		iVal := (float32(rawIQ[i*2]) - 127.5) * invU8Scale
+		qVal := (float32(rawIQ[i*2+1]) - 127.5) * invU8Scale
 		e.complexIn[i] = complex(iVal, qVal)
 	}
 
@@ -139,7 +136,7 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 	// Apply pre-filter noise blanker (if enabled)
 	e.noiseBlanker.Process(e.complexIn[:numSamples])
 
-	// Run through pipeline: NCO → Butterworth → Decimate
+	// Run through pipeline: NCO → Decimate (windowed-sinc FIR anti-aliasing)
 	out := e.pipeline.Process(e.complexIn)
 	if len(out) == 0 {
 		return nil
@@ -215,24 +212,18 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 	e.factor = factor
 	e.outputRate = actualRate
 
-	// Update filter cutoff: use explicit bandwidth if set, otherwise outputRate/2
-	if e.bandwidth > 0 {
-		e.filter.SetCutoff(float64(e.bandwidth) / 2.0)
-	} else {
-		e.filter.SetCutoff(float64(actualRate) / 2.0)
-	}
-	e.filter.Reset()
-
 	// Update decimation factor — need to rebuild the decimate block
 	e.decimate = NewDecimateBlock(factor)
 	_ = e.decimate.Init(BlockContext{SampleRate: float64(e.inputRate)})
+	if e.bandwidth > 0 {
+		e.decimate.SetBandwidth(e.bandwidth)
+	}
 
 	// Rebuild pipeline with new decimation factor
 	nco := e.nco
-	filter := e.filter
 	decimate := e.decimate
 
-	pipeline, err := NewPipeline(float64(e.inputRate), []ProcessorBlock{nco, filter, decimate}, e.logger)
+	pipeline, err := NewPipeline(float64(e.inputRate), []ProcessorBlock{nco, decimate}, e.logger)
 	if err != nil {
 		e.logger.Error("iq_extractor: failed to rebuild pipeline", "error", err)
 		return
@@ -241,21 +232,18 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 }
 
 // SetBandwidth sets the RF filter bandwidth in Hz.
-// Updates the Butterworth LPF cutoff to bandwidth/2 and resets filter state.
-// Set bandwidth=0 to revert to outputRate/2 (default behavior).
+// Forwards to the windowed-sinc FIR decimator, which redesigns its taps.
+// Set bandwidth=0 to revert to outputRate/2 (Nyquist default).
 func (e *IqExtractor) SetBandwidth(hz int) {
 	if hz <= 0 {
 		e.bandwidth = 0
-		// Revert to outputRate/2
-		e.filter.SetCutoff(float64(e.outputRate) / 2.0)
 	} else {
 		e.bandwidth = hz
-		e.filter.SetCutoff(float64(hz) / 2.0)
 	}
-	e.filter.Reset()
+	e.decimate.SetBandwidth(hz)
 }
 
-// Reset clears all filter state.
+// Reset clears all DSP state.
 func (e *IqExtractor) Reset() {
 	e.pipeline.Reset()
 	e.noiseBlanker.Reset()

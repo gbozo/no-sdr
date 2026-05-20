@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"unsafe"
 )
 
 // Message type bytes (Server → Client)
@@ -145,9 +146,9 @@ func PackIQMessage(samples []int16, sampleRate uint32) []byte {
 	binary.LittleEndian.PutUint32(buf[1:5], sampleRate)
 	buf[5] = 2 // always 2-channel interleaved I/Q
 	buf[6] = 0 // reserved
-	for i, s := range samples {
-		binary.LittleEndian.PutUint16(buf[7+i*2:], uint16(s))
-	}
+	// Unsafe cast int16 slice to bytes and copy in bulk.
+	sampleBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(samples))), len(samples)*2)
+	copy(buf[7:], sampleBytes)
 	return buf
 }
 

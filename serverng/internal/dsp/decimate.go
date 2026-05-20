@@ -5,12 +5,16 @@ import "math"
 // DecimateBlock performs decimation with proper anti-aliasing FIR filtering.
 // Uses a Blackman-Harris windowed-sinc lowpass filter designed for each
 // decimation ratio, with a circular delay line for correct sample alignment.
+// The FIR doubles as a bandwidth-limiting filter — call SetBandwidth to
+// narrow the passband below the default Nyquist of outputRate/2.
 type DecimateBlock struct {
-	factor  int
-	taps    []float32
-	buf     []complex64
-	pos     int
-	bufMask int
+	factor       int
+	taps         []float32
+	buf          []complex64
+	pos          int
+	bufMask      int
+	inputRate    float64
+	bandwidthHz  int // 0 = default (outputRate / 2)
 
 	// Total samples processed across all calls. Needed to maintain correct
 	// decimation phase across chunk boundaries — without this, the condition
@@ -34,8 +38,9 @@ func (d *DecimateBlock) Init(ctx BlockContext) error {
 		return nil
 	}
 
+	d.inputRate = ctx.SampleRate
 	numTaps := d.estimateTapCount()
-	d.taps = d.designAntiAliasFir(numTaps)
+	d.taps = d.designAntiAliasFir(numTaps, 0)
 
 	bufSize := 1
 	for bufSize < numTaps {
@@ -111,6 +116,20 @@ func (d *DecimateBlock) Reset() {
 	d.totalIn = 0
 }
 
+// SetBandwidth redesigns the FIR taps for a narrower passband. When hz > 0
+// and less than outputRate/2, the FIR's -6 dB point moves to hz/2 instead
+// of the default outputRate/2. Call with hz=0 to revert to Nyquist.
+// Resets filter state (buffer + phase) after redesign.
+func (d *DecimateBlock) SetBandwidth(hz int) {
+	d.bandwidthHz = hz
+	if d.factor <= 1 || d.taps == nil {
+		return
+	}
+	numTaps := len(d.taps)
+	d.taps = d.designAntiAliasFir(numTaps, hz)
+	d.Reset()
+}
+
 func (d *DecimateBlock) estimateTapCount() int {
 	n := d.factor*5 + 1
 	if n < 31 {
@@ -122,8 +141,14 @@ func (d *DecimateBlock) estimateTapCount() int {
 	return n
 }
 
-func (d *DecimateBlock) designAntiAliasFir(numTaps int) []float32 {
+func (d *DecimateBlock) designAntiAliasFir(numTaps int, bandwidthHz int) []float32 {
 	cutoff := 0.5 / float64(d.factor)
+	if bandwidthHz > 0 && d.inputRate > 0 {
+		c := float64(bandwidthHz) / 2.0 / d.inputRate
+		if c > 0 && c < cutoff {
+			cutoff = c
+		}
+	}
 	taps := make([]float32, numTaps)
 	m := float64(numTaps - 1) / 2.0
 	var sum float64

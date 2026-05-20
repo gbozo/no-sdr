@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -93,12 +94,9 @@ type activeDongle struct {
 
 // clientPipeline holds per-client IQ extraction state.
 type clientPipeline struct {
-	// pmu protects opusPipeline field only — used by both the hot path
-	// goroutine (processClientIQ) and command handler goroutines.
-	pmu          sync.Mutex
 	extractor    *dsp.IqExtractor
 	adpcmEnc     *codecPkg.ImaAdpcmEncoder
-	opusPipeline *OpusPipeline // non-nil for opus/opus-hq clients; guarded by pmu
+	opusPipeline atomic.Pointer[OpusPipeline] // non-nil for opus/opus-hq clients
 	accumBuf     []int16       // 20ms accumulation buffer
 	accumPos     int
 	chunkSize    int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
@@ -108,6 +106,7 @@ type clientPipeline struct {
 	nbThreshold  float32 // multiplier (default 10.0)
 	iqChunkCount int64   // debug counter
 	stereoEnabled bool   // remembered stereo preference, applied on pipeline creation
+	adpcmBuf     []byte  // pre-allocated ADPCM output buffer (avoids make on every chunk)
 }
 
 // maxRetries is the number of retry attempts for dongle initialization.
@@ -282,12 +281,9 @@ func (m *Manager) Stop() {
 	// Close all client pipelines including their Opus encoders.
 	// Without this, libopus encoder memory is leaked on shutdown.
 	for id, cp := range m.clientPipelines {
-		cp.pmu.Lock()
-		if cp.opusPipeline != nil {
-			cp.opusPipeline.Close()
-			cp.opusPipeline = nil
+		if p := cp.opusPipeline.Swap(nil); p != nil {
+			p.Close()
 		}
-		cp.pmu.Unlock()
 		delete(m.clientPipelines, id)
 	}
 }
@@ -329,12 +325,9 @@ func (m *Manager) StopDongleByID(dongleID string) error {
 	// Clean up client pipelines for this dongle
 	for clientID, cp := range m.clientPipelines {
 		if cp.dongleID == dongleID {
-			cp.pmu.Lock()
-			if cp.opusPipeline != nil {
-				cp.opusPipeline.Close()
-				cp.opusPipeline = nil
+			if p := cp.opusPipeline.Swap(nil); p != nil {
+				p.Close()
 			}
-			cp.pmu.Unlock()
 			delete(m.clientPipelines, clientID)
 		}
 	}
@@ -383,12 +376,9 @@ func (m *Manager) ReinitDongle(dongleID string) error {
 	m.mu.Lock()
 	for _, clientID := range affected {
 		if cp, ok := m.clientPipelines[clientID]; ok {
-			cp.pmu.Lock()
-			if cp.opusPipeline != nil {
-				cp.opusPipeline.Close()
-				cp.opusPipeline = nil
+			if p := cp.opusPipeline.Swap(nil); p != nil {
+				p.Close()
 			}
-			cp.pmu.Unlock()
 			delete(m.clientPipelines, clientID)
 		}
 	}
@@ -580,6 +570,9 @@ func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConf
 		fftHistory:      history.NewFftBuffer(1024),
 		cancel:          cancel,
 	}
+
+	// Pre-allocate all history frame buffers (zero alloc on hot path)
+	ad.fftHistory.InitFrames(profile.FftSize)
 
 	m.mu.Lock()
 	m.dongles[dcfg.ID] = ad
@@ -907,6 +900,7 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 	// visual artifacts in the client's history waterfall.
 	if d.fftHistory != nil {
 		d.fftHistory.Reset()
+		d.fftHistory.InitFrames(newProfile.FftSize)
 	}
 	m.mu.Unlock()
 
@@ -945,15 +939,13 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 			cp.extractor.SetDCOffsetRemoval(newProfile.DCOffsetRemoval == nil || *newProfile.DCOffsetRemoval)
 			m.updateChunkSize(cp)
 			// Update Opus pipeline if active
-			cp.pmu.Lock()
-			if cp.opusPipeline != nil {
-				cp.opusPipeline.UpdateSampleRate(newRate)
-				if err := cp.opusPipeline.SetMode(newProfile.Mode); err != nil {
+			if p := cp.opusPipeline.Load(); p != nil {
+				p.UpdateSampleRate(newRate)
+				if err := p.SetMode(newProfile.Mode); err != nil {
 					m.logger.Error("failed to update opus pipeline mode on profile switch",
 						"clientID", client.ID, "mode", newProfile.Mode, "error", err)
 				}
 			}
-			cp.pmu.Unlock()
 			// Reset accumulator
 			cp.accumPos = 0
 			if cp.adpcmEnc != nil {
@@ -1087,10 +1079,7 @@ func (m *Manager) processOneClient(clientID string, cp *clientPipeline, iqChunk 
 	}
 
 	// Opus pipeline path: demod + encode → send Opus packets
-	// pmu guards opusPipeline against concurrent codec switch commands.
-	cp.pmu.Lock()
-	opus := cp.opusPipeline
-	cp.pmu.Unlock()
+	opus := cp.opusPipeline.Load()
 	if opus != nil {
 		results := opus.Process(subBand)
 		for _, r := range results {
@@ -1120,7 +1109,8 @@ func (m *Manager) processOneClient(clientID string, cp *clientPipeline, iqChunk 
 			chunk := cp.accumBuf[:cp.chunkSize]
 			sampleRate := uint32(cp.extractor.OutputSampleRate())
 			if cp.iqCodec == "adpcm" {
-				encoded := cp.adpcmEnc.Encode(chunk)
+				encodedLen := cp.adpcmEnc.EncodeInto(chunk, cp.adpcmBuf)
+				encoded := cp.adpcmBuf[:encodedLen]
 				// sampleCount = total Int16 values (not IQ pairs)
 				msg := ws.PackIQAdpcmMessage(encoded, uint32(cp.chunkSize), sampleRate)
 				m.wsMgr.SendTo(clientID, msg)
@@ -1498,13 +1488,7 @@ func (m *Manager) handleUnsubscribe(clientID string) {
 	m.mu.Unlock()
 
 	if ok && cp != nil {
-		// Swap opusPipeline to nil under pmu so any concurrent Process() call
-		// that grabbed the pointer from a previous snapshot finishes safely,
-		// but future callers see nil.
-		cp.pmu.Lock()
-		pipeline := cp.opusPipeline
-		cp.opusPipeline = nil
-		cp.pmu.Unlock()
+		pipeline := cp.opusPipeline.Swap(nil)
 		if pipeline != nil {
 			pipeline.Close()
 		}
@@ -1526,12 +1510,10 @@ func (m *Manager) handleStereoEnabled(clientID string, cmd *ws.ClientCommand) {
 	// (e.g., on codec switch). This prevents the "first packet is stereo" race where
 	// the pipeline is created with stereoEnabled=true before stereo_enabled=false arrives.
 	cp.stereoEnabled = *cmd.Enabled
-	// pmu guards opusPipeline against concurrent Process() calls in the hot path.
-	cp.pmu.Lock()
-	if cp.opusPipeline != nil {
-		cp.opusPipeline.SetStereo(*cmd.Enabled)
+	// atomic.Pointer guards opusPipeline against concurrent Process() calls in the hot path.
+	if p := cp.opusPipeline.Load(); p != nil {
+		p.SetStereo(*cmd.Enabled)
 	}
-	cp.pmu.Unlock()
 }
 
 // handleSubscribe sends META message to client with profile info.
@@ -1646,7 +1628,7 @@ func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 }
 
 // handleBandwidth stores the client's audio/RF filter bandwidth.
-// Updates the IQ extractor's Butterworth LPF (RF filtering) and,
+	// Updates the IQ extractor's windowed-sinc FIR bandwidth (RF filtering) and,
 // for Opus clients, the demodulator's audio LPF.
 func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
@@ -1662,11 +1644,9 @@ func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	cp.extractor.SetBandwidth(cmd.Hz)
 
 	// Forward bandwidth to Opus pipeline demodulator if active (audio LPF).
-	cp.pmu.Lock()
-	if cp.opusPipeline != nil {
-		cp.opusPipeline.SetBandwidth(cmd.Hz)
+	if p := cp.opusPipeline.Load(); p != nil {
+		p.SetBandwidth(cmd.Hz)
 	}
-	cp.pmu.Unlock()
 
 	m.logger.Debug("client bandwidth updated", "clientID", clientID, "hz", cmd.Hz)
 }
@@ -1694,18 +1674,15 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 		m.updateChunkSize(cp)
 
 		// Update opus pipeline demodulator if active.
-		// pmu guards opusPipeline against concurrent hot-path reads.
-		cp.pmu.Lock()
-		if cp.opusPipeline != nil {
+		if p := cp.opusPipeline.Load(); p != nil {
 			// UpdateSampleRate recalculates decimFactor and upsampleRatio
 			// internally — do not manually override them afterwards.
-			cp.opusPipeline.UpdateSampleRate(rate)
-			if err := cp.opusPipeline.SetMode(cmd.Mode); err != nil {
+			p.UpdateSampleRate(rate)
+			if err := p.SetMode(cmd.Mode); err != nil {
 				m.logger.Error("failed to set opus pipeline mode",
 					"clientID", clientID, "mode", cmd.Mode, "error", err)
 			}
 		}
-		cp.pmu.Unlock()
 
 		// Reset accumulator on mode change
 		cp.accumPos = 0
@@ -1783,21 +1760,16 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 		// Reset the extractor to clear any stale IIR state before feeding Opus pipeline.
 		cp.extractor.Reset()
 
-		cp.pmu.Lock()
-		cp.opusPipeline = pipeline
+		cp.opusPipeline.Store(pipeline)
 		cp.iqCodec = newCodec
-		cp.pmu.Unlock()
 
 		m.logger.Info("switched to opus pipeline", "clientID", clientID, "codec", newCodec)
 
 	} else if isOldOpus && !isNewOpus {
 		// Switching from Opus to IQ (none/adpcm): destroy OpusPipeline
 		// IQ extractor rate is unchanged — it's always mode-based
-		cp.pmu.Lock()
-		old := cp.opusPipeline
-		cp.opusPipeline = nil
+		old := cp.opusPipeline.Swap(nil)
 		cp.iqCodec = newCodec
-		cp.pmu.Unlock()
 		if old != nil {
 			old.Close()
 		}
@@ -1808,17 +1780,15 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 
 	} else if isOldOpus && isNewOpus && oldCodec != newCodec {
 		// Switching between opus and opus-hq: just update bitrate
-		cp.pmu.Lock()
-		if cp.opusPipeline != nil {
-			channels := cp.opusPipeline.Channels()
+		if p := cp.opusPipeline.Load(); p != nil {
+			channels := p.Channels()
 			newBitrate := bitrateForQuality(newCodec, channels)
-			if err := cp.opusPipeline.encoder.SetBitrate(newBitrate); err != nil {
+			if err := p.encoder.SetBitrate(newBitrate); err != nil {
 				m.logger.Error("failed to update opus bitrate",
 					"clientID", clientID, "error", err)
 			}
 		}
 		cp.iqCodec = newCodec
-		cp.pmu.Unlock()
 
 		m.logger.Info("switched opus quality", "clientID", clientID, "codec", newCodec)
 
@@ -1909,6 +1879,7 @@ func (m *Manager) createClientPipeline(clientID string) {
 		nbEnabled:     false,
 		nbThreshold:   10.0,
 		stereoEnabled: client.StereoEnabled,
+		adpcmBuf:      make([]byte, (chunkSize+1)/2),
 	}
 
 	// Apply profile-level NB defaults to the extractor
@@ -1944,7 +1915,7 @@ func (m *Manager) createClientPipeline(clientID string) {
 				"clientID", clientID, "error", err)
 			cp.iqCodec = "adpcm"
 		} else {
-			cp.opusPipeline = pipeline
+			cp.opusPipeline.Store(pipeline)
 		}
 	}
 
@@ -1973,11 +1944,7 @@ func (m *Manager) destroyClientPipeline(clientID string) {
 	m.mu.Unlock()
 
 	if ok && cp != nil {
-		// Swap opusPipeline to nil under pmu before closing (mirrors handleUnsubscribe).
-		cp.pmu.Lock()
-		pipeline := cp.opusPipeline
-		cp.opusPipeline = nil
-		cp.pmu.Unlock()
+		pipeline := cp.opusPipeline.Swap(nil)
 		if pipeline != nil {
 			pipeline.Close()
 		}
@@ -1991,6 +1958,7 @@ func (m *Manager) updateChunkSize(cp *clientPipeline) {
 	if newSize != cp.chunkSize {
 		cp.chunkSize = newSize
 		cp.accumBuf = make([]int16, newSize)
+		cp.adpcmBuf = make([]byte, (newSize+1)/2)
 		cp.accumPos = 0
 		cp.adpcmEnc.Reset()
 	}
@@ -2045,9 +2013,7 @@ func (m *Manager) CapturePCMForClient(clientID string, secs int) []float32 {
 	if !ok {
 		return nil
 	}
-	cp.pmu.Lock()
-	opus := cp.opusPipeline
-	cp.pmu.Unlock()
+	opus := cp.opusPipeline.Load()
 	if opus == nil {
 		return nil
 	}

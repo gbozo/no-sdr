@@ -7,6 +7,10 @@ import (
 	"unsafe"
 )
 
+// Convert uint8 IQ sample to float32 in [-1,+1]: (sample - 127.5) / 127.5
+// Compiled as a multiply by precomputed inverse (division is ~20× slower).
+const invU8Scale = 1.0 / 127.5
+
 // fastLog10Power computes an approximation of 10*log10(x) using the IEEE 754
 // bit representation of x. It extracts the binary exponent directly and uses
 // a 3-term minimax polynomial over the mantissa for the fractional log2 part,
@@ -75,6 +79,10 @@ type FftProcessor struct {
 	lastEmit    time.Time
 	pendingBuf  []float32 // accumulated frame for rate cap, length fftSize
 	pendingN    int       // number of frames accumulated into pendingBuf
+
+	// Reusable emit buffer — avoids make+alloc per emitted frame.
+	// Copied by history.Push (which now copies), so safe to reuse.
+	emitBuf []float32
 }
 
 // NewFftProcessor creates a new FFT processor with fully pre-allocated buffers.
@@ -122,6 +130,7 @@ func NewFftProcessor(cfg FftProcessorConfig) (*FftProcessor, error) {
 	p.ringFill = 0
 	p.pendingBuf = make([]float32, cfg.FftSize)
 	p.pendingN = 0
+	p.emitBuf = make([]float32, cfg.FftSize)
 
 	if cfg.Averaging > 0 {
 		p.avgBuf = make([]float32, cfg.FftSize)
@@ -162,9 +171,8 @@ func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
 
 		if p.minInterval <= 0 {
 			// No rate cap — emit every frame
-			frame := make([]float32, p.fftSize)
-			copy(frame, p.magBuf)
-			emitted = append(emitted, frame)
+			copy(p.emitBuf, p.magBuf)
+			emitted = append(emitted, p.emitBuf[:p.fftSize])
 			continue
 		}
 
@@ -181,9 +189,8 @@ func (p *FftProcessor) ProcessIqData(data []byte) [][]float32 {
 		}
 
 		if now.Sub(p.lastEmit) >= p.minInterval {
-			frame := make([]float32, p.fftSize)
-			copy(frame, p.pendingBuf)
-			emitted = append(emitted, frame)
+			copy(p.emitBuf, p.pendingBuf)
+			emitted = append(emitted, p.emitBuf[:p.fftSize])
 			p.pendingN = 0
 			p.lastEmit = now
 		}
@@ -210,8 +217,8 @@ func (p *FftProcessor) processOneFrame(rawIq []byte) {
 	// Convert uint8 IQ -> float32 [-1,+1] with windowing in one pass
 	for i := 0; i < fftSize; i++ {
 		w := win[i]
-		buf[i*2] = (float32(rawIq[i*2]) - 127.5) / 127.5 * w
-		buf[i*2+1] = (float32(rawIq[i*2+1]) - 127.5) / 127.5 * w
+		buf[i*2] = (float32(rawIq[i*2]) - 127.5) * invU8Scale * w
+		buf[i*2+1] = (float32(rawIq[i*2+1]) - 127.5) * invU8Scale * w
 	}
 
 	// In-place FFT
@@ -277,6 +284,7 @@ func (p *FftProcessor) Resize(newSize int) error {
 	p.complexBuf = make([]float32, 2*newSize)
 	p.magBuf = make([]float32, newSize)
 	p.pendingBuf = make([]float32, newSize)
+	p.emitBuf = make([]float32, newSize)
 	p.pendingN = 0
 	p.ringBuf = make([]byte, newSize*2*4)
 	p.ringFill = 0
