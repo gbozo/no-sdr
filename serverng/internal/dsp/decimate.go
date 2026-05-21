@@ -2,6 +2,15 @@ package dsp
 
 import "math"
 
+// maxFirTapsFactorScale controls the FIR tap cap per decimation factor.
+// Actual cap = maxFirTapsFactorScale * factor / 10, giving:
+//   factor=10 (WFM, 240kHz): max 256 taps → 33% Pi4, 49dB @alias
+//   factor=50  (AMS/NFM):    max 1280 → uncapped for standard bandwidths
+//   factor=100 (SSB/CW):     max 2560 → uncapped for standard bandwidths
+// Narrow-bandwidth modes (low output rate) need many taps to represent the
+// cutoff; their CPU cost is low regardless (fewer output samples/sec).
+const maxFirTapsFactorScale = 256
+
 // DecimateBlock performs decimation with proper anti-aliasing FIR filtering.
 // Uses a Blackman-Harris windowed-sinc lowpass filter designed for each
 // decimation ratio, with a circular delay line for correct sample alignment.
@@ -39,8 +48,8 @@ func (d *DecimateBlock) Init(ctx BlockContext) error {
 	}
 
 	d.inputRate = ctx.SampleRate
-	numTaps := d.estimateTapCount()
-	d.taps = d.designAntiAliasFir(numTaps, 0)
+	numTaps := d.estimateTapCount(d.bandwidthHz)
+	d.taps = d.designAntiAliasFir(numTaps, d.bandwidthHz)
 
 	bufSize := 1
 	for bufSize < numTaps {
@@ -120,20 +129,61 @@ func (d *DecimateBlock) Reset() {
 // and less than outputRate/2, the FIR's -6 dB point moves to hz/2 instead
 // of the default outputRate/2. Call with hz=0 to revert to Nyquist.
 // Resets filter state (buffer + phase) after redesign.
+// Dynamically increases tap count to maintain adequate stopband rejection
+// at the first alias band (outputRate/2).
 func (d *DecimateBlock) SetBandwidth(hz int) {
 	d.bandwidthHz = hz
 	if d.factor <= 1 || d.taps == nil {
 		return
 	}
-	numTaps := len(d.taps)
+	numTaps := d.estimateTapCount(hz)
 	d.taps = d.designAntiAliasFir(numTaps, hz)
+	// Reallocate circular buffer if tap count increased
+	bufSize := 1
+	for bufSize < numTaps {
+		bufSize <<= 1
+	}
+	if bufSize > cap(d.buf) {
+		d.buf = make([]complex64, bufSize)
+		d.bufMask = bufSize - 1
+	}
 	d.Reset()
 }
 
-func (d *DecimateBlock) estimateTapCount() int {
+func (d *DecimateBlock) estimateTapCount(bandwidthHz int) int {
 	n := d.factor*5 + 1
 	if n < 31 {
 		n = 31
+	}
+	// When bandwidth is set narrower than output Nyquist, the transition from
+	// passband edge (bandwidth/2) to the first alias band (outputRate/2) can be
+	// very narrow. We need enough taps to keep the stopband clean at the alias.
+	if bandwidthHz > 0 && d.inputRate > 0 {
+		outputNyquist := d.inputRate / float64(d.factor) / 2.0
+		passbandHz := float64(bandwidthHz) / 2.0
+		if passbandHz < outputNyquist {
+			transitionHz := outputNyquist - passbandHz
+			// Blackman-Harris windowed-sinc needs ~4 tap periods per transition
+			// bandwidth in the normalized frequency domain: minTaps ≈ 4 / Δf
+			minTaps := int(4.0 * d.inputRate / transitionHz)
+			if minTaps > n {
+				n = minTaps
+			}
+		}
+	}
+	// Cap taps to protect low-end hardware (Raspberry Pi / SBCs).
+	// The cap scales with decimation factor: higher factors (lower output
+	// rates) can afford more taps because each tap costs proportionally
+	// less CPU. This ensures narrow-bandwidth modes (SSB, CW) still have
+	// enough taps to represent their cutoff frequency (~1/2 cycle minimum).
+	//
+	// At 2.4 MHz input:
+	//   factor=10 (WFM, 240kHz):  max 256 → 49dB @alias, ~33% Pi4
+	//   factor=50  (AMS/NFM):     max 1280 → uncapped for standard BWs
+	//   factor=100 (SSB/CW):      max 2560 → uncapped for standard BWs
+	capTaps := (maxFirTapsFactorScale * d.factor + 9) / 10
+	if n > capTaps {
+		n = capTaps
 	}
 	if n%2 == 0 {
 		n++
