@@ -16,10 +16,11 @@ type IqExtractorConfig struct {
 }
 
 // IqExtractor extracts a narrow sub-band from wideband IQ data.
-// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Decimate (windowed-sinc FIR) → normalize → scale to Int16
+// Pipeline: uint8→complex64 → DCBlocker → NoiseBlanker → NCO shift → Decimate (windowed-sinc FIR) → Butterworth LPF → normalize → scale to Int16
 type IqExtractor struct {
 	nco      *NCOBlock
 	decimate *DecimateBlock
+	butter   *ButterworthBlock // post-decimation BW limiting (8th-order at decimated rate)
 	pipeline *Pipeline
 
 	noiseBlanker *NoiseBlanker // optional pre-filter NB
@@ -46,6 +47,8 @@ type IqExtractor struct {
 	// Pre-allocated buffers
 	complexIn []complex64 // converted from uint8
 	int16Out  []int16     // final output
+
+	convertFn convertFn // fused conversion loop, selected by config
 }
 
 // NewIqExtractor creates a new sub-band extractor.
@@ -73,9 +76,13 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 	// Create DSP blocks
 	nco := NewNCOBlock(float64(cfg.TuneOffset))
 	decimate := NewDecimateBlock(factor)
+	// Post-decimation Butterworth LPF at the decimated rate for sharp rolloff
+	// near the passband edge. Running at ~48kHz instead of 2.4MHz is 50× cheaper
+	// than the original pre-decimation placement.
+	butter := NewButterworthBlock(5000.0) // placeholder, SetBandwidth adjusts cutoff
 
-	// Build pipeline: NCO → Decimate (windowed-sinc FIR)
-	pipeline, err := NewPipeline(float64(cfg.InputSampleRate), []ProcessorBlock{nco, decimate}, logger)
+	// Build pipeline: NCO → Decimate (windowed-sinc FIR) → Butterworth LPF
+	pipeline, err := NewPipeline(float64(cfg.InputSampleRate), []ProcessorBlock{nco, decimate, butter}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("iq_extractor: pipeline init failed: %w", err)
 	}
@@ -83,6 +90,7 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 	e := &IqExtractor{
 		nco:          nco,
 		decimate:     decimate,
+		butter:       butter,
 		pipeline:     pipeline,
 		noiseBlanker: NewNoiseBlanker(10.0),
 		dcBlocker:    NewDCBlocker(float64(cfg.InputSampleRate), 1.0, cfg.DCOffsetRemoval),
@@ -103,6 +111,7 @@ func NewIqExtractor(cfg IqExtractorConfig) (*IqExtractor, error) {
 		normMinSignal: 0.001,
 	}
 
+	e.updateConvertFn()
 	return e, nil
 }
 
@@ -122,19 +131,8 @@ func (e *IqExtractor) Process(rawIQ []byte) []int16 {
 		e.complexIn = e.complexIn[:numSamples]
 	}
 
-		// Convert uint8 IQ to complex64: (byte - 127.5) / 127.5
-	// Division by 127.5 is compiled as multiply by precomputed inverse (20× faster).
-	for i := 0; i < numSamples; i++ {
-		iVal := (float32(rawIQ[i*2]) - 127.5) * invU8Scale
-		qVal := (float32(rawIQ[i*2+1]) - 127.5) * invU8Scale
-		e.complexIn[i] = complex(iVal, qVal)
-	}
-
-	// Apply DC offset blocker (if enabled) — before NCO to remove ADC/mixer DC bias
-	e.dcBlocker.Process(e.complexIn[:numSamples])
-
-	// Apply pre-filter noise blanker (if enabled)
-	e.noiseBlanker.Process(e.complexIn[:numSamples])
+		// Fused conversion + DC blocker + noise blanker — single pass, no branch-per-iteration
+	e.convertFn(rawIQ, numSamples, e.complexIn, e.dcBlocker, e.noiseBlanker)
 
 	// Run through pipeline: NCO → Decimate (windowed-sinc FIR anti-aliasing)
 	out := e.pipeline.Process(e.complexIn)
@@ -222,8 +220,9 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 	// Rebuild pipeline with new decimation factor
 	nco := e.nco
 	decimate := e.decimate
+	butter := e.butter
 
-	pipeline, err := NewPipeline(float64(e.inputRate), []ProcessorBlock{nco, decimate}, e.logger)
+	pipeline, err := NewPipeline(float64(e.inputRate), []ProcessorBlock{nco, decimate, butter}, e.logger)
 	if err != nil {
 		e.logger.Error("iq_extractor: failed to rebuild pipeline", "error", err)
 		return
@@ -232,15 +231,19 @@ func (e *IqExtractor) SetOutputSampleRate(rate int) {
 }
 
 // SetBandwidth sets the RF filter bandwidth in Hz.
-// Forwards to the windowed-sinc FIR decimator, which redesigns its taps.
+// Forwards to the windowed-sinc FIR decimator (tap count + cutoff redesign)
+// and the post-decimation Butterworth LPF cutoff (bandwidth/2).
 // Set bandwidth=0 to revert to outputRate/2 (Nyquist default).
 func (e *IqExtractor) SetBandwidth(hz int) {
 	if hz <= 0 {
 		e.bandwidth = 0
+		e.decimate.SetBandwidth(0)
+		e.butter.SetCutoff(float64(e.outputRate) * 0.45)
 	} else {
 		e.bandwidth = hz
+		e.decimate.SetBandwidth(hz)
+		e.butter.SetCutoff(float64(hz) / 2.0)
 	}
-	e.decimate.SetBandwidth(hz)
 }
 
 // Reset clears all DSP state.
@@ -248,12 +251,16 @@ func (e *IqExtractor) Reset() {
 	e.pipeline.Reset()
 	e.noiseBlanker.Reset()
 	e.dcBlocker.Reset()
+	e.butter.Reset()
 	e.normGain = 1.0
 	e.normAvgMag = 0
 }
 
 // SetNbEnabled enables or disables the pre-filter noise blanker.
-func (e *IqExtractor) SetNbEnabled(enabled bool) { e.noiseBlanker.SetEnabled(enabled) }
+func (e *IqExtractor) SetNbEnabled(enabled bool) {
+	e.noiseBlanker.SetEnabled(enabled)
+	e.updateConvertFn()
+}
 
 // SetNbThreshold sets the noise blanker impulse threshold multiplier.
 func (e *IqExtractor) SetNbThreshold(t float32) { e.noiseBlanker.SetThreshold(t) }
@@ -262,7 +269,10 @@ func (e *IqExtractor) SetNbThreshold(t float32) { e.noiseBlanker.SetThreshold(t)
 func (e *IqExtractor) NbEnabled() bool { return e.noiseBlanker.IsEnabled() }
 
 // SetDCOffsetRemoval enables or disables the IQ DC offset blocker at runtime.
-func (e *IqExtractor) SetDCOffsetRemoval(enabled bool) { e.dcBlocker.SetEnabled(enabled) }
+func (e *IqExtractor) SetDCOffsetRemoval(enabled bool) {
+	e.dcBlocker.SetEnabled(enabled)
+	e.updateConvertFn()
+}
 
 // DCOffsetRemovalEnabled reports whether the DC offset blocker is active.
 func (e *IqExtractor) DCOffsetRemovalEnabled() bool { return e.dcBlocker.IsEnabled() }
@@ -280,6 +290,127 @@ func (e *IqExtractor) InputSampleRate() int {
 // DecimationFactor returns the current decimation factor.
 func (e *IqExtractor) DecimationFactor() int {
 	return e.factor
+}
+
+// convertFn is a fused conversion loop selected at config-change time,
+// avoiding branch-on-config checks inside the hot iteration.
+type convertFn func(rawIQ []byte, numSamples int, out []complex64, dc *DCBlocker, nb *NoiseBlanker)
+
+func (e *IqExtractor) updateConvertFn() {
+	dcOn := e.dcBlocker.IsEnabled()
+	nbOn := e.noiseBlanker.IsEnabled()
+	switch {
+	case dcOn && nbOn:
+		e.convertFn = convertDCNoise
+	case dcOn:
+		e.convertFn = convertDC
+	case nbOn:
+		e.convertFn = convertNoise
+	default:
+		e.convertFn = convertOnly
+	}
+}
+
+func convertOnly(rawIQ []byte, numSamples int, out []complex64, _ *DCBlocker, _ *NoiseBlanker) {
+	for i := 0; i < numSamples; i++ {
+		iVal := (float32(rawIQ[i*2]) - 127.5) * invU8Scale
+		qVal := (float32(rawIQ[i*2+1]) - 127.5) * invU8Scale
+		out[i] = complex(iVal, qVal)
+	}
+}
+
+func convertDC(rawIQ []byte, numSamples int, out []complex64, dc *DCBlocker, _ *NoiseBlanker) {
+	beta := dc.beta
+	dcI := dc.dcI
+	dcQ := dc.dcQ
+	for i := 0; i < numSamples; i++ {
+		iVal := (float32(rawIQ[i*2]) - 127.5) * invU8Scale
+		qVal := (float32(rawIQ[i*2+1]) - 127.5) * invU8Scale
+		iVal -= dcI
+		qVal -= dcQ
+		dcI += beta * iVal
+		dcQ += beta * qVal
+		out[i] = complex(iVal, qVal)
+	}
+	dc.dcI = dcI
+	dc.dcQ = dcQ
+}
+
+func convertNoise(rawIQ []byte, numSamples int, out []complex64, _ *DCBlocker, nb *NoiseBlanker) {
+	nAlpha := nb.alpha
+	nThreshSq := nb.thresholdSq
+	nThreshLowSq := nb.thresholdLowSq
+	nGuard := nb.guardSize
+	nAvgMagSq := nb.avgMagSq
+	nBlankCount := nb.blankCount
+
+	for i := 0; i < numSamples; i++ {
+		iVal := (float32(rawIQ[i*2]) - 127.5) * invU8Scale
+		qVal := (float32(rawIQ[i*2+1]) - 127.5) * invU8Scale
+		magSq := iVal*iVal + qVal*qVal
+		nAvgMagSq = nAvgMagSq + nAlpha*(magSq-nAvgMagSq)
+
+		if nBlankCount > 0 {
+			iVal, qVal = 0, 0
+			nBlankCount--
+		} else if nAvgMagSq > 0 && magSq > nAvgMagSq*nThreshSq {
+			iVal, qVal = 0, 0
+			nBlankCount = nGuard
+		} else if nAvgMagSq > 0 && magSq > nAvgMagSq*nThreshLowSq {
+			excess := (magSq - nAvgMagSq*nThreshLowSq) / (nAvgMagSq * (nThreshSq - nThreshLowSq))
+			if excess > 0.5 {
+				iVal, qVal = 0, 0
+				nBlankCount = nGuard
+			}
+		}
+
+		out[i] = complex(iVal, qVal)
+	}
+	nb.avgMagSq = nAvgMagSq
+	nb.blankCount = nBlankCount
+}
+
+func convertDCNoise(rawIQ []byte, numSamples int, out []complex64, dc *DCBlocker, nb *NoiseBlanker) {
+	beta := dc.beta
+	dcI := dc.dcI
+	dcQ := dc.dcQ
+	nAlpha := nb.alpha
+	nThreshSq := nb.thresholdSq
+	nThreshLowSq := nb.thresholdLowSq
+	nGuard := nb.guardSize
+	nAvgMagSq := nb.avgMagSq
+	nBlankCount := nb.blankCount
+
+	for i := 0; i < numSamples; i++ {
+		iVal := (float32(rawIQ[i*2]) - 127.5) * invU8Scale
+		qVal := (float32(rawIQ[i*2+1]) - 127.5) * invU8Scale
+		iVal -= dcI
+		qVal -= dcQ
+		dcI += beta * iVal
+		dcQ += beta * qVal
+		magSq := iVal*iVal + qVal*qVal
+		nAvgMagSq = nAvgMagSq + nAlpha*(magSq-nAvgMagSq)
+
+		if nBlankCount > 0 {
+			iVal, qVal = 0, 0
+			nBlankCount--
+		} else if nAvgMagSq > 0 && magSq > nAvgMagSq*nThreshSq {
+			iVal, qVal = 0, 0
+			nBlankCount = nGuard
+		} else if nAvgMagSq > 0 && magSq > nAvgMagSq*nThreshLowSq {
+			excess := (magSq - nAvgMagSq*nThreshLowSq) / (nAvgMagSq * (nThreshSq - nThreshLowSq))
+			if excess > 0.5 {
+				iVal, qVal = 0, 0
+				nBlankCount = nGuard
+			}
+		}
+
+		out[i] = complex(iVal, qVal)
+	}
+	dc.dcI = dcI
+	dc.dcQ = dcQ
+	nb.avgMagSq = nAvgMagSq
+	nb.blankCount = nBlankCount
 }
 
 // findDecimationFactor finds the best integer decimation factor

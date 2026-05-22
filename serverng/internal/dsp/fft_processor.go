@@ -42,11 +42,12 @@ func fastLog10Power(x float32) float32 {
 
 // FftProcessorConfig configures the FFT processor pipeline.
 type FftProcessorConfig struct {
-	FftSize    int     // power of 2
-	SampleRate int     // dongle sample rate
-	Window     string  // "blackman-harris", "hann", "hamming"
-	Averaging  float32 // 0 = no averaging, 0.9 = heavy smoothing
-	TargetFps  int     // output frame rate cap (0 = unlimited). Typical: 30.
+	FftSize       int     // power of 2
+	SampleRate    int     // dongle sample rate
+	Window        string  // "blackman-harris", "hann", "hamming"
+	Averaging     float32 // 0 = no averaging, 0.9 = heavy smoothing (used when AveragingTaps <= 1)
+	AveragingTaps int     // 0 or 1 = use Averaging (exponential), 2+ = N-tap weighted moving average
+	TargetFps     int     // output frame rate cap (0 = unlimited). Typical: 30.
 }
 
 // FftProcessor accumulates raw uint8 IQ data, applies windowing + FFT,
@@ -68,6 +69,13 @@ type FftProcessor struct {
 	magBuf     []float32 // magnitude output, length fftSize
 	avgBuf     []float32 // exponential averaging state, length fftSize (nil if averaging==0)
 	avgInit    bool       // whether avgBuf has been initialized with first frame
+
+	// Multi-tap weighted averaging state (used when tapCount > 1)
+	tapCount      int          // number of taps (0 or 1 = disabled)
+	tapWeights    []float32    // triangular weights summing to 1
+	tapHistory    [][]float32  // circular buffer of previous frames
+	tapNext       int          // write index into tapHistory
+	tapFilled     bool         // all slots filled with first frame
 
 	// Ring buffer accumulator
 	ringBuf     []byte
@@ -98,6 +106,9 @@ func NewFftProcessor(cfg FftProcessorConfig) (*FftProcessor, error) {
 	}
 	if cfg.Averaging > 1 {
 		cfg.Averaging = 1
+	}
+	if cfg.AveragingTaps < 0 {
+		cfg.AveragingTaps = 0
 	}
 
 	fft, err := NewFFT(cfg.FftSize)
@@ -132,7 +143,16 @@ func NewFftProcessor(cfg FftProcessorConfig) (*FftProcessor, error) {
 	p.pendingN = 0
 	p.emitBuf = make([]float32, cfg.FftSize)
 
-	if cfg.Averaging > 0 {
+	if cfg.AveragingTaps > 1 {
+		p.tapCount = cfg.AveragingTaps
+		p.tapWeights = computeTriangularWeights(cfg.AveragingTaps)
+		p.tapHistory = make([][]float32, cfg.AveragingTaps)
+		for j := range p.tapHistory {
+			p.tapHistory[j] = make([]float32, cfg.FftSize)
+		}
+		p.tapNext = 0
+		p.tapFilled = false
+	} else if cfg.Averaging > 0 {
 		p.avgBuf = make([]float32, cfg.FftSize)
 		p.avgInit = false
 	}
@@ -240,8 +260,10 @@ func (p *FftProcessor) processOneFrame(rawIq []byte) {
 		mag[i] = fastLog10Power(power) - normDb
 	}
 
-	// Exponential averaging
-	if p.averaging > 0 {
+	// Averaging: multi-tap WMA or exponential
+	if p.tapCount > 1 {
+		p.applyMultiTapAverage(fftSize, mag)
+	} else if p.averaging > 0 {
 		if !p.avgInit {
 			copy(p.avgBuf, mag)
 			p.avgInit = true
@@ -253,9 +275,36 @@ func (p *FftProcessor) processOneFrame(rawIq []byte) {
 				avg[i] = a*avg[i] + b*mag[i]
 			}
 		}
-		// Output the averaged magnitudes
 		copy(mag, p.avgBuf)
 	}
+}
+
+// applyMultiTapAverage computes a weighted moving average of the last tapCount
+// magnitude frames using triangular (linearly decreasing) weights.
+// Writes the averaged result back into mag. Zero heap allocations.
+func (p *FftProcessor) applyMultiTapAverage(fftSize int, mag []float32) {
+	if !p.tapFilled {
+		for j := 0; j < p.tapCount; j++ {
+			copy(p.tapHistory[j], mag)
+		}
+		p.tapFilled = true
+		p.tapNext = 0
+	}
+
+	// Store current frame in history
+	copy(p.tapHistory[p.tapNext], mag)
+
+	// Compute weighted sum across all taps (newest * w[0] + ... + oldest * w[N-1])
+	for i := 0; i < fftSize; i++ {
+		sum := float32(0)
+		for j := 0; j < p.tapCount; j++ {
+			idx := (p.tapNext - j + p.tapCount) % p.tapCount
+			sum += p.tapWeights[j] * p.tapHistory[idx][i]
+		}
+		mag[i] = sum
+	}
+
+	p.tapNext = (p.tapNext + 1) % p.tapCount
 }
 
 // Resize changes FFT size at runtime (used on profile switch).
@@ -289,7 +338,16 @@ func (p *FftProcessor) Resize(newSize int) error {
 	p.ringBuf = make([]byte, newSize*2*4)
 	p.ringFill = 0
 
-	if p.averaging > 0 {
+	if p.tapCount > 1 {
+		p.tapHistory = make([][]float32, p.tapCount)
+		for j := range p.tapHistory {
+			p.tapHistory[j] = make([]float32, newSize)
+		}
+		p.tapNext = 0
+		p.tapFilled = false
+		p.avgBuf = nil
+		p.avgInit = false
+	} else if p.averaging > 0 {
 		p.avgBuf = make([]float32, newSize)
 		p.avgInit = false
 	} else {
@@ -311,6 +369,27 @@ func (p *FftProcessor) Reset() {
 			p.avgBuf[i] = 0
 		}
 	}
+	if p.tapCount > 1 {
+		p.tapNext = 0
+		p.tapFilled = false
+		for j := range p.tapHistory {
+			for i := range p.tapHistory[j] {
+				p.tapHistory[j][i] = 0
+			}
+		}
+	}
+}
+
+// computeTriangularWeights returns N linearly decreasing weights summing to 1.
+// w[0] has the most weight (newest frame), w[N-1] the least (oldest).
+// For N=3: [0.500, 0.333, 0.167]; for N=5: [0.333, 0.267, 0.200, 0.133, 0.067]
+func computeTriangularWeights(n int) []float32 {
+	w := make([]float32, n)
+	sum := float32(n * (n + 1) / 2)
+	for i := 0; i < n; i++ {
+		w[i] = float32(n-i) / sum
+	}
+	return w
 }
 
 // computeNormalization returns 20*log10(fftSize) + 20*log10(coherentGain)

@@ -1,6 +1,9 @@
 package dsp
 
-import "math"
+import (
+	"math"
+	"unsafe"
+)
 
 // maxFirTapsFactorScale controls the FIR tap cap per decimation factor.
 // Actual cap = maxFirTapsFactorScale * factor / 10, giving:
@@ -11,24 +14,27 @@ import "math"
 // cutoff; their CPU cost is low regardless (fewer output samples/sec).
 const maxFirTapsFactorScale = 256
 
-// DecimateBlock performs decimation with proper anti-aliasing FIR filtering.
-// Uses a Blackman-Harris windowed-sinc lowpass filter designed for each
-// decimation ratio, with a circular delay line for correct sample alignment.
-// The FIR doubles as a bandwidth-limiting filter — call SetBandwidth to
-// narrow the passband below the default Nyquist of outputRate/2.
+// DecimateBlock performs decimation with proper anti-aliasing FIR filtering
+// using a polyphase decomposition. The prototype lowpass filter is split into
+// M sub-filters (where M = decimation factor), each of length P = ceil(N/M).
+// Input samples are commutated across sub-filters; every M-th input produces
+// one output by summing all M sub-filter dot products.
+//
+// Polyphase gives each sub-filter a small, cache-local delay line (~11 taps
+// for typical configurations). The dot product over each sub-filter walks
+// sequential memory, which is SIMD-friendly and avoids the strided access
+// pattern of the equivalent direct-form FIR.
 type DecimateBlock struct {
 	factor       int
-	taps         []float32
-	buf          []complex64
-	pos          int
-	bufMask      int
+	subTaps      []float32   // flat row-major: [h_0[0]..h_0[P-1], h_1[0]..h_1[P-1], ...]
+	subBufs      []complex64 // flat row-major delay lines, same layout
+	subPos       []int       // write position within each sub-filter's delay line
+	tapsPerSub   int         // P = ceil(prototypeLen / factor)
+	prototypeLen int         // length of the ORIGINAL prototype (before zero-pad)
+	firstOut     int64       // totalIn threshold for first output
 	inputRate    float64
 	bandwidthHz  int // 0 = default (outputRate / 2)
-
-	// Total samples processed across all calls. Needed to maintain correct
-	// decimation phase across chunk boundaries — without this, the condition
-	// check resets on every ProcessComplex call, dropping output samples.
-	totalIn int64
+	totalIn      int64
 }
 
 func NewDecimateBlock(factor int) *DecimateBlock {
@@ -43,111 +49,194 @@ func (d *DecimateBlock) SampleRateOut(inputRate float64) float64 {
 
 func (d *DecimateBlock) Init(ctx BlockContext) error {
 	if d.factor <= 1 {
-		d.taps = nil
+		d.subTaps = nil
 		return nil
 	}
-
 	d.inputRate = ctx.SampleRate
-	numTaps := d.estimateTapCount(d.bandwidthHz)
-	d.taps = d.designAntiAliasFir(numTaps, d.bandwidthHz)
-
-	bufSize := 1
-	for bufSize < numTaps {
-		bufSize <<= 1
-	}
-	d.buf = make([]complex64, bufSize)
-	d.bufMask = bufSize - 1
-	d.pos = 0
-	d.totalIn = 0
-
+	d.initFromPrototype(d.estimateTapCount(d.bandwidthHz), d.bandwidthHz, true)
 	return nil
 }
 
-// ProcessComplex filters through the FIR anti-aliasing filter and decimates.
-// Uses a persistent totalIn counter so decimation phase is correct across
-// chunk boundaries. The FIR output y[t] = sum_{k=0}^{numTaps-1} h[k] * x[t-k]
-// is evaluated at every factor-th sample index t.
+// initFromPrototype designs a prototype filter of origNTaps, zero-pads it to a
+// multiple of d.factor, splits into polyphase sub-filters, allocates delay
+// lines, and computes the first-output index. If allocBufs is false, only
+// recomputes coefficients (used during SetBandwidth when the buffer may
+// already be large enough).
+func (d *DecimateBlock) initFromPrototype(origNTaps int, bandwidthHz int, allocBufs bool) {
+	d.prototypeLen = origNTaps
+	P := (origNTaps + d.factor - 1) / d.factor // ceil(origNTaps / factor)
+	d.tapsPerSub = P
+	proto := d.designAntiAliasFir(origNTaps, bandwidthHz)
+	padded := zeroPadFilter(proto, d.factor)
+	d.splitPolyphase(padded)
+
+	// firstOut = (P-1)*factor + (prototypeLen-1)%factor
+	// Ensures all sub-filters have enough non-zero samples for their
+	// first dot product, matching the direct-form output schedule.
+	d.firstOut = int64((P-1)*d.factor + (origNTaps-1)%d.factor)
+
+	if allocBufs {
+		d.allocDelayLines()
+		d.Reset()
+	}
+}
+
+// zeroPadFilter appends zeros to make the filter length a multiple of factor.
+// This ensures all polyphase sub-filters have the same length P.
+func zeroPadFilter(taps []float32, factor int) []float32 {
+	N := len(taps)
+	rem := N % factor
+	if rem == 0 {
+		return taps
+	}
+	padded := make([]float32, N+factor-rem)
+	copy(padded, taps)
+	return padded
+}
+
+// splitPolyphase decomposes the prototype filter into M sub-filters
+// and stores them in row-major flat array d.subTaps.
+func (d *DecimateBlock) splitPolyphase(prototype []float32) {
+	M := d.factor
+	P := d.tapsPerSub
+	N := len(prototype) // zero-padded, guaranteed multiple of M
+	d.subTaps = make([]float32, M*P)
+	for p := 0; p < M; p++ {
+		for k := 0; k < P; k++ {
+			idx := p + k*M
+			if idx < N {
+				d.subTaps[p*P+k] = prototype[idx]
+			}
+		}
+	}
+}
+
+// allocDelayLines creates M delay lines, each of length P.
+func (d *DecimateBlock) allocDelayLines() {
+	M := d.factor
+	P := d.tapsPerSub
+	d.subBufs = make([]complex64, M*P)
+	d.subPos = make([]int, M)
+}
+
+// ProcessComplex filters through the polyphase decimator.
 //
-// Reads the delay line DURING the write phase so the circular buffer always
-// contains the most recent numTaps samples at each position.
+// Each input sample is routed to the sub-filter corresponding to its phase
+// (sample index modulo factor). When the commutator completes one rotation
+// (every factor-th sample), all sub-filter dot products are summed to produce
+// one output sample.
+//
+// The totalIn counter maintains correct commutator phase across chunk
+// boundaries. First output is produced after P*factor input samples (enough
+// to populate all sub-filter delay lines).
 func (d *DecimateBlock) ProcessComplex(in []complex64, out []complex64) int {
-	if d.factor <= 1 || d.taps == nil {
+	if d.factor <= 1 || d.subTaps == nil {
 		copy(out, in)
 		return len(in)
 	}
 
 	f := d.factor
+	P := d.tapsPerSub
 	n := len(in)
-	taps := d.taps
-	numTaps := len(taps)
-	buf := d.buf
-	mask := d.bufMask
-	pos := d.pos
-
 	outIdx := 0
-	firstOut := int64(numTaps - 1)
+	firstOut := d.firstOut
+
+	// Pre-fetch pointer base for unsafe inner loops
+	tapsBase := unsafe.Pointer(unsafe.SliceData(d.subTaps))
+	bufBase := unsafe.Pointer(unsafe.SliceData(d.subBufs))
 
 	for i := 0; i < n; i++ {
-		buf[pos] = in[i]
+		phase := int(d.totalIn+int64(i)) % f
+		wpos := d.subPos[phase]
+		d.subBufs[phase*P+wpos] = in[i]
+		d.subPos[phase] = (wpos + 1) % P
 
 		totalIdx := d.totalIn + int64(i)
 		if totalIdx >= firstOut {
 			rem := (totalIdx - firstOut) % int64(f)
 			if rem == 0 {
-				var sum complex64
-				idx := pos
-				for k := 0; k < numTaps; k++ {
-					coeff := taps[k]
-					sum += complex(real(buf[idx])*coeff, imag(buf[idx])*coeff)
-					idx = (idx - 1) & mask
+				var sumRe, sumIm float32
+				for q := 0; q < f; q++ {
+					qOff := q * P
+					rpos := d.subPos[q]
+					idx := rpos - 1
+					// Unrolled sub-filter dot product (re + im in one pass)
+					for k := 0; k < P; k++ {
+						coeff := *(*float32)(unsafe.Add(tapsBase, uintptr(qOff+k)*4))
+						v := *(*complex64)(unsafe.Add(bufBase, uintptr(qOff+idx)*8))
+						sumRe += real(v) * coeff
+						sumIm += imag(v) * coeff
+						idx--
+						if idx < 0 {
+							idx = P - 1
+						}
+					}
 				}
-				out[outIdx] = sum
+				out[outIdx] = complex(sumRe, sumIm)
 				outIdx++
 			}
 		}
-
-		pos = (pos + 1) & mask
 	}
 
-	d.pos = pos
 	d.totalIn += int64(n)
-
 	return outIdx
 }
 
 func (d *DecimateBlock) Reset() {
-	if d.buf != nil {
-		for i := range d.buf {
-			d.buf[i] = 0
+	if d.subBufs != nil {
+		for i := range d.subBufs {
+			d.subBufs[i] = 0
 		}
 	}
-	d.pos = 0
+	for i := range d.subPos {
+		d.subPos[i] = 0
+	}
 	d.totalIn = 0
 }
 
-// SetBandwidth redesigns the FIR taps for a narrower passband. When hz > 0
-// and less than outputRate/2, the FIR's -6 dB point moves to hz/2 instead
-// of the default outputRate/2. Call with hz=0 to revert to Nyquist.
-// Resets filter state (buffer + phase) after redesign.
-// Dynamically increases tap count to maintain adequate stopband rejection
-// at the first alias band (outputRate/2).
+// SetBandwidth redesigns the FIR taps for a narrower passband.
+// See DecimateBlock doc for details. Resets filter state after redesign.
 func (d *DecimateBlock) SetBandwidth(hz int) {
 	d.bandwidthHz = hz
-	if d.factor <= 1 || d.taps == nil {
+	if d.factor <= 1 || d.subTaps == nil {
 		return
 	}
-	numTaps := d.estimateTapCount(hz)
-	d.taps = d.designAntiAliasFir(numTaps, hz)
-	// Reallocate circular buffer if tap count increased
-	bufSize := 1
-	for bufSize < numTaps {
-		bufSize <<= 1
-	}
-	if bufSize > cap(d.buf) {
-		d.buf = make([]complex64, bufSize)
-		d.bufMask = bufSize - 1
+	origTaps := d.estimateTapCount(hz)
+	d.prototypeLen = origTaps
+	P := (origTaps + d.factor - 1) / d.factor
+	d.tapsPerSub = P
+	d.firstOut = int64((P-1)*d.factor + (origTaps-1)%d.factor)
+	proto := d.designAntiAliasFir(origTaps, hz)
+	padded := zeroPadFilter(proto, d.factor)
+	d.splitPolyphase(padded)
+
+	// Reallocate delay lines if sub-filter length grew
+	needBufs := d.factor * d.tapsPerSub
+	if needBufs > cap(d.subBufs) {
+		d.allocDelayLines()
 	}
 	d.Reset()
+}
+
+// PrototypeTaps returns the original prototype filter taps.
+// Used by tests to verify filter characteristics.
+func (d *DecimateBlock) PrototypeTaps() []float32 {
+	if d.subTaps == nil || d.factor <= 1 {
+		return nil
+	}
+	// Reconstruct prototype from polyphase sub-filters
+	P := d.tapsPerSub
+	n := d.prototypeLen
+	proto := make([]float32, n)
+	for p := 0; p < d.factor; p++ {
+		for k := 0; k < P; k++ {
+			idx := p + k*d.factor
+			if idx < n {
+				proto[idx] = d.subTaps[p*P+k]
+			}
+		}
+	}
+	return proto
 }
 
 func (d *DecimateBlock) estimateTapCount(bandwidthHz int) int {
@@ -155,32 +244,17 @@ func (d *DecimateBlock) estimateTapCount(bandwidthHz int) int {
 	if n < 31 {
 		n = 31
 	}
-	// When bandwidth is set narrower than output Nyquist, the transition from
-	// passband edge (bandwidth/2) to the first alias band (outputRate/2) can be
-	// very narrow. We need enough taps to keep the stopband clean at the alias.
 	if bandwidthHz > 0 && d.inputRate > 0 {
 		outputNyquist := d.inputRate / float64(d.factor) / 2.0
 		passbandHz := float64(bandwidthHz) / 2.0
 		if passbandHz < outputNyquist {
 			transitionHz := outputNyquist - passbandHz
-			// Blackman-Harris windowed-sinc needs ~4 tap periods per transition
-			// bandwidth in the normalized frequency domain: minTaps ≈ 4 / Δf
 			minTaps := int(4.0 * d.inputRate / transitionHz)
 			if minTaps > n {
 				n = minTaps
 			}
 		}
 	}
-	// Cap taps to protect low-end hardware (Raspberry Pi / SBCs).
-	// The cap scales with decimation factor: higher factors (lower output
-	// rates) can afford more taps because each tap costs proportionally
-	// less CPU. This ensures narrow-bandwidth modes (SSB, CW) still have
-	// enough taps to represent their cutoff frequency (~1/2 cycle minimum).
-	//
-	// At 2.4 MHz input:
-	//   factor=10 (WFM, 240kHz):  max 256 → 49dB @alias, ~33% Pi4
-	//   factor=50  (AMS/NFM):     max 1280 → uncapped for standard BWs
-	//   factor=100 (SSB/CW):      max 2560 → uncapped for standard BWs
 	capTaps := (maxFirTapsFactorScale * d.factor + 9) / 10
 	if n > capTaps {
 		n = capTaps

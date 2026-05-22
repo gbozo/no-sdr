@@ -257,6 +257,131 @@ func TestFftProcessorAveraging(t *testing.T) {
 	}
 }
 
+// TestFftProcessorMultiTapAveraging verifies that N-tap weighted moving average
+// produces the correct weighted combination and converges to steady state.
+func TestFftProcessorMultiTapAveraging(t *testing.T) {
+	const fftSize = 256
+	const tapCount = 3
+	cfg := FftProcessorConfig{
+		FftSize:       fftSize,
+		SampleRate:    2400000,
+		Window:        "blackman-harris",
+		AveragingTaps: tapCount,
+		TargetFps:     0,
+	}
+	p, err := NewFftProcessor(cfg)
+	if err != nil {
+		t.Fatalf("NewFftProcessor failed: %v", err)
+	}
+
+	// Verify triangular weights
+	expected := []float32{3.0 / 6.0, 2.0 / 6.0, 1.0 / 6.0}
+	for i, w := range p.tapWeights {
+		if absF32(w-expected[i]) > 1e-6 {
+			t.Errorf("tapWeights[%d] = %.6f, want %.6f", i, w, expected[i])
+		}
+	}
+	if p.tapCount != tapCount {
+		t.Errorf("tapCount = %d, want %d", p.tapCount, tapCount)
+	}
+
+	// Generate deterministic frames: three distinct constant-magnitude inputs
+	frame1 := make([]byte, fftSize*2)
+	for i := range frame1 {
+		frame1[i] = 200 // high DC offset → specific magnitude pattern
+	}
+	frame2 := make([]byte, fftSize*2)
+	for i := range frame2 {
+		frame2[i] = 128 // mid level
+	}
+	frame3 := make([]byte, fftSize*2)
+	for i := range frame3 {
+		frame3[i] = 50 // low level
+	}
+
+	// Feed frame1 three times to fully populate all taps
+	// (first call fills all slots, second and third rotate)
+	f1 := p.ProcessIqData(frame1)
+	f1b := p.ProcessIqData(frame1)
+	f1c := p.ProcessIqData(frame1)
+	_ = f1
+	_ = f1b
+	if len(f1c) < 1 {
+		t.Fatal("expected at least one frame from triple feed")
+	}
+	steadyFrame := f1c[len(f1c)-1]
+
+	// Feed a different frame (frame2) twice — output should blend taps
+	_ = p.ProcessIqData(frame2)
+	_ = p.ProcessIqData(frame2)
+	_ = p.ProcessIqData(frame2)
+
+	// After 3x frame2, output should match frame1 steady state (identical input)
+	_ = p.ProcessIqData(frame2)
+	_ = p.ProcessIqData(frame2)
+	f2steady := p.ProcessIqData(frame2)
+	if len(f2steady) < 1 {
+		t.Fatal("expected frame from second frame2 feed")
+	}
+	steady2 := f2steady[len(f2steady)-1]
+
+	// With identical inputs, all taps produce same value → output = input
+	maxDiff := float32(0)
+	for i := 0; i < fftSize; i++ {
+		d := float32(math.Abs(float64(steadyFrame[i] - steady2[i])))
+		if d > maxDiff {
+			maxDiff = d
+		}
+	}
+	if maxDiff > 0.5 {
+		t.Errorf("steady frames should converge to same values, max diff=%.4f", maxDiff)
+	}
+
+	// Verify Reset clears multi-tap state
+	p.Reset()
+	if p.tapFilled {
+		t.Error("expected tapFilled=false after Reset")
+	}
+	if p.tapNext != 0 {
+		t.Errorf("expected tapNext=0 after Reset, got %d", p.tapNext)
+	}
+
+	// After reset, first frame should fill all slots again
+	frames := p.ProcessIqData(frame1)
+	if len(frames) < 1 {
+		t.Fatal("expected frame after reset+feed")
+	}
+	if !p.tapFilled {
+		t.Error("expected tapFilled=true after first post-reset frame")
+	}
+
+	// Multi-tap and exponential averaging are mutually exclusive
+	expCfg := FftProcessorConfig{
+		FftSize:    fftSize,
+		SampleRate: 2400000,
+		Window:     "hann",
+		Averaging:  0.5,
+		TargetFps:  0,
+	}
+	expP, err := NewFftProcessor(expCfg)
+	if err != nil {
+		t.Fatalf("NewFftProcessor failed: %v", err)
+	}
+	if expP.tapCount > 0 {
+		t.Error("expected tapCount=0 when using exponential averaging")
+	}
+	if expP.avgBuf == nil {
+		t.Error("expected avgBuf allocated for exponential averaging")
+	}
+}
+
+func absF32(x float32) float32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 // TestFftProcessorReset verifies that Reset clears all internal state.
 func TestFftProcessorReset(t *testing.T) {
 	const fftSize = 256

@@ -1,22 +1,25 @@
 package dsp
 
-// DCBlocker removes the DC offset from a complex IQ stream using a first-order
-// IIR high-pass filter with a very low corner frequency (~1 Hz at typical SDR
-// sample rates). This eliminates the center-frequency DC spike that RTL-SDR
-// hardware produces due to mixer LO leakage / ADC DC bias.
+// DCBlocker removes the DC offset from a complex IQ stream using a leaky
+// integrator (first-order IIR high-pass) with a very low corner frequency
+// (~1 Hz at typical SDR sample rates). This eliminates the center-frequency
+// DC spike that RTL-SDR hardware produces due to mixer LO leakage / ADC DC
+// bias.
 //
 // Algorithm (applied independently to I and Q):
 //
-//	dcEst = alpha * dcEst + (1 - alpha) * x
 //	y = x - dcEst
+//	dcEst += beta * y
 //
-// where alpha = 1 - 2π * cornerHz / sampleRate.
-// For sampleRate = 2.4 MSPS and cornerHz = 1 Hz: alpha ≈ 0.9999974.
+// where beta = 2π * cornerHz / sampleRate.
+// For sampleRate = 2.4 MSPS and cornerHz = 1 Hz: beta ≈ 2.618e-6.
 // Time constant ≈ 1/cornerHz = 1 second.
+//
+// This is the standard leaky integrator form — it saves one multiply per
+// sample compared to the equivalent alpha/beta formulation.
 type DCBlocker struct {
 	enabled bool
-	alpha   float32 // IIR coefficient ≈ 1 - 2π/sampleRate
-	beta    float32 // 1 - alpha
+	beta    float32 // 1 - alpha ≈ 2π * cornerHz / sampleRate
 	dcI     float32 // running DC estimate for I channel
 	dcQ     float32 // running DC estimate for Q channel
 }
@@ -25,17 +28,16 @@ type DCBlocker struct {
 // cornerHz is the -3 dB corner of the high-pass response (typically 1.0 Hz).
 // enabled controls whether the filter is active; it can be toggled at runtime.
 func NewDCBlocker(sampleRate float64, cornerHz float64, enabled bool) *DCBlocker {
-	alpha := float32(1.0 - (2*3.14159265358979/sampleRate)*cornerHz)
-	if alpha < 0 {
-		alpha = 0
+	beta := float32((2 * 3.14159265358979 / sampleRate) * cornerHz)
+	if beta < 0 {
+		beta = 0
 	}
-	if alpha > 1 {
-		alpha = 1
+	if beta > 1 {
+		beta = 1
 	}
 	return &DCBlocker{
 		enabled: enabled,
-		alpha:   alpha,
-		beta:    1 - alpha,
+		beta:    beta,
 	}
 }
 
@@ -62,7 +64,6 @@ func (b *DCBlocker) Process(samples []complex64) {
 	if !b.enabled {
 		return
 	}
-	alpha := b.alpha
 	beta := b.beta
 	dcI := b.dcI
 	dcQ := b.dcQ
@@ -70,9 +71,12 @@ func (b *DCBlocker) Process(samples []complex64) {
 	for i, s := range samples {
 		rI := real(s)
 		rQ := imag(s)
-		dcI = alpha*dcI + beta*rI
-		dcQ = alpha*dcQ + beta*rQ
-		samples[i] = complex(rI-dcI, rQ-dcQ)
+		// y = x - dcEst; dcEst += beta * y
+		yI := rI - dcI
+		yQ := rQ - dcQ
+		dcI += beta * yI
+		dcQ += beta * yQ
+		samples[i] = complex(yI, yQ)
 	}
 
 	b.dcI = dcI

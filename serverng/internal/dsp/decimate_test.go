@@ -256,19 +256,20 @@ func TestDecimate_FilterTaps(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	taps := d.PrototypeTaps()
 	var tapSum float32
-	for _, v := range d.taps {
+	for _, v := range taps {
 		tapSum += v
 	}
 
-	t.Logf("numTaps=%d, tap sum=%f (should be ~1.0)", len(d.taps), tapSum)
+	t.Logf("numTaps=%d, tap sum=%f (should be ~1.0)", len(taps), tapSum)
 	if math.Abs(float64(tapSum-1.0)) > 0.01 {
 		t.Errorf("filter taps do not sum to 1.0: sum=%f", tapSum)
 	}
 
 	// Frequency response at f=0.15 (3x cutoff for factor=10)
 	var hRe, hIm float64
-	for k, h := range d.taps {
+	for k, h := range taps {
 		angle := -2.0 * math.Pi * 0.15 * float64(k)
 		hRe += float64(h) * math.Cos(angle)
 		hIm += float64(h) * math.Sin(angle)

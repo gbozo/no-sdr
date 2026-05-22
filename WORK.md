@@ -83,6 +83,11 @@ Full plan written. Build tag: `gpu_vulkan`. CPU fallback is always the default.
 
 ## Completed (reference)
 
+### v2.10.6
+- [x] Polyphase DecimateBlock: prototype filter split into M sub-filters with commutator routing; zero-padding for equal-length sub-filters; correct firstOut aligns with direct-form output schedule; `PrototypeTaps()` accessor for tests
+- [x] Weighted multi-tap FFT averaging: triangular weights (linearly decreasing), ring buffer of past frames, zero-alloc hot path, mutually exclusive with exponential averaging
+- [x] DCBlocker simplification: leaky integrator `y = x - dcEst; dcEst += beta*y` replaces `alpha*dcEst + beta*x` — saves one multiply per sample per channel; `alpha` field removed; fused convertDC/convertDCNoise updated
+
 ### v2.7.0
 - [x] Identify song: Lanczos-3 windowed-sinc resampler replacing linear interpolation (48 kHz → 22050 Hz, `recognizer.go`)
 - [x] Waterfall drag-to-scrub: vertical mousedown/drag rewinds history; `↶ LIVE` return button overlay; touch direction-lock (vertical=scrub, horizontal=pan); wheel seeks history when buffer available
