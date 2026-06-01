@@ -110,7 +110,9 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 	r.Get("/health", healthHandler)
 
 	// Static files with SPA fallback
-	if staticDir != "" {
+	// In production builds (with the production build tag), the dist is embedded
+	// and served regardless of staticDir. In development, staticDir must be set.
+	if staticDir != "" || getEmbeddedDist() != nil {
 		r.Get("/*", SPAHandler(staticDir))
 	}
 

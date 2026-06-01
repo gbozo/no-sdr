@@ -4,8 +4,10 @@ package dongle
 
 import "syscall"
 
-// rusageMemMB returns the process RSS in megabytes from a Rusage snapshot.
-// On Linux, Maxrss is in kilobytes.
-func rusageMemMB(ru *syscall.Rusage) int {
+// getMemoryMB returns the process RSS in megabytes.
+// On Linux, Maxrss from getrusage is in kilobytes.
+func getMemoryMB() int {
+	var ru syscall.Rusage
+	syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
 	return int(ru.Maxrss / 1024)
 }

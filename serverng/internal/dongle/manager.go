@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	codecPkg "github.com/gbozo/no-sdr/serverng/internal/codec"
@@ -2025,23 +2024,15 @@ func (m *Manager) statsLoop(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	var lastCPU int64
-	var lastTime time.Time
-
-	// Initialize
-	var ru syscall.Rusage
-	syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
-	lastCPU = ru.Utime.Nano() + ru.Stime.Nano()
-	lastTime = time.Now()
+	var lastCPU = getCPUTimeNanos()
+	var lastTime = time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// CPU usage via rusage — zero allocation, no STW pause.
-			syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
-			nowCPU := ru.Utime.Nano() + ru.Stime.Nano()
+			nowCPU := getCPUTimeNanos()
 			elapsed := time.Since(lastTime)
 			cpuDelta := nowCPU - lastCPU
 			cpuPercent := 0
@@ -2054,9 +2045,7 @@ func (m *Manager) statsLoop(ctx context.Context) {
 			lastCPU = nowCPU
 			lastTime = time.Now()
 
-			// RSS memory via rusage — no stop-the-world.
-			// ru.Maxrss is in bytes on Linux, kilobytes on Darwin.
-			memMb := rusageMemMB(&ru)
+			memMb := getMemoryMB()
 
 			// Broadcast to all connected clients
 			statsJSON, _ := json.Marshal(map[string]any{

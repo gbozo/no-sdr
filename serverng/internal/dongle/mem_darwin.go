@@ -4,8 +4,10 @@ package dongle
 
 import "syscall"
 
-// rusageMemMB returns the process RSS in megabytes from a Rusage snapshot.
-// On Darwin, Maxrss is in bytes.
-func rusageMemMB(ru *syscall.Rusage) int {
+// getMemoryMB returns the process RSS in megabytes.
+// On Darwin, Maxrss from getrusage is in bytes.
+func getMemoryMB() int {
+	var ru syscall.Rusage
+	syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
 	return int(ru.Maxrss / 1_048_576)
 }
