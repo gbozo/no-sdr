@@ -1,0 +1,58 @@
+[package]
+name = "serverrs"
+version = "2.6.8"
+edition = "2021"
+rust-version = "1.82"
+description = "Multi-user WebSDR server (Rust port of serverng)"
+license = "MIT"
+
+[[bin]]
+name = "serverrs"
+path = "src/main.rs"
+
+[lib]
+name = "serverrs"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+flate2 = "1"
+futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
+num-complex = "0.4"
+parking_lot = "0.12"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal", "process"] }
+tokio-tungstenite = "0.26"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "trace", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Optional native codecs/hardware.
+opus = { version = "0.3", optional = true }
+rtl-sdr = { version = "0.1", optional = true }
+
+[features]
+default = []
+opus = ["dep:opus"]
+rtlsdr = ["dep:rtl-sdr"]
+
+[dev-dependencies]
+approx = "0.5"
+tempfile = "3"

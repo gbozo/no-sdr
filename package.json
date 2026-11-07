@@ -2,7 +2,7 @@
   "name": "no-sdr",
   "version": "2.10.5",
   "private": true,
-  "description": "Multi-user WebSDR server for RTL-SDR dongles — real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
+  "description": "Multi-user WebSDR server for RTL-SDR dongles \u2014 real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
   "license": "MIT",
   "type": "module",
   "workspaces": [
@@ -35,7 +35,13 @@
     "clean": "rimraf client/dist serverng/bin node_modules/.cache",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test:go": "cd serverng && go test ./...",
-    "bench:go": "cd serverng && go test -bench=. -benchmem ./internal/dsp/ ./internal/demod/ ./internal/codec/"
+    "bench:go": "cd serverng && go test -bench=. -benchmem ./internal/dsp/ ./internal/demod/ ./internal/codec/",
+    "build:rust": "cd serverrs && cargo build --release",
+    "build:rust:opus": "cd serverrs && cargo build --release --features opus",
+    "build:rust:full": "cd serverrs && cargo build --release --features \"opus rtlsdr\"",
+    "test:rust": "cd serverrs && cargo test",
+    "start:rust": "cd serverrs && ./target/release/serverrs",
+    "start:rust:demo": "cd serverrs && NODE_SDR_DEMO=1 ./target/release/serverrs"
   },
   "engines": {
     "node": ">=22.0.0"
