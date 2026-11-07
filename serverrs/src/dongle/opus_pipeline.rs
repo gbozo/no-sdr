@@ -7,6 +7,7 @@ use anyhow::{bail, Result};
 use num_complex::Complex32;
 
 use crate::codec::{OpusEncoder, OpusEncoderConfig};
+use crate::dsp::Interpolator;
 use crate::demod::{
     AmDemod, CquamDemod, CwDemod, Demodulator, FmMonoDemod, FmStereoDemod, RdsDecoder, SamDemod,
     SsbDemod, SsbMode,
@@ -66,6 +67,7 @@ pub struct OpusPipeline {
 
     decim_factor: usize,
     upsample_ratio: f64,
+    upsampler: Option<Interpolator>,
     upsample_accum: f64,
     last_sample: f32,
 
@@ -141,6 +143,17 @@ impl OpusPipeline {
             (1, 1.0)
         };
 
+        let upsampler = if decim_factor == 0 {
+            let ratio = 48000.0 / demod_out_rate as f64;
+            if ratio.fract().abs() < 1e-9 && ratio >= 2.0 {
+                Some(Interpolator::new(ratio as usize))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let capture_cap = CAPTURE_SECS * 48000;
         let rds_decoder = if mode == "wfm" {
             Some(RdsDecoder::new(cfg.sample_rate as f64))
@@ -158,6 +171,7 @@ impl OpusPipeline {
             closed: false,
             decim_factor,
             upsample_ratio,
+            upsampler,
             upsample_accum: 0.0,
             last_sample: 0.0,
             bandwidth: 0,
@@ -298,17 +312,24 @@ impl OpusPipeline {
             }
             out
         } else {
-            // Upsample (SSB/CW).
-            let est_out = (demod_frames as f64 * self.upsample_ratio) as usize + 4;
-            let mut out = Vec::with_capacity(est_out);
-            for sample in audio.iter().take(demod_frames) {
-                self.upsample_accum += self.upsample_ratio;
-                while self.upsample_accum >= 1.0 && out.len() < est_out {
-                    let frac = (self.upsample_accum - self.upsample_accum.trunc()) as f32;
-                    out.push(self.last_sample + frac * (sample - self.last_sample));
-                    self.upsample_accum -= 1.0;
+            // Upsample (SSB/CW). Use the band-limited polyphase interpolator
+            // for integer 2x/4x ratios; fall back to linear otherwise.
+            let mut out = Vec::with_capacity(
+                (demod_frames as f64 * self.upsample_ratio) as usize + 4,
+            );
+            if let Some(up) = self.upsampler.as_mut() {
+                up.process(&audio[..demod_frames], &mut out);
+            } else {
+                let est_out = (demod_frames as f64 * self.upsample_ratio) as usize + 4;
+                for sample in audio.iter().take(demod_frames) {
+                    self.upsample_accum += self.upsample_ratio;
+                    while self.upsample_accum >= 1.0 && out.len() < est_out {
+                        let frac = (self.upsample_accum - self.upsample_accum.trunc()) as f32;
+                        out.push(self.last_sample + frac * (sample - self.last_sample));
+                        self.upsample_accum -= 1.0;
+                    }
+                    self.last_sample = *sample;
                 }
-                self.last_sample = *sample;
             }
             out
         };
@@ -436,6 +457,16 @@ impl OpusPipeline {
         }
         self.upsample_accum = 0.0;
         self.last_sample = 0.0;
+        if self.decim_factor == 0 {
+            let ratio = 48000.0 / demod_out_rate as f64;
+            self.upsampler = if ratio.fract().abs() < 1e-9 && ratio >= 2.0 {
+                Some(Interpolator::new(ratio as usize))
+            } else {
+                None
+            };
+        } else {
+            self.upsampler = None;
+        }
     }
 
     /// Enables or disables stereo output, forcing mono immediately when disabled.
@@ -467,6 +498,9 @@ impl OpusPipeline {
         self.capture_len = 0;
         self.upsample_accum = 0.0;
         self.last_sample = 0.0;
+        if let Some(up) = self.upsampler.as_mut() {
+            up.reset();
+        }
     }
 
     /// Returns up to `secs` seconds of the most recent decoded mono 48 kHz PCM.

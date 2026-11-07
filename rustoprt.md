@@ -168,3 +168,9 @@ protocol as `serverng`).
     16k frames: global 5% = 10.25 KB/frame, region-64 30th pct = 8.87 KB (-13%),
     region-64 median = 7.06 KB (-31%), at the cost of flattening more weak bins.
     Not applied; current behaviour matches Go.
+- 2026-11-08: Added a band-limited integer interpolator (`dsp::Interpolator`)
+  for the Opus pipeline's SSB/CW 24k/12k -> 48k upsampling: zero-stuffing plus
+  a Blackman-Harris windowed-sinc polyphase FIR, gain-compensated and processed
+  with 8 accumulators. Linear interpolation remains as a fallback for
+  non-integer ratios. Unit tests cover rate/tone preservation and chunk
+  equivalence; USB and WFM paths verified live with no client errors.
