@@ -174,3 +174,10 @@ protocol as `serverng`).
   with 8 accumulators. Linear interpolation remains as a fallback for
   non-integer ratios. Unit tests cover rate/tone preservation and chunk
   equivalence; USB and WFM paths verified live with no client errors.
+- 2026-11-08: RDS robustness. Block sync now corrects every 1- and 2-bit
+  error burst during tracking using a syndrome->burst table (52 patterns),
+  replacing the single-bit-only correction. Acquisition still requires a clean
+  offset word, which avoids false sync on noise. Test asserts the table recovers
+  every single bit and every adjacent pair for arbitrary blocks. Live RDS still
+  decodes (PS/PTY/PI verified). Not ported from sdroxide: clock-time group 4A
+  (MJD date) and its wider group coverage.

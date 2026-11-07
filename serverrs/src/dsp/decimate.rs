@@ -144,17 +144,6 @@ impl DecimateBlock {
     }
 }
 
-fn zero_pad_filter(taps: &[f32], factor: usize) -> Vec<f32> {
-    let n = taps.len();
-    let rem = n % factor;
-    if rem == 0 {
-        return taps.to_vec();
-    }
-    let mut padded = taps.to_vec();
-    padded.resize(n + factor - rem, 0.0);
-    padded
-}
-
 impl ProcessorBlock for DecimateBlock {
     fn name(&self) -> &'static str {
         "decimate"

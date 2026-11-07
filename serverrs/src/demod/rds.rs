@@ -337,12 +337,34 @@ enum RdsSyndrome {
     D,
 }
 
-/// Maps a syndrome to the bit position (0-25) that caused it.
-fn single_bit_syndrome(syndrome: u32) -> Option<u32> {
-    PARITY_MATRIX
-        .iter()
-        .position(|&m| m == syndrome)
-        .map(|i| 25 - i as u32)
+/// Longest error burst corrected in tracking. Two covers the single-bit and
+/// adjacent-pair errors a marginal signal produces while leaving enough unused
+/// syndromes that noise cannot hold sync indefinitely (the same trade-off the
+/// sdroxide decoder documents).
+const MAX_BURST: usize = 2;
+
+/// Syndrome -> error pattern for every burst of up to [`MAX_BURST`] bits.
+fn burst_table() -> &'static std::collections::HashMap<u32, u32> {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<std::collections::HashMap<u32, u32>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut map = std::collections::HashMap::new();
+        for len in 1..=MAX_BURST {
+            let interior = if len <= 2 { 1u32 } else { 1 << (len - 2) };
+            for fill in 0..interior {
+                let pattern = if len == 1 {
+                    1u32
+                } else {
+                    1 | (fill << 1) | (1 << (len - 1))
+                };
+                for pos in 0..=(26 - len) {
+                    let err = pattern << pos;
+                    map.entry(calculate_syndrome(err)).or_insert(err);
+                }
+            }
+        }
+        map
+    })
 }
 
 fn syndrome_for_offset(s: RdsSyndrome) -> u32 {
@@ -358,14 +380,20 @@ fn syndrome_for_offset(s: RdsSyndrome) -> u32 {
 
 fn try_correct_block(register: u32, expected: RdsSyndrome) -> Option<u32> {
     let syndrome = calculate_syndrome(register);
-    let error_syn = syndrome ^ syndrome_for_offset(expected);
-    if let Some(bit_pos) = single_bit_syndrome(error_syn) {
-        return Some(register ^ (1u32 << bit_pos));
+    let table = burst_table();
+
+    let try_expected = |want: u32| -> Option<u32> {
+        let error_syn = syndrome ^ want;
+        // Bursts of up to MAX_BURST bits (includes the old single-bit cases).
+        table.get(&error_syn).map(|err| register ^ err)
+    };
+
+    if let Some(fixed) = try_expected(syndrome_for_offset(expected)) {
+        return Some(fixed);
     }
     if expected == RdsSyndrome::C {
-        let error_syn = syndrome ^ SYNDROME_C_PRIME;
-        if let Some(bit_pos) = single_bit_syndrome(error_syn) {
-            return Some(register ^ (1u32 << bit_pos));
+        if let Some(fixed) = try_expected(SYNDROME_C_PRIME) {
+            return Some(fixed);
         }
     }
     None
@@ -927,6 +955,26 @@ mod tests {
         assert_eq!(data.pty, 10);
         assert_eq!(data.pty_name, "Pop Music");
         assert_eq!(data.ps, "AB");
+    }
+
+    #[test]
+    fn burst_correction_recovers_one_and_two_bit_errors() {
+        // Syndrome is linear, so a burst's syndrome is independent of the block.
+        let blocks = [0x0123_4567u32 & 0x03FF_FFFF, 0x02AB_CDEF & 0x03FF_FFFF, 0x0000_0001];
+        for block in blocks {
+            for pos in 0..26 {
+                let err = 1u32 << pos;
+                let corrupted = block ^ err;
+                let syn = calculate_syndrome(corrupted) ^ calculate_syndrome(block);
+                assert_eq!(burst_table().get(&syn), Some(&err), "single bit {pos}");
+            }
+            for pos in 0..25 {
+                let err = 0b11u32 << pos;
+                let corrupted = block ^ err;
+                let syn = calculate_syndrome(corrupted) ^ calculate_syndrome(block);
+                assert_eq!(burst_table().get(&syn), Some(&err), "pair at {pos}");
+            }
+        }
     }
 
     #[test]
