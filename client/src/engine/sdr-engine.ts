@@ -814,6 +814,16 @@ export class SdrEngine {
             store.setRdsPi('');
           }
           if (rds.synced !== undefined) store.setRdsSynced(rds.synced);
+          if (rds.clock) {
+            const c = rds.clock;
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const half = Math.abs(c.offsetHalfHours ?? 0);
+            const sign = (c.offsetHalfHours ?? 0) >= 0 ? '+' : '-';
+            store.setRdsClock(
+              `${c.year}-${pad(c.month)}-${pad(c.day)} ${pad(c.hour)}:${pad(c.minute)} ` +
+              `UTC${sign}${pad(Math.floor(half / 2))}:${pad((half % 2) * 30)}`,
+            );
+          }
           // Update lock screen with RDS station name / radio text
           this.updateMediaSession();
         } catch (e) {

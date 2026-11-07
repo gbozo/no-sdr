@@ -43,6 +43,19 @@ pub const PTY_NAMES: [&str; 32] = [
     "Alarm",
 ];
 
+/// Station clock from group 4A.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RdsClock {
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    /// Signed offset from UTC in half-hours (+4 = UTC+02:00).
+    pub offset_half_hours: i8,
+}
+
 /// One Enhanced Other Network entry (group 14A).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +78,8 @@ pub struct RdsData {
     pub synced: bool,
     pub ecc: Option<u8>,
     pub ptyn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock: Option<RdsClock>,
     pub eon: Vec<EonEntry>,
 }
 
@@ -79,6 +94,7 @@ impl Default for RdsData {
             synced: false,
             ecc: None,
             ptyn: String::new(),
+            clock: None,
             eon: Vec::new(),
         }
     }
@@ -643,6 +659,31 @@ impl GroupParser {
                 }
                 data.rt = trim_right(&self.rt_chars[..rt_end], &[b' ', 0x00, 0x0D]);
             }
+            4 => {
+                // Type 4A: station clock (MJD + UTC time + local offset).
+                if !version_b && block_c != -1 && block_d != -1 {
+                    let b = block_b as u32;
+                    let c = block_c as u32;
+                    let d = block_d as u32;
+                    let mjd = ((b & 0x3) << 15) | (c >> 1);
+                    let hour = (((c & 1) << 4) | (d >> 12)) as u8;
+                    let minute = ((d >> 6) & 0x3f) as u8;
+                    let half_hours = (d & 0x1f) as i8;
+                    let offset = if d & 0x20 != 0 { -half_hours } else { half_hours };
+                    if hour <= 23 && minute <= 59 && (15_079..=88_127).contains(&mjd) {
+                        if let Some((year, month, day)) = mjd_to_date(mjd) {
+                            data.clock = Some(RdsClock {
+                                year,
+                                month,
+                                day,
+                                hour,
+                                minute,
+                                offset_half_hours: offset,
+                            });
+                        }
+                    }
+                }
+            }
             10 => {
                 // Type 10A: Programme Type Name (PTYN), 8 chars, 4 per group.
                 if !version_b {
@@ -711,6 +752,24 @@ impl GroupParser {
         self.ptyn_chars = [b' '; 8];
         self.rt_ab_flag = -1;
         self.eon_map.clear();
+    }
+}
+
+/// Modified Julian Date to a calendar date (standard RDS arithmetic).
+fn mjd_to_date(mjd: u32) -> Option<(i32, u8, u8)> {
+    let yp = ((mjd as f64 - 15_078.2) / 365.25) as i32;
+    let mp = ((mjd as f64 - 14_956.1 - (yp as f64 * 365.25).floor()) / 30.6001) as i32;
+    let day = mjd as i32
+        - 14_956
+        - (yp as f64 * 365.25).floor() as i32
+        - (mp as f64 * 30.6001).floor() as i32;
+    let k = i32::from(mp == 14 || mp == 15);
+    let year = yp + k + 1900;
+    let month = mp - 1 - k * 12;
+    if (1..=12).contains(&month) && (1..=31).contains(&day) {
+        Some((year, month as u8, day as u8))
+    } else {
+        None
     }
 }
 
@@ -921,6 +980,22 @@ mod tests {
         for (i, &m) in PARITY_MATRIX.iter().enumerate() {
             assert!(seen.insert(m), "duplicate parity row at {i}");
         }
+    }
+
+    #[test]
+    fn group4a_decodes_clock() {
+        // 2000-01-01 12:34 UTC+02:00 (MJD 51544, +4 half-hours).
+        let mjd = 51544u32;
+        let b = (4u16 << 12) | ((mjd >> 15) as u16 & 0x3);
+        let c = (((mjd & 0x7FFF) << 1) as u16) | ((12u16 >> 4) & 1);
+        let d = ((12u16 & 0xF) << 12) | (34 << 6) | 4;
+        let mut parser = GroupParser::new();
+        let mut data = RdsData::default();
+        parser.parse([0x1234, b as i32, c as i32, d as i32], &mut data);
+        let clock = data.clock.expect("clock");
+        assert_eq!((clock.year, clock.month, clock.day), (2000, 1, 1));
+        assert_eq!((clock.hour, clock.minute), (12, 34));
+        assert_eq!(clock.offset_half_hours, 4);
     }
 
     #[test]

@@ -220,6 +220,7 @@ function createStore() {
   const [rdsPty, setRdsPty] = createSignal('');               // Programme Type name
   const [rdsPi, setRdsPi] = createSignal('');                 // PI code (hex string)
   const [rdsSynced, setRdsSynced] = createSignal(false);      // RDS sync acquired
+  const [rdsClock, setRdsClock] = createSignal('');            // Station clock from group 4A
 
   // ---- Music identification ----
   const [identifyState, setIdentifyState] = createSignal<'idle' | 'capturing' | 'querying' | 'done' | 'error'>('idle');
@@ -372,6 +373,7 @@ function createStore() {
     rdsPty, setRdsPty,
     rdsPi, setRdsPi,
     rdsSynced, setRdsSynced,
+    rdsClock, setRdsClock,
     identifyState, setIdentifyState,
     identifyResult, setIdentifyResult,
     identifyReadyAt, setIdentifyReadyAt,

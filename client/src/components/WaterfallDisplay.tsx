@@ -1400,6 +1400,11 @@ const RdsOverlay: Component = () => {
                 </Show>
               </div>
             </Show>
+            <Show when={store.rdsClock()}>
+              <div class="text-[7px] font-mono text-white/50 mt-0.5">
+                {store.rdsClock()}
+              </div>
+            </Show>
           </div>
         </Show>
       </div>

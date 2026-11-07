@@ -181,3 +181,10 @@ protocol as `serverng`).
   every single bit and every adjacent pair for arbitrary blocks. Live RDS still
   decodes (PS/PTY/PI verified). Not ported from sdroxide: clock-time group 4A
   (MJD date) and its wider group coverage.
+- 2026-11-08: RDS group 4A (clock time) implemented server-side: MJD ->
+  calendar date, UTC hour/minute and signed half-hour offset, exposed as
+  `clock` in the RDS JSON. The client formats it as
+  `YYYY-MM-DD HH:MM UTC±HH:MM` and shows it in the RDS overlay. Unit test
+  decodes MJD 51544 + 12:34 + UTC+02:00. Live stations tested did not emit 4A
+  during the check, so the display path is exercised by the unit test only for
+  now.
