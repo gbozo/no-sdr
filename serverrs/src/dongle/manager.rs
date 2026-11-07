@@ -873,7 +873,16 @@ impl Manager {
             "tune" => self.handle_tune(client_id, cmd),
             "bandwidth" => self.handle_bandwidth(client_id, cmd),
             "mode" => self.handle_mode(client_id, cmd),
-            "codec" => self.handle_codec_change(client_id, cmd),
+            "codec" => {
+                // A codec switch must not wait behind queued FFT frames of the
+                // old codec (can be several seconds of backlog).
+                if !cmd.fft_codec.is_empty() {
+                    if let Some(c) = self.ws.get_client(client_id) {
+                        c.drop_queued_fft();
+                    }
+                }
+                self.handle_codec_change(client_id, cmd);
+            }
             "stereo_enabled" => self.handle_stereo_enabled(client_id, cmd),
             "admin_set_profile" => self.handle_admin_set_profile(client_id, cmd),
             "admin_auth" => self.handle_admin_auth(client_id, cmd),
@@ -1524,6 +1533,7 @@ impl Manager {
         let default_bw = default_bandwidth_for_mode(&mode) as i64;
         let subscribed = self.ws.subscribed_clients(dongle_id);
         for client in subscribed {
+            client.drop_queued_fft();
             let meta = ServerMeta {
                 msg_type: "profile_changed".to_string(),
                 dongle_id: Some(dongle_id.to_string()),
@@ -1854,8 +1864,8 @@ impl Manager {
 
                 let stats = json!({
                     "type": "server_stats",
-                    "cpuPercent": cpu_percent,
-                    "memMb": process_mem_mb(),
+                    "cpuPercent": cpu_percent.round() as i64,
+                    "memMb": process_mem_mb().round() as i64,
                     "clients": mgr.ws.client_count(),
                 });
                 let bytes = serde_json::to_vec(&stats).unwrap_or_default();

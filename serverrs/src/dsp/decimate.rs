@@ -12,30 +12,50 @@ const MAX_FIR_TAPS_FACTOR_SCALE: usize = 256;
 
 pub struct DecimateBlock {
     factor: usize,
-    sub_taps: Vec<f32>,
-    sub_bufs: Vec<Complex32>,
-    sub_pos: Vec<usize>,
-    taps_per_sub: usize,
+    /// Prototype low-pass taps (symmetric windowed sinc).
+    taps: Vec<f32>,
+    /// Input history, at least `taps.len()-1` samples carried between calls.
+    buf: Vec<Complex32>,
     prototype_len: usize,
-    first_out: i64,
     input_rate: f64,
     bandwidth_hz: i32,
-    total_in: i64,
+}
+
+/// Complex dot product with independent accumulators. A single accumulator is
+/// one long dependency chain; eight let the multiplies overlap and give the
+/// compiler something to vectorise.
+#[inline]
+fn dot(window: &[Complex32], taps: &[f32]) -> Complex32 {
+    const ACC: usize = 8;
+    let mut acc = [Complex32::default(); ACC];
+    let mut ws = window.chunks_exact(ACC);
+    let mut ts = taps.chunks_exact(ACC);
+    for (xs, tt) in (&mut ws).zip(&mut ts) {
+        for i in 0..ACC {
+            acc[i].re += xs[i].re * tt[i];
+            acc[i].im += xs[i].im * tt[i];
+        }
+    }
+    let mut sum = Complex32::default();
+    for a in acc {
+        sum += a;
+    }
+    for (x, &t) in ws.remainder().iter().zip(ts.remainder()) {
+        sum.re += x.re * t;
+        sum.im += x.im * t;
+    }
+    sum
 }
 
 impl DecimateBlock {
     pub fn new(factor: usize) -> Self {
         Self {
             factor,
-            sub_taps: Vec::new(),
-            sub_bufs: Vec::new(),
-            sub_pos: Vec::new(),
-            taps_per_sub: 0,
+            taps: Vec::new(),
+            buf: Vec::new(),
             prototype_len: 0,
-            first_out: 0,
             input_rate: 0.0,
             bandwidth_hz: 0,
-            total_in: 0,
         }
     }
 
@@ -45,74 +65,22 @@ impl DecimateBlock {
 
     pub fn set_bandwidth(&mut self, hz: i32) {
         self.bandwidth_hz = hz;
-        if self.factor <= 1 || self.sub_taps.is_empty() {
+        if self.factor <= 1 || self.prototype_len == 0 || self.input_rate <= 0.0 {
             return;
         }
-        let orig_taps = self.estimate_tap_count(hz);
-        self.prototype_len = orig_taps;
-        let p = orig_taps.div_ceil(self.factor);
-        self.taps_per_sub = p;
-        self.first_out = ((p - 1) * self.factor + (orig_taps - 1) % self.factor) as i64;
-        let proto = self.design_anti_alias_fir(orig_taps, hz);
-        let padded = zero_pad_filter(&proto, self.factor);
-        self.split_polyphase(&padded);
-
-        let need = self.factor * self.taps_per_sub;
-        if need > self.sub_bufs.capacity() {
-            self.alloc_delay_lines();
-        }
-        self.reset();
+        let taps = self.estimate_tap_count(hz);
+        self.init_from_prototype(taps, hz);
     }
 
     /// Original prototype filter taps (used by tests).
     pub fn prototype_taps(&self) -> Vec<f32> {
-        if self.sub_taps.is_empty() || self.factor <= 1 {
-            return Vec::new();
-        }
-        let p = self.taps_per_sub;
-        let n = self.prototype_len;
-        let mut proto = vec![0.0f32; n];
-        for phase in 0..self.factor {
-            for k in 0..p {
-                let idx = phase + k * self.factor;
-                if idx < n {
-                    proto[idx] = self.sub_taps[phase * p + k];
-                }
-            }
-        }
-        proto
+        self.taps.clone()
     }
 
     fn init_from_prototype(&mut self, orig_taps: usize, bandwidth_hz: i32) {
         self.prototype_len = orig_taps;
-        let p = orig_taps.div_ceil(self.factor);
-        self.taps_per_sub = p;
-        let proto = self.design_anti_alias_fir(orig_taps, bandwidth_hz);
-        let padded = zero_pad_filter(&proto, self.factor);
-        self.split_polyphase(&padded);
-        self.first_out = ((p - 1) * self.factor + (orig_taps - 1) % self.factor) as i64;
-        self.alloc_delay_lines();
-        self.reset();
-    }
-
-    fn split_polyphase(&mut self, prototype: &[f32]) {
-        let m = self.factor;
-        let p = self.taps_per_sub;
-        let n = prototype.len();
-        self.sub_taps = vec![0.0f32; m * p];
-        for phase in 0..m {
-            for k in 0..p {
-                let idx = phase + k * m;
-                if idx < n {
-                    self.sub_taps[phase * p + k] = prototype[idx];
-                }
-            }
-        }
-    }
-
-    fn alloc_delay_lines(&mut self) {
-        self.sub_bufs = vec![Complex32::default(); self.factor * self.taps_per_sub];
-        self.sub_pos = vec![0usize; self.factor];
+        self.taps = self.design_anti_alias_fir(orig_taps, bandwidth_hz);
+        self.buf.clear();
     }
 
     fn estimate_tap_count(&self, bandwidth_hz: i32) -> usize {
@@ -198,7 +166,7 @@ impl ProcessorBlock for DecimateBlock {
 
     fn init(&mut self, sample_rate: f64) -> anyhow::Result<()> {
         if self.factor <= 1 {
-            self.sub_taps.clear();
+            self.taps.clear();
             return Ok(());
         }
         self.input_rate = sample_rate;
@@ -208,53 +176,36 @@ impl ProcessorBlock for DecimateBlock {
     }
 
     fn process_complex(&mut self, input: &[Complex32]) -> Vec<Complex32> {
-        if self.factor <= 1 || self.sub_taps.is_empty() {
+        if self.factor <= 1 || self.taps.is_empty() {
             return input.to_vec();
         }
 
+        self.buf.extend_from_slice(input);
+        let n = self.taps.len();
         let f = self.factor;
-        let p = self.taps_per_sub;
-        let n = input.len();
-        let mut out = Vec::with_capacity(n / f + 2);
-        let first_out = self.first_out;
 
-        for (i, &sample) in input.iter().enumerate() {
-            let phase = ((self.total_in + i as i64) % f as i64) as usize;
-            let wpos = self.sub_pos[phase];
-            self.sub_bufs[phase * p + wpos] = sample;
-            self.sub_pos[phase] = (wpos + 1) % p;
+        // Align the first output with the old polyphase delay line: its first
+        // output had `first_out = (p-1)*f + (n-1)%f` samples in, i.e. its
+        // window ended one sample later than a window starting at zero.
+        let p = n.div_ceil(f);
+        let delta = ((p - 1) * f + (n - 1) % f) - (n - 1);
 
-            let total_idx = self.total_in + i as i64;
-            if total_idx >= first_out && (total_idx - first_out) % f as i64 == 0 {
-                let mut sum_re = 0.0f32;
-                let mut sum_im = 0.0f32;
-                for q in 0..f {
-                    let q_off = q * p;
-                    let mut pos = if self.sub_pos[q] == 0 {
-                        p - 1
-                    } else {
-                        self.sub_pos[q] - 1
-                    };
-                    for k in 0..p {
-                        let coeff = self.sub_taps[q_off + k];
-                        let v = self.sub_bufs[q_off + pos];
-                        sum_re += v.re * coeff;
-                        sum_im += v.im * coeff;
-                        pos = if pos == 0 { p - 1 } else { pos - 1 };
-                    }
-                }
-                out.push(Complex32::new(sum_re, sum_im));
+        let mut out = Vec::new();
+        if self.buf.len() > delta && self.buf.len() - delta >= n {
+            let count = (self.buf.len() - delta - n) / f + 1;
+            out.reserve(count);
+            for o in 0..count {
+                let base = delta + o * f;
+                out.push(dot(&self.buf[base..base + n], &self.taps));
             }
+            let consumed = delta + count * f;
+            self.buf.drain(..consumed);
         }
-
-        self.total_in += n as i64;
         out
     }
 
     fn reset(&mut self) {
-        self.sub_bufs.fill(Complex32::default());
-        self.sub_pos.fill(0);
-        self.total_in = 0;
+        self.buf.clear();
     }
 }
 

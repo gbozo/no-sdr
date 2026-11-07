@@ -1,53 +1,78 @@
 //! Numerically controlled oscillator (frequency shift).
 //!
-//! Mirrors `serverng/internal/dsp/nco.go`.
+//! Uses a block-wise complex phasor recurrence instead of a sine table with
+//! per-sample interpolation. The f64 phasor advances once per 8 samples; the
+//! samples inside a block are reached from a precomputed lane table, so their
+//! complex multiplies are independent and can pipeline/vectorise.
+//!
+//! Semantics match the previous implementation: `out = in * e^{-j phase}`,
+//! phase-continuous across retunes.
 
 use std::f64::consts::PI;
 
+use num_complex::Complex;
 use num_complex::Complex32;
 
 use super::block::ProcessorBlock;
 use super::fft_processor::INV_U8_SCALE;
 
-const NCO_TABLE_SIZE: usize = 4096;
-const NCO_TABLE_MASK: usize = NCO_TABLE_SIZE - 1;
+const LANES: usize = 8;
+const RENORM_SAMPLES: u64 = 1 << 16;
 
 pub struct NcoBlock {
     offset_hz: f64,
     sample_rate: f64,
-    phase: f64,
-    phase_inc: f64,
-    sin_table: Vec<f32>,
-    cos_table: Vec<f32>,
+    /// e^{-j phase}, f64 for long-run phase accuracy.
+    phasor: Complex<f64>,
+    /// e^{-j 2π f / fs}
+    step: Complex<f64>,
+    /// step^LANES
+    block_step: Complex<f64>,
+    /// step^0 .. step^{LANES-1} as f32
+    lanes: [Complex32; LANES],
+    renorm_count: u64,
 }
 
 impl NcoBlock {
     pub fn new(offset_hz: f64) -> Self {
-        let mut n = Self {
+        Self {
             offset_hz,
             sample_rate: 0.0,
-            phase: 0.0,
-            phase_inc: 0.0,
-            sin_table: vec![0.0; NCO_TABLE_SIZE],
-            cos_table: vec![0.0; NCO_TABLE_SIZE],
-        };
-        for i in 0..NCO_TABLE_SIZE {
-            let angle = 2.0 * PI * i as f64 / NCO_TABLE_SIZE as f64;
-            n.sin_table[i] = angle.sin() as f32;
-            n.cos_table[i] = angle.cos() as f32;
+            phasor: Complex::new(1.0, 0.0),
+            step: Complex::new(1.0, 0.0),
+            block_step: Complex::new(1.0, 0.0),
+            lanes: [Complex32::new(1.0, 0.0); LANES],
+            renorm_count: 0,
         }
-        n
     }
 
     pub fn set_offset(&mut self, hz: f64) {
         self.offset_hz = hz;
         if self.sample_rate > 0.0 {
-            self.phase_inc = 2.0 * PI * hz / self.sample_rate;
+            self.rebuild_step();
         }
     }
 
     pub fn offset_hz(&self) -> f64 {
         self.offset_hz
+    }
+
+    fn rebuild_step(&mut self) {
+        let w = 2.0 * PI * self.offset_hz / self.sample_rate;
+        // e^{-jw}, matching `out = in * e^{-j phase}`.
+        self.step = Complex::new(w.cos(), -w.sin());
+
+        let mut p = Complex::new(1.0f64, 0.0);
+        for lane in self.lanes.iter_mut() {
+            *lane = Complex32::new(p.re as f32, p.im as f32);
+            p *= self.step;
+        }
+        self.block_step = p;
+    }
+
+    #[inline]
+    fn renorm(&mut self) {
+        self.phasor /= self.phasor.norm();
     }
 }
 
@@ -62,44 +87,42 @@ impl ProcessorBlock for NcoBlock {
 
     fn init(&mut self, sample_rate: f64) -> anyhow::Result<()> {
         self.sample_rate = sample_rate;
-        self.phase_inc = 2.0 * PI * self.offset_hz / self.sample_rate;
-        self.phase = 0.0;
+        self.phasor = Complex::new(1.0, 0.0);
+        self.renorm_count = 0;
+        self.rebuild_step();
         Ok(())
     }
 
     fn process_complex(&mut self, input: &[Complex32]) -> Vec<Complex32> {
         let mut out = Vec::with_capacity(input.len());
-        let table_scale = NCO_TABLE_SIZE as f64 / (2.0 * PI);
-        for s in input {
-            let phase_scaled = self.phase * table_scale;
-            let idx = (phase_scaled as usize) & NCO_TABLE_MASK;
-            let frac = (phase_scaled - phase_scaled.floor()) as f32;
-            let next = (idx + 1) & NCO_TABLE_MASK;
+        let whole = input.len() - input.len() % LANES;
 
-            let cos0 = self.cos_table[idx];
-            let sin0 = self.sin_table[idx];
-            let cos1 = self.cos_table[next];
-            let sin1 = self.sin_table[next];
-
-            let cos_val = cos0 + frac * (cos1 - cos0);
-            let sin_val = sin0 + frac * (sin1 - sin0);
-
-            out.push(Complex32::new(
-                s.re * cos_val + s.im * sin_val,
-                s.im * cos_val - s.re * sin_val,
-            ));
-            self.phase += self.phase_inc;
+        for block in input[..whole].chunks_exact(LANES) {
+            let base = Complex32::new(self.phasor.re as f32, self.phasor.im as f32);
+            for (x, lane) in block.iter().zip(self.lanes.iter()) {
+                out.push(*x * (base * *lane));
+            }
+            self.phasor *= self.block_step;
         }
 
-        self.phase %= 2.0 * PI;
-        if self.phase < 0.0 {
-            self.phase += 2.0 * PI;
+        self.renorm_count += whole as u64;
+        if self.renorm_count >= RENORM_SAMPLES {
+            self.renorm();
+            self.renorm_count = 0;
         }
+
+        let base = Complex32::new(self.phasor.re as f32, self.phasor.im as f32);
+        for x in &input[whole..] {
+            out.push(*x * base);
+            self.phasor *= self.step;
+        }
+
         out
     }
 
     fn reset(&mut self) {
-        self.phase = 0.0;
+        self.phasor = Complex::new(1.0, 0.0);
+        self.renorm_count = 0;
     }
 }
 
@@ -135,5 +158,18 @@ mod tests {
         let mid = out.len() / 2;
         let prod = out[mid] * out[mid + 1].conj();
         assert!(prod.arg().abs() < 0.2, "residual rotation {}", prod.arg());
+    }
+
+    #[test]
+    fn retune_is_phase_continuous() {
+        let mut nco = NcoBlock::new(0.0);
+        nco.init(48_000.0).unwrap();
+        let input = vec![Complex32::new(1.0, 0.0); 64];
+        let before = nco.process_complex(&input);
+        nco.set_offset(1000.0);
+        let after = nco.process_complex(&input);
+        // No discontinuity larger than a sample step.
+        let d = (after[0] - before[63]).norm();
+        assert!(d < 0.2, "phase jumped by {d}");
     }
 }

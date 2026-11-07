@@ -3,7 +3,7 @@
   "version": "2.10.5",
   "private": true,
   "description": "Multi-user WebSDR server for RTL-SDR dongles \u2014 real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "workspaces": [
     "client"
@@ -41,7 +41,8 @@
     "build:rust:full": "cd serverrs && cargo build --release --features \"opus rtlsdr\"",
     "test:rust": "cd serverrs && cargo test",
     "start:rust": "cd serverrs && ./target/release/serverrs",
-    "start:rust:demo": "cd serverrs && NODE_SDR_DEMO=1 ./target/release/serverrs"
+    "start:rust:demo": "cd serverrs && NODE_SDR_DEMO=1 ./target/release/serverrs",
+    "build:rust:native": "cd serverrs && RUSTFLAGS=\"-C target-cpu=native\" cargo build --release --features opus"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -199,15 +199,21 @@ impl FftProcessor {
         self.fft.transform(&mut self.complex_buf);
 
         let half = fft_size >> 1;
-        let mask = fft_size - 1;
-        for i in 0..fft_size {
-            let src = (i + half) & mask;
-            let c = self.complex_buf[src];
-            let mut power = c.re * c.re + c.im * c.im;
-            if power < 1e-20 {
-                power = 1e-20;
+        // DC-centred output: bins [half..N) come first, then [0..half).
+        // Two contiguous loops let the compiler vectorise this without the
+        // per-bin modulo/mask that the original wraparound loop required.
+        {
+            let (first, second) = self.mag_buf.split_at_mut(half);
+            for i in 0..half {
+                let c = self.complex_buf[half + i];
+                let power = (c.re * c.re + c.im * c.im).max(1e-20);
+                first[i] = fast_log10_power(power) - self.norm_db;
             }
-            self.mag_buf[i] = fast_log10_power(power) - self.norm_db;
+            for i in 0..half {
+                let c = self.complex_buf[i];
+                let power = (c.re * c.re + c.im * c.im).max(1e-20);
+                second[i] = fast_log10_power(power) - self.norm_db;
+            }
         }
 
         if self.tap_count > 1 {
@@ -220,10 +226,11 @@ impl FftProcessor {
                 let a = self.averaging;
                 let b = 1.0 - a;
                 for i in 0..fft_size {
-                    self.avg_buf[i] = a * self.avg_buf[i] + b * self.mag_buf[i];
+                    let v = a * self.avg_buf[i] + b * self.mag_buf[i];
+                    self.avg_buf[i] = v;
+                    self.mag_buf[i] = v;
                 }
             }
-            self.mag_buf.copy_from_slice(&self.avg_buf);
         }
     }
 

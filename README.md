@@ -22,7 +22,7 @@
   <a href="https://github.com/gbozo/no-sdr/releases"><img src="https://img.shields.io/github/v/release/gbozo/no-sdr?include_prereleases&label=version&color=blue" alt="Version" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node.js 22+" />
   <img src="https://img.shields.io/badge/typescript-5-blue" alt="TypeScript 5" />
-  <a href="https://github.com/gbozo/no-sdr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gbozo/no-sdr?color=green" alt="MIT License" /></a>
+  <a href="https://github.com/gbozo/no-sdr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gbozo/no-sdr?color=green" alt="GPL-3.0-or-later License" /></a>
   <img src="https://img.shields.io/badge/RTL--SDR-supported-orange" alt="RTL-SDR" />
   <a href="https://github.com/gbozo/no-sdr/issues"><img src="https://img.shields.io/github/issues/gbozo/no-sdr" alt="Open Issues" /></a>
   <a href="https://github.com/gbozo/no-sdr/pulls"><img src="https://img.shields.io/github/issues-pr/gbozo/no-sdr" alt="Pull Requests" /></a>
@@ -460,7 +460,14 @@ Contributions are welcome. Please:
 
 ## License
 
-MIT
+GPL-3.0-or-later
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See `LICENSE` for the full text.
 
 ## Acknowledgments
 

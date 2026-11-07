@@ -101,6 +101,20 @@ impl WriteQueue {
         self.inner.lock().items.pop_front()
     }
 
+    /// Drops queued FFT frames (used when the client changes FFT codec or the
+    /// dongle profile changes, so stale frames of the old codec/center frequency
+    /// are not delivered before the new stream).
+    pub fn drop_fft(&self) {
+        let mut inner = self.inner.lock();
+        inner.items.retain(|msg| {
+            if !msg.binary || msg.data.is_empty() {
+                return true;
+            }
+            // MSG_FFT, MSG_FFT_COMPRESSED, MSG_FFT_ADPCM, MSG_FFT_DEFLATE
+            !matches!(msg.data[0], 0x01 | 0x04 | 0x08 | 0x0B)
+        });
+    }
+
     /// Wait until a message is available, then pop it.
     pub async fn wait_pop(&self) -> Option<Outgoing> {
         loop {
@@ -303,6 +317,12 @@ impl Client {
         let mut st = self.state.lock();
         st.dongle_id.clear();
         st.profile_id.clear();
+    }
+
+    /// Discards queued FFT frames so a codec/profile change takes effect
+    /// immediately instead of after draining the old backlog.
+    pub fn drop_queued_fft(&self) {
+        self.queue.drop_fft();
     }
 
     /// Update state when the server switches profiles.
@@ -588,5 +608,28 @@ mod tests {
         assert_eq!(v["ip"], "1.2.3.4");
         assert_eq!(v["realIp"], "5.6.7.8");
         assert!(v["connectedAt"].as_str().unwrap().contains('T'));
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    #[test]
+    fn drop_fft_keeps_other_messages() {
+        let q = WriteQueue::new(16);
+        q.push(Outgoing::binary(vec![0x04, 1, 2]));
+        q.push(Outgoing::binary(vec![0x03, b'{', b'}']));
+        q.push(Outgoing::binary(vec![0x0C, 1]));
+        q.push(Outgoing::binary(vec![0x08, 1]));
+        q.push(Outgoing::text(b"{}".to_vec()));
+
+        q.drop_fft();
+
+        let mut types = Vec::new();
+        while let Some(msg) = q.pop() {
+            types.push(msg.data[0]);
+        }
+        assert_eq!(types, vec![0x03, 0x0C, b'{']);
     }
 }

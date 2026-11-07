@@ -31,8 +31,8 @@ pub fn system_info(state: &AppState) -> Value {
         "goamd64": "",
         "uptime": uptime,
         "memory": {
-            "allocMB": mem_mb,
-            "sysMB": mem_mb,
+            "allocMB": mem_mb.round() as i64,
+            "sysMB": mem_mb.round() as i64,
             "numGC": 0,
             "goroutines": tasks,
         },

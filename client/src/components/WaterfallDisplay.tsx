@@ -534,7 +534,7 @@ const WaterfallDisplay: Component = () => {
     scrubAnchorY = null;
     scrubAnchorX = null;
     setIsScrubbing(false);
-    handleMouseLeave(e);
+    handleMouseLeave();
   };
 
   // Waterfall wheel — horizontal scroll pans, vertical scroll seeks in time

@@ -74,7 +74,7 @@ mod imp {
             if cfg.bitrate <= 0 {
                 bail!("opus: bitrate must be positive, got {}", cfg.bitrate);
             }
-            let complexity = if cfg.complexity <= 0 { 5 } else { cfg.complexity };
+            let complexity = cfg.complexity.clamp(0, 10); // 0 = fastest
             let mut encoder = opus::Encoder::new(
                 cfg.sample_rate as u32,
                 channels_enum(cfg.channels),

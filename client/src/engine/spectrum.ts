@@ -90,7 +90,7 @@ export class SpectrumRenderer {
     // Pause: freeze on the last frame, stop updating
     if (this.paused) {
       if (!this.frozenData) this.frozenData = new Float32Array(fftData);
-      return; // already drawn frozen frame; nothing to update
+      return false; // already drawn frozen frame; nothing to update
     }
     this.frozenData = null;
 

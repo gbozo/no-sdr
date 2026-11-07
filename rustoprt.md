@@ -85,3 +85,68 @@ protocol as `serverng`).
   backend, FFT output rate is identical (~19 fps for bursty 16 KiB rtl_tcp
   reads at fftFps=60), confirming this is existing behavior rather than a port
   regression. `cargo test` still green (105 tests).
+
+## FFT compression review (2026-11-07)
+
+- Quantization (`compress_fft`), delta encoding, and the `deflate-floor`
+  noise-floor pipeline were compared byte-for-byte against Go using 293 real
+  FFT frames captured from the rtl_tcp receiver. The quantized+delta streams are
+  **identical**; only the deflate backend differed.
+- The original `flate2` default backend (`miniz_oxide`) produced ~2–3% larger
+  frames than Go's `compress/flate`. Switched `flate2` to the `zlib-rs` backend
+  (pure Rust, no C dependency), which now matches or slightly beats Go:
+  - Go (live): deflate 8696 B/frame, floor 8565 B/frame
+  - Rust + zlib-rs: deflate 8853 B/frame, floor 8579 B/frame (same signal)
+  - Offline 293-frame set: Go 10312 / 9719 B; Rust (zlib-rs) 9874 / 9643 B
+- Measured compression ratios vs raw Float32 (bins × 4 B):
+  - FM broadcast, 16k FFT: deflate ~7.4–7.5:1, deflate-floor ~7.5:1
+  - Aviation, 8k FFT: ~8.2:1
+  - Shortwave, 4k FFT: ~10.0:1
+- `deflate-floor` gains are small by design: it clamps only bins below the
+  5th-percentile noise floor (matches the Go and original Node implementation).
+  On quiet bands most of the gain already comes from delta+deflate.
+- ADPCM is 4:1 on Int16 IQ/FFT samples (≈8:1 versus raw Float32), so ~8.2 KB
+  per 16k FFT frame — it is compressed, not raw.
+- 2026-11-07: FFT codec-switch polish. Server flushes queued FFT frames when a
+  client changes `fftCodec` (and on profile switch). Client now drops FFT
+  frames whose type does not match the selected codec before byte accounting/
+  rendering, and resets FFT bandwidth stats on switch, so the compression panel
+  stops showing the previous codec immediately. Remaining latency is only the
+  kernel/socket backlog of already-written old-codec frames (a few seconds
+  after a long high-bandwidth run); new frames render as soon as they arrive.
+- 2026-11-07: Fixed two pre-existing client TypeScript errors (`spectrum.ts`
+  paused draw returned undefined; `WaterfallDisplay.tsx` called a 0-arg
+  handler with an event). `npm run typecheck --workspace=client` is clean.
+- 2026-11-08: Replaced the hand-written radix-4 FFT with `rustfft` 6 while
+  keeping the `Fft` API (`new`/`size`/`transform`) and unnormalised forward-DSF
+  convention. Micro-benchmark (native release, i3-9100): n=8192 ours 218.9 us vs
+  rustfft 11.8 us (18.5x); n=16384 ours 528.2 us vs rustfft 29.0 us (18.2x).
+  Live server CPU with one Opus client dropped from ~31% to ~19-25% of one core;
+  FFT compression ratio unchanged within noise (9.7 -> 9.9:1) and audio/waterfall
+  verified working. `rustfft` performs runtime SIMD dispatch, so portable builds
+  benefit too.
+- 2026-11-08: Restored the two client TypeScript fixes (spectrum paused draw
+  returns false; WaterfallDisplay calls the 0-arg handleMouseLeave without an
+  event). `npm run typecheck --workspace=client` clean, client rebuilt.
+- 2026-11-08: Further FFT-processor optimisation. Split the DC-shift/magnitude
+  loop into two contiguous halves (removes the per-bin `(i+half)&mask` wrap),
+  and fused the EMA averaging write into the same pass (removed a full 32 KiB
+  copy per frame). Micro-benchmark at 293 chunks/s: 75.4 us/chunk (2.21% core)
+  -> 49.9 us/chunk (1.46% core), a 34% reduction; rustfft itself is 11.8 us of
+  that. Compression ratio unchanged (9.9:1) and live audio/waterfall verified.
+- 2026-11-08: IQ-extraction optimisation inspired by sdroxide's techniques
+  (independently reimplemented; sdroxide is GPL-3.0-or-later. The project has
+  since moved to GPL-3.0-or-later, but these kernels remain our own code):
+  * NCO: replaced the 4096-entry sine/cosine table + per-sample interpolation
+    with an f64 block phasor recurrence (8 precomputed lanes per block),
+    phase-continuous across retunes and renormalised every 65536 samples.
+  * Decimator: replaced per-phase circular delay lines and per-tap modulo
+    branches with a contiguous input history and a symmetric-prototype dot
+    product using 8 independent accumulators (SIMD-friendly, delay-aligned with
+    the old output phase). Output length/phase preserved.
+  * Micro-benchmark (native, 2.4 MSPS, factor 10, 257 taps): 15.57% -> 1.98% of
+    one core (7.9x). Live server CPU with one Opus client dropped from ~23% to
+    ~10-13%. FFT 9.9:1 and IQ 23.7:1 unchanged; audio/waterfall verified.
+  * sdroxide's half-band cascade was evaluated but not adopted: for a 10x
+    decimation the single-stage prototype FIR is cheaper; half-bands pay off at
+    large factors (their 16 Msps front end).
