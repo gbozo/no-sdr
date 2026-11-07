@@ -188,3 +188,12 @@ protocol as `serverng`).
   decodes MJD 51544 + 12:34 + UTC+02:00. Live stations tested did not emit 4A
   during the check, so the display path is exercised by the unit test only for
   now.
+- 2026-11-08: Front-end IQ correction (inspired by sdroxide's iqcorrect,
+  independently implemented): per-dongle optional `iqCorrection` applies a
+  leaky-mean DC blocker (10 Hz corner) plus the adaptive orthogonalise/normalise
+  imbalance loop (16k-sample blocks, 0.35 s time constant, alpha/gain clamps,
+  implausible-block rejection) to the raw device stream before recording/FFT/
+  client pipelines. Enabled for the test dongle in config.yaml. Live CPU with
+  one Opus client unchanged at ~7%; audio, RDS and FFT/IQ ratios verified
+  (9.9:1 / 23.7:1). Unit tests cover DC removal, convergence direction and
+  reset.

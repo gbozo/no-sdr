@@ -180,6 +180,9 @@ pub struct DongleConfig {
     pub digital_agc: bool,
     #[serde(default)]
     pub offset_tuning: bool,
+    /// Front-end DC + I/Q imbalance correction (zero-IF receivers).
+    #[serde(default)]
+    pub iq_correction: bool,
     #[serde(default)]
     pub profiles: Vec<DongleProfile>,
 }

@@ -28,6 +28,7 @@ server:
 dongles:
     - id: dongle-mooroo30
       name: Remote-GBserv
+      iqCorrection: true
       enabled: true
       autoStart: true
       source:

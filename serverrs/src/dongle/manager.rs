@@ -20,7 +20,7 @@ use crate::codec::adpcm::encode_fft_adpcm;
 use crate::codec::fft::compress_fft;
 use crate::codec::{FftDeflateEncoder, ImaAdpcmEncoder};
 use crate::config::{Config, DongleConfig, DongleProfile};
-use crate::dsp::{FftProcessor, FftProcessorConfig, IqExtractor, IqExtractorConfig};
+use crate::dsp::{FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
 use crate::history::FftBuffer;
 use crate::ws::{
     pack_audio_opus_message, pack_fft_adpcm_message, pack_fft_compressed_message,
@@ -147,6 +147,8 @@ struct ActiveDongle {
     deflate_enc: Mutex<FftDeflateEncoder>,
     deflate_floor_enc: Mutex<FftDeflateEncoder>,
     history: FftBuffer,
+    iq_correct: Mutex<Option<IqCorrect>>,
+    iq_scratch: Mutex<Vec<num_complex::Complex32>>,
     cancel: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -409,6 +411,12 @@ impl Manager {
             deflate_enc: Mutex::new(deflate_enc),
             deflate_floor_enc: Mutex::new(deflate_floor_enc),
             history,
+            iq_correct: Mutex::new(if dcfg.iq_correction {
+                Some(IqCorrect::new(sample_rate as f64, 10.0, true))
+            } else {
+                None
+            }),
+            iq_scratch: Mutex::new(Vec::new()),
             cancel,
             task: Mutex::new(None),
         });
@@ -1524,6 +1532,18 @@ impl Manager {
         }
 
         *ad.profile.write() = profile.clone();
+        if dcfg.iq_correction {
+            let rate = if profile.sample_rate > 0 {
+                profile.sample_rate
+            } else if dcfg.sample_rate > 0 {
+                dcfg.sample_rate
+            } else {
+                2_400_000
+            };
+            *ad.iq_correct.lock() = Some(IqCorrect::new(rate as f64, 10.0, true));
+        } else {
+            *ad.iq_correct.lock() = None;
+        }
         ad.history.reset();
         if profile.fft_size > 0 {
             ad.history.init_frames(profile.fft_size as usize);
