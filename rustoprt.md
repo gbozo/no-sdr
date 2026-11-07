@@ -150,3 +150,21 @@ protocol as `serverng`).
   * sdroxide's half-band cascade was evaluated but not adopted: for a 10x
     decimation the single-stage prototype FIR is cheaper; half-bands pay off at
     large factors (their 16 Msps front end).
+- 2026-11-08: `SimpleFir::process_batch` (used by FM stereo's two 51-tap
+  low-passes) now lays history + block out contiguously and uses 8 independent
+  accumulators; sample-at-a-time `process` keeps the circular buffer. Benchmark
+  per 51-tap FIR: 9.36% -> 2.01% of one core at 2.4 MSPS (at the actual 240 kHz
+  demod rate that is ~10x less). Live server CPU with one Opus client:
+  ~10-13% -> ~7%. Audio/waterfall/ratios unchanged (9.9:1, 23.7:1).
+- 2026-11-08: sdroxide review, remaining items:
+  * RDS: theirs adds burst error correction, clock-time (MJD) and richer
+    group coverage; ours matches Go. CPU cost is negligible, so this is a
+    robustness/feature trade-off, not a performance one.
+  * Interpolators: theirs uses rubato septic polynomial resampling; our Opus
+    path still uses linear interpolation for SSB/CW upsampling. Quality upgrade
+    possible at audio rate (cheap), not yet implemented.
+  * Noise floor: their per-region median (bit-pattern select_nth) could replace
+    the global 5th-percentile clamp in `deflate-floor`. Offline on 293 captured
+    16k frames: global 5% = 10.25 KB/frame, region-64 30th pct = 8.87 KB (-13%),
+    region-64 median = 7.06 KB (-31%), at the cost of flattening more weak bins.
+    Not applied; current behaviour matches Go.

@@ -13,9 +13,11 @@ use super::{fast_atan2, Demodulator};
 /// Windowed-sinc lowpass FIR with a power-of-2 circular buffer.
 pub struct SimpleFir {
     taps: Vec<f32>,
+    taps_rev: Vec<f32>,
     buf: Vec<f32>,
     pos: usize,
     buf_mask: usize,
+    batch: Vec<f32>,
 }
 
 impl SimpleFir {
@@ -26,9 +28,11 @@ impl SimpleFir {
         }
         let mut f = Self {
             taps: vec![0.0; num_taps],
+            taps_rev: vec![0.0; num_taps],
             buf: vec![0.0; buf_size],
             pos: 0,
             buf_mask: buf_size - 1,
+            batch: Vec::new(),
         };
         f.design(cutoff);
         f
@@ -56,6 +60,7 @@ impl SimpleFir {
         for tap in &mut self.taps {
             *tap = (*tap as f64 / sum) as f32;
         }
+        self.taps_rev = self.taps.iter().rev().copied().collect();
     }
 
     pub fn process(&mut self, x: f32) -> f32 {
@@ -71,20 +76,47 @@ impl SimpleFir {
     }
 
     /// Filters `input` into `out` in one pass.
+    ///
+    /// Block form: the history and the new block are laid out contiguously and
+    /// each output is a straight dot product, which vectorises. The sample-at-a-
+    /// time `process` keeps the circular buffer for callers at audio rate.
     pub fn process_batch(&mut self, input: &[f32], out: &mut [f32]) {
-        let taps = &self.taps;
-        let buf = &mut self.buf;
+        let n = self.taps.len();
+        let hist = n - 1;
         let mask = self.buf_mask;
-        let mut pos = self.pos;
-        for (i, &x) in input.iter().enumerate() {
-            buf[pos] = x;
-            let mut acc = 0.0f32;
-            let mut idx = pos;
-            for &tap in taps {
-                acc += tap * buf[idx];
-                idx = idx.wrapping_sub(1) & mask;
+
+        self.batch.clear();
+        self.batch.reserve(input.len() + hist);
+        let start = (self.pos + self.buf.len() - hist) & mask;
+        for k in 0..hist {
+            self.batch.push(self.buf[(start + k) & mask]);
+        }
+        self.batch.extend_from_slice(input);
+
+        let taps = &self.taps_rev;
+        for (i, o) in out.iter_mut().enumerate().take(input.len()) {
+            let win = &self.batch[i..i + n];
+            let mut acc = [0.0f32; 8];
+            let mut ws = win.chunks_exact(8);
+            let mut ts = taps.chunks_exact(8);
+            for (xs, tt) in (&mut ws).zip(&mut ts) {
+                for j in 0..8 {
+                    acc[j] += xs[j] * tt[j];
+                }
             }
-            out[i] = acc;
+            let mut sum = 0.0f32;
+            for a in acc {
+                sum += a;
+            }
+            for (x, &t) in ws.remainder().iter().zip(ts.remainder()) {
+                sum += x * t;
+            }
+            *o = sum;
+        }
+
+        let mut pos = self.pos;
+        for &x in input {
+            self.buf[pos] = x;
             pos = (pos + 1) & mask;
         }
         self.pos = pos;
