@@ -6,7 +6,7 @@ SolidJS client (`client/src/shared/protocol.ts`).
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as `serverng`).
 
-## Current status (2.11.1)
+## Current status (2.11.2)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,9 +23,9 @@ protocol as `serverng`).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.11.0-rust` (prerelease). Current HEAD is
-  **2.11.1** and adds direct USB rtlsdr, aggregate bandwidth stats and default
-  Opus+rtlsdr features; it is not tagged yet.
+- Latest published release: `v2.11.2-rust` (prerelease). It adds the hot-path
+  performance pass on top of 2.11.1's direct USB rtlsdr, aggregate bandwidth
+  stats and default Opus+rtlsdr features.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
   Go backend on main).
@@ -298,3 +298,38 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   are built on native runners (`ubuntu-latest`, `ubuntu-24.04-arm`) with
   separate GHA layer cache scopes, then the two digests are merged into one
   multi-arch manifest.
+- 2026-11-08: Hot-path performance pass (no protocol/API/config changes).
+  Added `serverrs/examples/bench.rs`, a dependency-free best-of-5 microbenchmark
+  harness (`cargo run --release --example bench`). Re-reviewed sdroxide and
+  adopted its runtime-SIMD pattern: the same portable loop is compiled again
+  under `#[target_feature(enable = "avx2,fma")]` / AVX-512 and selected once per
+  block, so portable release binaries still use wide registers. Added
+  `dsp/simd.rs`, explicit AVX2+FMA kernels for the complex decimator dot
+  (taps duplicated to match interleaved `re,im`) and the real 51-tap stereo FIR,
+  and SIMD dispatch for the NCO block mixer. Removed per-chunk allocations:
+  `IqExtractor::process_into` plus in-place NCO/Butterworth and reusable scratch;
+  `OpusPipeline` reuses complex/PCM/rate buffers, avoids the WFM stereo clone and
+  the per-sample modulo in the capture ring; `FmStereoDemod` reuses its PLL/FIR
+  work buffers and `FmMonoDemod::process_into` feeds the composite without a
+  copy. Fused the IQ-correction DC + imbalance loops and replaced a per-bin
+  division in FFT frame averaging with a reciprocal.
+  Microbenchmarks (generic x86-64 release, i3-9100, best of 5):
+  decimator 2.4M /10 / 257 taps 78.7 -> 23.1 us per 16 KiB chunk (3.4x);
+  IQ extractor 2.4M -> 240k 136.5 -> 60-66 us/chunk (2.1x, ~4.7% -> ~1.9% core);
+  2.4M -> 48k 80.6 -> 42 us (1.9x); 51-tap FIR batch 50.7 -> 32-34 us;
+  FM stereo 241 -> 205-212 us per 20 ms; Opus WFM pipeline 373 -> 328-341 us
+  per 20 ms; IQ correction 35.5 -> 29-30 us per chunk; FFT unchanged
+  (~36 us/chunk @8192, ~1.1% core). A `-C target-cpu=native` build measured
+  within noise of the runtime-dispatched generic build.
+  Live RTL2838/R820T, one Opus WFM client at 100.6 MHz: ~10.2% of one core
+  (server_stats average; 10.5% measured externally), 277 FFT frames and 583
+  Opus packets over 35 s (34.98 s audio), RDS sync messages present, no client
+  errors. The same test on HEAD 6272daf measured 12.3% average (~17% lower after
+  the pass). Four concurrent clients: 22.95% of one core, each receiving
+  19.9-20.0 s of audio per 20 s. Client pipelines still run sequentially on the
+  dongle task; parallelising them is the next step for >8 clients.
+  `cargo test` and `cargo test --no-default-features` remain 114/114 green.
+
+- 2026-11-08: Version bump to 2.11.2 and release `v2.11.2-rust` (prerelease):
+  portable archives and the multi-CPU Docker image ship the hot-path
+  performance pass (SIMD dispatch, allocation-free extractor/Opus path).
