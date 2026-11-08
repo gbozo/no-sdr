@@ -177,7 +177,10 @@ pub async fn clients(State(state): State<AppState>) -> Response {
 }
 
 pub async fn local_devices() -> Response {
-    let devices = crate::dongle::enumerate_local_devices();
+    // USB enumeration is blocking; keep it off the async workers.
+    let devices = tokio::task::spawn_blocking(crate::dongle::enumerate_local_devices)
+        .await
+        .unwrap_or_default();
     json_response(
         StatusCode::OK,
         serde_json::to_value(devices).unwrap_or_else(|_| json!([])),
@@ -314,7 +317,10 @@ pub async fn update_dongle(
         let mgr = state.mgr.clone();
         let id2 = id.clone();
         tokio::spawn(async move {
-            let _ = mgr.reinit_dongle(&id2).await;
+            tracing::info!(id = %id2, "reinitialising dongle after config change");
+            if let Err(e) = mgr.reinit_dongle(&id2).await {
+                tracing::error!(id = %id2, error = %e, "dongle reinit failed");
+            }
         });
     }
     json_response(StatusCode::OK, serde_json::to_value(&new_cfg).unwrap(), Some(version))
@@ -334,7 +340,7 @@ pub async fn delete_dongle(State(state): State<AppState>, Path(id): Path<String>
         bump_version_locked(&state)
     };
 
-    let _ = state.mgr.stop_dongle_by_id(&id);
+    let _ = state.mgr.stop_dongle_by_id(&id).await;
     state.mgr.notify_dongle_removed(&id);
     json_response(StatusCode::OK, json!({"status": "deleted"}), Some(version))
 }
@@ -395,7 +401,7 @@ pub async fn dongle_start(State(state): State<AppState>, Path(id): Path<String>)
 }
 
 pub async fn dongle_stop(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.mgr.stop_dongle_by_id(&id) {
+    match state.mgr.stop_dongle_by_id(&id).await {
         Ok(()) => {
             state.mgr.notify_dongle_stopped(&id);
             json_response(StatusCode::OK, json!({"ok": true, "dongleId": id}), None)
@@ -529,7 +535,7 @@ pub async fn delete_profile(
     let id2 = id.clone();
     let pid2 = profile_id.clone();
     tokio::spawn(async move {
-        mgr.handle_profile_removed(&id2, &pid2);
+        mgr.handle_profile_removed(&id2, &pid2).await;
     });
     json_response(StatusCode::OK, json!({"status": "deleted"}), Some(version))
 }

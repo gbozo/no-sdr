@@ -507,10 +507,16 @@ impl Manager {
             "local" => {
                 #[cfg(feature = "rtlsdr")]
                 {
-                    let source = RtlSdrSource::open(
-                        dcfg.source.device_index,
-                        &dcfg.source.serial,
-                    )?;
+                    // USB enumeration/open/reset is blocking; keep it off the
+                    // async workers so an admin-triggered reinit cannot stall
+                    // HTTP/WebSocket service on a small (1-vCPU) host.
+                    let device_index = dcfg.source.device_index;
+                    let serial = dcfg.source.serial.clone();
+                    let source = tokio::task::spawn_blocking(move || {
+                        RtlSdrSource::open(device_index, &serial)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("local rtlsdr open task failed: {e}"))??;
                     let command = Source::command_handle(&source);
                     if let Some(cmd) = &command {
                         self.apply_dongle_settings(cmd, dcfg, profile);
@@ -1399,14 +1405,25 @@ impl Manager {
         self.start_dongle_with_retry(dcfg).await
     }
 
-    pub fn stop_dongle_by_id(&self, dongle_id: &str) -> Result<()> {
+    pub async fn stop_dongle_by_id(&self, dongle_id: &str) -> Result<()> {
         let ad = match self.dongles.write().remove(dongle_id) {
             Some(d) => d,
             None => bail!("dongle {dongle_id} is not running"),
         };
         let _ = ad.cancel.send(true);
-        if let Some(task) = ad.task.lock().take() {
-            task.abort();
+        // Let the run loop observe cancellation and a blocking source read
+        // finish before the source is dropped and the device is closed. An
+        // immediate abort can drop a local RTL-SDR device while `read_sync` is
+        // still inside librtlsdr, and it blocks the reinit unnecessarily.
+        let task = ad.task.lock().take();
+        if let Some(mut task) = task {
+            if tokio::time::timeout(Duration::from_secs(2), &mut task)
+                .await
+                .is_err()
+            {
+                warn!(id = %dongle_id, "dongle task did not stop in time; aborting");
+                task.abort();
+            }
         }
 
         let pipelines: Vec<String> = {
@@ -1442,7 +1459,7 @@ impl Manager {
             self.destroy_client_pipeline(&id);
         }
         if self.dongles.read().contains_key(dongle_id) {
-            let _ = self.stop_dongle_by_id(dongle_id);
+            let _ = self.stop_dongle_by_id(dongle_id).await;
         }
 
         if !dcfg.enabled {
@@ -1463,7 +1480,7 @@ impl Manager {
         self.start_dongle_with_retry(dcfg).await
     }
 
-    pub fn handle_profile_removed(&self, dongle_id: &str, profile_id: &str) {
+    pub async fn handle_profile_removed(&self, dongle_id: &str, profile_id: &str) {
         let active = {
             let map = self.dongles.read();
             match map.get(dongle_id) {
@@ -1485,7 +1502,7 @@ impl Manager {
             .unwrap_or_default();
 
         if remaining.is_empty() {
-            let _ = self.stop_dongle_by_id(dongle_id);
+            let _ = self.stop_dongle_by_id(dongle_id).await;
         } else if let Err(e) = self.switch_profile(dongle_id, &remaining[0].id) {
             warn!(dongle = %dongle_id, error = %e, "failed to switch to remaining profile");
         }
