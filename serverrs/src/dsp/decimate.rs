@@ -119,9 +119,14 @@ unsafe fn dot_avx2(window: &[Complex32], taps_packed: &[f32]) -> Complex32 {
     let acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
     let lo = _mm256_castps256_ps128(acc);
     let hi = _mm256_extractf128_ps(acc, 1);
-    let s = _mm_hadd_ps(_mm_add_ps(lo, hi), _mm_add_ps(lo, hi));
-    let mut re = _mm_cvtss_f32(s);
-    let mut im = _mm_cvtss_f32(_mm_shuffle_ps(s, s, 0b01));
+    // Lane layout after the widen is [re0, im0, re1, im1, ...]. Adding the two
+    // halves gives [re0+re2, im0+im2, re1+re3, im1+im3]; fold the upper pair
+    // onto the lower one so lane 0 is the real sum and lane 1 the imaginary
+    // sum. (`hadd` here would add re to im and mix the channels.)
+    let s = _mm_add_ps(lo, hi);
+    let t = _mm_add_ps(s, _mm_movehl_ps(s, s));
+    let mut re = _mm_cvtss_f32(t);
+    let mut im = _mm_cvtss_f32(_mm_shuffle_ps(t, t, 0b01));
 
     while i < n {
         re += window[i].re * taps_packed[2 * i];
@@ -427,6 +432,49 @@ mod tests {
         assert_eq!(all.len(), split.len());
         for (x, y) in all.iter().zip(split.iter()) {
             assert!((x - y).norm() < 1e-3);
+        }
+    }
+
+    /// The AVX2 kernel must agree with the portable one, including the
+    /// interleaved complex horizontal reduction that `hadd` gets wrong. This
+    /// covers the production 257-tap shape and non-multiple-of-16 lengths.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn avx2_dot_matches_portable() {
+        if !simd::avx2() {
+            return;
+        }
+        let mut d = DecimateBlock::new(10);
+        d.init(2_400_000.0).unwrap();
+        d.set_bandwidth(200_000);
+        assert!(d.taps.len() > 200, "expected the 257-tap WFM prototype");
+
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        for n in [31usize, 32, 33, 257] {
+            let mut packed = Vec::with_capacity(n * 2);
+            for &t in &d.taps[..n] {
+                packed.push(t);
+                packed.push(t);
+            }
+            for _ in 0..50 {
+                let window: Vec<Complex32> = (0..n)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        let a = (seed >> 40) as f32 / 8_388_608.0 - 1.0;
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        let b = (seed >> 40) as f32 / 8_388_608.0 - 1.0;
+                        Complex32::new(a, b)
+                    })
+                    .collect();
+                let want = dot(&window, &d.taps[..n]);
+                // SAFETY: avx2() was checked above.
+                let got = unsafe { dot_avx2(&window, &packed) };
+                assert!((got - want).norm() < 1e-4, "n={n}: {got:?} vs {want:?}");
+            }
         }
     }
 }
