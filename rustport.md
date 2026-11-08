@@ -6,7 +6,7 @@ SolidJS client (`client/src/shared/protocol.ts`).
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as `serverng`).
 
-## Current status (2.11.4)
+## Current status (2.11.5)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,7 +23,7 @@ protocol as `serverng`).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.11.4-rust` (prerelease). It adds the hot-path
+- Latest published release: `v2.11.5-rust` (prerelease). It adds the hot-path
   performance pass on top of 2.11.1's direct USB rtlsdr, aggregate bandwidth
   stats and default Opus+rtlsdr features, fixes the AVX2 decimator reduction
   that affected WFM audio in 2.11.2, and keeps USB open/reset work off the
@@ -351,3 +351,11 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   Local open and device enumeration now run under `spawn_blocking`, stop
   signals cancellation and awaits the task (2 s) before closing, and the admin
   UI retries transient 5xx from the dongle list. Version bump to 2.11.4.
+
+- 2026-11-08: Follow-up on the admin source-switch stall: moving only the USB
+  open was not enough on hosts where the waterfall history allocation is
+  expensive. `start_dongle` now also builds the rustfft plan, deflate encoders
+  and the 1024-frame FFT history under `spawn_blocking`, and reinit logs its
+  elapsed time. The admin UI retries `/api/admin/session` on transient 5xx so a
+  proxy 502 during reinit no longer logs the user out, and retries
+  `/api/admin/dongles` for up to ~4.5 s. Version bump to 2.11.5.
