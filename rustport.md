@@ -6,7 +6,7 @@ SolidJS client (`client/src/shared/protocol.ts`).
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as `serverng`).
 
-## Current status (2.11.0)
+## Current status (2.11.1)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,6 +23,9 @@ protocol as `serverng`).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
+- Latest published release: `v2.11.0-rust` (prerelease). Current HEAD is
+  **2.11.1** and adds direct USB rtlsdr, aggregate bandwidth stats and default
+  Opus+rtlsdr features; it is not tagged yet.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
   Go backend on main).

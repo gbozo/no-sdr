@@ -27,7 +27,7 @@ use super::protocol::{
 use super::ratelimit::RateLimiter;
 
 /// Server version advertised in the welcome message.
-pub const SERVER_VERSION: &str = "2.11.0";
+pub const SERVER_VERSION: &str = "2.11.1";
 
 type CommandHandler = Arc<dyn Fn(&str, &ClientCommand) + Send + Sync>;
 type ClientHandler = Arc<dyn Fn(&str) + Send + Sync>;
@@ -789,7 +789,7 @@ mod tests {
         assert_eq!(meta["type"], "welcome");
         assert_eq!(meta["clientId"], "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(meta["connIndex"], 1);
-        assert_eq!(meta["serverVersion"], "2.11.0");
+        assert_eq!(meta["serverVersion"], "2.11.1");
 
         // Wait until the manager registers the client.
         for _ in 0..100 {

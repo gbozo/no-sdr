@@ -1,6 +1,6 @@
 {
   "name": "no-sdr",
-  "version": "2.11.0",
+  "version": "2.11.1",
   "private": true,
   "description": "Multi-user WebSDR server for RTL-SDR dongles \u2014 real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
   "license": "GPL-3.0-or-later",
