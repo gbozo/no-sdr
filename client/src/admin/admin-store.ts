@@ -574,6 +574,11 @@ function createAdminStore() {
         body: JSON.stringify(serverConfig()),
       });
       if (!cfgRes.ok) {
+        if (cfgRes.status === 401) {
+          setAuthenticated(false);
+          setAuthError('Session expired. Please log in again.');
+          return false;
+        }
         const data = await cfgRes.json().catch(() => ({ error: 'Failed to update server config' }));
         setSaveError(data.error || 'Failed to update config');
         return false;
@@ -601,6 +606,11 @@ function createAdminStore() {
       }
       if (res.status === 409) {
         setSaveError('Config was modified by another admin. Please refresh and try again.');
+        return false;
+      }
+      if (res.status === 401) {
+        setAuthenticated(false);
+        setAuthError('Session expired. Please log in again.');
         return false;
       }
       const data = await res.json().catch(() => ({ error: 'Save failed' }));
