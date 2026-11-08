@@ -7,6 +7,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Extra image tag to publish (e.g. 2.11.0-rust)"
+        required: false
+        default: ""
 
 env:
   REGISTRY: ghcr.io
@@ -36,6 +41,7 @@ jobs:
           # v2.11.0-rust -> 2.11.0-rust (never `latest`).
           tags: |
             type=semver,pattern={{version}}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

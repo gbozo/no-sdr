@@ -34,8 +34,11 @@ COPY serverrs/bands ./bands
 
 ARG TARGETARCH
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+# Per-architecture cache IDs: amd64 and arm64 are built in parallel under
+# buildx, and sharing one registry cache mount makes crates.io unpacking race
+# (`failed to open .../.cargo-ok: File exists`).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/app/target,id=cargo-target-${TARGETARCH} \
     set -eux; \
     if [ "$TARGETARCH" = "amd64" ]; then \
         rustup target add x86_64-unknown-linux-gnu; \
