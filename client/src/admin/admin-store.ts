@@ -279,8 +279,24 @@ function createAdminStore() {
   async function loadDongles(): Promise<void> {
     setDonglesLoading(true);
     try {
-      const res = await fetch('/api/admin/dongles', { credentials: 'same-origin' });
-      if (res.ok) {
+      // A source switch reinitialises the dongle in the background. On small
+      // hosts the first follow-up request can briefly hit a proxy 502 while
+      // the USB open completes, so retry transient 5xx responses.
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          res = await fetch('/api/admin/dongles', { credentials: 'same-origin' });
+        } catch {
+          res = null;
+        }
+        if (res && res.status < 500) break;
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+      if (res?.status === 401) {
+        setAuthenticated(false);
+        return;
+      }
+      if (res?.ok) {
         const data = await res.json();
         setDongles(Array.isArray(data) ? data : []);
       }
