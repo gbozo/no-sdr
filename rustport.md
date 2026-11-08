@@ -217,3 +217,12 @@ protocol as `serverng`).
   `-rust` tags only (e.g. `2.11.0-rust`) and never `latest`; the Go Docker
   workflow skips `-rust` release tags so `latest` stays with the main-branch
   Go server.
+- 2026-11-08: Released `v2.11.0-rust` (prerelease so it never becomes the
+  repository's "Latest"). Rust Binaries CI built and attached ten portable
+  archives (Linux amd64 v1-v4, Linux arm64 Cortex-A53/A72/A76, macOS
+  arm64/Intel, Windows amd64) plus SHA256SUMS. Docker published
+  `ghcr.io/gbozo/no-sdr:2.11.0-rust` as a linux/amd64 + linux/arm64 manifest
+  (no `latest`). The Alpine image builds against musl, needs
+  `CMAKE_POLICY_VERSION_MINIMUM=3.5` for vendored Opus, and uses per-arch
+  cargo cache IDs to avoid buildx cache races. Go Docker publishing is skipped
+  for `-rust` release tags so the Go image keeps `latest`.
