@@ -50,7 +50,7 @@ opus = { version = "0.3", optional = true }
 rtl-sdr = { version = "0.1", optional = true }
 
 [features]
-default = []
+default = ["opus", "rtlsdr"]
 opus = ["dep:opus"]
 rtlsdr = ["dep:rtl-sdr"]
 

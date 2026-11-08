@@ -38,7 +38,9 @@ machine that owns the dongle and update `host`/`port` if needed.
 
 ## Codecs
 
-This build includes Opus support. All FFT and IQ codecs are enabled by default.
+This build includes Opus support. Linux x86-64/ARM64 builds also include
+direct USB RTL-SDR support (librtlsdr is required at runtime). All FFT and IQ
+codecs are enabled by default.
 
 ## License
 

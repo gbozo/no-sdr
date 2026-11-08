@@ -2,11 +2,28 @@
 
 ## What This Is
 
-Multi-user WebSDR. Streams RF spectrum + audio from RTL-SDR dongles to browsers. Go backend does FFT (shared) + per-client IQ extraction + optional server-side demod/Opus. SolidJS/TypeScript client does demodulation + audio rendering.
+Multi-user WebSDR. Streams RF spectrum + audio from RTL-SDR dongles to browsers.
+
+Two interchangeable backends share the same wire protocol and REST API:
+
+- `serverng/` — Go backend (reference implementation, production on `main`).
+- `serverrs/` — Rust backend (active port on branch `rustport`, release 2.11.0).
+
+Both do FFT (shared) + per-client IQ extraction + optional server-side
+demod/Opus. The SolidJS/TypeScript client does demodulation + audio rendering.
 
 ## Quick Orientation
 
 ```
+serverrs/              → Rust backend (axum, tokio, rustfft; features `opus`, `rtlsdr`)
+  src/api/             → axum REST/admin router, bandplan, identify/recognizer, bookmarks
+  src/ws/              → WebSocket protocol, client state, manager, rate limiting
+  src/dsp/             → rustfft FFT, IQ extractor, NCO, FIR, decimation, IQ correction
+  src/demod/           → FM mono/stereo+RDS, AM, SSB, CW, SAM, C-QUAM
+  src/dongle/          → demo/rtl_tcp/local rtlsdr/manager/Opus/recorder/notifications
+  src/codec/           → ADPCM, deflate (zlib-rs), Opus (feature gated)
+  src/config.rs        → YAML config + defaults/validation/version
+  bands/               → embedded band plans
 serverng/              → Go backend (chi router, WebSocket, DSP pipeline, dongle management)
   cmd/serverng/        → Entrypoint (main.go)
   internal/api/        → chi REST router + admin endpoints + static file serving
@@ -18,37 +35,43 @@ serverng/              → Go backend (chi router, WebSocket, DSP pipeline, dong
   internal/config/     → YAML config loader + validation
   internal/history/    → FFT history ring buffer (waterfall backfill)
   internal/gpu/        → GPU offload: VkFFT + Vulkan compute shaders (planned)
-shared/src/            → TypeScript types, binary protocol codec, ADPCM codec (zero deps) — merged into client/src/shared/
-client/src/shared/     → Protocol constants, codec helpers, types, modes (was separate workspace)
+client/src/shared/     → Protocol constants, binary codec, types, modes, ADPCM decoder
 client/src/engine/     → DSP: demodulators, RDS, noise reduction, audio worklet, renderers
 client/src/components/ → SolidJS UI: ControlPanel, WaterfallDisplay, FrequencyDisplay
 client/src/admin/      → Admin page: AdminPage, admin-store, sections/
 client/src/store/      → SolidJS reactive state
 client/src/styles/     → Tailwind v4 @theme (design tokens in CSS, no JS config)
-config/config.yaml     → Dongle + profile definitions (validated by Go config package)
+config/config.yaml     → Dongle + profile definitions (shared by Go/Rust config layers)
+packaging/             → portable release archive builder + launchers
+docker/Dockerfile.rust → multi-CPU Rust image (amd64 v1-v4, arm64 Pi cores)
 ```
 
 ## Architecture (data flow)
 
 ```
-Dongle (uint8 IQ @ 2.4 MSPS)
-  ├─► FftProcessor (1× per dongle, Go) → Float32 dB → codec encode → broadcast all clients
-  └─► IqExtractor (1× per client, Go) → NCO + Butterworth + decimate → Int16 sub-band
+Dongle (uint8 IQ @ 2.4 MSPS, demo/rtl_tcp/local USB)
+  ├─► FftProcessor (1× per dongle) → Float32 dB → codec encode → broadcast all clients
+  └─► IqExtractor (1× per client) → NCO + Butterworth + decimate → Int16 sub-band
         ├─► ADPCM/raw → WS → client demod (FM/AM/SSB/CW/SAM/C-QUAM) → audio
-        └─► OpusPipeline (Go) → server demod + Opus encode → WS → client decode → audio
+        └─► OpusPipeline → server demod + Opus encode → WS → client decode → audio
 ```
+
+The Rust pipeline is the same shape; `serverrs/src/dongle/manager.rs` owns the
+dongle loop. Optional `iqCorrection` runs on the raw device stream before
+recording/FFT/client pipelines.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Backend | Go 1.23, chi/v5 router, coder/websocket, slog structured logging |
+| Backend (Go) | Go 1.23, chi/v5 router, coder/websocket, slog structured logging |
+| Backend (Rust) | Rust 1.82+, axum 0.8, tokio, rustfft, serde, tracing |
 | Frontend | SolidJS, TypeScript, Vite, Tailwind v4 |
-| Shared types | TypeScript (npm workspace `shared/`) |
-| Build | npm workspaces (shared + client), Go binary (serverng) |
-| Dev reload | Air (Go hot reload), Vite HMR (client), concurrently |
-| Config | YAML (gopkg.in/yaml.v3), validated by `internal/config` |
-| Optional deps | libopus (build tag `opus`), librtlsdr (build tag `rtlsdr`) |
+| Shared types | TypeScript, merged into `client/src/shared/` |
+| Build | npm workspaces (client), Go binary (serverng), Cargo crate (serverrs) |
+| Dev reload | Air (Go), Vite HMR (client), concurrently; Rust runs as a normal process |
+| Config | YAML; Go `internal/config`, Rust `serverrs/src/config.rs` |
+| Optional deps | libopus (`opus`), librtlsdr (`rtlsdr`); both are default Cargo features |
 
 ## Key Files (by responsibility)
 
@@ -66,8 +89,15 @@ Dongle (uint8 IQ @ 2.4 MSPS)
 | `client/src/engine/sdr-engine.ts` | Client orchestrator (god object) | Dispatches all client work |
 | `client/src/engine/demodulators.ts` | All demod classes: FM stereo, AM, C-QUAM, SAM, SSB, CW | Per audio frame |
 | `client/src/engine/audio.ts` | AudioWorklet + 5-band EQ + jitter buffer | Per audio frame |
-| `shared/src/protocol.ts` | Binary WS protocol: client-side pack/unpack, codec helpers | Every WS message |
-| `shared/src/adpcm.ts` | IMA-ADPCM decoder (TypeScript, browser-side) | Every IQ/FFT frame |
+| `client/src/shared/protocol.ts` | Binary WS protocol: client-side pack/unpack, codec helpers | Every WS message |
+| `client/src/shared/adpcm.ts` | IMA-ADPCM decoder (TypeScript, browser-side) | Every IQ/FFT frame |
+| `serverrs/src/dongle/manager.rs` | Rust dongle lifecycle, client pipelines, FFT broadcast | YES |
+| `serverrs/src/dsp/fft_processor.rs` | rustfft wrapper, windowing, rate cap, averaging | YES |
+| `serverrs/src/dsp/iq_extractor.rs` | Rust NCO + Butterworth + polyphase decimation | YES |
+| `serverrs/src/dsp/iq_correct.rs` | DC blocker + I/Q imbalance correction | YES (optional) |
+| `serverrs/src/dongle/rtlsdr.rs` | Direct USB RTL-SDR source (feature `rtlsdr`) | Per dongle |
+| `serverrs/src/ws/manager.rs` | Rust WS lifecycle, broadcast, aggregate traffic stats | YES |
+| `serverrs/src/api/router.rs` | axum routes, admin API, static SPA, WebSocket upgrade | Request handler |
 
 ## GPU Acceleration (planned)
 
@@ -132,9 +162,15 @@ Full plan: `docs/gpu-offload-plan.md`
 | `0x05` | AUDIO | Int16Array mono samples |
 | `0x06` | DECODER | JSON-encoded decoder messages |
 | `0x07` | SIGNAL_LEVEL | Float32 dB value |
-| `0x0A` | RDS | UTF-8 JSON (RDS data: ps, rt, ptyName, pi, synced) |
+| `0x0A` | RDS | UTF-8 JSON (RDS data: ps, rt, ptyName, pi, pty, synced, optional clock) |
 
 Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, `stereo_enabled`, etc.)
+
+`META` (0x03) also carries `server_stats` every 2 s:
+`{cpuPercent, memMb, clients, wsBytesPerSec}` — `wsBytesPerSec` is the
+aggregate outbound WebSocket rate for all connected clients.
+
+RDS JSON may include `clock` (group 4A): `{year, month, day, hour, minute, offsetHalfHours}`.
 
 ## Build & Dev
 
@@ -156,6 +192,25 @@ npm run test:go                    # go test ./...
 npm run bench:go                   # Benchmark DSP, demod, codec packages
 ```
 
+### Rust-specific commands
+
+```bash
+npm run test:rust                  # cargo test (default features)
+npm run build:rust                 # release build
+npm run build:rust:opus            # + server-side Opus (needs libopus)
+npm run build:rust:full            # + Opus + direct USB rtlsdr (needs libopus/librtlsdr)
+npm run start:rust                 # run built Rust binary
+npm run start:rust:demo            # demo source, no hardware
+```
+
+Manual:
+```bash
+cd serverrs
+cargo test                          # default features (opus + rtlsdr)
+cargo test --no-default-features    # dependency-free
+cargo build --release               # full binary
+```
+
 ### Production
 
 ```bash
@@ -175,14 +230,14 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 
 | Task | Files to touch |
 |------|---------------|
-| New demod mode | `serverng/internal/config/config.go` (validModes) + `serverng/internal/demod/` (new file) + `serverng/internal/dongle/opus_pipeline.go` + `client/src/engine/demodulators.ts` + `shared/src/types.ts` + `shared/src/modes.ts` + `client/src/components/ControlPanel.tsx` |
-| New codec | `serverng/internal/ws/protocol.go` + `serverng/internal/codec/` (new file) + `serverng/internal/dongle/manager.go` + `shared/src/protocol.ts` + `client/src/engine/sdr-engine.ts` |
-| New REST endpoint | `serverng/internal/api/router.go` |
-| New admin endpoint | `serverng/internal/api/admin.go` |
+| New demod mode | Both backends: `serverng/internal/config/config.go` + `serverng/internal/demod/` + `serverng/internal/dongle/opus_pipeline.go`; `serverrs/src/config.rs` + `serverrs/src/demod/` + `serverrs/src/dongle/opus_pipeline.rs`; client `demodulators.ts`, `client/src/shared/{types,modes}.ts`, `ControlPanel.tsx` |
+| New codec | Both: `serverng/internal/ws/protocol.go` + `codec/` + `dongle/manager.go`; `serverrs/src/ws/protocol.rs` + `codec/` + `dongle/manager.rs`; `client/src/shared/protocol.ts` + `sdr-engine.ts` |
+| New REST endpoint | `serverng/internal/api/router.go` and `serverrs/src/api/router.rs` |
+| New admin endpoint | `serverng/internal/api/admin.go` and `serverrs/src/api/admin.rs` |
 | New UI panel | `client/src/components/` + import in `App.tsx` |
-| New dongle source | `serverng/internal/dongle/source.go` (interface) + new `serverng/internal/dongle/<source>.go` + `serverng/internal/config/config.go` |
-| Config changes | `serverng/internal/config/config.go` + `config/config.yaml` |
-| DSP block | `serverng/internal/dsp/` (implement `ProcessorBlock` interface) |
+| New dongle source | Go: `serverng/internal/dongle/source.go` + `<source>.go`; Rust: `serverrs/src/dongle/source.rs` trait + `<source>.rs`, wire into `create_source` |
+| Config changes | `serverng/internal/config/config.go` + `serverrs/src/config.rs` + `config/config.yaml` |
+| DSP block | Go `serverng/internal/dsp/`; Rust `serverrs/src/dsp/` (`ProcessorBlock` trait) |
 
 ## Design System
 
@@ -192,6 +247,26 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 - Monospace everywhere (JetBrains Mono), uppercase + tracking on labels
 - Tailwind v4 with `@theme` in `client/src/styles/app.css`
 - See `DESIGN.md` for full token reference
+
+## Rust Package Conventions
+
+- Modules mirror Go packages: `serverrs/src/{config,codec,dsp,demod,ws,dongle,api}`.
+- Wire formats and JSON field names must stay byte-compatible with the Go
+  backend and `client/src/shared/protocol.ts`.
+- Hot paths avoid allocation: preallocated buffers, slices, and `rustfft`
+  plans are reused.
+- Feature flags gate native deps: `opus` (libopus via `audiopus_sys`) and
+  `rtlsdr` (librtlsdr). Both are **enabled by default**; use
+  `--no-default-features` for a dependency-free build and add features back
+  explicitly. macOS/Windows release builds currently use `opus` only because
+  librtlsdr is not bundled there.
+- `cargo test` runs the full default-feature suite; `cargo test
+  --no-default-features` verifies the dependency-free stub build; `cargo test
+  --no-default-features --features opus` covers Opus-only platforms.
+- In this environment use `CARGO_HOME=/home/opencode/.cargo` for Cargo.
+- Binary/CI releases are built by GitHub Actions (`Rust Binaries`,
+  `Docker Publish (Rust)`); Docker tags for Rust releases use the
+  `<version>-rust` suffix and never `latest`.
 
 ## Go Package Conventions
 
@@ -211,7 +286,9 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 
 ## Active Work
 
-See [WORK.md](./WORK.md) for the current task backlog.
+See [WORK.md](./WORK.md) for the current task backlog and
+[rustport.md](./rustport.md) for the Rust port status, verified hardware
+results, release packaging and compatibility notes.
 
 ## graphify
 

@@ -6,6 +6,27 @@ SolidJS client (`client/src/shared/protocol.ts`).
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as `serverng`).
 
+## Current status (2.11.0)
+
+- Rust backend is feature-complete for the existing client: FFT/IQ streaming,
+  ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
+  WebSocket manager, admin/REST API, band plan, bookmarks, music recognition,
+  IQ recording, history and SPA serving.
+- Dongle sources: `demo`, `rtl_tcp`, `airspy_tcp`/`hfp_tcp`/`rsp_tcp`
+  (rtl_tcp-compatible), and **local USB `rtlsdr`** (feature `rtlsdr`).
+  Local RTL2838/R820T hardware verified: streaming, FFT, Opus WFM, RDS,
+  profile switch, MW direct sampling, stop/start.
+- Features: `opus` (server-side audio) and `rtlsdr` (direct USB, requires
+  librtlsdr) are **default features**. Use `--no-default-features` to build
+  without native dependencies. macOS/Windows release artifacts use
+  `--no-default-features --features opus` (no librtlsdr there).
+- CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
+  arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
+  archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
+- Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
+  `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
+  Go backend on main).
+
 ## Ground rules
 
 - Do not change the client protocol. Existing client must work unmodified.
@@ -31,24 +52,39 @@ protocol as `serverng`).
 - [x] `history` (FFT waterfall ring buffer)
 - [x] `main` wiring + graceful shutdown
 - [x] `cargo test` unit tests mirroring Go tests
-- [x] demo-mode end-to-end against the existing client (HTTP + WS protocol;
-      headless browser unavailable in this environment)
+- [x] client end-to-end (in-app browser + raw WebSocket client) for demo,
+      rtl_tcp and local USB sources
 - [x] optional feature: `opus` (verified live: AUDIO_OPUS + RDS messages)
-- [ ] optional feature: `rtlsdr` (needs librtlsdr + USB hardware)
-- [ ] **ASK USER for real USB dongle**, then hardware test
+- [x] optional feature: `rtlsdr` (librtlsdr direct USB; RTL2838 hardware test)
+- [x] real USB dongle hardware test
 
 ## Notes / compatibility decisions
 
 - Wire formats copied 1:1 from `serverng/internal/ws/protocol.go`.
-- Deflate uses `flate2` raw deflate; any valid deflate stream is accepted by the
-  browser's `DecompressionStream("deflate-raw")`, byte-for-byte parity with Go's
-  flate is not required.
+- Deflate uses `flate2` with the `zlib-rs` backend; the quantized+delta
+  streams are byte-identical to Go, and zlib-rs typically compresses slightly
+  better than Go's `compress/flate`.
 - YAML config uses the Go YAML key names (`defaultBandwidth`, `defaultMode`,
   `defaultTuneOffset`); JSON API uses the Go JSON tags (`bandwidth`, `mode`,
   `tuneOffset`). Conversion is done at the YAML boundary.
 - Go quirk reproduced for parity: `applyDefaults` forces `enabled`/`autoStart`
   to `true` for every dongle after load.
-- `opusComplexity` <= 0 means "use 5" at pipeline construction time.
+- `opusComplexity` < 0 means "use 5" at load time; **0 is valid and selects
+  the fastest encoder setting**.
+
+## Build / run
+
+```bash
+cd serverrs
+cargo test                                       # full default suite
+cargo test --no-default-features                 # dependency-free stub build
+cargo test --no-default-features --features opus # Opus-only build
+cargo build --release                            # full binary (default features)
+CONFIG_PATH=../config/config.yaml STATIC_DIR=../client/dist ./target/release/serverrs
+```
+
+npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
+`build:rust:full`, `start:rust`, `start:rust:demo`.
 
 ## Status log
 
@@ -245,3 +281,10 @@ protocol as `serverng`).
   `rtl-sdr` 0.1 crate does not expose bias-T, so `biasT` is accepted but not
   applied yet; offset-tuning is ignored by the R820T (librtlsdr returns
   InvalidParam, harmless).
+- 2026-11-08: `opus` and `rtlsdr` are now **default Cargo features**.
+  `cargo build`/`cargo test` therefore produce the full-featured backend on
+  systems with libopus + librtlsdr. CI/Docker use explicit
+  `--no-default-features --features "opus rtlsdr"` on Linux so the defaults
+  cannot silently change the build; macOS/Windows artifacts use
+  `--no-default-features --features opus`. The Alpine builder/runtime now
+  install `librtlsdr-dev`/`libusb-dev` and `librtlsdr`/`libusb`.
