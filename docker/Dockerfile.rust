@@ -41,18 +41,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
     --mount=type=cache,target=/app/target,id=cargo-target-${TARGETARCH} \
     set -eux; \
     if [ "$TARGETARCH" = "amd64" ]; then \
-        rustup target add x86_64-unknown-linux-gnu; \
+        rustup target add x86_64-unknown-linux-musl; \
         for level in v1 v2 v3 v4; do \
             if [ "$level" = "v1" ]; then target_cpu="x86-64"; else target_cpu="x86-64-$level"; fi; \
             RUSTFLAGS="-C target-cpu=$target_cpu" \
-                cargo build --release --target x86_64-unknown-linux-gnu --features opus --bin serverrs; \
-            cp target/x86_64-unknown-linux-gnu/release/serverrs "/serverrs-$level"; \
+                cargo build --release --target x86_64-unknown-linux-musl --features opus --bin serverrs; \
+            cp target/x86_64-unknown-linux-musl/release/serverrs "/serverrs-$level"; \
         done; \
     elif [ "$TARGETARCH" = "arm64" ]; then \
+        rustup target add aarch64-unknown-linux-musl; \
         for cpu in cortex-a53 cortex-a72 cortex-a76; do \
             RUSTFLAGS="-C target-cpu=$cpu" \
-                cargo build --release --features opus --bin serverrs; \
-            cp target/release/serverrs "/serverrs-$cpu"; \
+                cargo build --release --target aarch64-unknown-linux-musl --features opus --bin serverrs; \
+            cp target/aarch64-unknown-linux-musl/release/serverrs "/serverrs-$cpu"; \
         done; \
     else \
         echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1; \
