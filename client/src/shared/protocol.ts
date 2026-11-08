@@ -164,7 +164,7 @@ export type ServerMeta =
   | { type: 'error'; message: string; code?: string }
   | { type: 'admin_auth_ok' }
   | { type: 'decoder_data'; decoderType: string; data: unknown }
-  | { type: 'server_stats'; cpuPercent: number; memMb: number; clients: number }
+  | { type: 'server_stats'; cpuPercent: number; memMb: number; clients: number; wsBytesPerSec?: number }
   // Config push notifications (from Phase 3 backend)
   | { type: 'state_sync'; dongles: PushDongleInfo[]; server?: PushServerConfig; version?: number }
   | { type: 'dongle_added'; dongleId: string; dongle: PushDongleInfo; version?: number }

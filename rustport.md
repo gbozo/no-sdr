@@ -226,3 +226,9 @@ protocol as `serverng`).
   `CMAKE_POLICY_VERSION_MINIMUM=3.5` for vendored Opus, and uses per-arch
   cargo cache IDs to avoid buildx cache races. Go Docker publishing is skipped
   for `-rust` release tags so the Go image keeps `latest`.
+- 2026-11-08: Status-bar bandwidth now reports the **server-wide total** for
+  all connected clients instead of the local client's inbound rate. The Rust
+  WebSocket write loop counts every payload byte into a manager-wide atomic
+  counter; the 2-second `server_stats` META message includes
+  `wsBytesPerSec`, and the client prefers it for the footer meter and
+  sparkline (falling back to local counting when absent, e.g. Go backend).

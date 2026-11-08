@@ -3,6 +3,8 @@
 //! Port of `serverng/internal/ws/client.go`.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -200,6 +202,8 @@ pub struct Client {
     queue: WriteQueue,
     cancel_tx: watch::Sender<bool>,
     last_seen: Mutex<Instant>,
+    /// Total WebSocket payload bytes written to this client.
+    bytes_written: Arc<AtomicU64>,
 }
 
 impl Client {
@@ -223,7 +227,24 @@ impl Client {
             queue: WriteQueue::new(write_cap),
             cancel_tx,
             last_seen: Mutex::new(Instant::now()),
+            bytes_written: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Shares a cumulative traffic counter (used by the manager aggregate).
+    pub fn with_traffic(mut self, counter: Arc<AtomicU64>) -> Self {
+        self.bytes_written = counter;
+        self
+    }
+
+    /// Total payload bytes written to this client since connect.
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written.load(Ordering::Relaxed)
+    }
+
+    /// Adds to the written-byte counter (called by the write loop).
+    pub(crate) fn add_bytes_written(&self, n: u64) {
+        self.bytes_written.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Record activity from the peer (any received frame, including pongs).

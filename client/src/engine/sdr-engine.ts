@@ -1027,6 +1027,8 @@ export class SdrEngine {
 
     switch (meta.type) {
       case 'welcome':
+        store.setServerWsBytes(-1);
+        store.setServerWsBytesHistory([]);
         store.setClientId(meta.clientId);
         // Server is the authority on client ID — store whatever it sends
         if (meta.clientId && meta.clientId !== store.localClientId()) {
@@ -1211,6 +1213,12 @@ export class SdrEngine {
         store.setServerCpu(meta.cpuPercent);
         store.setServerMem(meta.memMb);
         store.setServerClients(meta.clients);
+        if (typeof meta.wsBytesPerSec === 'number') {
+          store.setServerWsBytes(meta.wsBytesPerSec);
+          const history = store.serverWsBytesHistory().slice(-29);
+          history.push(meta.wsBytesPerSec);
+          store.setServerWsBytesHistory(history);
+        }
         break;
 
       // ---- Config push notifications (Phase 13: reactive state from WS) ----

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,6 +50,7 @@ pub struct WsManager {
     real_ip_header: RwLock<String>,
     max_fft_fps: AtomicUsize,
     stale_started: AtomicBool,
+    total_bytes: Arc<AtomicU64>,
 }
 
 impl Default for WsManager {
@@ -70,6 +71,7 @@ impl WsManager {
             real_ip_header: RwLock::new(String::new()),
             max_fft_fps: AtomicUsize::new(30),
             stale_started: AtomicBool::new(false),
+            total_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -209,6 +211,11 @@ impl WsManager {
 
     pub fn client_count(&self) -> usize {
         self.clients.read().len()
+    }
+
+    /// Cumulative payload bytes written to WebSocket clients (survives disconnects).
+    pub fn total_bytes_written(&self) -> u64 {
+        self.total_bytes.load(Ordering::Relaxed)
     }
 
     /// Clients subscribed to a specific dongle.
@@ -401,14 +408,17 @@ impl WsManager {
         let persistent_id = self.resolve_client_id(provided_id.as_deref().unwrap_or(""));
         let conn_index = self.next_conn_index(&persistent_id);
 
-        let client = Arc::new(Client::new(
-            conn_id.clone(),
-            persistent_id.clone(),
-            conn_index,
-            client_ip.clone(),
-            raw_ip.clone(),
-            self.write_chan_cap(),
-        ));
+        let client = Arc::new(
+            Client::new(
+                conn_id.clone(),
+                persistent_id.clone(),
+                conn_index,
+                client_ip.clone(),
+                raw_ip.clone(),
+                self.write_chan_cap(),
+            )
+            .with_traffic(self.total_bytes.clone()),
+        );
 
         self.add_client(client.clone());
         tracing::info!(
@@ -548,6 +558,7 @@ impl WsManager {
                 }
                 msg = client.queue().wait_pop() => {
                     let Some(out) = msg else { break };
+                    let frame_len = out.data.len() as u64;
                     let frame = if out.binary {
                         Message::Binary(out.data.into())
                     } else {
@@ -557,6 +568,7 @@ impl WsManager {
                         tracing::debug!(id = %client.id, "write error, disconnecting client");
                         break;
                     }
+                    client.add_bytes_written(frame_len);
                 }
             }
         }

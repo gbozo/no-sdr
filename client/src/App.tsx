@@ -401,7 +401,10 @@ const BandwidthMeter: Component = () => {
     return `${bytes} B/s`;
   };
 
-  const history = () => store.wsBytesHistory();
+  const rate = () => store.serverWsBytes() >= 0 ? store.serverWsBytes() : store.wsBytes();
+  const history = () => store.serverWsBytes() >= 0
+    ? store.serverWsBytesHistory()
+    : store.wsBytesHistory();
   const histMax = createMemo(() => {
     const h = history();
     if (h.length === 0) return 1;
@@ -445,8 +448,11 @@ const BandwidthMeter: Component = () => {
 
       {/* Rate text */}
       <div class="flex flex-col leading-[1.1]">
-        <span class="text-text-secondary normal-case">
-          {formatRate(store.wsBytes())}
+        <span
+          class="text-text-secondary normal-case"
+          title="Total bandwidth for all connected clients"
+        >
+          {formatRate(rate())}
         </span>
         <span class="text-text-muted text-[7px] normal-case">
           FFT {store.fftRate()}/s

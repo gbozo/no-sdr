@@ -202,6 +202,9 @@ function createStore() {
   const [iqRate, setIqRate] = createSignal(0);           // IQ samples/sec
   const [wsBytes, setWsBytes] = createSignal(0);         // WebSocket bytes/sec (total inbound)
   const [wsBytesHistory, setWsBytesHistory] = createSignal<number[]>([]); // last 30 seconds
+  // Server-reported total outbound bandwidth (all clients); -1 = unknown.
+  const [serverWsBytes, setServerWsBytes] = createSignal(-1);
+  const [serverWsBytesHistory, setServerWsBytesHistory] = createSignal<number[]>([]);
 
   // ---- Server Stats (broadcast every 2s) ----
   const [serverCpu, setServerCpu] = createSignal(0);     // server process CPU %
@@ -355,6 +358,8 @@ function createStore() {
     iqRate, setIqRate,
     wsBytes, setWsBytes,
     wsBytesHistory, setWsBytesHistory,
+    serverWsBytes, setServerWsBytes,
+    serverWsBytesHistory, setServerWsBytesHistory,
 
     // Server Stats
     serverCpu, setServerCpu,

@@ -1856,9 +1856,11 @@ impl Manager {
 
     fn spawn_stats_loop(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
+        let ws = self.ws.clone();
         tokio::spawn(async move {
             let mut last_cpu = process_cpu_seconds();
             let mut last_at = Instant::now();
+            let mut last_bytes = ws.total_bytes_written();
             let mut ticker = tokio::time::interval(Duration::from_secs(2));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -1882,11 +1884,20 @@ impl Manager {
                 last_cpu = cpu;
                 last_at = now;
 
+                let total_bytes = ws.total_bytes_written();
+                let ws_bytes_per_sec = if elapsed > 0.0 {
+                    ((total_bytes.saturating_sub(last_bytes)) as f64 / elapsed).round() as i64
+                } else {
+                    0
+                };
+                last_bytes = total_bytes;
+
                 let stats = json!({
                     "type": "server_stats",
                     "cpuPercent": cpu_percent.round() as i64,
                     "memMb": process_mem_mb().round() as i64,
                     "clients": mgr.ws.client_count(),
+                    "wsBytesPerSec": ws_bytes_per_sec,
                 });
                 let bytes = serde_json::to_vec(&stats).unwrap_or_default();
                 let mut msg = Vec::with_capacity(1 + bytes.len());

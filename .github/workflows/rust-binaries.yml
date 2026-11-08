@@ -145,7 +145,6 @@ jobs:
           path: dist/serverrs-windows-amd64.exe
 
   client:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
