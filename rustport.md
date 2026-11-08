@@ -206,3 +206,14 @@ protocol as `serverng`).
   `.github/workflows/rust-binaries.yml` (Linux amd64/arm64 + macOS arm64/Intel
   artifacts, release attachment) and `.github/workflows/docker-publish-rust.yml`
   (GHCR `no-sdr-rust`, linux/amd64 + linux/arm64) triggered by release/manual.
+- 2026-11-08: Version bump to 2.11.0 (`package.json`, client, `serverrs`
+  Cargo package, WS `SERVER_VERSION`). Release packaging added:
+  `packaging/package.sh` builds portable archives (binary, web client,
+  config, bookmarks, LICENSE, launcher scripts, README) for Linux amd64
+  v1..v4, Linux arm64 Cortex-A53/A72/A76, macOS arm64/Intel and Windows
+  amd64, plus `SHA256SUMS`. The `Rust Binaries` workflow now builds the
+  client, packages these archives and attaches them on release. The Rust
+  Docker workflow publishes the same GHCR repository with semver
+  `-rust` tags only (e.g. `2.11.0-rust`) and never `latest`; the Go Docker
+  workflow skips `-rust` release tags so `latest` stays with the main-branch
+  Go server.

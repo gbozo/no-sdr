@@ -1,7 +1,8 @@
 # Build native serverrs binaries for Linux (x86-64 v1..v4, ARM64 Pi cores),
-# macOS (Apple Silicon + Intel) and Windows 11 (x86-64). Runs on pushes touching
-# the Rust backend or client, and attaches the binaries to a GitHub release when
-# one is published.
+# macOS (Apple Silicon + Intel) and Windows 11 (x86-64). On a release (or a
+# manual dispatch) the binaries are packaged into portable archives together
+# with the web client, config, bookmarks and launchers. Published releases
+# attach those archives.
 
 name: Rust Binaries
 
@@ -11,6 +12,7 @@ on:
     paths:
       - 'serverrs/**'
       - 'client/**'
+      - 'packaging/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.base.json'
@@ -142,18 +144,76 @@ jobs:
           name: serverrs-windows-amd64
           path: dist/serverrs-windows-amd64.exe
 
+  client:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build web client
+        run: |
+          npm ci --workspace=client
+          npm run build --workspace=client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist
+
+  package:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64, windows-amd64, client]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            version="${{ github.event.release.tag_name }}"
+          else
+            version=$(grep -m1 '^version' serverrs/Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          fi
+          version="${version#v}"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client-dist
+      - name: Package portable archives
+        run: |
+          sudo apt-get update && sudo apt-get install -y zip
+          ./packaging/package.sh \
+            "${{ steps.version.outputs.value }}" \
+            artifacts \
+            client-dist \
+            package-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverrs-release-archives
+          path: package-out/archives/*
+
   release:
     if: github.event_name == 'release'
-    needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64, windows-amd64]
+    needs: [package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: serverrs-release-archives
           path: dist
-          merge-multiple: true
-      - name: Attach binaries to release
+      - name: Attach portable archives to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/serverrs-*
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
