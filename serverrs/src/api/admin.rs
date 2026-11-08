@@ -177,7 +177,12 @@ pub async fn clients(State(state): State<AppState>) -> Response {
 }
 
 pub async fn local_devices() -> Response {
-    json_response(StatusCode::OK, json!([]), None)
+    let devices = crate::dongle::enumerate_local_devices();
+    json_response(
+        StatusCode::OK,
+        serde_json::to_value(devices).unwrap_or_else(|_| json!([])),
+        None,
+    )
 }
 
 pub async fn admin_dongles(State(state): State<AppState>) -> Response {

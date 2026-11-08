@@ -511,6 +511,7 @@ mod tests {
             queue: WriteQueue::new(3),
             cancel_tx: tx,
             last_seen: Mutex::new(Instant::now()),
+            bytes_written: Arc::new(AtomicU64::new(0)),
         };
         c.send(vec![1]);
         c.send(vec![2]);

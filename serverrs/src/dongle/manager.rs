@@ -31,6 +31,8 @@ use crate::ws::{
 use super::demo::{DemoConfig, DemoSource};
 use super::opus_pipeline::{bitrate_for_quality, OpusPipeline, OpusPipelineConfig};
 use super::recorder::{Recorder, RecordingStatus};
+#[cfg(feature = "rtlsdr")]
+use super::rtlsdr::RtlSdrSource;
 use super::rtltcp::{spawn_rtl_tcp, RtlTcpSource};
 use super::source::{CommandHandle, Source};
 
@@ -504,7 +506,24 @@ impl Manager {
                 Ok((Box::new(source), command))
             }
             "local" => {
-                bail!("local rtlsdr support is not compiled in")
+                #[cfg(feature = "rtlsdr")]
+                {
+                    let source = RtlSdrSource::open(
+                        dcfg.source.device_index,
+                        &dcfg.source.serial,
+                    )?;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "rtlsdr"))]
+                {
+                    bail!(
+                        "local rtlsdr support is not compiled in (build with --features rtlsdr)"
+                    )
+                }
             }
             other => bail!("unsupported source type: {other}"),
         }

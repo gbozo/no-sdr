@@ -31,9 +31,9 @@ dongles:
   enabled: true
   autoStart: true
   source:
-    type: rtl_tcp
-    host: 192.168.1.3
-    port: 1234
+    type: local
+    host: ""
+    port: 0
     deviceIndex: 0
     serial: ''
     binary: ''

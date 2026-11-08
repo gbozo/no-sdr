@@ -232,3 +232,16 @@ protocol as `serverng`).
   counter; the 2-second `server_stats` META message includes
   `wsBytesPerSec`, and the client prefers it for the footer meter and
   sparkline (falling back to local counting when absent, e.g. Go backend).
+- 2026-11-08: Direct USB RTL-SDR support implemented and hardware-tested.
+  New `serverrs/src/dongle/rtlsdr.rs` (feature `rtlsdr`) wraps librtlsdr:
+  serial/index selection, enumeration for `/api/admin/devices`, synchronous
+  16 KiB reads on a blocking thread, command channel for frequency, sample
+  rate, gain/gain-mode, PPM, AGC, direct sampling and offset tuning. The
+  configured dongle now uses `type: local`. Verified on an RTL2838/R820T:
+  device opens, FFT/waterfall and IQ streams run, server-side Opus WFM audio
+  decodes, RDS syncs (`PI:AE6D`, PTY), profile switches reconfigure the tuner,
+  MW direct-sampling mode enables/disables cleanly, and stop/start reopens the
+  device. `cargo test --features "opus rtlsdr"`: 114 passed. Caveat: the
+  `rtl-sdr` 0.1 crate does not expose bias-T, so `biasT` is accepted but not
+  applied yet; offset-tuning is ignored by the R820T (librtlsdr returns
+  InvalidParam, harmless).
