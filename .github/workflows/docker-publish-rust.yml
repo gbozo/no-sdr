@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to publish (e.g. 2.11.3-rust)"
+        description: "Image tag to publish (e.g. 2.11.4-rust)"
         required: true
 
 env:

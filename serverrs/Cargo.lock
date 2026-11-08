@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "serverrs"
-version = "2.11.3"
+version = "2.11.4"
 dependencies = [
  "anyhow",
  "approx",
