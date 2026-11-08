@@ -67,6 +67,7 @@ const DevicesSection: Component = () => {
       biasT: false,
       digitalAgc: false,
       offsetTuning: false,
+      iqCorrection: false,
       profiles: [],
     });
     if (result) {
@@ -421,6 +422,7 @@ const DongleEditor: Component<{
                   <ToggleChip label="Bias-T" value={current().biasT ?? false} onChange={(v) => updateLocal('biasT', v)} />
                   <ToggleChip label="Digital AGC" value={current().digitalAgc ?? false} onChange={(v) => updateLocal('digitalAgc', v)} />
                   <ToggleChip label="Offset Tuning" value={current().offsetTuning ?? false} onChange={(v) => updateLocal('offsetTuning', v)} />
+                  <ToggleChip label="IQ Correction" value={current().iqCorrection ?? false} onChange={(v) => updateLocal('iqCorrection', v)} />
                 </div>
               </Show>
 
@@ -431,6 +433,7 @@ const DongleEditor: Component<{
                   <Show when={d().biasT}><StatusChip label="Bias-T" active /></Show>
                   <Show when={d().digitalAgc}><StatusChip label="Digital AGC" active /></Show>
                   <Show when={d().offsetTuning}><StatusChip label="Offset Tuning" active /></Show>
+                  <Show when={d().iqCorrection}><StatusChip label="IQ Correction" active /></Show>
                 </div>
               </Show>
             </div>

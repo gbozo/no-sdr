@@ -60,6 +60,7 @@ export interface DongleConfig {
   biasT: boolean;
   digitalAgc: boolean;
   offsetTuning: boolean;
+  iqCorrection?: boolean;
   profiles: DongleProfile[];
 }
 

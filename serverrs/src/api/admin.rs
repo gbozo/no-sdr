@@ -229,6 +229,7 @@ pub async fn admin_dongles(State(state): State<AppState>) -> Response {
             "biasT": d.bias_t,
             "digitalAgc": d.digital_agc,
             "offsetTuning": d.offset_tuning,
+            "iqCorrection": d.iq_correction,
             "profiles": profiles,
         }));
     }
@@ -960,4 +961,5 @@ pub fn needs_reinit(old: &DongleConfig, new: &DongleConfig) -> bool {
         || o.binary != n.binary
         || o.spawn_rtl_tcp != n.spawn_rtl_tcp
         || old.sample_rate != new.sample_rate
+        || old.iq_correction != new.iq_correction
 }

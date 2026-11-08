@@ -1,134 +1,134 @@
 server:
-    port: 3000
-    host: 0.0.0.0
-    adminPassword: admin
-    callsign: ""
-    description: ""
-    location: ""
-    demoMode: false
-    fftHistoryFftSize: 4096
-    fftHistoryCompression: deflate
-    allowedFftCodecs:
-        - none
-        - adpcm
-        - deflate
-        - deflate-floor
-    allowedIqCodecs:
-        - none
-        - adpcm
-        - opus-lo
-        - opus
-        - opus-hq
-    opusComplexity: 0
-    realIPHeader: ""
-    auddApiKey: c63a4f2cf56674c6041b73f4feef055b
-    acrcloudHost: identify-eu-west-1.acrcloud.com
-    acrcloudAccessKey: 9233f967382c7a171794366539a2ff2b
-    acrcloudAccessSecret: TM2aWry4BU6bnnR2lxNYZMdggZp7QjuJnwybut3O
+  port: 3000
+  host: 0.0.0.0
+  adminPassword: admin
+  callsign: ''
+  description: ''
+  location: ''
+  demoMode: false
+  fftHistoryFftSize: 4096
+  fftHistoryCompression: deflate
+  allowedFftCodecs:
+  - none
+  - adpcm
+  - deflate
+  - deflate-floor
+  allowedIqCodecs:
+  - none
+  - adpcm
+  - opus-lo
+  - opus
+  - opus-hq
+  opusComplexity: 0
+  realIpHeader: ''
+  auddApiKey: c63a4f2cf56674c6041b73f4feef055b
+  acrcloudHost: identify-eu-west-1.acrcloud.com
+  acrcloudAccessKey: 9233f967382c7a171794366539a2ff2b
+  acrcloudAccessSecret: TM2aWry4BU6bnnR2lxNYZMdggZp7QjuJnwybut3O
 dongles:
-    - id: dongle-mooroo30
-      name: Remote-GBserv
-      iqCorrection: true
-      enabled: true
-      autoStart: true
-      source:
-        type: rtl_tcp
-        host: 192.168.1.3
-        port: 1234
-        deviceIndex: 0
-        serial: ""
-        binary: ""
-        extraArgs: []
-        spawnRtlTcp: false
-      sampleRate: 2400000
-      gain: 0
-      ppmCorrection: 0
-      deviceIndex: 0
-      directSampling: 0
-      biasT: false
-      digitalAgc: true
-      offsetTuning: false
-      profiles:
-        - id: profile-moorpqzg
-          name: FM Broadcast
-          centerFrequency: 100000000
-          sampleRate: 2400000
-          defaultBandwidth: 200000
-          defaultMode: wfm
-          gain: 23
-          fftSize: 8192
-          fftFps: 8
-          defaultTuneOffset: 0
-          tuningStep: 1000
-          swapIQ: false
-          oscillatorOffset: 0
-          directSampling: 0
-          description: FM radio 87.5–108 MHz (stereo, RDS)
-          dongleId: ""
-          preFilterNb: true
-          preFilterNbThreshold: 0
-          dcOffsetRemoval: true
-        - id: profile-mootuxy2
-          name: Aviation VHF
-          centerFrequency: 127500000
-          sampleRate: 2400000
-          defaultBandwidth: 8330
-          defaultMode: am
-          gain: 40
-          fftSize: 8192
-          fftFps: 25
-          defaultTuneOffset: 0
-          tuningStep: 1000
-          swapIQ: false
-          oscillatorOffset: 0
-          directSampling: 0
-          description: Airband 118–137 MHz — tower, approach, ATIS
-          dongleId: ""
-          preFilterNb: false
-          preFilterNbThreshold: 0
-          dcOffsetRemoval: true
-        - id: profile-mp07v3bz
-          name: MW Broadcast (AM)
-          centerFrequency: 1400000
-          sampleRate: 1800000
-          defaultBandwidth: 10000
-          defaultMode: am
-          gain: 0
-          fftSize: 8192
-          fftFps: 10
-          defaultTuneOffset: 0
-          tuningStep: 1000
-          swapIQ: false
-          oscillatorOffset: 0
-          directSampling: 2
-          description: Medium wave 530–1700 kHz (requires direct sampling)
-          dongleId: ""
-          preFilterNb: false
-          preFilterNbThreshold: 0
-          dcOffsetRemoval: true
-        - id: profile-mp7f9a3s
-          name: Shortwave Broadcast
-          centerFrequency: 6050000
-          sampleRate: 2400000
-          defaultBandwidth: 10000
-          defaultMode: am
-          gain: 0
-          fftSize: 4096
-          fftFps: 15
-          defaultTuneOffset: 0
-          tuningStep: 1000
-          swapIQ: false
-          oscillatorOffset: 0
-          directSampling: 2
-          description: International shortwave 5.9–6.2 MHz (requires direct sampling)
-          dongleId: ""
-          preFilterNb: false
-          preFilterNbThreshold: 0
-          dcOffsetRemoval: true
+- id: dongle-mooroo30
+  name: Remote-GBserv
+  enabled: true
+  autoStart: true
+  source:
+    type: rtl_tcp
+    host: 192.168.1.3
+    port: 1234
+    deviceIndex: 0
+    serial: ''
+    binary: ''
+    extraArgs: []
+    spawnRtlTcp: false
+  sampleRate: 2400000
+  gain: 0.0
+  ppmCorrection: 0
+  deviceIndex: 0
+  directSampling: 0
+  biasT: false
+  digitalAgc: true
+  offsetTuning: false
+  iqCorrection: true
+  profiles:
+  - id: profile-moorpqzg
+    name: FM Broadcast
+    centerFrequency: 100000000
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 200000
+    gain: 23.0
+    fftSize: 8192
+    fftFps: 8
+    defaultMode: wfm
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 0
+    description: FM radio 87.5–108 MHz (stereo, RDS)
+    dongleId: ''
+    preFilterNb: true
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
+  - id: profile-mootuxy2
+    name: Aviation VHF
+    centerFrequency: 127500000
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 8330
+    gain: 40.0
+    fftSize: 8192
+    fftFps: 25
+    defaultMode: am
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 0
+    description: Airband 118–137 MHz — tower, approach, ATIS
+    dongleId: ''
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
+  - id: profile-mp07v3bz
+    name: MW Broadcast (AM)
+    centerFrequency: 1400000
+    sampleRate: 1800000
+    dcOffsetRemoval: true
+    defaultBandwidth: 10000
+    gain: 0.0
+    fftSize: 8192
+    fftFps: 10
+    defaultMode: am
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 2
+    description: Medium wave 530–1700 kHz (requires direct sampling)
+    dongleId: ''
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
+  - id: profile-mp7f9a3s
+    name: Shortwave Broadcast
+    centerFrequency: 6050000
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 10000
+    gain: 0.0
+    fftSize: 4096
+    fftFps: 15
+    defaultMode: am
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 2
+    description: International shortwave 5.9–6.2 MHz (requires direct sampling)
+    dongleId: ''
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
 bookmarks:
-    - id: bm_mp7dfk7l_4qv3b
-      name: Nostos
-      frequency: 100600000
-      mode: wfm
-      bandwidth: 200000
-      description: Cool sttion
+- id: bm_mp7dfk7l_4qv3b
+  name: Nostos
+  frequency: 100600000
+  mode: wfm
+  bandwidth: 200000
+  description: Cool sttion
