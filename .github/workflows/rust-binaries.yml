@@ -1,0 +1,121 @@
+# Build native serverrs binaries for Linux (x86-64 v1..v4, ARM64 Pi cores)
+# and macOS (Apple Silicon + Intel). Runs on pushes touching the Rust backend
+# or client, and attaches the binaries to a GitHub release when one is published.
+
+name: Rust Binaries
+
+on:
+  push:
+    branches: [main, rustport]
+    paths:
+      - 'serverrs/**'
+      - 'client/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/rust-binaries.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: rust-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+      - name: Build x86-64 v1..v4
+        run: |
+          mkdir -p dist
+          for level in v1 v2 v3 v4; do
+            RUSTFLAGS="-C target-cpu=x86-64-$level" \
+              cargo build --release --features opus --bin serverrs \
+              --manifest-path serverrs/Cargo.toml
+            cp serverrs/target/release/serverrs "dist/serverrs-linux-amd64-$level"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverrs-linux-amd64
+          path: dist/serverrs-linux-amd64-*
+
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+      - name: Build Cortex-A53/A72/A76
+        run: |
+          mkdir -p dist
+          for cpu in cortex-a53 cortex-a72 cortex-a76; do
+            RUSTFLAGS="-C target-cpu=$cpu" \
+              cargo build --release --features opus --bin serverrs \
+              --manifest-path serverrs/Cargo.toml
+            cp serverrs/target/release/serverrs "dist/serverrs-linux-arm64-$cpu"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverrs-linux-arm64
+          path: dist/serverrs-linux-arm64-*
+
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Build Apple Silicon
+        run: |
+          cargo build --release --features opus --bin serverrs \
+            --manifest-path serverrs/Cargo.toml
+          mkdir -p dist
+          cp serverrs/target/release/serverrs dist/serverrs-macos-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverrs-macos-arm64
+          path: dist/serverrs-macos-arm64
+
+  macos-x86_64:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Build Intel
+        run: |
+          cargo build --release --features opus --bin serverrs \
+            --manifest-path serverrs/Cargo.toml
+          mkdir -p dist
+          cp serverrs/target/release/serverrs dist/serverrs-macos-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverrs-macos-x86_64
+          path: dist/serverrs-macos-x86_64
+
+  release:
+    if: github.event_name == 'release'
+    needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach binaries to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/serverrs-*

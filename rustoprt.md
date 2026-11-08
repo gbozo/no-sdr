@@ -197,3 +197,12 @@ protocol as `serverng`).
   one Opus client unchanged at ~7%; audio, RDS and FFT/IQ ratios verified
   (9.9:1 / 23.7:1). Unit tests cover DC removal, convergence direction and
   reset.
+- 2026-11-08: Packaging for CI-only builds (no local Docker builds). Added
+  `docker/Dockerfile.rust` + `docker/entrypoint-rust.sh`: amd64 builds x86-64
+  v1..v4, arm64 builds Cortex-A53/A72/A76; the entrypoint detects AVX-512/AVX2/
+  SSE4.2 or the aarch64 CPU part and execs the best binary. Runtime is Alpine
+  with the client dist, config and bookmarks baked in; Opus is built statically
+  by audiopus-sys (cmake in the builder). Added
+  `.github/workflows/rust-binaries.yml` (Linux amd64/arm64 + macOS arm64/Intel
+  artifacts, release attachment) and `.github/workflows/docker-publish-rust.yml`
+  (GHCR `no-sdr-rust`, linux/amd64 + linux/arm64) triggered by release/manual.

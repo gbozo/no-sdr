@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1
+# ============================================
+# node-sdr — Docker Build (Rust backend, serverrs)
+# ============================================
+# Multi-CPU build: four x86-64 microarchitecture levels (v1..v4) and three
+# aarch64 cores (Cortex-A53 for Pi 3/Zero 2, A72 for Pi 4, A76 for Pi 5).
+# docker/entrypoint-rust.sh picks the best binary at container start.
+# ============================================
+
+# ---- Client build ----
+FROM node:22-slim AS client-builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY client/package.json client/
+RUN npm ci --workspace=client
+
+COPY tsconfig.base.json ./
+COPY client/ client/
+RUN npm run build --workspace=client
+
+# ---- Rust build ----
+FROM rust:1.99-alpine AS rust-builder
+
+# cmake is needed by audiopus-sys, which builds the bundled Opus library.
+RUN apk add --no-cache build-base cmake perl pkgconf
+
+WORKDIR /app
+
+COPY serverrs/Cargo.toml serverrs/Cargo.lock ./
+COPY serverrs/src ./src
+COPY serverrs/bands ./bands
+
+ARG TARGETARCH
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    set -eux; \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+        for level in v1 v2 v3 v4; do \
+            RUSTFLAGS="-C target-cpu=x86-64-$level" \
+                cargo build --release --features opus --bin serverrs; \
+            cp target/release/serverrs "/serverrs-$level"; \
+        done; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        for cpu in cortex-a53 cortex-a72 cortex-a76; do \
+            RUSTFLAGS="-C target-cpu=$cpu" \
+                cargo build --release --features opus --bin serverrs; \
+            cp target/release/serverrs "/serverrs-$cpu"; \
+        done; \
+    else \
+        echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1; \
+    fi
+
+# ---- Runtime ----
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates libgcc
+
+WORKDIR /app
+
+COPY --from=client-builder /app/client/dist /app/static
+COPY --from=rust-builder /serverrs-* /app/
+COPY config/ /app/config/
+COPY bookmarks/ /app/bookmarks/
+COPY docker/entrypoint-rust.sh /app/entrypoint.sh
+
+RUN chmod +x /app/entrypoint.sh
+
+ENV STATIC_DIR=/app/static
+ENV CONFIG_PATH=/app/config/config.yaml
+
+EXPOSE 3000
+
+ENTRYPOINT ["/app/entrypoint.sh"]
