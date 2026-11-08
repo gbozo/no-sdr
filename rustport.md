@@ -291,3 +291,10 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   cannot silently change the build; macOS/Windows artifacts use
   `--no-default-features --features opus`. The Alpine builder/runtime now
   install `librtlsdr-dev`/`libusb-dev` and `librtlsdr`/`libusb`.
+- 2026-11-08: CI build caching. Native binary jobs now use sccache (GitHub
+  Actions backend) plus cargo registry/cache restore, so the four amd64
+  microarchitecture builds and repeat runs reuse compiled dependencies.
+  The Docker workflow no longer emulates arm64 under QEMU: amd64 and arm64
+  are built on native runners (`ubuntu-latest`, `ubuntu-24.04-arm`) with
+  separate GHA layer cache scopes, then the two digests are merged into one
+  multi-arch manifest.

@@ -267,6 +267,10 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 - Binary/CI releases are built by GitHub Actions (`Rust Binaries`,
   `Docker Publish (Rust)`); Docker tags for Rust releases use the
   `<version>-rust` suffix and never `latest`.
+- CI caching: native binary jobs use `sccache` + `Swatinem/rust-cache`
+  (crates only; compilation objects are shared via sccache). The Docker
+  workflow builds amd64 and arm64 on native runners with per-architecture
+  GHA layer caches, then merges the digests into one manifest.
 
 ## Go Package Conventions
 

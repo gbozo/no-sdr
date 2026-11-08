@@ -1,5 +1,10 @@
 # Build and publish the Rust Docker image (multi-CPU x86-64 + ARM64/Pi).
 # Kept separate from the Go image so both can be published side by side.
+#
+# amd64 and arm64 are built on native runners (no QEMU), each pushing a digest;
+# a final job merges the digests into a multi-arch manifest. Cargo registries
+# and Docker layers are cached per architecture, so repeat builds are much
+# faster than the old single-job emulated build.
 
 name: Docker Publish (Rust)
 
@@ -9,9 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Extra image tag to publish (e.g. 2.11.0-rust)"
-        required: false
-        default: ""
+        description: "Image tag to publish (e.g. 2.11.1-rust)"
+        required: true
 
 env:
   REGISTRY: ghcr.io
@@ -20,8 +24,18 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -33,23 +47,67 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # v2.11.0-rust -> 2.11.0-rust (never `latest`).
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
-      - name: Build and push
+      - name: Build and push digest (${{ matrix.arch }})
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile.rust
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: >-
+            type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=rust-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=rust-${{ matrix.arch }}
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${{ matrix.arch }}"
+          digest="${{ steps.build.outputs.digest }}"
+          echo "${digest#sha256:}" > "/tmp/digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - name: Resolve image tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${{ github.event.release.tag_name }}"
+          else
+            tag="${{ github.event.inputs.tag }}"
+          fi
+          tag="${tag#v}"
+          if [ -z "$tag" ]; then
+            echo "No image tag provided" >&2
+            exit 1
+          fi
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+      - name: Create multi-arch manifest
+        run: |
+          cd /tmp/digests
+          docker buildx imagetools create \
+            --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.value }}" \
+            $(printf "${REGISTRY}/${IMAGE_NAME}@sha256:%s " *)
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.value }}"
