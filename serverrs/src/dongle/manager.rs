@@ -386,18 +386,28 @@ impl Manager {
         } else {
             30
         };
-        let fft_proc = FftProcessor::new(FftProcessorConfig {
-            fft_size,
-            sample_rate,
-            window: "blackman-harris".to_string(),
-            averaging: 0.5,
-            averaging_taps: 0,
-            target_fps: fft_fps,
-        })?;
-        let deflate_enc = FftDeflateEncoder::new(fft_size);
-        let deflate_floor_enc = FftDeflateEncoder::new(fft_size);
-        let history = FftBuffer::new(1024);
-        history.init_frames(fft_size);
+        // Building the rustfft plan and, more importantly, pre-allocating the
+        // 1024-frame waterfall history (32 MB at 8192 bins) is CPU/allocation
+        // heavy. Keep it off the async workers so an admin-triggered reinit
+        // cannot stall HTTP/WebSocket service while the dongle restarts.
+        let (fft_proc, deflate_enc, deflate_floor_enc, history) =
+            tokio::task::spawn_blocking(move || -> Result<_> {
+                let fft_proc = FftProcessor::new(FftProcessorConfig {
+                    fft_size,
+                    sample_rate,
+                    window: "blackman-harris".to_string(),
+                    averaging: 0.5,
+                    averaging_taps: 0,
+                    target_fps: fft_fps,
+                })?;
+                let deflate_enc = FftDeflateEncoder::new(fft_size);
+                let deflate_floor_enc = FftDeflateEncoder::new(fft_size);
+                let history = FftBuffer::new(1024);
+                history.init_frames(fft_size);
+                Ok((fft_proc, deflate_enc, deflate_floor_enc, history))
+            })
+            .await
+            .map_err(|e| anyhow!("dongle DSP init task failed: {e}"))??;
 
         let (source, command) = self
             .create_source(&dcfg, &profile)
@@ -1477,7 +1487,15 @@ impl Manager {
             );
             return Ok(());
         }
-        self.start_dongle_with_retry(dcfg).await
+        let started = Instant::now();
+        let result = self.start_dongle_with_retry(dcfg).await;
+        tracing::info!(
+            id = %dongle_id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            ok = result.is_ok(),
+            "dongle reinit finished"
+        );
+        result
     }
 
     pub async fn handle_profile_removed(&self, dongle_id: &str, profile_id: &str) {
