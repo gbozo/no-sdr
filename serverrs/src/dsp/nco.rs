@@ -15,6 +15,8 @@ use num_complex::Complex32;
 
 use super::block::ProcessorBlock;
 use super::fft_processor::INV_U8_SCALE;
+#[cfg(target_arch = "x86_64")]
+use super::simd;
 
 const LANES: usize = 8;
 const RENORM_SAMPLES: u64 = 1 << 16;
@@ -94,16 +96,29 @@ impl ProcessorBlock for NcoBlock {
     }
 
     fn process_complex(&mut self, input: &[Complex32]) -> Vec<Complex32> {
-        let mut out = Vec::with_capacity(input.len());
-        let whole = input.len() - input.len() % LANES;
+        let mut out = input.to_vec();
+        self.process_complex_into(&mut out);
+        out
+    }
 
-        for block in input[..whole].chunks_exact(LANES) {
-            let base = Complex32::new(self.phasor.re as f32, self.phasor.im as f32);
-            for (x, lane) in block.iter().zip(self.lanes.iter()) {
-                out.push(*x * (base * *lane));
-            }
-            self.phasor *= self.block_step;
-        }
+    fn reset(&mut self) {
+        self.phasor = Complex::new(1.0, 0.0);
+        self.renorm_count = 0;
+    }
+}
+
+impl NcoBlock {
+    /// Shifts `buf` by the NCO in place. Avoids allocating an output buffer
+    /// and a full copy per chunk.
+    pub fn process_complex_into(&mut self, buf: &mut [Complex32]) {
+        let whole = buf.len() - buf.len() % LANES;
+
+        mix_in_place_run(
+            &mut buf[..whole],
+            &mut self.phasor,
+            self.block_step,
+            &self.lanes,
+        );
 
         self.renorm_count += whole as u64;
         if self.renorm_count >= RENORM_SAMPLES {
@@ -112,18 +127,71 @@ impl ProcessorBlock for NcoBlock {
         }
 
         let base = Complex32::new(self.phasor.re as f32, self.phasor.im as f32);
-        for x in &input[whole..] {
-            out.push(*x * base);
+        for x in &mut buf[whole..] {
+            *x = *x * base;
             self.phasor *= self.step;
         }
-
-        out
     }
+}
 
-    fn reset(&mut self) {
-        self.phasor = Complex::new(1.0, 0.0);
-        self.renorm_count = 0;
+/// One `LANES`-sample block of the in-place mixer.
+#[inline(always)]
+fn mix_in_place_portable(
+    samples: &mut [Complex32],
+    phasor: &mut Complex<f64>,
+    block_step: Complex<f64>,
+    lanes: &[Complex32; LANES],
+) {
+    for xs in samples.chunks_exact_mut(LANES) {
+        let base = Complex32::new(phasor.re as f32, phasor.im as f32);
+        for (x, &lane) in xs.iter_mut().zip(lanes.iter()) {
+            *x = *x * (base * lane);
+        }
+        *phasor *= block_step;
     }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn mix_in_place_avx2(
+    samples: &mut [Complex32],
+    phasor: &mut Complex<f64>,
+    block_step: Complex<f64>,
+    lanes: &[Complex32; LANES],
+) {
+    mix_in_place_portable(samples, phasor, block_step, lanes)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512dq,avx512bw,fma")]
+unsafe fn mix_in_place_avx512(
+    samples: &mut [Complex32],
+    phasor: &mut Complex<f64>,
+    block_step: Complex<f64>,
+    lanes: &[Complex32; LANES],
+) {
+    mix_in_place_portable(samples, phasor, block_step, lanes)
+}
+
+#[inline]
+fn mix_in_place_run(
+    samples: &mut [Complex32],
+    phasor: &mut Complex<f64>,
+    block_step: Complex<f64>,
+    lanes: &[Complex32; LANES],
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if simd::avx512() {
+            // SAFETY: the CPU reported every feature this copy was built for.
+            return unsafe { mix_in_place_avx512(samples, phasor, block_step, lanes) };
+        }
+        if simd::avx2() {
+            // SAFETY: as above.
+            return unsafe { mix_in_place_avx2(samples, phasor, block_step, lanes) };
+        }
+    }
+    mix_in_place_portable(samples, phasor, block_step, lanes)
 }
 
 /// Fused uint8 -> complex conversion (`(v-127.5)/127.5`).

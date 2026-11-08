@@ -7,6 +7,8 @@ use std::f64::consts::PI;
 use num_complex::Complex32;
 
 use super::block::ProcessorBlock;
+#[cfg(target_arch = "x86_64")]
+use super::simd;
 
 const MAX_FIR_TAPS_FACTOR_SCALE: usize = 256;
 
@@ -14,6 +16,10 @@ pub struct DecimateBlock {
     factor: usize,
     /// Prototype low-pass taps (symmetric windowed sinc).
     taps: Vec<f32>,
+    /// `taps` with each value duplicated (`[t0,t0,t1,t1,...]`), so an AVX2
+    /// load lines up with the interleaved `re,im` of `Complex32`.
+    #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+    taps_packed: Vec<f32>,
     /// Input history, at least `taps.len()-1` samples carried between calls.
     buf: Vec<Complex32>,
     prototype_len: usize,
@@ -23,8 +29,10 @@ pub struct DecimateBlock {
 
 /// Complex dot product with independent accumulators. A single accumulator is
 /// one long dependency chain; eight let the multiplies overlap and give the
-/// compiler something to vectorise.
-#[inline]
+/// compiler something to vectorise. `inline(always)` so that the AVX2/AVX-512
+/// copies below compile this arithmetic too, instead of calling the baseline
+/// copy from inside a widened loop.
+#[inline(always)]
 fn dot(window: &[Complex32], taps: &[f32]) -> Complex32 {
     const ACC: usize = 8;
     let mut acc = [Complex32::default(); ACC];
@@ -47,11 +55,143 @@ fn dot(window: &[Complex32], taps: &[f32]) -> Complex32 {
     sum
 }
 
+/// One kept output per `factor` input samples.
+#[inline(always)]
+fn fir_decim_portable(dst: &mut [Complex32], buf: &[Complex32], taps: &[f32], factor: usize) {
+    let n = taps.len();
+    for (o, d) in dst.iter_mut().enumerate() {
+        let base = o * factor;
+        *d = dot(&buf[base..base + n], taps);
+    }
+}
+
+/// Explicit AVX2+FMA complex dot product. `taps_packed` is each tap duplicated
+/// so a 256-bit load lines up with four interleaved `re,im` samples: one FMA
+/// covers four complex multiply-accumulates. Four independent accumulators
+/// hide the FMA latency.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn dot_avx2(window: &[Complex32], taps_packed: &[f32]) -> Complex32 {
+    use std::arch::x86_64::*;
+
+    let n = taps_packed.len() / 2;
+    let xp = window.as_ptr() as *const f32;
+    let tp = taps_packed.as_ptr();
+
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+
+    let mut i = 0usize;
+    while i + 16 <= n {
+        acc0 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(2 * i)),
+            _mm256_loadu_ps(tp.add(2 * i)),
+            acc0,
+        );
+        acc1 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(2 * i + 8)),
+            _mm256_loadu_ps(tp.add(2 * i + 8)),
+            acc1,
+        );
+        acc2 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(2 * i + 16)),
+            _mm256_loadu_ps(tp.add(2 * i + 16)),
+            acc2,
+        );
+        acc3 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(2 * i + 24)),
+            _mm256_loadu_ps(tp.add(2 * i + 24)),
+            acc3,
+        );
+        i += 16;
+    }
+    while i + 4 <= n {
+        acc0 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(2 * i)),
+            _mm256_loadu_ps(tp.add(2 * i)),
+            acc0,
+        );
+        i += 4;
+    }
+
+    let acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    let lo = _mm256_castps256_ps128(acc);
+    let hi = _mm256_extractf128_ps(acc, 1);
+    let s = _mm_hadd_ps(_mm_add_ps(lo, hi), _mm_add_ps(lo, hi));
+    let mut re = _mm_cvtss_f32(s);
+    let mut im = _mm_cvtss_f32(_mm_shuffle_ps(s, s, 0b01));
+
+    while i < n {
+        re += window[i].re * taps_packed[2 * i];
+        im += window[i].im * taps_packed[2 * i + 1];
+        i += 1;
+    }
+    Complex32::new(re, im)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn fir_decim_avx2(
+    dst: &mut [Complex32],
+    buf: &[Complex32],
+    taps_packed: &[f32],
+    factor: usize,
+) {
+    let n = taps_packed.len() / 2;
+    for (o, d) in dst.iter_mut().enumerate() {
+        let base = o * factor;
+        *d = dot_avx2(&buf[base..base + n], taps_packed);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512dq,avx512bw,avx2,fma")]
+unsafe fn fir_decim_avx512(
+    dst: &mut [Complex32],
+    buf: &[Complex32],
+    taps_packed: &[f32],
+    factor: usize,
+) {
+    // AVX-512 CPUs also have AVX2; use the explicit kernel rather than a
+    // second auto-vectorised shape.
+    let n = taps_packed.len() / 2;
+    for (o, d) in dst.iter_mut().enumerate() {
+        let base = o * factor;
+        *d = dot_avx2(&buf[base..base + n], taps_packed);
+    }
+}
+
+/// Dispatches once per block, not per output sample.
+#[inline]
+fn fir_decim(
+    dst: &mut [Complex32],
+    buf: &[Complex32],
+    taps: &[f32],
+    _taps_packed: &[f32],
+    factor: usize,
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if simd::avx512() {
+            // SAFETY: the CPU reported every feature this copy was built for.
+            return unsafe { fir_decim_avx512(dst, buf, _taps_packed, factor) };
+        }
+        if simd::avx2() {
+            // SAFETY: as above.
+            return unsafe { fir_decim_avx2(dst, buf, _taps_packed, factor) };
+        }
+    }
+    fir_decim_portable(dst, buf, taps, factor)
+}
+
 impl DecimateBlock {
     pub fn new(factor: usize) -> Self {
         Self {
             factor,
             taps: Vec::new(),
+            taps_packed: Vec::new(),
             buf: Vec::new(),
             prototype_len: 0,
             input_rate: 0.0,
@@ -80,6 +220,12 @@ impl DecimateBlock {
     fn init_from_prototype(&mut self, orig_taps: usize, bandwidth_hz: i32) {
         self.prototype_len = orig_taps;
         self.taps = self.design_anti_alias_fir(orig_taps, bandwidth_hz);
+        self.taps_packed.clear();
+        self.taps_packed.reserve(self.taps.len() * 2);
+        for &t in &self.taps {
+            self.taps_packed.push(t);
+            self.taps_packed.push(t);
+        }
         self.buf.clear();
     }
 
@@ -165,8 +311,24 @@ impl ProcessorBlock for DecimateBlock {
     }
 
     fn process_complex(&mut self, input: &[Complex32]) -> Vec<Complex32> {
+        let mut out = Vec::new();
+        self.process_into(input, &mut out);
+        out
+    }
+
+    fn reset(&mut self) {
+        self.buf.clear();
+    }
+}
+
+impl DecimateBlock {
+    /// Decimates `input` into `out` (cleared first), reusing the caller's
+    /// buffer so the hot path performs no per-chunk allocation.
+    pub fn process_into(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
+        out.clear();
         if self.factor <= 1 || self.taps.is_empty() {
-            return input.to_vec();
+            out.extend_from_slice(input);
+            return;
         }
 
         self.buf.extend_from_slice(input);
@@ -179,22 +341,20 @@ impl ProcessorBlock for DecimateBlock {
         let p = n.div_ceil(f);
         let delta = ((p - 1) * f + (n - 1) % f) - (n - 1);
 
-        let mut out = Vec::new();
         if self.buf.len() > delta && self.buf.len() - delta >= n {
             let count = (self.buf.len() - delta - n) / f + 1;
-            out.reserve(count);
-            for o in 0..count {
-                let base = delta + o * f;
-                out.push(dot(&self.buf[base..base + n], &self.taps));
-            }
+            let start = out.len();
+            out.resize(start + count, Complex32::default());
+            fir_decim(
+                &mut out[start..],
+                &self.buf[delta..],
+                &self.taps,
+                &self.taps_packed,
+                f,
+            );
             let consumed = delta + count * f;
             self.buf.drain(..consumed);
         }
-        out
-    }
-
-    fn reset(&mut self) {
-        self.buf.clear();
     }
 }
 

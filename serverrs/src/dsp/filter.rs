@@ -114,18 +114,25 @@ impl ProcessorBlock for ButterworthBlock {
     }
 
     fn process_complex(&mut self, input: &[Complex32]) -> Vec<Complex32> {
-        let mut out = Vec::with_capacity(input.len());
-        for s in input {
-            let re = self.filter_sample(s.re as f64, Channel::I);
-            let im = self.filter_sample(s.im as f64, Channel::Q);
-            out.push(Complex32::new(re as f32, im as f32));
-        }
+        let mut out = input.to_vec();
+        self.process_complex_inplace(&mut out);
         out
     }
 
     fn reset(&mut self) {
         self.state_i = [BiquadState::default(); 4];
         self.state_q = [BiquadState::default(); 4];
+    }
+}
+
+impl ButterworthBlock {
+    /// Filters `buf` in place.
+    pub fn process_complex_inplace(&mut self, buf: &mut [Complex32]) {
+        for s in buf.iter_mut() {
+            let re = self.filter_sample(s.re as f64, Channel::I);
+            let im = self.filter_sample(s.im as f64, Channel::Q);
+            *s = Complex32::new(re as f32, im as f32);
+        }
     }
 }
 

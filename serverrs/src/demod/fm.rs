@@ -6,9 +6,127 @@ use std::f64::consts::PI;
 
 use num_complex::Complex32;
 
+#[cfg(target_arch = "x86_64")]
+use crate::dsp::simd;
+
 use super::{fast_atan2, Demodulator};
 
 // ---------- simple FIR ----------
+
+/// Real dot product with eight independent accumulators, `inline(always)` so
+/// the AVX2/AVX-512 copies of the batch loop compile it too.
+#[inline(always)]
+fn real_dot(win: &[f32], taps: &[f32]) -> f32 {
+    const ACC: usize = 8;
+    let mut acc = [0.0f32; ACC];
+    let mut ws = win.chunks_exact(ACC);
+    let mut ts = taps.chunks_exact(ACC);
+    for (xs, tt) in (&mut ws).zip(&mut ts) {
+        for j in 0..ACC {
+            acc[j] += xs[j] * tt[j];
+        }
+    }
+    let mut sum = 0.0f32;
+    for a in acc {
+        sum += a;
+    }
+    for (x, &t) in ws.remainder().iter().zip(ts.remainder()) {
+        sum += x * t;
+    }
+    sum
+}
+
+#[inline(always)]
+fn fir_batch_portable(out: &mut [f32], batch: &[f32], taps: &[f32], n: usize) {
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = real_dot(&batch[i..i + n], taps);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn real_dot_avx2(win: &[f32], taps: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let n = taps.len();
+    let xp = win.as_ptr();
+    let tp = taps.as_ptr();
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+
+    let mut i = 0usize;
+    while i + 32 <= n {
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(xp.add(i)), _mm256_loadu_ps(tp.add(i)), acc0);
+        acc1 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(i + 8)),
+            _mm256_loadu_ps(tp.add(i + 8)),
+            acc1,
+        );
+        acc2 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(i + 16)),
+            _mm256_loadu_ps(tp.add(i + 16)),
+            acc2,
+        );
+        acc3 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xp.add(i + 24)),
+            _mm256_loadu_ps(tp.add(i + 24)),
+            acc3,
+        );
+        i += 32;
+    }
+    while i + 8 <= n {
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(xp.add(i)), _mm256_loadu_ps(tp.add(i)), acc0);
+        i += 8;
+    }
+
+    let acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    let lo = _mm256_castps256_ps128(acc);
+    let hi = _mm256_extractf128_ps(acc, 1);
+    let s0 = _mm_add_ps(lo, hi);
+    let s1 = _mm_hadd_ps(s0, s0);
+    let s2 = _mm_hadd_ps(s1, s1);
+    let mut sum = _mm_cvtss_f32(s2);
+    while i < n {
+        sum += win[i] * taps[i];
+        i += 1;
+    }
+    sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn fir_batch_avx2(out: &mut [f32], batch: &[f32], taps: &[f32], n: usize) {
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = real_dot_avx2(&batch[i..i + n], taps);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512dq,avx512bw,avx2,fma")]
+unsafe fn fir_batch_avx512(out: &mut [f32], batch: &[f32], taps: &[f32], n: usize) {
+    // AVX-512 CPUs also have AVX2; keep the explicit kernel.
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = real_dot_avx2(&batch[i..i + n], taps);
+    }
+}
+
+#[inline]
+fn fir_batch(out: &mut [f32], batch: &[f32], taps: &[f32], n: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if simd::avx512() {
+            // SAFETY: the CPU reported every feature this copy was built for.
+            return unsafe { fir_batch_avx512(out, batch, taps, n) };
+        }
+        if simd::avx2() {
+            // SAFETY: as above.
+            return unsafe { fir_batch_avx2(out, batch, taps, n) };
+        }
+    }
+    fir_batch_portable(out, batch, taps, n)
+}
 
 /// Windowed-sinc lowpass FIR with a power-of-2 circular buffer.
 pub struct SimpleFir {
@@ -93,26 +211,12 @@ impl SimpleFir {
         }
         self.batch.extend_from_slice(input);
 
-        let taps = &self.taps_rev;
-        for (i, o) in out.iter_mut().enumerate().take(input.len()) {
-            let win = &self.batch[i..i + n];
-            let mut acc = [0.0f32; 8];
-            let mut ws = win.chunks_exact(8);
-            let mut ts = taps.chunks_exact(8);
-            for (xs, tt) in (&mut ws).zip(&mut ts) {
-                for j in 0..8 {
-                    acc[j] += xs[j] * tt[j];
-                }
-            }
-            let mut sum = 0.0f32;
-            for a in acc {
-                sum += a;
-            }
-            for (x, &t) in ws.remainder().iter().zip(ts.remainder()) {
-                sum += x * t;
-            }
-            *o = sum;
-        }
+        fir_batch(
+            &mut out[..input.len()],
+            &self.batch,
+            &self.taps_rev,
+            n,
+        );
 
         let mut pos = self.pos;
         for &x in input {
@@ -181,6 +285,45 @@ impl FmMonoDemod {
     pub(crate) fn set_deemph_alpha(&mut self, alpha: f32) {
         self.deemph_alpha = alpha;
     }
+
+    /// Demodulates into a caller-owned buffer (cleared first).
+    pub fn process_into(&mut self, input: &[Complex32], out: &mut Vec<f32>) {
+        out.clear();
+        out.reserve(input.len());
+        let gain = self.gain;
+        let alpha = self.deemph_alpha;
+        let mut state = self.deemph_state;
+        let mut prev_i = self.prev_i;
+        let mut prev_q = self.prev_q;
+
+        for s in input {
+            let cur_i = s.re;
+            let cur_q = s.im;
+            let conj_re = cur_i * prev_i + cur_q * prev_q;
+            let conj_im = cur_q * prev_i - cur_i * prev_q;
+
+            let phase = fast_atan2(conj_im, conj_re);
+            let sample = phase * gain;
+
+            state = alpha * sample + (1.0 - alpha) * state;
+            out.push(state);
+
+            prev_i = cur_i;
+            prev_q = cur_q;
+        }
+
+        self.prev_i = prev_i;
+        self.prev_q = prev_q;
+        self.deemph_state = state;
+
+        if self.audio_lpf_enabled {
+            if let Some(fir) = &mut self.audio_lpf {
+                for sample in out.iter_mut() {
+                    *sample = fir.process(*sample);
+                }
+            }
+        }
+    }
 }
 
 impl Demodulator for FmMonoDemod {
@@ -221,40 +364,8 @@ impl Demodulator for FmMonoDemod {
     }
 
     fn process(&mut self, input: &[Complex32]) -> Vec<f32> {
-        let mut out = vec![0.0f32; input.len()];
-        let gain = self.gain;
-        let alpha = self.deemph_alpha;
-        let mut state = self.deemph_state;
-        let mut prev_i = self.prev_i;
-        let mut prev_q = self.prev_q;
-
-        for (i, s) in input.iter().enumerate() {
-            let cur_i = s.re;
-            let cur_q = s.im;
-            let conj_re = cur_i * prev_i + cur_q * prev_q;
-            let conj_im = cur_q * prev_i - cur_i * prev_q;
-
-            let phase = fast_atan2(conj_im, conj_re);
-            let sample = phase * gain;
-
-            state = alpha * sample + (1.0 - alpha) * state;
-            out[i] = state;
-
-            prev_i = cur_i;
-            prev_q = cur_q;
-        }
-
-        self.prev_i = prev_i;
-        self.prev_q = prev_q;
-        self.deemph_state = state;
-
-        if self.audio_lpf_enabled {
-            if let Some(fir) = &mut self.audio_lpf {
-                for sample in out.iter_mut() {
-                    *sample = fir.process(*sample);
-                }
-            }
-        }
+        let mut out = Vec::new();
+        self.process_into(input, &mut out);
         out
     }
 
@@ -352,6 +463,11 @@ pub struct FmStereoDemod {
     pilot_phases: Vec<f64>,
     left_out: Vec<f32>,
     right_out: Vec<f32>,
+    lpr_in: Vec<f32>,
+    lr_in: Vec<f32>,
+    lpr_out: Vec<f32>,
+    lr_out: Vec<f32>,
+    blends: Vec<f32>,
 }
 
 impl FmStereoDemod {
@@ -388,6 +504,11 @@ impl FmStereoDemod {
             pilot_phases: Vec::new(),
             left_out: Vec::new(),
             right_out: Vec::new(),
+            lpr_in: Vec::new(),
+            lr_in: Vec::new(),
+            lpr_out: Vec::new(),
+            lr_out: Vec::new(),
+            blends: Vec::new(),
         }
     }
 
@@ -478,9 +599,10 @@ impl Demodulator for FmStereoDemod {
             return Vec::new();
         }
 
-        self.composite = self.mono.process(input);
-        let n = n.min(self.composite.len());
-        self.composite.truncate(n);
+        let mut composite = std::mem::take(&mut self.composite);
+        self.mono.process_into(input, &mut composite);
+        let n = n.min(composite.len());
+        composite.truncate(n);
 
         let max_out = n.div_ceil(self.decim_factor);
         self.left_out.clear();
@@ -488,13 +610,24 @@ impl Demodulator for FmStereoDemod {
         self.left_out.reserve(max_out);
         self.right_out.reserve(max_out);
 
-        let mut lpr_in = vec![0.0f32; n];
-        let mut lr_in = vec![0.0f32; n];
-        let mut lpr_out = vec![0.0f32; n];
-        let mut lr_out = vec![0.0f32; n];
-        let mut blends = vec![0.0f32; n];
-        self.pilot_phases.clear();
-        self.pilot_phases.reserve(n);
+        let mut lpr_in = std::mem::take(&mut self.lpr_in);
+        let mut lr_in = std::mem::take(&mut self.lr_in);
+        let mut lpr_out = std::mem::take(&mut self.lpr_out);
+        let mut lr_out = std::mem::take(&mut self.lr_out);
+        let mut blends = std::mem::take(&mut self.blends);
+        lpr_in.clear();
+        lr_in.clear();
+        lpr_out.clear();
+        lr_out.clear();
+        blends.clear();
+        lpr_in.resize(n, 0.0);
+        lr_in.resize(n, 0.0);
+        lpr_out.resize(n, 0.0);
+        lr_out.resize(n, 0.0);
+        blends.resize(n, 0.0);
+        let mut pilot_phases = std::mem::take(&mut self.pilot_phases);
+        pilot_phases.clear();
+        pilot_phases.reserve(n);
 
         // ---- Pass 1: PLL + FIR inputs ----
         let mut pll_sin = self.pll_sin;
@@ -511,7 +644,7 @@ impl Demodulator for FmStereoDemod {
         let mut pilot_phase = self.pll_phase;
 
         for i in 0..n {
-            let comp = self.composite[i];
+            let comp = composite[i];
 
             let pilot_ref = pll_sin as f32;
             let phase_err = (comp * pilot_ref) as f64;
@@ -573,7 +706,7 @@ impl Demodulator for FmStereoDemod {
             } else if pilot_phase < 0.0 {
                 pilot_phase += 2.0 * PI;
             }
-            self.pilot_phases.push(pilot_phase);
+            pilot_phases.push(pilot_phase);
         }
 
         self.pll_sin = pll_sin;
@@ -637,6 +770,13 @@ impl Demodulator for FmStereoDemod {
         self.decim_counter = decim_counter;
         self.deemph_state_l = state_l;
         self.deemph_state_r = state_r;
+        self.composite = composite;
+        self.pilot_phases = pilot_phases;
+        self.lpr_in = lpr_in;
+        self.lr_in = lr_in;
+        self.lpr_out = lpr_out;
+        self.lr_out = lr_out;
+        self.blends = blends;
         out
     }
 

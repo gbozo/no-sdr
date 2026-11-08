@@ -15,6 +15,7 @@ pub mod iq_extractor;
 pub mod nco;
 pub mod noise_blanker;
 pub mod pipeline;
+pub mod simd;
 pub mod window;
 
 pub use block::ProcessorBlock;

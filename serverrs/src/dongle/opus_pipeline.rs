@@ -84,6 +84,11 @@ pub struct OpusPipeline {
     capture_len: usize,
     capture_cap: usize,
     capture_chans: usize,
+
+    /// Reused per-call scratch buffers (no allocation in steady state).
+    complex_buf: Vec<Complex32>,
+    rate_buf: Vec<f32>,
+    pcm_buf: Vec<i16>,
 }
 
 impl OpusPipeline {
@@ -185,6 +190,9 @@ impl OpusPipeline {
             capture_len: 0,
             capture_cap,
             capture_chans: 1,
+            complex_buf: Vec::new(),
+            rate_buf: Vec::new(),
+            pcm_buf: Vec::new(),
         })
     }
 
@@ -195,15 +203,16 @@ impl OpusPipeline {
         }
 
         let num_samples = iq_int16.len() / 2;
-        let mut complex_buf = Vec::with_capacity(num_samples);
+        self.complex_buf.clear();
+        self.complex_buf.reserve(num_samples);
         for i in 0..num_samples {
             let i_val = iq_int16[i * 2] as f32 / 32768.0;
             let q_val = iq_int16[i * 2 + 1] as f32 / 32768.0;
-            complex_buf.push(Complex32::new(i_val, q_val));
+            self.complex_buf.push(Complex32::new(i_val, q_val));
         }
 
         // Demodulate.
-        let audio = self.demodulator.process(&complex_buf);
+        let audio = self.demodulator.process(&self.complex_buf);
         if audio.is_empty() {
             return Vec::new();
         }
@@ -278,99 +287,119 @@ impl OpusPipeline {
             }
         }
 
-        // Rate-convert to 48 kHz.
-        let audio_for_opus: Vec<f32> = if self.decim_factor == 1 {
-            if demod_is_stereo && self.channels == 2 {
-                audio.clone()
-            } else if demod_is_stereo && self.channels == 1 {
-                let mut out = Vec::with_capacity(demod_frames);
-                for i in 0..demod_frames {
-                    out.push((audio[i * 2] + audio[i * 2 + 1]) * 0.5);
-                }
-                out
-            } else {
-                audio.clone()
-            }
-        } else if self.decim_factor > 1 {
-            let out_frames = demod_frames / self.decim_factor;
-            let mut out = Vec::with_capacity(out_frames * self.channels);
-            if demod_is_stereo && self.channels == 2 {
-                for i in 0..out_frames {
-                    let src = i * self.decim_factor * 2;
-                    out.push(audio[src]);
-                    out.push(audio[src + 1]);
-                }
-            } else if demod_is_stereo && self.channels == 1 {
-                for i in 0..out_frames {
-                    let src = i * self.decim_factor * 2;
-                    out.push((audio[src] + audio[src + 1]) * 0.5);
-                }
-            } else {
-                for i in 0..out_frames {
-                    out.push(audio[i * self.decim_factor]);
-                }
-            }
-            out
+        // Rate-convert to 48 kHz. The common WFM stereo case borrows the
+        // demodulator output directly; only an actual conversion uses scratch.
+        // `rate_buf` is moved out while borrowed so the capture ring below can
+        // still be written through `&mut self`.
+        let needs_convert = self.decim_factor != 1 || (demod_is_stereo && self.channels == 1);
+        let mut scratch = if needs_convert {
+            Some(std::mem::take(&mut self.rate_buf))
         } else {
-            // Upsample (SSB/CW). Use the band-limited polyphase interpolator
-            // for integer 2x/4x ratios; fall back to linear otherwise.
-            let mut out = Vec::with_capacity(
-                (demod_frames as f64 * self.upsample_ratio) as usize + 4,
-            );
-            if let Some(up) = self.upsampler.as_mut() {
-                up.process(&audio[..demod_frames], &mut out);
-            } else {
-                let est_out = (demod_frames as f64 * self.upsample_ratio) as usize + 4;
-                for sample in audio.iter().take(demod_frames) {
-                    self.upsample_accum += self.upsample_ratio;
-                    while self.upsample_accum >= 1.0 && out.len() < est_out {
-                        let frac = (self.upsample_accum - self.upsample_accum.trunc()) as f32;
-                        out.push(self.last_sample + frac * (sample - self.last_sample));
-                        self.upsample_accum -= 1.0;
+            None
+        };
+        if let Some(buf) = scratch.as_mut() {
+            buf.clear();
+            if self.decim_factor == 1 {
+                buf.reserve(demod_frames);
+                for i in 0..demod_frames {
+                    buf.push((audio[i * 2] + audio[i * 2 + 1]) * 0.5);
+                }
+            } else if self.decim_factor > 1 {
+                let out_frames = demod_frames / self.decim_factor;
+                buf.reserve(out_frames * self.channels);
+                if demod_is_stereo && self.channels == 2 {
+                    for i in 0..out_frames {
+                        let src = i * self.decim_factor * 2;
+                        buf.push(audio[src]);
+                        buf.push(audio[src + 1]);
                     }
-                    self.last_sample = *sample;
+                } else if demod_is_stereo && self.channels == 1 {
+                    for i in 0..out_frames {
+                        let src = i * self.decim_factor * 2;
+                        buf.push((audio[src] + audio[src + 1]) * 0.5);
+                    }
+                } else {
+                    for i in 0..out_frames {
+                        buf.push(audio[i * self.decim_factor]);
+                    }
+                }
+            } else {
+                // Upsample (SSB/CW). Use the band-limited polyphase interpolator
+                // for integer 2x/4x ratios; fall back to linear otherwise.
+                buf.reserve((demod_frames as f64 * self.upsample_ratio) as usize + 4);
+                if let Some(up) = self.upsampler.as_mut() {
+                    up.process(&audio[..demod_frames], buf);
+                } else {
+                    let est_out =
+                        (demod_frames as f64 * self.upsample_ratio) as usize + 4;
+                    for sample in audio.iter().take(demod_frames) {
+                        self.upsample_accum += self.upsample_ratio;
+                        while self.upsample_accum >= 1.0 && buf.len() < est_out {
+                            let frac =
+                                (self.upsample_accum - self.upsample_accum.trunc()) as f32;
+                            buf.push(self.last_sample + frac * (sample - self.last_sample));
+                            self.upsample_accum -= 1.0;
+                        }
+                        self.last_sample = *sample;
+                    }
                 }
             }
-            out
-        };
+        }
+        let audio_for_opus: &[f32] = scratch.as_deref().unwrap_or(&audio);
 
         let out_len = audio_for_opus.len();
         if out_len == 0 {
+            if let Some(buf) = scratch {
+                self.rate_buf = buf;
+            }
             return Vec::new();
         }
 
         // Feed the PCM capture ring buffer (mono downmix).
         self.capture_chans = self.channels;
+        let cap = self.capture_cap;
+        let mut pos = self.capture_pos;
         if demod_is_stereo && self.channels == 2 {
             let frames = out_len / 2;
             for i in 0..frames {
-                self.capture_ring[self.capture_pos] =
+                self.capture_ring[pos] =
                     (audio_for_opus[i * 2] + audio_for_opus[i * 2 + 1]) * 0.5;
-                self.capture_pos = (self.capture_pos + 1) % self.capture_cap;
+                pos += 1;
+                if pos == cap {
+                    pos = 0;
+                }
             }
-            self.capture_len = (self.capture_len + frames).min(self.capture_cap);
+            self.capture_len = (self.capture_len + frames).min(cap);
         } else {
-            for sample in audio_for_opus.iter() {
-                self.capture_ring[self.capture_pos] = *sample;
-                self.capture_pos = (self.capture_pos + 1) % self.capture_cap;
+            for &sample in audio_for_opus {
+                self.capture_ring[pos] = sample;
+                pos += 1;
+                if pos == cap {
+                    pos = 0;
+                }
             }
-            self.capture_len = (self.capture_len + out_len).min(self.capture_cap);
+            self.capture_len = (self.capture_len + out_len).min(cap);
         }
+        self.capture_pos = pos;
 
-        // float32 → int16 PCM.
-        let mut pcm = Vec::with_capacity(out_len);
-        for sample in audio_for_opus.iter() {
-            let mut v = *sample * 32767.0;
+        // float32 → int16 PCM (reused buffer).
+        self.pcm_buf.clear();
+        self.pcm_buf.reserve(out_len);
+        for &sample in audio_for_opus {
+            let mut v = sample * 32767.0;
             if v > 32767.0 {
                 v = 32767.0;
             } else if v < -32768.0 {
                 v = -32768.0;
             }
-            pcm.push(v as i16);
+            self.pcm_buf.push(v as i16);
+        }
+        if let Some(buf) = scratch {
+            self.rate_buf = buf;
         }
 
         let packets = match self.encoder.as_mut() {
-            Some(enc) => enc.encode(&pcm),
+            Some(enc) => enc.encode(&self.pcm_buf),
             None => return Vec::new(),
         };
         let mut results = Vec::with_capacity(packets.len());

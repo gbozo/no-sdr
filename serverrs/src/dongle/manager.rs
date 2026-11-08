@@ -150,7 +150,6 @@ struct ActiveDongle {
     deflate_floor_enc: Mutex<FftDeflateEncoder>,
     history: FftBuffer,
     iq_correct: Mutex<Option<IqCorrect>>,
-    iq_scratch: Mutex<Vec<num_complex::Complex32>>,
     cancel: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -160,6 +159,7 @@ struct ClientPipeline {
     extractor: IqExtractor,
     adpcm_enc: ImaAdpcmEncoder,
     opus_pipeline: Option<OpusPipeline>,
+    sub_band: Vec<i16>,
     accum_buf: Vec<i16>,
     accum_pos: usize,
     chunk_size: usize,
@@ -418,7 +418,6 @@ impl Manager {
             } else {
                 None
             }),
-            iq_scratch: Mutex::new(Vec::new()),
             cancel,
             task: Mutex::new(None),
         });
@@ -686,8 +685,12 @@ impl Manager {
             debug!(client = %client_id, chunks = cp.iq_chunk_count, "IQ chunks processed");
         }
 
-        let sub_band = cp.extractor.process(chunk);
+        // Move the scratch buffer out so the extractor and the encoders can
+        // hold disjoint borrows; it is returned at every exit path.
+        let mut sub_band = std::mem::take(&mut cp.sub_band);
+        cp.extractor.process_into(chunk, &mut sub_band);
         if sub_band.is_empty() {
+            cp.sub_band = sub_band;
             return;
         }
 
@@ -702,6 +705,7 @@ impl Manager {
                     self.ws.send_to(client_id, pack_rds_message(&rds));
                 }
             }
+            cp.sub_band = sub_band;
             return;
         }
 
@@ -737,6 +741,7 @@ impl Manager {
                 cp.accum_pos = 0;
             }
         }
+        cp.sub_band = sub_band;
     }
 
     // ------------------------------------------------------------------
@@ -806,6 +811,7 @@ impl Manager {
             extractor,
             adpcm_enc: ImaAdpcmEncoder::new(),
             opus_pipeline: None,
+            sub_band: Vec::new(),
             accum_buf: vec![0; chunk_size.max(2)],
             accum_pos: 0,
             chunk_size: chunk_size.max(2),

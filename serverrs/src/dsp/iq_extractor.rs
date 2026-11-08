@@ -62,6 +62,7 @@ pub struct IqExtractor {
 
     convert_mode: ConvertMode,
     complex_in: Vec<Complex32>,
+    decimated: Vec<Complex32>,
 }
 
 impl IqExtractor {
@@ -128,6 +129,7 @@ impl IqExtractor {
 
             convert_mode: ConvertMode::Plain,
             complex_in: Vec::new(),
+            decimated: Vec::new(),
         };
         e.update_convert_mode();
         Ok(e)
@@ -136,8 +138,19 @@ impl IqExtractor {
     /// Processes raw uint8 IQ (interleaved I,Q) and returns int16 IQ
     /// (interleaved I,Q). Returns an empty vector when the input is empty.
     pub fn process(&mut self, raw_iq: &[u8]) -> Vec<i16> {
+        let mut out = Vec::new();
+        self.process_into(raw_iq, &mut out);
+        out
+    }
+
+    /// Processes raw uint8 IQ into a caller-owned buffer (cleared first).
+    ///
+    /// Reuses internal scratch buffers for the whole chain, so the steady-state
+    /// hot path performs no allocation.
+    pub fn process_into(&mut self, raw_iq: &[u8], out: &mut Vec<i16>) {
+        out.clear();
         if raw_iq.len() < 2 {
-            return Vec::new();
+            return;
         }
         let num_samples = raw_iq.len() / 2;
 
@@ -167,19 +180,16 @@ impl IqExtractor {
             ),
         }
 
-        let mut stage = self.nco.process_complex(&self.complex_in);
-        if !stage.is_empty() {
-            stage = self.decimate.process_complex(&stage);
+        self.nco.process_complex_into(&mut self.complex_in);
+        self.decimate
+            .process_into(&self.complex_in, &mut self.decimated);
+        if self.decimated.is_empty() {
+            return;
         }
-        if !stage.is_empty() {
-            stage = self.butter.process_complex(&stage);
-        }
-        if stage.is_empty() {
-            return Vec::new();
-        }
+        self.butter.process_complex_inplace(&mut self.decimated);
 
         if self.normalize {
-            for s in stage.iter_mut() {
+            for s in self.decimated.iter_mut() {
                 let mag = (s.re * s.re + s.im * s.im).sqrt();
                 self.norm_avg_mag += self.norm_alpha * (mag - self.norm_avg_mag);
                 if self.norm_avg_mag > self.norm_min_signal {
@@ -198,12 +208,11 @@ impl IqExtractor {
             }
         }
 
-        let mut out = Vec::with_capacity(stage.len() * 2);
-        for s in &stage {
+        out.reserve(self.decimated.len() * 2);
+        for s in &self.decimated {
             out.push(clamp_to_int16(s.re * 32767.0));
             out.push(clamp_to_int16(s.im * 32767.0));
         }
-        out
     }
 
     pub fn set_normalization_enabled(&mut self, enabled: bool) {

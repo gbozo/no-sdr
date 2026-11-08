@@ -163,9 +163,11 @@ impl FftProcessor {
                 self.pending_n = 1;
             } else {
                 self.pending_n += 1;
-                let n = self.pending_n as f32;
+                let inv_n = 1.0 / self.pending_n as f32;
+                let pending = &mut self.pending_buf;
+                let mag = &self.mag_buf;
                 for i in 0..self.fft_size {
-                    self.pending_buf[i] += (self.mag_buf[i] - self.pending_buf[i]) / n;
+                    pending[i] += (mag[i] - pending[i]) * inv_n;
                 }
             }
 

@@ -53,6 +53,7 @@ mod imp {
         frame_size: usize,
         pcm_buf: Vec<i16>,
         pcm_pos: usize,
+        out_buf: Vec<u8>,
     }
 
     fn channels_enum(channels: i32) -> Channels {
@@ -92,6 +93,7 @@ mod imp {
                 frame_size,
                 pcm_buf: vec![0i16; frame_size * cfg.channels as usize],
                 pcm_pos: 0,
+                out_buf: vec![0u8; 4000],
             })
         }
 
@@ -99,7 +101,9 @@ mod imp {
             let mut packets = Vec::new();
             let frame_samples = self.frame_size * self.channels as usize;
             let mut pos = 0usize;
-            let mut out = vec![0u8; 4000];
+            if self.out_buf.len() < 4000 {
+                self.out_buf.resize(4000, 0);
+            }
             while pos < pcm.len() {
                 let space = frame_samples - self.pcm_pos;
                 let avail = pcm.len() - pos;
@@ -109,11 +113,13 @@ mod imp {
                 self.pcm_pos += n;
                 pos += n;
                 if self.pcm_pos >= frame_samples {
-                    if let Ok(encoded) = self.encoder.encode(&self.pcm_buf[..frame_samples], &mut out)
+                    if let Ok(encoded) = self
+                        .encoder
+                        .encode(&self.pcm_buf[..frame_samples], &mut self.out_buf)
                     {
                         if encoded > 0 {
                             packets.push(OpusPacket {
-                                data: out[..encoded].to_vec(),
+                                data: self.out_buf[..encoded].to_vec(),
                                 samples: self.frame_size,
                                 channels: self.channels as usize,
                             });

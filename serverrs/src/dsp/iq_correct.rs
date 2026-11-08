@@ -73,18 +73,26 @@ impl IqCorrect {
 
     /// Corrects a block in place.
     pub fn process(&mut self, buf: &mut [Complex32]) {
-        // DC blocker.
-        for s in buf.iter_mut() {
-            self.mean_re += self.dc_alpha * (s.re as f64 - self.mean_re);
-            self.mean_im += self.dc_alpha * (s.im as f64 - self.mean_im);
-            s.re -= self.mean_re as f32;
-            s.im -= self.mean_im as f32;
-        }
+        let dc_alpha = self.dc_alpha;
+        let mut mean_re = self.mean_re;
+        let mut mean_im = self.mean_im;
 
+        // Without imbalance correction the DC blocker alone is one pass.
         if !self.balance {
+            for s in buf.iter_mut() {
+                mean_re += dc_alpha * (s.re as f64 - mean_re);
+                mean_im += dc_alpha * (s.im as f64 - mean_im);
+                s.re -= mean_re as f32;
+                s.im -= mean_im as f32;
+            }
+            self.mean_re = mean_re;
+            self.mean_im = mean_im;
             return;
         }
 
+        // DC blocker and imbalance correction are both per-sample functions of
+        // the same input sample, so they can share one pass. The block
+        // statistics still accumulate in exactly the same order.
         let mut at = 0;
         while at < buf.len() {
             let take = (BLOCK - self.n).min(buf.len() - at);
@@ -92,13 +100,19 @@ impl IqCorrect {
             let gain = self.gain as f32;
             let (mut ii, mut qq, mut iq) = (0.0f64, 0.0f64, 0.0f64);
             for s in &mut buf[at..at + take] {
-                let i = s.re;
-                let q = gain * (s.im - alpha * i);
+                mean_re += dc_alpha * (s.re as f64 - mean_re);
+                mean_im += dc_alpha * (s.im as f64 - mean_im);
+                let i = s.re - mean_re as f32;
+                let q0 = s.im - mean_im as f32;
+                let q = gain * (q0 - alpha * i);
+                s.re = i;
                 s.im = q;
                 ii += (i as f64) * (i as f64);
                 qq += (q as f64) * (q as f64);
                 iq += (i as f64) * (q as f64);
             }
+            self.mean_re = mean_re;
+            self.mean_im = mean_im;
             self.sum_ii += ii;
             self.sum_qq += qq;
             self.sum_iq += iq;
