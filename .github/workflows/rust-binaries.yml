@@ -1,6 +1,7 @@
-# Build native serverrs binaries for Linux (x86-64 v1..v4, ARM64 Pi cores)
-# and macOS (Apple Silicon + Intel). Runs on pushes touching the Rust backend
-# or client, and attaches the binaries to a GitHub release when one is published.
+# Build native serverrs binaries for Linux (x86-64 v1..v4, ARM64 Pi cores),
+# macOS (Apple Silicon + Intel) and Windows 11 (x86-64). Runs on pushes touching
+# the Rust backend or client, and attaches the binaries to a GitHub release when
+# one is published.
 
 name: Rust Binaries
 
@@ -120,9 +121,30 @@ jobs:
           name: serverrs-macos-x86_64
           path: dist/serverrs-macos-x86_64
 
+  windows-amd64:
+    runs-on: windows-latest
+    env:
+      # Keep the vendored Opus build compatible with newer CMake.
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Windows 11 (x86-64)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          cargo build --release --features opus --bin serverrs `
+            --manifest-path serverrs/Cargo.toml
+          Copy-Item serverrs/target/release/serverrs.exe `
+            dist/serverrs-windows-amd64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serverrs-windows-amd64
+          path: dist/serverrs-windows-amd64.exe
+
   release:
     if: github.event_name == 'release'
-    needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64]
+    needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64, windows-amd64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
