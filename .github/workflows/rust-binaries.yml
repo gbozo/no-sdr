@@ -36,16 +36,21 @@ jobs:
       - name: Build x86-64 v1..v4
         run: |
           mkdir -p dist
+          rustup target add x86_64-unknown-linux-gnu
           for level in v1 v2 v3 v4; do
             if [ "$level" = "v1" ]; then
               target_cpu="x86-64"
             else
               target_cpu="x86-64-$level"
             fi
+            # Use an explicit target so build scripts and proc-macros are
+            # compiled for the runner CPU, not for the selected -v4 CPU.
             RUSTFLAGS="-C target-cpu=$target_cpu" \
-              cargo build --release --features opus --bin serverrs \
+              cargo build --release --target x86_64-unknown-linux-gnu \
+              --features opus --bin serverrs \
               --manifest-path serverrs/Cargo.toml
-            cp serverrs/target/release/serverrs "dist/serverrs-linux-amd64-$level"
+            cp serverrs/target/x86_64-unknown-linux-gnu/release/serverrs \
+              "dist/serverrs-linux-amd64-$level"
           done
       - uses: actions/upload-artifact@v4
         with:
