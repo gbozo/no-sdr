@@ -39,7 +39,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     set -eux; \
     if [ "$TARGETARCH" = "amd64" ]; then \
         for level in v1 v2 v3 v4; do \
-            RUSTFLAGS="-C target-cpu=x86-64-$level" \
+            if [ "$level" = "v1" ]; then target_cpu="x86-64"; else target_cpu="x86-64-$level"; fi; \
+            RUSTFLAGS="-C target-cpu=$target_cpu" \
                 cargo build --release --features opus --bin serverrs; \
             cp target/release/serverrs "/serverrs-$level"; \
         done; \

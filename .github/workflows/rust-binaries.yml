@@ -37,7 +37,12 @@ jobs:
         run: |
           mkdir -p dist
           for level in v1 v2 v3 v4; do
-            RUSTFLAGS="-C target-cpu=x86-64-$level" \
+            if [ "$level" = "v1" ]; then
+              target_cpu="x86-64"
+            else
+              target_cpu="x86-64-$level"
+            fi
+            RUSTFLAGS="-C target-cpu=$target_cpu" \
               cargo build --release --features opus --bin serverrs \
               --manifest-path serverrs/Cargo.toml
             cp serverrs/target/release/serverrs "dist/serverrs-linux-amd64-$level"
@@ -70,6 +75,10 @@ jobs:
 
   macos-arm64:
     runs-on: macos-15
+    env:
+      # CMake 4 no longer accepts the old cmake_minimum_required in the
+      # vendored Opus build used by audiopus_sys.
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -88,6 +97,8 @@ jobs:
 
   macos-x86_64:
     runs-on: macos-15-intel
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
