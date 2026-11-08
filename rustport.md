@@ -6,7 +6,7 @@ SolidJS client (`client/src/shared/protocol.ts`).
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as `serverng`).
 
-## Current status (2.11.2)
+## Current status (2.11.3)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,9 +23,10 @@ protocol as `serverng`).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.11.2-rust` (prerelease). It adds the hot-path
+- Latest published release: `v2.11.3-rust` (prerelease). It adds the hot-path
   performance pass on top of 2.11.1's direct USB rtlsdr, aggregate bandwidth
-  stats and default Opus+rtlsdr features.
+  stats and default Opus+rtlsdr features, and fixes the AVX2 decimator
+  reduction that affected WFM audio in 2.11.2.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
   Go backend on main).
@@ -333,3 +334,11 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 - 2026-11-08: Version bump to 2.11.2 and release `v2.11.2-rust` (prerelease):
   portable archives and the multi-CPU Docker image ship the hot-path
   performance pass (SIMD dispatch, allocation-free extractor/Opus path).
+
+- 2026-11-08: Fixed the 2.11.2 WFM regression: the AVX2 complex decimator dot
+  folded the real/imaginary lanes together with `hadd`, corrupting the sub-band
+  (noise + faint audio). Replaced it with a movehl reduction and added an
+  AVX2-vs-portable test over 31/32/33/257 taps. Admin UI now drops back to the
+  login form with "Session expired" on a 401 instead of only reporting
+  "not authenticated" (in-memory sessions do not survive a server restart).
+  Version bump to 2.11.3.

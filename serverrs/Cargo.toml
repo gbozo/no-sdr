@@ -1,6 +1,6 @@
 [package]
 name = "serverrs"
-version = "2.11.2"
+version = "2.11.3"
 edition = "2021"
 rust-version = "1.82"
 description = "Multi-user WebSDR server (Rust port of serverng)"
