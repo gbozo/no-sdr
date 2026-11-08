@@ -161,8 +161,19 @@ function createAdminStore() {
   async function checkSession(): Promise<boolean> {
     setAuthChecking(true);
     try {
-      const res = await fetch('/api/admin/session', { credentials: 'same-origin' });
-      const ok = res.ok;
+      // A source reinit can briefly make the backend/proxy return 5xx. Do not
+      // treat that as a logout; retry transient failures before deciding.
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          res = await fetch('/api/admin/session', { credentials: 'same-origin' });
+        } catch {
+          res = null;
+        }
+        if (res && res.status < 500) break;
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+      const ok = !!res?.ok;
       setAuthenticated(ok);
       if (ok) {
         // Auto-load server config and dongles on session check success
@@ -283,7 +294,7 @@ function createAdminStore() {
       // hosts the first follow-up request can briefly hit a proxy 502 while
       // the USB open completes, so retry transient 5xx responses.
       let res: Response | null = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 5; attempt++) {
         try {
           res = await fetch('/api/admin/dongles', { credentials: 'same-origin' });
         } catch {
