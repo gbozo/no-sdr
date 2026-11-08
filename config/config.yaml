@@ -20,7 +20,7 @@ server:
   - opus
   - opus-hq
   opusComplexity: 0
-  realIpHeader: ''
+  realIPHeader: ''
   auddApiKey: c63a4f2cf56674c6041b73f4feef055b
   acrcloudHost: identify-eu-west-1.acrcloud.com
   acrcloudAccessKey: 9233f967382c7a171794366539a2ff2b

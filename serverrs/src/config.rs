@@ -112,7 +112,7 @@ pub struct ServerConfig {
     pub allowed_iq_codecs: Vec<String>,
     #[serde(default)]
     pub opus_complexity: i32,
-    #[serde(default)]
+    #[serde(default, rename = "realIPHeader", alias = "realIpHeader")]
     pub real_ip_header: String,
     // Secrets: present in YAML, omitted from JSON by the Go implementation
     // (`json:"-"`). Our JSON handlers build explicit maps, never serialize this
@@ -515,6 +515,8 @@ mod tests {
         assert!(y.contains("defaultBandwidth: 200000"), "{y}");
         assert!(y.contains("defaultMode: am"), "{y}");
         assert!(y.contains("defaultTuneOffset: 500"), "{y}");
+        assert!(y.contains("realIPHeader:"), "{y}");
+        assert!(!y.contains("realIpHeader:"), "{y}");
         let reparsed = parse(&y);
         assert_eq!(reparsed.dongles[0].profiles[0].tune_offset, 500);
     }
