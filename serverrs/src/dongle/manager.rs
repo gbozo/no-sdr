@@ -877,7 +877,14 @@ impl Manager {
                 quality: iq_codec.clone(),
                 complexity,
             }) {
-                Ok(p) => cp.opus_pipeline = Some(p),
+                Ok(mut p) => {
+                    // OpusPipeline starts with bandwidth 0; without this the
+                    // server-side demod would run with its audio/IF filters
+                    // disabled until the client sends a separate bandwidth
+                    // command.
+                    p.set_bandwidth(bandwidth);
+                    cp.opus_pipeline = Some(p);
+                }
                 Err(e) => {
                     error!(client = %client_id, error = %e, "failed to create Opus pipeline; falling back to ADPCM");
                     cp.iq_codec = "adpcm".to_string();
@@ -1171,6 +1178,7 @@ impl Manager {
             if let Err(e) = opus.set_mode(&cmd.mode) {
                 error!(client = %client_id, error = %e, "failed to set Opus mode");
             }
+            opus.set_bandwidth(bandwidth);
         }
         cp.accum_pos = 0;
         cp.adpcm_enc.reset();
@@ -1738,6 +1746,7 @@ impl Manager {
                 if let Err(e) = opus.set_mode(&mode) {
                     warn!(error = %e, "failed to update Opus mode on profile switch");
                 }
+                opus.set_bandwidth(default_bandwidth_for_mode(&mode));
             }
             cp.accum_pos = 0;
             cp.adpcm_enc.reset();

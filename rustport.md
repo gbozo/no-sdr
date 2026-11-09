@@ -23,11 +23,12 @@ protocol as `serverng`).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.11.5-rust` (prerelease). It adds the hot-path
-  performance pass on top of 2.11.1's direct USB rtlsdr, aggregate bandwidth
-  stats and default Opus+rtlsdr features, fixes the AVX2 decimator reduction
-  that affected WFM audio in 2.11.2, and keeps USB open/reset work off the
-  async runtime during admin-triggered dongle reinitialisation.
+- Latest published release: `v2.11.6-rust` (prerelease). It adds the AM
+  adjacent-channel selectivity fix (191-tap IF FIR before the envelope detector
+  and OpusPipeline bandwidth propagation) on top of 2.11.5's admin reinit
+  stall follow-up. Earlier releases added the hot-path performance pass,
+  direct USB rtlsdr, aggregate bandwidth stats, default Opus+rtlsdr features,
+  and the WFM AVX2 decimator fix.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
   Go backend on main).
@@ -359,3 +360,16 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   elapsed time. The admin UI retries `/api/admin/session` on transient 5xx so a
   proxy 502 during reinit no longer logs the user out, and retries
   `/api/admin/dongles` for up to ~4.5 s. Version bump to 2.11.5.
+
+- 2026-11-09: AM adjacent-channel selectivity. Added a 191-tap linear-phase IF
+  FIR to `AmDemod`, ahead of the envelope detector, with cutoff 0.6× bandwidth
+  (3.6 kHz for the default 6 kHz AM) and cascaded with the extractor's
+  8th-order Butterworth. Synthetic two-station test: at 5 kHz offset and a
+  +28 dB interferer, interferer/desired audio drops from +0.5 dB to -20 dB;
+  4 kHz remains limited by the interferer's lower sideband overlapping the
+  audio passband. Cost ~0.15% of one core per AM client at 48 kHz.
+  Also fixed OpusPipeline bandwidth propagation: pipelines were created with
+  bandwidth 0 and the manager only forwarded mode bandwidth to the extractor,
+  so server-side demod audio/IF filters stayed off until the client sent a
+  separate bandwidth command. Creation, mode changes and profile switches now
+  call `set_bandwidth`. `cargo test --no-default-features`: 119 passed.

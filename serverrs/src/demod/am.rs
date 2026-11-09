@@ -22,6 +22,18 @@ pub struct AmDemod {
     agc_decay: f32,
     agc_max: f32,
 
+    // Sharp linear-phase IF selectivity filter (I/Q), applied before the
+    // envelope detector. The extractor's Butterworth is only 8th order, which
+    // leaves a strong station 5-6 kHz away at roughly -40 to -55 dB; this FIR
+    // pushes the adjacent channel into the stopband and stops it capturing the
+    // AGC.
+    if_i: Option<SimpleFir>,
+    if_q: Option<SimpleFir>,
+    if_i_in: Vec<f32>,
+    if_q_in: Vec<f32>,
+    if_i_out: Vec<f32>,
+    if_q_out: Vec<f32>,
+
     // Audio LPF (post-AGC, bandwidth-limiting).
     audio_lpf: Option<SimpleFir>,
     audio_lpf_enabled: bool,
@@ -29,6 +41,13 @@ pub struct AmDemod {
     /// only indirectly; kept for parity with the Node version).
     pending_cutoff: Option<f64>,
 }
+
+/// Taps for the AM IF selectivity filter. At 48 kHz this gives a ~1 kHz
+/// transition and >90 dB stopband for negligible CPU.
+const IF_TAPS: usize = 191;
+/// IF cutoff as a fraction of the requested bandwidth. Slightly above the
+/// existing bandwidth/2 edge so the cascaded response keeps the passband.
+const IF_CUTOFF_SCALE: f64 = 0.6;
 
 impl Default for AmDemod {
     fn default() -> Self {
@@ -47,6 +66,12 @@ impl AmDemod {
             agc_attack: 0.01,
             agc_decay: 0.0001,
             agc_max: 100.0,
+            if_i: None,
+            if_q: None,
+            if_i_in: Vec::new(),
+            if_q_in: Vec::new(),
+            if_i_out: Vec::new(),
+            if_q_out: Vec::new(),
             audio_lpf: None,
             audio_lpf_enabled: false,
             pending_cutoff: None,
@@ -78,6 +103,28 @@ impl Demodulator for AmDemod {
         let n = input.len();
         let mut out = vec![0.0f32; n];
 
+        // IF selectivity before the envelope detector. Two real FIRs (I/Q),
+        // batched so the hot path stays vectorised and allocation-free.
+        let filtered = self.if_i.is_some() && self.if_q.is_some();
+        if filtered {
+            self.if_i_in.clear();
+            self.if_i_in.reserve(n);
+            self.if_q_in.clear();
+            self.if_q_in.reserve(n);
+            for c in input {
+                self.if_i_in.push(c.re);
+                self.if_q_in.push(c.im);
+            }
+            self.if_i_out.resize(n, 0.0);
+            self.if_q_out.resize(n, 0.0);
+            let mut fi = self.if_i.take().unwrap();
+            let mut fq = self.if_q.take().unwrap();
+            fi.process_batch(&self.if_i_in, &mut self.if_i_out);
+            fq.process_batch(&self.if_q_in, &mut self.if_q_out);
+            self.if_i = Some(fi);
+            self.if_q = Some(fq);
+        }
+
         let target = self.agc_target;
         let attack = self.agc_attack;
         let decay = self.agc_decay;
@@ -87,8 +134,11 @@ impl Demodulator for AmDemod {
         let mut dc_prev_out = self.dc_prev_out;
 
         for i in 0..n {
-            let re = input[i].re;
-            let im = input[i].im;
+            let (re, im) = if filtered {
+                (self.if_i_out[i], self.if_q_out[i])
+            } else {
+                (input[i].re, input[i].im)
+            };
             // Envelope detection
             let env = (re * re + im * im).sqrt();
 
@@ -132,9 +182,19 @@ impl Demodulator for AmDemod {
         self.dc_prev = 0.0;
         self.dc_prev_out = 0.0;
         self.agc_gain = 1.0;
-        if let Some(lpf) = self.audio_lpf.as_mut() {
-            lpf.reset();
+        if let Some(fir) = self.audio_lpf.as_mut() {
+            fir.reset();
         }
+        if let Some(fir) = self.if_i.as_mut() {
+            fir.reset();
+        }
+        if let Some(fir) = self.if_q.as_mut() {
+            fir.reset();
+        }
+        self.if_i_in.clear();
+        self.if_q_in.clear();
+        self.if_i_out.clear();
+        self.if_q_out.clear();
     }
 
     fn set_bandwidth(&mut self, hz: f64) {
@@ -150,6 +210,8 @@ impl AmDemod {
     fn apply_bandwidth(&mut self, hz: f64) {
         if hz <= 0.0 || self.sample_rate <= 0.0 {
             self.audio_lpf_enabled = false;
+            self.if_i = None;
+            self.if_q = None;
             return;
         }
         let mut cutoff_hz = hz / 2.0;
@@ -159,6 +221,8 @@ impl AmDemod {
         let norm = cutoff_hz / self.sample_rate;
         if norm >= 0.5 {
             self.audio_lpf_enabled = false;
+            self.if_i = None;
+            self.if_q = None;
             return;
         }
         match self.audio_lpf.as_mut() {
@@ -169,6 +233,40 @@ impl AmDemod {
             }
         }
         self.audio_lpf_enabled = true;
+
+        // Sharp IF selectivity: 0.6 * bandwidth keeps the cascaded passband
+        // edge near bandwidth/2 while putting the adjacent channel deep into
+        // the stopband well before a 9/10 kHz MW neighbour.
+        let mut if_cutoff_hz = hz * IF_CUTOFF_SCALE;
+        let max_if_cutoff = self.sample_rate * 0.45;
+        if if_cutoff_hz > max_if_cutoff {
+            if_cutoff_hz = max_if_cutoff;
+        }
+        let if_norm = if_cutoff_hz / self.sample_rate;
+        if if_norm > 0.0 && if_norm < 0.5 {
+            match self.if_i.as_mut() {
+                None => {
+                    self.if_i = Some(SimpleFir::new(IF_TAPS, if_norm));
+                    self.if_q = Some(SimpleFir::new(IF_TAPS, if_norm));
+                }
+                Some(fi) => {
+                    fi.design(if_norm);
+                    fi.reset();
+                    if let Some(fq) = self.if_q.as_mut() {
+                        fq.design(if_norm);
+                        fq.reset();
+                    }
+                }
+            }
+        } else {
+            self.if_i = None;
+            self.if_q = None;
+        }
+    }
+
+    /// Whether the sharp IF selectivity filter is active (tests/diagnostics).
+    pub fn if_filter_enabled(&self) -> bool {
+        self.if_i.is_some() && self.if_q.is_some()
     }
 
     /// Current AGC gain (test/diagnostics).
@@ -211,6 +309,7 @@ mod tests {
         d.init(fs).unwrap();
         d.set_bandwidth(10_000.0); // cutoff 5 kHz
         assert!(d.audio_lpf_enabled);
+        assert!(d.if_filter_enabled());
         // Feed a real carrier whose *envelope* is modulated at 15 kHz vs 1 kHz.
         // Envelope detection turns the modulation into audio, which the LPF must
         // then reject above 5 kHz.
@@ -228,11 +327,71 @@ mod tests {
         assert!(rms(&hi) < rms(&lo) * 0.35, "hi={} lo={}", rms(&hi), rms(&lo));
     }
 
+    fn goertzel(samples: &[f32], rate: f64, hz: f64) -> f64 {
+        let w = 2.0 * PI * hz / rate;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &x in samples {
+            let s0 = x as f64 + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        ((s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0)).sqrt() * 2.0
+            / samples.len() as f64
+    }
+
+    /// A strong adjacent carrier 5 kHz away must not dominate the desired
+    /// station. The sharp IF FIR should improve the interferer/desired audio
+    /// ratio by a wide margin compared with the unfiltered path.
+    #[test]
+    fn if_filter_rejects_strong_adjacent_carrier() {
+        let fs = 48_000.0;
+        let n = 48_000; // 1 s
+        let make_input = || -> Vec<Complex32> {
+            (0..n)
+                .map(|i| {
+                    let t = i as f64 / fs;
+                    let desired = (1.0 + 0.5 * (2.0 * PI * 1_000.0 * t).sin()) * 0.02;
+                    let interferer = (1.0 + 0.5 * (2.0 * PI * 1_500.0 * t).sin()) * 0.5;
+                    let phase = 2.0 * PI * 5_000.0 * t;
+                    Complex32::new(
+                        (desired + interferer * phase.cos()) as f32,
+                        (interferer * phase.sin()) as f32,
+                    )
+                })
+                .collect()
+        };
+
+        let measure = |bandwidth: f64| -> (f64, f64) {
+            let mut d = AmDemod::new();
+            d.init(fs).unwrap();
+            d.set_bandwidth(bandwidth);
+            let audio = d.process(&make_input());
+            let tail = &audio[audio.len() / 2..];
+            (
+                goertzel(tail, fs, 1_000.0),
+                goertzel(tail, fs, 1_500.0),
+            )
+        };
+
+        let (d_on, i_on) = measure(6_000.0);
+        let (d_off, i_off) = measure(0.0);
+        let on_db = 20.0 * (i_on / d_on).log10();
+        let off_db = 20.0 * (i_off / d_off).log10();
+        assert!(
+            on_db < off_db - 15.0,
+            "IF filter did not improve adjacent rejection: on={on_db:.1} dB off={off_db:.1} dB"
+        );
+        assert!(on_db < -10.0, "adjacent audio still too strong: {on_db:.1} dB");
+        assert!(d_on > 0.01, "desired audio lost: {d_on}");
+    }
+
     #[test]
     fn zero_bandwidth_disables_lpf() {
         let mut d = AmDemod::new();
         d.init(48_000.0).unwrap();
         d.set_bandwidth(0.0);
         assert!(!d.audio_lpf_enabled);
+        assert!(!d.if_filter_enabled());
     }
 }
