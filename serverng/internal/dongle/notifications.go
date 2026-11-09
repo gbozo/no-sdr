@@ -49,8 +49,8 @@ type ConfigNotification struct {
 	Dongle *DongleInfo `json:"dongle,omitempty"`
 
 	// For profile events
-	ProfileID string              `json:"profileId,omitempty"`
-	Profile   *config.DongleProfile `json:"profile,omitempty"`
+	ProfileID string                 `json:"profileId,omitempty"`
+	Profile   *config.DongleProfile  `json:"profile,omitempty"`
 	Profiles  []config.DongleProfile `json:"profiles,omitempty"`
 
 	// For state sync: all dongles + profiles
@@ -68,14 +68,15 @@ type ConfigNotification struct {
 
 // DongleInfo is the public view of a dongle for client notifications.
 type DongleInfo struct {
-	ID         string               `json:"id"`
-	Name       string               `json:"name"`
-	Enabled    bool                 `json:"enabled"`
-	SourceType string               `json:"sourceType"`
-	SampleRate int                  `json:"sampleRate"`
-	Profiles   []config.DongleProfile `json:"profiles"`
-	State      DongleState          `json:"state"`
-	ActiveProfile string            `json:"activeProfile,omitempty"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Enabled       bool                   `json:"enabled"`
+	SourceType    string                 `json:"sourceType"`
+	SampleRate    int                    `json:"sampleRate"`
+	ClientCount   int                    `json:"clientCount"`
+	Profiles      []config.DongleProfile `json:"profiles"`
+	State         DongleState            `json:"state"`
+	ActiveProfile string                 `json:"activeProfile,omitempty"`
 }
 
 // ServerConfigInfo is the public view of server config for client notifications.
@@ -305,6 +306,7 @@ func (m *Manager) buildDongleInfo(dcfg *config.DongleConfig) DongleInfo {
 		Enabled:       dcfg.Enabled,
 		SourceType:    dcfg.Source.Type,
 		SampleRate:    dcfg.SampleRate,
+		ClientCount:   len(m.wsMgr.SubscribedClients(dcfg.ID)),
 		Profiles:      dcfg.Profiles,
 		State:         state,
 		ActiveProfile: activeProfile,

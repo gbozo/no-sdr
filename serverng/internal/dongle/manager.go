@@ -76,15 +76,15 @@ func (m *Manager) opusComplexity() int {
 }
 
 type activeDongle struct {
-	id         string
-	profile    *config.DongleProfile
-	dongleCfg  *config.DongleConfig
-	source     Source // interface — DemoSource, RtlTcpSource, etc.
-	fftProc    *dsp.FftProcessor
-	deflateEnc    *codecPkg.FftDeflateEncoder
+	id              string
+	profile         *config.DongleProfile
+	dongleCfg       *config.DongleConfig
+	source          Source // interface — DemoSource, RtlTcpSource, etc.
+	fftProc         *dsp.FftProcessor
+	deflateEnc      *codecPkg.FftDeflateEncoder
 	deflateFloorEnc *codecPkg.FftDeflateEncoder
-	fftHistory *history.FftBuffer
-	cancel     context.CancelFunc
+	fftHistory      *history.FftBuffer
+	cancel          context.CancelFunc
 
 	// iqScratch is a reusable snapshot buffer for processClientIQ.
 	// Owned exclusively by the runDongle goroutine — no locking needed.
@@ -93,19 +93,19 @@ type activeDongle struct {
 
 // clientPipeline holds per-client IQ extraction state.
 type clientPipeline struct {
-	extractor    *dsp.IqExtractor
-	adpcmEnc     *codecPkg.ImaAdpcmEncoder
-	opusPipeline atomic.Pointer[OpusPipeline] // non-nil for opus/opus-hq clients
-	accumBuf     []int16       // 20ms accumulation buffer
-	accumPos     int
-	chunkSize    int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
-	iqCodec      string // "none", "adpcm", "opus", "opus-hq"
-	dongleID     string // which dongle this client is subscribed to
-	nbEnabled    bool
-	nbThreshold  float32 // multiplier (default 10.0)
-	iqChunkCount int64   // debug counter
-	stereoEnabled bool   // remembered stereo preference, applied on pipeline creation
-	adpcmBuf     []byte  // pre-allocated ADPCM output buffer (avoids make on every chunk)
+	extractor     *dsp.IqExtractor
+	adpcmEnc      *codecPkg.ImaAdpcmEncoder
+	opusPipeline  atomic.Pointer[OpusPipeline] // non-nil for opus/opus-hq clients
+	accumBuf      []int16                      // 20ms accumulation buffer
+	accumPos      int
+	chunkSize     int    // int16 samples per 20ms chunk (outputRate * 2 * 0.020)
+	iqCodec       string // "none", "adpcm", "opus", "opus-hq"
+	dongleID      string // which dongle this client is subscribed to
+	nbEnabled     bool
+	nbThreshold   float32 // multiplier (default 10.0)
+	iqChunkCount  int64   // debug counter
+	stereoEnabled bool    // remembered stereo preference, applied on pipeline creation
+	adpcmBuf      []byte  // pre-allocated ADPCM output buffer (avoids make on every chunk)
 }
 
 // maxRetries is the number of retry attempts for dongle initialization.
@@ -520,6 +520,30 @@ func (m *Manager) GetAllDongleStates() map[string]DongleState {
 	return states
 }
 
+// IsRunning reports whether a dongle pipeline is currently active.
+func (m *Manager) IsRunning(dongleID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.dongles[dongleID]
+	return ok
+}
+
+// ActiveProfileID returns the running profile for a dongle, or the first
+// configured profile when it is stopped.
+func (m *Manager) ActiveProfileID(dongleID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d, ok := m.dongles[dongleID]; ok && d.profile != nil {
+		return d.profile.ID
+	}
+	for i := range m.cfg.Dongles {
+		if m.cfg.Dongles[i].ID == dongleID && len(m.cfg.Dongles[i].Profiles) > 0 {
+			return m.cfg.Dongles[i].Profiles[0].ID
+		}
+	}
+	return ""
+}
+
 // startDongle creates and runs the pipeline for a single dongle.
 func (m *Manager) startDongle(parentCtx context.Context, dcfg *config.DongleConfig) error {
 	// Use the first profile as the active profile
@@ -764,7 +788,7 @@ func (m *Manager) applyDongleSettings(src CommandableSource, dcfg *config.Dongle
 
 	// Gain: profile-level overrides dongle-level
 	if profile.Gain > 0 {
-		src.SetGainMode(1) // manual gain
+		src.SetGainMode(1)                     // manual gain
 		src.SetGain(uint32(profile.Gain * 10)) // tenths of dB
 	} else if dcfg.Gain > 0 {
 		src.SetGainMode(1)
@@ -910,7 +934,7 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 		Type:         "profile_changed",
 		DongleId:     dongleID,
 		ProfileId:    newProfile.ID,
-		CenterFreq:  float64(newProfile.CenterFrequency),
+		CenterFreq:   float64(newProfile.CenterFrequency),
 		SampleRate:   newProfile.SampleRate,
 		FftSize:      newProfile.FftSize,
 		IqSampleRate: iqRate,
@@ -1287,9 +1311,27 @@ func (m *Manager) SetIssueIdentifyTokenFunc(fn func(connClientID, persistentID s
 
 // handleAdminAuth validates admin password sent over WebSocket.
 func (m *Manager) handleAdminAuth(clientID string, cmd *ws.ClientCommand) {
-	if cmd.Password == m.cfg.Server.AdminPassword {
+	client := m.wsMgr.GetClient(clientID)
+	if client != nil && client.AuthFailures >= 5 {
+		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
+			Type:    "error",
+			Message: "Too many failed admin password attempts",
+			Code:    "AUTH_RATE_LIMITED",
+		}))
+		return
+	}
+	password := m.cfg.Server.AdminPassword
+	if password != "" && cmd.Password == password {
+		if client != nil {
+			client.Admin = true
+			client.AuthFailures = 0
+		}
 		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{Type: "admin_auth_ok"}))
 	} else {
+		if client != nil {
+			client.Admin = false
+			client.AuthFailures++
+		}
 		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
 			Type:    "error",
 			Message: "Invalid admin password",
@@ -1300,6 +1342,15 @@ func (m *Manager) handleAdminAuth(clientID string, cmd *ws.ClientCommand) {
 
 // handleAdminSetProfile switches a dongle to a different profile (admin command).
 func (m *Manager) handleAdminSetProfile(clientID string, cmd *ws.ClientCommand) {
+	client := m.wsMgr.GetClient(clientID)
+	if client == nil || !client.Admin {
+		m.wsMgr.SendTo(clientID, ws.PackMetaMessage(&ws.ServerMeta{
+			Type:    "error",
+			Message: "admin authentication required",
+			Code:    "AUTH_FAILED",
+		}))
+		return
+	}
 	if cmd.DongleId == "" || cmd.ProfileId == "" {
 		return
 	}
@@ -1460,11 +1511,15 @@ func (m *Manager) handleSetPreFilterNb(clientID string, cmd *ws.ClientCommand) {
 
 // handleSetPreFilterNbThreshold sets the noise blanker threshold multiplier.
 func (m *Manager) handleSetPreFilterNbThreshold(clientID string, cmd *ws.ClientCommand) {
+	threshold := cmd.Level
+	if cmd.Threshold != nil {
+		threshold = *cmd.Threshold
+	}
 	m.mu.Lock()
 	if cp, ok := m.clientPipelines[clientID]; ok {
-		if cmd.Level > 0 {
-			cp.nbThreshold = float32(cmd.Level)
-			cp.extractor.SetNbThreshold(float32(cmd.Level))
+		if threshold > 0 {
+			cp.nbThreshold = float32(threshold)
+			cp.extractor.SetNbThreshold(float32(threshold))
 		}
 	}
 	m.mu.Unlock()
@@ -1568,12 +1623,13 @@ func (m *Manager) handleSubscribe(clientID string, cmd *ws.ClientCommand) {
 		Type:         "subscribed",
 		DongleId:     dongleID,
 		ProfileId:    profile.ID,
-		CenterFreq:  float64(profile.CenterFrequency),
+		CenterFreq:   float64(profile.CenterFrequency),
 		SampleRate:   profile.SampleRate,
 		FftSize:      profile.FftSize,
 		IqSampleRate: iqRate,
 		Mode:         profile.Mode,
 		TuningStep:   profile.TuningStep,
+		TuneOffset:   profile.TuneOffset,
 	}
 
 	m.wsMgr.SendTo(clientID, ws.PackMetaMessage(meta))
@@ -1627,7 +1683,7 @@ func (m *Manager) handleTune(clientID string, cmd *ws.ClientCommand) {
 }
 
 // handleBandwidth stores the client's audio/RF filter bandwidth.
-	// Updates the IQ extractor's windowed-sinc FIR bandwidth (RF filtering) and,
+// Updates the IQ extractor's windowed-sinc FIR bandwidth (RF filtering) and,
 // for Opus clients, the demodulator's audio LPF.
 func (m *Manager) handleBandwidth(clientID string, cmd *ws.ClientCommand) {
 	m.mu.Lock()
@@ -1695,9 +1751,18 @@ func (m *Manager) handleMode(clientID string, cmd *ws.ClientCommand) {
 
 // handleCodecChange handles IQ codec switching between adpcm and opus.
 func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
-	// Client state is updated by ws.Client.UpdateFromCommand() first.
-	// Here we handle the pipeline switch.
+	// Client state is updated by ws.Client.UpdateFromCommand() first, so use
+	// that sanitized value (it may have fallen back to "none" if the server
+	// does not allow the requested codec).
 	if cmd.IqCodec == "" {
+		return
+	}
+	client := m.wsMgr.GetClient(clientID)
+	if client == nil {
+		return
+	}
+	newCodec := client.IqCodec
+	if newCodec == "" {
 		return
 	}
 
@@ -1710,7 +1775,6 @@ func (m *Manager) handleCodecChange(clientID string, cmd *ws.ClientCommand) {
 	}
 
 	oldCodec := cp.iqCodec
-	newCodec := cmd.IqCodec
 
 	// No change needed
 	if oldCodec == newCodec {
@@ -2026,6 +2090,7 @@ func (m *Manager) statsLoop(ctx context.Context) {
 
 	var lastCPU = getCPUTimeNanos()
 	var lastTime = time.Now()
+	lastClientCounts := make(map[string]int)
 
 	for {
 		select {
@@ -2059,6 +2124,55 @@ func (m *Manager) statsLoop(ctx context.Context) {
 			copy(msg[1:], statsJSON)
 
 			m.wsMgr.BroadcastAll(msg)
+
+			// Push per-dongle client counts when they change so the UI does
+			// not need to poll the admin REST endpoint.
+			type dongleCount struct {
+				id      string
+				count   int
+				running bool
+			}
+			counts := make([]dongleCount, 0, len(m.cfg.Dongles))
+			m.mu.Lock()
+			for i := range m.cfg.Dongles {
+				id := m.cfg.Dongles[i].ID
+				_, running := m.dongles[id]
+				counts = append(counts, dongleCount{
+					id:      id,
+					count:   len(m.wsMgr.SubscribedClients(id)),
+					running: running,
+				})
+			}
+			m.mu.Unlock()
+
+			for _, dc := range counts {
+				if lastClientCounts[dc.id] == dc.count {
+					continue
+				}
+				lastClientCounts[dc.id] = dc.count
+				statusJSON, _ := json.Marshal(map[string]any{
+					"type":        "dongle_status",
+					"dongleId":    dc.id,
+					"running":     dc.running,
+					"clientCount": dc.count,
+				})
+				statusMsg := make([]byte, 1+len(statusJSON))
+				statusMsg[0] = ws.MsgMeta
+				copy(statusMsg[1:], statusJSON)
+				m.wsMgr.BroadcastAll(statusMsg)
+			}
+			for id := range lastClientCounts {
+				found := false
+				for _, dc := range counts {
+					if dc.id == id {
+						found = true
+						break
+					}
+				}
+				if !found {
+					delete(lastClientCounts, id)
+				}
+			}
 		}
 	}
 }

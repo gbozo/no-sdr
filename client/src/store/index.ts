@@ -87,6 +87,8 @@ function createStore() {
   const [configVersion, setConfigVersion] = createSignal(0);
   // Connection state: 'connecting' | 'connected' | 'disconnected' | 'unconfigured'
   const [connectionState, setConnectionState] = createSignal<'connecting' | 'connected' | 'disconnected' | 'unconfigured'>('disconnected');
+  // Server version reported in the WELCOME META message.
+  const [serverVersion, setServerVersion] = createSignal('');
   // Reconnect attempt counter (0 = not reconnecting, >0 = attempt N of max)
   const [reconnectAttempt, setReconnectAttempt] = createSignal(0);
 
@@ -267,6 +269,7 @@ function createStore() {
     pushServerConfig, setPushServerConfig,
     configVersion, setConfigVersion,
     connectionState, setConnectionState,
+    serverVersion, setServerVersion,
     reconnectAttempt, setReconnectAttempt,
 
     // Tuning

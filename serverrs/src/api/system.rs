@@ -22,10 +22,17 @@ pub fn system_info(state: &AppState) -> Value {
         .filter(|s| s.status == crate::dongle::STATUS_RUNNING)
         .count();
     let tasks = info.len() + running_dongles + 2;
+    let runtime_version = format!("rustc {}", rustc_version());
+    let mut supported_iq: Vec<&str> = DEFAULT_IQ_CODECS.to_vec();
+    if !OPUS_AVAILABLE {
+        supported_iq.retain(|c| !matches!(*c, "opus" | "opus-hq" | "opus-lo"));
+    }
 
     let mut resp = json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "goVersion": format!("rustc {}", rustc_version()),
+        "goVersion": runtime_version.clone(),
+        "runtime": "rust",
+        "runtimeVersion": runtime_version,
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "goamd64": "",
@@ -44,7 +51,7 @@ pub fn system_info(state: &AppState) -> Value {
             "supportedSources": ["demo", "rtl_tcp", "airspy_tcp", "hfp_tcp", "rsp_tcp", "local"],
             "supportedModes": ["wfm", "nfm", "am", "am-stereo", "usb", "lsb", "cw", "raw", "sam"],
             "supportedFftCodecs": DEFAULT_FFT_CODECS,
-            "supportedIqCodecs": DEFAULT_IQ_CODECS,
+            "supportedIqCodecs": supported_iq,
         },
         "dongles": {
             "configured": cfg.dongles.len(),

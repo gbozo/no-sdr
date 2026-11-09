@@ -296,6 +296,8 @@ pub fn load(path: &Path) -> Result<Config> {
             let value: serde_yaml::Value = serde_yaml::from_slice(&data)
                 .with_context(|| format!("config: parse yaml: {}", path.display()))?;
             let value = yaml_keys_to_json(value);
+            let mut value = value;
+            apply_dongle_presence_defaults(&mut value);
             let mut cfg: Config = serde_yaml::from_value(value)
                 .with_context(|| format!("config: parse yaml: {}", path.display()))?;
             apply_defaults(&mut cfg);
@@ -354,10 +356,30 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.opus_complexity < 0 {
         cfg.server.opus_complexity = 5;
     }
-    // Go quirk: every dongle is forced enabled + autoStart after load.
-    for d in &mut cfg.dongles {
-        d.enabled = true;
-        d.auto_start = true;
+}
+
+/// YAML `enabled`/`autoStart` default to true only when the keys are absent.
+///
+/// `apply_defaults` must not force them (that would make an explicit
+/// `enabled: false` impossible, which was the old Go quirk).
+fn apply_dongle_presence_defaults(value: &mut serde_yaml::Value) {
+    let Some(root) = value.as_mapping_mut() else {
+        return;
+    };
+    let dongles_key = serde_yaml::Value::String("dongles".to_string());
+    let Some(seq) = root.get_mut(&dongles_key).and_then(|v| v.as_sequence_mut()) else {
+        return;
+    };
+    for d in seq {
+        let Some(map) = d.as_mapping_mut() else {
+            continue;
+        };
+        for key in ["enabled", "autoStart"] {
+            let k = serde_yaml::Value::String(key.to_string());
+            if !map.contains_key(&k) {
+                map.insert(k, serde_yaml::Value::Bool(true));
+            }
+        }
     }
 }
 
@@ -481,7 +503,9 @@ mod tests {
 
     fn parse(text: &str) -> Config {
         let value: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
-        let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+        let mut value = yaml_keys_to_json(value);
+        apply_dongle_presence_defaults(&mut value);
+        let mut cfg: Config = serde_yaml::from_value(value).unwrap();
         apply_defaults(&mut cfg);
         apply_profile_defaults(&mut cfg);
         validate(&cfg).unwrap();
@@ -504,6 +528,15 @@ mod tests {
         assert!(p.dc_offset_removal_enabled());
         assert!(cfg.dongles[0].enabled);
         assert!(cfg.dongles[0].auto_start);
+    }
+
+    #[test]
+    fn explicit_disabled_is_preserved() {
+        let cfg = parse(
+            "dongles:\n  - id: d1\n    enabled: false\n    autoStart: false\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: nfm\n",
+        );
+        assert!(!cfg.dongles[0].enabled);
+        assert!(!cfg.dongles[0].auto_start);
     }
 
     #[test]

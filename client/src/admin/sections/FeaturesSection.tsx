@@ -7,6 +7,9 @@ import { Component, createSignal, onMount, For, Show } from 'solid-js';
 interface SystemInfo {
   version: string;
   goVersion: string;
+  /** Backend runtime identifier: "go" or "rust" (newer servers). */
+  runtime?: string;
+  runtimeVersion?: string;
   os: string;
   arch: string;
   goamd64?: string;
@@ -187,7 +190,11 @@ const FeaturesSection: Component = () => {
             {/* Build Info */}
              <InfoGroup title="Build Information">
                <InfoRow label="Version" value={data().version} accent />
-               <InfoRow label="Go Version" value={data().goVersion} />
+               <InfoRow label="Runtime" value={data().runtime === 'rust' ? 'Rust' : 'Go'} />
+               <InfoRow
+                 label={data().runtime === 'rust' ? 'Rust Version' : 'Go Version'}
+                 value={data().runtimeVersion ?? data().goVersion}
+               />
                <InfoRow label="Platform" value={`${data().os}/${data().arch}`} />
                <Show when={data().goamd64 as string}>
                  <InfoRow label="GOAMD64" value={data().goamd64 as string} accent />
@@ -197,10 +204,21 @@ const FeaturesSection: Component = () => {
 
             {/* Runtime */}
             <InfoGroup title="Runtime">
-              <InfoRow label="Memory (allocated)" value={`${data().memory.allocMB.toFixed(1)} MB`} />
-              <InfoRow label="Memory (system)" value={`${data().memory.sysMB.toFixed(1)} MB`} />
-              <InfoRow label="Goroutines" value={String(data().memory.goroutines)} />
-              <InfoRow label="GC Cycles" value={String(data().memory.numGC)} />
+              <InfoRow
+                label={data().runtime === 'rust' ? 'Memory (RSS)' : 'Memory (allocated)'}
+                value={`${data().memory.allocMB.toFixed(1)} MB`}
+              />
+              <InfoRow
+                label="Memory (system)"
+                value={`${data().memory.sysMB.toFixed(1)} MB`}
+              />
+              <InfoRow
+                label={data().runtime === 'rust' ? 'Tasks' : 'Goroutines'}
+                value={String(data().memory.goroutines)}
+              />
+              <Show when={data().runtime !== 'rust'}>
+                <InfoRow label="GC Cycles" value={String(data().memory.numGC)} />
+              </Show>
             </InfoGroup>
 
             {/* Compile-time Features */}

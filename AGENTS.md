@@ -7,7 +7,7 @@ Multi-user WebSDR. Streams RF spectrum + audio from RTL-SDR dongles to browsers.
 Two interchangeable backends share the same wire protocol and REST API:
 
 - `serverng/` — Go backend (reference implementation, production on `main`).
-- `serverrs/` — Rust backend (active port on branch `rustport`, release 2.11.5).
+- `serverrs/` — Rust backend (active port on branch `rustport`, release 2.11.6).
 
 Both do FFT (shared) + per-client IQ extraction + optional server-side
 demod/Opus. The SolidJS/TypeScript client does demodulation + audio rendering.

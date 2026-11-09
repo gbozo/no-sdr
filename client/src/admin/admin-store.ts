@@ -69,6 +69,8 @@ export interface UsbDevice {
   name: string;
   serial: string;
   available: boolean;
+  product?: string;
+  manufact?: string;
 }
 
 // ---- Bookmark Types ----

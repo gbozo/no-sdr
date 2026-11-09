@@ -26,6 +26,7 @@ mod imp {
         pub serial: String,
         pub product: String,
         pub manufact: String,
+        pub available: bool,
     }
 
     /// Enumerates locally attached RTL-SDR devices.
@@ -40,6 +41,7 @@ mod imp {
                 serial,
                 product,
                 manufact,
+                available: true,
             });
         }
         out
@@ -208,6 +210,7 @@ mod imp {
         pub serial: String,
         pub product: String,
         pub manufact: String,
+        pub available: bool,
     }
 
     pub fn enumerate_local_devices() -> Vec<LocalDeviceInfo> {

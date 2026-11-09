@@ -58,7 +58,7 @@ export const MSG_RDS = 0x0A;
 /**
  * Waterfall history burst — Uint8-quantized FFT frames for waterfall prefill.
  * Sent once per client on request_history command.
- * Wire: [0x0D][Uint16 frameCount LE][Uint16 binCount LE][Int16 minDb LE][Int16 maxDb LE]
+ * Wire: [0x0D][Uint16 frameCount LE][Uint32 binCount LE][Int16 minDb LE][Int16 maxDb LE][Uint8 codec]
  *        [Uint8 frame0bin0][Uint8 frame0bin1]...[Uint8 frameN-1binM-1]
  * Frames are ordered oldest-first so the client draws them top-to-bottom.
  */
@@ -96,8 +96,6 @@ export type ClientCommand =
   // Admin commands
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
-  | { cmd: 'admin_stop_dongle'; dongleId: string }
-  | { cmd: 'admin_start_dongle'; dongleId: string }
   // Music identification
   | { cmd: 'identify_start' };
 
@@ -121,6 +119,8 @@ export interface PushDongleInfo {
   enabled: boolean;
   sourceType: string;
   sampleRate: number;
+  /** Number of clients currently subscribed to this dongle (push updates). */
+  clientCount?: number;
   profiles: PushDongleProfile[];
   state: DongleState;
   activeProfile?: string;
@@ -158,8 +158,8 @@ export interface PushServerConfig {
 
 export type ServerMeta =
   | { type: 'welcome'; clientId: string; connIndex: number; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[] }
-  | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number }
-  | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number }
+  | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number }
+  | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number }
   | { type: 'dongle_status'; dongleId: string; running: boolean; clientCount: number }
   | { type: 'error'; message: string; code?: string }
   | { type: 'admin_auth_ok' }
@@ -179,8 +179,8 @@ export type ServerMeta =
   | { type: 'profiles_reordered'; dongleId: string; profiles: PushDongleProfile[]; version?: number }
   | { type: 'server_config_updated'; server: PushServerConfig; version?: number }
   | { type: 'config_saved'; version?: number }
-  | { type: 'dongle_disconnected'; dongleId: string; reason: string }
-  | { type: 'codec_status'; codec: string; accepted: boolean; reason?: string }
+  | { type: 'dongle_disconnected'; dongleId: string; message?: string; reason?: string }
+  | { type: 'codec_status'; fftCodec?: string; fftMsg?: string; iqCodec?: string; iqMsg?: string }
   // Music identification — one-time token response
   | { type: 'identify_token'; message: string }
   // Server-initiated toast notification (info / warning / error)
@@ -299,7 +299,7 @@ export function packIqAdpcmMessage(adpcmData: Uint8Array, sampleCount: number): 
 
 /**
  * Pack deflate-compressed FFT data into a binary message.
- * Header: [type 0x0B] [Int16 minDb LE] [Int16 maxDb LE] [Uint16 binCount LE] [deflate payload]
+ * Header: [type 0x0B] [Int16 minDb LE] [Int16 maxDb LE] [Uint32 binCount LE] [deflate payload]
  * The deflate payload contains delta-encoded Uint8 dB values compressed with raw deflate.
  * Delta encoding: first byte is absolute, subsequent bytes are (current - previous) as Int8.
  */

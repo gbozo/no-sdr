@@ -27,7 +27,7 @@ use super::protocol::{
 use super::ratelimit::RateLimiter;
 
 /// Server version advertised in the welcome message.
-pub const SERVER_VERSION: &str = "2.11.5";
+pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 type CommandHandler = Arc<dyn Fn(&str, &ClientCommand) + Send + Sync>;
 type ClientHandler = Arc<dyn Fn(&str) + Send + Sync>;
@@ -168,6 +168,13 @@ impl WsManager {
     pub fn set_client_profile_id(&self, client_id: &str, profile_id: &str) {
         if let Some(c) = self.clients.read().get(client_id) {
             c.set_profile_id(profile_id);
+        }
+    }
+
+    /// Set the IQ codec state on a connected client (fallback bookkeeping).
+    pub fn set_client_iq_codec(&self, client_id: &str, codec: &str) {
+        if let Some(c) = self.clients.read().get(client_id) {
+            c.set_iq_codec(codec);
         }
     }
 
@@ -789,7 +796,7 @@ mod tests {
         assert_eq!(meta["type"], "welcome");
         assert_eq!(meta["clientId"], "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(meta["connIndex"], 1);
-        assert_eq!(meta["serverVersion"], "2.11.5");
+        assert_eq!(meta["serverVersion"], SERVER_VERSION);
 
         // Wait until the manager registers the client.
         for _ in 0..100 {

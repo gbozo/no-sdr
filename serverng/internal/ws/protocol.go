@@ -57,20 +57,23 @@ type ServerMeta struct {
 
 // ClientCommand represents a parsed command from the client (JSON text).
 type ClientCommand struct {
-	Cmd           string `json:"cmd"`
-	DongleId      string `json:"dongleId,omitempty"`
-	ProfileId     string `json:"profileId,omitempty"`
-	Offset        int    `json:"offset,omitempty"`
-	Mode          string `json:"mode,omitempty"`
-	Bandwidth     int    `json:"bandwidth,omitempty"`
-	Hz            int    `json:"hz,omitempty"`
-	FftCodec      string `json:"fftCodec,omitempty"`
-	IqCodec       string `json:"iqCodec,omitempty"`
-	Enabled       *bool  `json:"enabled,omitempty"`
-	StereoEnabled *bool  `json:"stereoEnabled,omitempty"`
-	Password      string `json:"password,omitempty"`
+	Cmd           string  `json:"cmd"`
+	DongleId      string  `json:"dongleId,omitempty"`
+	ProfileId     string  `json:"profileId,omitempty"`
+	Offset        int     `json:"offset,omitempty"`
+	Mode          string  `json:"mode,omitempty"`
+	Bandwidth     int     `json:"bandwidth,omitempty"`
+	Hz            int     `json:"hz,omitempty"`
+	FftCodec      string  `json:"fftCodec,omitempty"`
+	IqCodec       string  `json:"iqCodec,omitempty"`
+	Enabled       *bool   `json:"enabled,omitempty"`
+	StereoEnabled *bool   `json:"stereoEnabled,omitempty"`
+	Password      string  `json:"password,omitempty"`
 	Level         float64 `json:"level,omitempty"`
-	Muted         *bool  `json:"muted,omitempty"`
+	// Threshold is what the client actually sends for
+	// `set_pre_filter_nb_threshold`; Level is kept for older clients/tools.
+	Threshold *float64 `json:"threshold,omitempty"`
+	Muted     *bool    `json:"muted,omitempty"`
 }
 
 // PackMetaMessage packs a ServerMeta as a binary message: [0x03][UTF-8 JSON]

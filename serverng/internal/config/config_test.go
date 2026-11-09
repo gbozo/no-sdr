@@ -53,6 +53,53 @@ func TestLoadValidYAML(t *testing.T) {
 	}
 }
 
+func TestExplicitDisabledPreserved(t *testing.T) {
+	path := writeTempFile(t, "config-disabled-*.yaml", `
+dongles:
+  - id: "d1"
+    name: "D1"
+    enabled: false
+    autoStart: false
+    source:
+      type: "demo"
+    profiles:
+      - id: "p1"
+        sampleRate: 2400000
+        defaultMode: "nfm"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Dongles[0].Enabled {
+		t.Error("explicit enabled: false was not preserved")
+	}
+	if cfg.Dongles[0].AutoStart {
+		t.Error("explicit autoStart: false was not preserved")
+	}
+}
+
+func TestOmittedEnabledDefaultsTrue(t *testing.T) {
+	path := writeTempFile(t, "config-presence-*.yaml", `
+dongles:
+  - id: "d1"
+    name: "D1"
+    source:
+      type: "demo"
+    profiles:
+      - id: "p1"
+        sampleRate: 2400000
+        defaultMode: "nfm"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Dongles[0].Enabled || !cfg.Dongles[0].AutoStart {
+		t.Error("omitted enabled/autoStart should default to true")
+	}
+}
+
 func TestDefaultValues(t *testing.T) {
 	yaml := `
 dongles:

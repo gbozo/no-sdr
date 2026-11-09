@@ -14,6 +14,10 @@ import (
 )
 
 // Manager handles WebSocket client connections and broadcasting.
+// ServerVersion is advertised in the welcome message. Set by main.go from
+// the ldflags version so it cannot drift from the released binary.
+var ServerVersion = "dev"
+
 type Manager struct {
 	clients      map[string]*Client
 	mu           sync.RWMutex
@@ -248,7 +252,7 @@ func (m *Manager) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		Type:             "welcome",
 		ClientId:         persistentID,
 		ConnIndex:        connIndex,
-		ServerVersion:    "2.6.8",
+		ServerVersion:    ServerVersion,
 		AllowedFftCodecs: allowedFft,
 		AllowedIqCodecs:  allowedIq,
 	})

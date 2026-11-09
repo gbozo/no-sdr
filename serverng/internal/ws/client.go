@@ -25,15 +25,20 @@ type Client struct {
 	cancel       context.CancelFunc
 
 	// Subscription state — written only from the read goroutine.
-	DongleID       string
-	ProfileID      string // Active profile ID on the subscribed dongle
-	AudioEnabled   bool
-	StereoEnabled  bool
-	FftCodec       string // "none", "adpcm", "deflate"
-	IqCodec        string // "none", "adpcm", "opus-lo", "opus", "opus-hq"
-	Mode           string
-	TuneOffset     int
-	Bandwidth      int
+	DongleID      string
+	ProfileID     string // Active profile ID on the subscribed dongle
+	AudioEnabled  bool
+	StereoEnabled bool
+	FftCodec      string // "none", "adpcm", "deflate"
+	IqCodec       string // "none", "adpcm", "opus-lo", "opus", "opus-hq"
+	Mode          string
+	TuneOffset    int
+	Bandwidth     int
+
+	// Admin is set after a successful admin_auth on this connection.
+	Admin bool
+	// AuthFailures counts consecutive failed admin password attempts.
+	AuthFailures int
 
 	// ConnectedAt records when the client connected.
 	ConnectedAt time.Time
@@ -68,16 +73,16 @@ func newClient(id string, conn *websocket.Conn, ctx context.Context, cancel cont
 		writeCap = DefaultWriteChSize
 	}
 	return &Client{
-		ID:          id,
-		conn:        conn,
-		ctx:         ctx,
-		cancel:      cancel,
+		ID:            id,
+		conn:          conn,
+		ctx:           ctx,
+		cancel:        cancel,
 		FftCodec:      "",   // empty = "none" — client sends preferred codec after subscribe
 		IqCodec:       "",   // empty = "none" — client sends preferred codec after subscribe
 		StereoEnabled: true, // default true until client sends stereo_enabled=false
-		ConnectedAt: time.Now(),
-		writeCh:     make(chan []byte, writeCap),
-		lastDrainAt: time.Now(),
+		ConnectedAt:   time.Now(),
+		writeCh:       make(chan []byte, writeCap),
+		lastDrainAt:   time.Now(),
 	}
 }
 

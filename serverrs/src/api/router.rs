@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{header, HeaderMap, HeaderName, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -81,7 +81,8 @@ pub fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([header::ETAG, HeaderName::from_static("x-config-version")]);
 
     Router::new()
         .route("/ws", get(ws_handler))
@@ -131,9 +132,8 @@ async fn status(State(state): State<AppState>) -> Response {
 }
 
 async fn public_dongles(State(state): State<AppState>) -> Response {
-    let cfg = state.cfg.read();
-    let out: Vec<_> = cfg
-        .dongles
+    let dongles = state.cfg.read().dongles.clone();
+    let out: Vec<_> = dongles
         .iter()
         .map(|d| {
             json!({
@@ -142,9 +142,9 @@ async fn public_dongles(State(state): State<AppState>) -> Response {
                 "name": d.name,
                 "serial": "",
                 "source": d.source.kind,
-                "activeProfileId": d.profiles.first().map(|p| p.id.clone()).unwrap_or_default(),
+                "activeProfileId": state.mgr.active_profile_id(&d.id).unwrap_or_default(),
                 "ppmCorrection": d.ppm,
-                "running": d.enabled && d.auto_start,
+                "running": state.mgr.is_dongle_running(&d.id),
                 "clientCount": state.ws.subscribed_clients(&d.id).len(),
             })
         })

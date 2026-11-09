@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 var startTime = time.Now()
@@ -98,7 +98,7 @@ func NewRouterWithPath(wsMgr *ws.Manager, cfg *config.Config, logger *slog.Logge
 			r.Delete("/bookmarks/{id}", deleteBookmarkHandler(cfg, cfgVersion))
 			r.Post("/save-config", saveConfigHandler(cfg, cfgPath, cfgVersion))
 			r.Get("/server/config", serverConfigHandler(cfg, cfgVersion))
-			r.Put("/server/config", updateServerConfigHandler(cfg, cfgVersion))
+			r.Put("/server/config", updateServerConfigHandler(cfg, cfgVersion, adminAuth))
 			// IQ recording (SigMF)
 			r.Get("/recordings", recordStatusHandler())
 			r.Post("/dongles/{id}/record", recordStartHandler(cfg))
@@ -181,6 +181,14 @@ func donglesHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var resp []dongleResponse
 		for _, d := range cfg.Dongles {
+			running := d.Enabled && d.AutoStart
+			if IsDongleRunningFunc != nil {
+				running = IsDongleRunningFunc(d.ID)
+			}
+			activeProfile := ""
+			if ActiveProfileFunc != nil {
+				activeProfile = ActiveProfileFunc(d.ID)
+			}
 			dr := dongleResponse{
 				ID:            d.ID,
 				DeviceIndex:   d.DeviceIndex,
@@ -188,10 +196,12 @@ func donglesHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 				Serial:        "",
 				Source:        d.Source.Type,
 				PpmCorrection: d.PPM,
-				Running:       d.Enabled && d.AutoStart,
+				Running:       running,
 				ClientCount:   len(wsMgr.SubscribedClients(d.ID)),
 			}
-			if len(d.Profiles) > 0 {
+			if activeProfile != "" {
+				dr.ActiveProfileId = activeProfile
+			} else if len(d.Profiles) > 0 {
 				dr.ActiveProfileId = d.Profiles[0].ID
 			}
 			resp = append(resp, dr)
@@ -249,6 +259,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Config-Version, ETag")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

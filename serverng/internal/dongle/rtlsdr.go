@@ -12,11 +12,12 @@ import (
 
 // LocalDeviceInfo describes a locally-attached RTL-SDR dongle.
 type LocalDeviceInfo struct {
-	Index   int    `json:"index"`
-	Name    string `json:"name"`
-	Serial  string `json:"serial"`
-	Product string `json:"product"`
-	Manufact string `json:"manufact"`
+	Index     int    `json:"index"`
+	Name      string `json:"name"`
+	Serial    string `json:"serial"`
+	Product   string `json:"product"`
+	Manufact  string `json:"manufact"`
+	Available bool   `json:"available"`
 }
 
 // EnumerateLocalDevices returns info about every RTL-SDR visible to librtlsdr.
@@ -30,11 +31,12 @@ func EnumerateLocalDevices() []LocalDeviceInfo {
 			manufact, product, serial = "", "", ""
 		}
 		out = append(out, LocalDeviceInfo{
-			Index:    i,
-			Name:     rtl.GetDeviceName(i),
-			Serial:   serial,
-			Product:  product,
-			Manufact: manufact,
+			Index:     i,
+			Name:      rtl.GetDeviceName(i),
+			Serial:    serial,
+			Product:   product,
+			Manufact:  manufact,
+			Available: true,
 		})
 	}
 	return out

@@ -153,6 +153,8 @@ export class SdrEngine {
   // Unlike activeDongleId (cleared on disconnect), this stays true across
   // reconnects so the 'subscribed' handler can restore tuning state.
   private hadPriorSubscription = false;
+  /** True while re-establishing a dropped connection (restores tuning state). */
+  private reconnecting = false;
 
   // Bandwidth / throughput tracking (updated every second)
   private bwFftFrames = 0;
@@ -481,6 +483,7 @@ export class SdrEngine {
     this.ws.onclose = () => {
       store.setConnected(false);
       store.setConnectionState('disconnected');
+      this.reconnecting = true;
       // FIX: Clear activeDongleId so state_sync triggers resubscription on reconnect
       store.setActiveDongleId('');
       console.log('[SDR] WebSocket disconnected');
@@ -1030,6 +1033,7 @@ export class SdrEngine {
         store.setServerWsBytes(-1);
         store.setServerWsBytesHistory([]);
         store.setClientId(meta.clientId);
+        store.setServerVersion(meta.serverVersion ?? '');
         // Server is the authority on client ID — store whatever it sends
         if (meta.clientId && meta.clientId !== store.localClientId()) {
           store.setLocalClientId(meta.clientId);
@@ -1061,6 +1065,10 @@ export class SdrEngine {
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
         store.setTuningStep(meta.tuningStep ?? 0);
+        // Apply the profile's default tune offset so the displayed frequency
+        // matches what the server is actually demodulating. On reconnect the
+        // client restores its previous offset below.
+        store.setTuneOffset(meta.tuneOffset ?? 0);
         // Center frequency changed server-side — arm identify cooldown for ADPCM/none.
         this.armIdentifyCooldown();
         if (meta.iqSampleRate) {
@@ -1144,6 +1152,7 @@ export class SdrEngine {
           this.send({ cmd: 'set_pre_filter_nb', enabled: true });
           this.send({ cmd: 'set_pre_filter_nb_threshold', threshold: store.nbLevel() });
         }
+        this.reconnecting = false;
         break;
       }
 
@@ -1154,7 +1163,7 @@ export class SdrEngine {
         store.setFftSize(meta.fftSize);
         store.setTuningStep(meta.tuningStep ?? 0);
         // Reset tune offset — previous offset is invalid for new center frequency
-        store.setTuneOffset(0);
+        store.setTuneOffset(meta.tuneOffset ?? 0);
         // Profile/center frequency changed — arm identify cooldown for ADPCM/none.
         this.armIdentifyCooldown();
         if (meta.iqSampleRate) {
@@ -1238,7 +1247,7 @@ export class SdrEngine {
           activeProfileId: d.activeProfile || null,
           ppmCorrection: 0,
           running: d.state.status === 'running',
-          clientCount: 0,
+          clientCount: d.clientCount ?? 0,
           sampleRate: d.sampleRate,
         }));
         store.setDongles(legacyDongles);
@@ -1273,7 +1282,7 @@ export class SdrEngine {
           activeProfileId: meta.dongle.activeProfile || null,
           ppmCorrection: 0,
           running: meta.dongle.state.status === 'running',
-          clientCount: 0,
+          clientCount: meta.dongle.clientCount ?? 0,
           sampleRate: meta.dongle.sampleRate,
         }]);
         if (meta.version) store.setConfigVersion(meta.version);
@@ -1296,6 +1305,7 @@ export class SdrEngine {
             running: meta.dongle.state.status === 'running',
             sampleRate: meta.dongle.sampleRate,
             activeProfileId: meta.dongle.activeProfile || null,
+            clientCount: meta.dongle.clientCount ?? d.clientCount ?? 0,
           } : d)
         );
         if (meta.version) store.setConfigVersion(meta.version);
@@ -1355,6 +1365,24 @@ export class SdrEngine {
             this.subscribe(running.id);
           }
         }
+        break;
+      }
+
+      case 'dongle_status': {
+        store.setDongles(
+          store.dongles().map(d => d.id === meta.dongleId
+            ? { ...d, running: meta.running, clientCount: meta.clientCount }
+            : d)
+        );
+        store.setPushDongles(
+          store.pushDongles().map(d => {
+            if (d.id !== meta.dongleId) return d;
+            const status = meta.running
+              ? 'running'
+              : (d.state.status === 'running' ? 'stopped' : d.state.status);
+            return { ...d, clientCount: meta.clientCount, state: { ...d.state, status } };
+          })
+        );
         break;
       }
 
@@ -1429,7 +1457,7 @@ export class SdrEngine {
         break;
 
       case 'dongle_disconnected':
-        console.warn(`[SDR] Dongle disconnected: ${meta.dongleId} (${meta.reason})`);
+        console.warn(`[SDR] Dongle disconnected: ${meta.dongleId} (${meta.message ?? meta.reason ?? 'disconnected'})`);
         // If we were subscribed to this dongle, clear subscription state
         if (store.activeDongleId() === meta.dongleId) {
           store.setActiveDongleId('');
@@ -1441,11 +1469,21 @@ export class SdrEngine {
         }
         break;
 
-      case 'codec_status':
-        if (!meta.accepted) {
-          console.warn(`[SDR] Codec ${meta.codec} rejected: ${meta.reason}`);
+      case 'codec_status': {
+        if (meta.fftCodec && meta.fftCodec !== store.fftCodec()) {
+          store.setFftCodec(meta.fftCodec as FftCodecType);
+        }
+        if (meta.iqCodec && meta.iqCodec !== store.iqCodec()) {
+          store.setIqCodec(meta.iqCodec as IqCodecType);
+          this.iqAdpcmDecoder.reset();
+        }
+        const notice = [meta.fftMsg, meta.iqMsg].filter(Boolean).join(' ');
+        if (notice) {
+          console.warn(`[SDR] Codec fallback: ${notice}`);
+          store.addToast(notice, 'codec');
         }
         break;
+      }
     }
   }
 
@@ -1461,6 +1499,12 @@ export class SdrEngine {
   }
 
   subscribe(dongleId: string, profileId?: string): void {
+    // A user-initiated subscribe (or automatic dongle switch while connected)
+    // must use the new profile's defaults. Only a reconnect restores the
+    // previous mode/bandwidth/tune offset.
+    if (!this.reconnecting) {
+      this.hadPriorSubscription = false;
+    }
     this.send({ cmd: 'subscribe', dongleId, profileId });
   }
 

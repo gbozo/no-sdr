@@ -22,6 +22,14 @@ var GoAMD64 = ""
 // Set by main.go to dongle.Manager.GetAllDongleStates.
 var GetDongleStatesFunc func() map[string]any
 
+// IsDongleRunningFunc reports whether a dongle pipeline is active.
+// Set by main.go to dongle.Manager.IsRunning.
+var IsDongleRunningFunc func(dongleID string) bool
+
+// ActiveProfileFunc returns a dongle's active profile ID.
+// Set by main.go to dongle.Manager.ActiveProfileID.
+var ActiveProfileFunc func(dongleID string) string
+
 // systemInfoHandler returns build info, supported features, and server runtime info.
 // GET /api/admin/system-info
 func systemInfoHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
@@ -29,22 +37,35 @@ func systemInfoHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
 
+		supportedIq := append([]string(nil), config.DefaultIqCodecs...)
+		if !codec.OpusAvailable() {
+			filtered := supportedIq[:0]
+			for _, c := range supportedIq {
+				if c != "opus" && c != "opus-hq" && c != "opus-lo" {
+					filtered = append(filtered, c)
+				}
+			}
+			supportedIq = filtered
+		}
+
 		resp := map[string]any{
-			"version":   Version,
-			"goVersion": runtime.Version(),
-			"os":        runtime.GOOS,
-			"arch":      runtime.GOARCH,
-			"goamd64":  GoAMD64,
-			"uptime":    int64(time.Since(startTime).Seconds()),
+			"version":        Version,
+			"goVersion":      runtime.Version(),
+			"runtime":        "go",
+			"runtimeVersion": runtime.Version(),
+			"os":             runtime.GOOS,
+			"arch":           runtime.GOARCH,
+			"goamd64":        GoAMD64,
+			"uptime":         int64(time.Since(startTime).Seconds()),
 			"memory": map[string]any{
-				"allocMB":   float64(mem.Alloc) / 1024 / 1024,
-				"sysMB":     float64(mem.Sys) / 1024 / 1024,
-				"numGC":     mem.NumGC,
+				"allocMB":    float64(mem.Alloc) / 1024 / 1024,
+				"sysMB":      float64(mem.Sys) / 1024 / 1024,
+				"numGC":      mem.NumGC,
 				"goroutines": runtime.NumGoroutine(),
 			},
 			"features": map[string]any{
-				"opusSupport":     codec.OpusAvailable(),
-				"rtlsdrNative":    rtlsdrAvailable(),
+				"opusSupport":      codec.OpusAvailable(),
+				"rtlsdrNative":     rtlsdrAvailable(),
 				"allowedFftCodecs": cfg.Server.AllowedFftCodecs,
 				"allowedIqCodecs":  cfg.Server.AllowedIqCodecs,
 				"supportedSources": []string{
@@ -54,7 +75,7 @@ func systemInfoHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc {
 					"wfm", "nfm", "am", "am-stereo", "usb", "lsb", "cw", "raw", "sam",
 				},
 				"supportedFftCodecs": config.DefaultFftCodecs,
-				"supportedIqCodecs":  config.DefaultIqCodecs,
+				"supportedIqCodecs":  supportedIq,
 			},
 			"dongles": map[string]any{
 				"configured": len(cfg.Dongles),

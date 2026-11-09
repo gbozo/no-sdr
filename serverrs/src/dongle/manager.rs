@@ -23,9 +23,9 @@ use crate::config::{Config, DongleConfig, DongleProfile};
 use crate::dsp::{FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
 use crate::history::FftBuffer;
 use crate::ws::{
-    pack_audio_opus_message, pack_fft_adpcm_message, pack_fft_compressed_message,
-    pack_iq_adpcm_message, pack_iq_message, pack_meta_message,
-    pack_rds_message, ClientCommand, ServerMeta, WsManager, MSG_META,
+    pack_audio_opus_message, pack_codec_status_message, pack_fft_adpcm_message,
+    pack_fft_compressed_message, pack_iq_adpcm_message, pack_iq_message, pack_meta_message,
+    pack_rds_message, ClientCommand, CodecStatus, ServerMeta, WsManager, MSG_META,
 };
 
 use super::demo::{DemoConfig, DemoSource};
@@ -43,6 +43,7 @@ pub const STATUS_RETRYING: &str = "retrying";
 pub const STATUS_ERROR: &str = "error";
 
 const MAX_RETRIES: i32 = 5;
+const MAX_ADMIN_AUTH_FAILURES: u32 = 5;
 
 fn retry_backoff(attempt: i32) -> Duration {
     let secs = 1u64 << attempt.clamp(0, 4);
@@ -84,6 +85,7 @@ pub struct DongleInfo {
     pub enabled: bool,
     pub source_type: String,
     pub sample_rate: i32,
+    pub client_count: usize,
     pub profiles: Vec<DongleProfile>,
     pub state: DongleState,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -179,6 +181,9 @@ pub struct Manager {
     dongles: RwLock<HashMap<String, Arc<ActiveDongle>>>,
     dongle_states: Mutex<HashMap<String, DongleState>>,
     client_pipelines: Mutex<HashMap<String, Arc<Mutex<ClientPipeline>>>>,
+    /// Last per-dongle subscribed-client counts, used to broadcast
+    /// `dongle_status` only when a count actually changes.
+    last_client_counts: Mutex<HashMap<String, usize>>,
     recorder: Recorder,
     get_version: Mutex<Option<Arc<dyn Fn() -> u64 + Send + Sync>>>,
     identify_token_func:
@@ -202,6 +207,7 @@ impl Manager {
             dongles: RwLock::new(HashMap::new()),
             dongle_states: Mutex::new(states),
             client_pipelines: Mutex::new(HashMap::new()),
+            last_client_counts: Mutex::new(HashMap::new()),
             recorder: Recorder::new("recordings"),
             get_version: Mutex::new(None),
             identify_token_func: Mutex::new(None),
@@ -860,6 +866,7 @@ impl Manager {
         };
         cp.extractor.set_bandwidth(bandwidth);
 
+        let mut fallback_status: Option<CodecStatus> = None;
         if is_opus_codec(&iq_codec) {
             let complexity = self.cfg.read().server.opus_complexity;
             match OpusPipeline::new(OpusPipelineConfig {
@@ -874,6 +881,13 @@ impl Manager {
                 Err(e) => {
                     error!(client = %client_id, error = %e, "failed to create Opus pipeline; falling back to ADPCM");
                     cp.iq_codec = "adpcm".to_string();
+                    fallback_status = Some(CodecStatus {
+                        iq_codec: "adpcm".to_string(),
+                        iq_msg: format!(
+                            "codec '{iq_codec}' not available on this server, using 'adpcm': {e}"
+                        ),
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -881,6 +895,12 @@ impl Manager {
         self.client_pipelines
             .lock()
             .insert(client_id.to_string(), Arc::new(Mutex::new(cp)));
+
+        if let Some(status) = fallback_status {
+            self.ws.set_client_iq_codec(client_id, "adpcm");
+            self.ws
+                .send_to(client_id, pack_codec_status_message(&status));
+        }
     }
 
     fn destroy_client_pipeline(&self, client_id: &str) {
@@ -963,8 +983,21 @@ impl Manager {
     }
 
     fn handle_admin_auth(&self, client_id: &str, cmd: &ClientCommand) {
+        let Some(client) = self.ws.get_client(client_id) else {
+            return;
+        };
+        if client.auth_failures() >= MAX_ADMIN_AUTH_FAILURES {
+            self.send_error(
+                client_id,
+                "Too many failed admin password attempts".to_string(),
+                "AUTH_RATE_LIMITED",
+            );
+            return;
+        }
         let password = self.cfg.read().server.admin_password.clone();
-        if cmd.password == password {
+        if !password.is_empty() && cmd.password == password {
+            client.set_admin(true);
+            client.set_auth_failures(0);
             self.send_meta(
                 client_id,
                 ServerMeta {
@@ -973,11 +1006,24 @@ impl Manager {
                 },
             );
         } else {
+            client.set_admin(false);
+            client.set_auth_failures(client.auth_failures().saturating_add(1));
             self.send_error(client_id, "Invalid admin password".to_string(), "AUTH_FAILED");
         }
     }
 
     fn handle_admin_set_profile(&self, client_id: &str, cmd: &ClientCommand) {
+        let Some(client) = self.ws.get_client(client_id) else {
+            return;
+        };
+        if !client.is_admin() {
+            self.send_error(
+                client_id,
+                "admin authentication required".to_string(),
+                "AUTH_FAILED",
+            );
+            return;
+        }
         if cmd.dongle_id.is_empty() || cmd.profile_id.is_empty() {
             return;
         }
@@ -1016,7 +1062,13 @@ impl Manager {
             return;
         }
 
-        if !cmd.profile_id.is_empty() && client.profile_id() != cmd.profile_id {
+        let active_profile_id = self
+            .dongles
+            .read()
+            .get(&dongle_id)
+            .map(|d| d.profile.read().id.clone())
+            .unwrap_or_default();
+        if !cmd.profile_id.is_empty() && active_profile_id != cmd.profile_id {
             if let Err(e) = self.switch_profile(&dongle_id, &cmd.profile_id) {
                 self.send_error(
                     client_id,
@@ -1054,6 +1106,7 @@ impl Manager {
             iq_sample_rate: Some(output_rate_for_mode(&mode) as i64),
             mode: Some(mode),
             tuning_step: Some(profile.tuning_step as i64),
+            tune_offset: Some(profile.tune_offset as i64),
             ..Default::default()
         };
         self.send_meta(client_id, meta);
@@ -1141,6 +1194,15 @@ impl Manager {
         if cmd.iq_codec.is_empty() {
             return;
         }
+        // The WS layer already applied the allowed-codec fallback to the
+        // client state; use that sanitized value rather than the raw request.
+        let new_codec = match self.ws.get_client(client_id) {
+            Some(c) => c.iq_codec(),
+            None => return,
+        };
+        if new_codec.is_empty() {
+            return;
+        }
         let cp = match self.client_pipelines.lock().get(client_id).cloned() {
             Some(cp) => cp,
             None => return,
@@ -1148,7 +1210,9 @@ impl Manager {
         let mut cp = cp.lock();
 
         let old_codec = cp.iq_codec.clone();
-        let new_codec = cmd.iq_codec.clone();
+        if old_codec == new_codec {
+            return;
+        }
         let old_opus = is_opus_codec(&old_codec);
         let new_opus = is_opus_codec(&new_codec);
 
@@ -1184,6 +1248,19 @@ impl Manager {
                     }
                     Err(e) => {
                         error!(client = %client_id, error = %e, "failed to create Opus pipeline");
+                        // Keep the pipeline on the previous codec and tell the
+                        // client what it is actually receiving.
+                        self.ws.set_client_iq_codec(client_id, &old_codec);
+                        self.ws.send_to(
+                            client_id,
+                            pack_codec_status_message(&CodecStatus {
+                                iq_codec: old_codec.clone(),
+                                iq_msg: format!(
+                                    "codec '{new_codec}' could not be enabled, staying on '{old_codec}': {e}"
+                                ),
+                                ..Default::default()
+                            }),
+                        );
                     }
                 }
             }
@@ -1260,10 +1337,15 @@ impl Manager {
     }
 
     fn handle_set_pre_filter_nb_threshold(&self, client_id: &str, cmd: &ClientCommand) {
-        if cmd.level <= 0.0 {
+        // The client sends `threshold`; older clients/tools send `level`.
+        let threshold = match cmd.threshold {
+            Some(v) => v,
+            None => cmd.level,
+        };
+        if threshold <= 0.0 {
             return;
         }
-        let threshold = cmd.level as f32;
+        let threshold = threshold as f32;
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
             cp.nb_threshold = threshold;
@@ -1681,6 +1763,26 @@ impl Manager {
         self.dongle_states.lock().clone()
     }
 
+    /// True while the dongle pipeline is actually running.
+    pub fn is_dongle_running(&self, dongle_id: &str) -> bool {
+        self.dongles.read().contains_key(dongle_id)
+    }
+
+    /// Active profile of a running dongle, or the first configured profile
+    /// when it is stopped.
+    pub fn active_profile_id(&self, dongle_id: &str) -> Option<String> {
+        if let Some(d) = self.dongles.read().get(dongle_id) {
+            return Some(d.profile.read().id.clone());
+        }
+        self.cfg
+            .read()
+            .dongles
+            .iter()
+            .find(|d| d.id == dongle_id)
+            .and_then(|d| d.profiles.first())
+            .map(|p| p.id.clone())
+    }
+
     fn set_state(&self, dongle_id: &str, state: DongleState) {
         self.dongle_states
             .lock()
@@ -1695,6 +1797,7 @@ impl Manager {
             .get(&dcfg.id)
             .map(|d| d.profile.read().id.clone())
             .unwrap_or_default();
+        let client_count = self.ws.subscribed_clients(&dcfg.id).len();
 
         DongleInfo {
             id: dcfg.id.clone(),
@@ -1702,6 +1805,7 @@ impl Manager {
             enabled: dcfg.enabled,
             source_type: dcfg.source.kind.clone(),
             sample_rate: dcfg.sample_rate,
+            client_count,
             profiles: dcfg.profiles.clone(),
             state,
             active_profile,
@@ -1964,6 +2068,38 @@ impl Manager {
                 msg.push(MSG_META);
                 msg.extend_from_slice(&bytes);
                 mgr.ws.broadcast_all(msg);
+
+                // Push per-dongle client counts when they change so the UI
+                // does not have to poll the admin REST endpoint.
+                let current_counts: Vec<(String, usize)> = {
+                    let cfg = mgr.cfg.read();
+                    cfg.dongles
+                        .iter()
+                        .map(|d| (d.id.clone(), mgr.ws.subscribed_clients(&d.id).len()))
+                        .collect()
+                };
+                let changes: Vec<(String, usize)> = {
+                    let mut last = mgr.last_client_counts.lock();
+                    let mut changes = Vec::new();
+                    for (id, count) in &current_counts {
+                        if last.get(id).copied() != Some(*count) {
+                            last.insert(id.clone(), *count);
+                            changes.push((id.clone(), *count));
+                        }
+                    }
+                    last.retain(|id, _| current_counts.iter().any(|(known, _)| known == id));
+                    changes
+                };
+                for (id, count) in changes {
+                    let meta = ServerMeta {
+                        msg_type: "dongle_status".to_string(),
+                        dongle_id: Some(id.clone()),
+                        running: Some(mgr.is_dongle_running(&id)),
+                        client_count: Some(count as i64),
+                        ..Default::default()
+                    };
+                    mgr.ws.broadcast_all(pack_meta_message(&meta));
+                }
             }
         });
     }

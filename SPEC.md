@@ -154,14 +154,14 @@ All binary messages are prefixed with a single type byte. The remaining bytes ar
 | Type | Constant | Payload Format | Size per Message | Scope |
 |------|----------|---------------|-----------------|-------|
 | `0x01` | `MSG_FFT` | `Float32Array` — dB magnitudes, DC-centered, length = fftSize | fftSize × 4 + 1 bytes | Broadcast to dongle |
-| `0x02` | `MSG_IQ` | `Int16Array` — interleaved I,Q,I,Q... samples of user's sub-band | Variable (depends on bandwidth/mode) | Per-user |
+| `0x02` | `MSG_IQ` | `[Uint32 sampleRate LE][Uint8 channels=2][Uint8 reserved][Int16 interleaved I/Q...]` | Variable (depends on bandwidth/mode) | Per-user |
 | `0x03` | `MSG_META` | UTF-8 JSON string — `ServerMeta` union type | Variable | Per-user |
 | `0x04` | `MSG_FFT_COMPRESSED` | `[Int16 minDb LE][Int16 maxDb LE][Uint8...]` — 4-byte header + dB mapped to 0-255 | fftSize + 5 bytes | Broadcast to dongle |
 | `0x05` | `MSG_AUDIO` | `Int16Array` — mono PCM audio samples | Variable | Per-user |
 | `0x06` | `MSG_DECODER` | UTF-8 JSON — `{ decoderType, data }` | Variable | Broadcast to dongle |
 | `0x07` | `MSG_SIGNAL_LEVEL` | `Float32` — signal strength in dB | 5 bytes | Per-user |
 | `0x08` | `MSG_FFT_ADPCM` | IMA-ADPCM encoded FFT: `[Int16 minDb LE][Int16 maxDb LE][10 warmup samples][ADPCM bytes]` | ~fftSize/2 + 15 bytes | Broadcast to dongle |
-| `0x09` | `MSG_IQ_ADPCM` | `[Uint32 sampleCount LE][ADPCM bytes]` — IMA-ADPCM compressed IQ | Variable (~50% of raw) | Per-user |
+| `0x09` | `MSG_IQ_ADPCM` | `[Uint32 sampleCount LE][Uint32 sampleRate LE][Uint8 channels=2][Uint8 reserved][ADPCM bytes]` — IMA-ADPCM compressed IQ | Variable (~50% of raw) | Per-user |
 | `0x0B` | `MSG_FFT_DEFLATE` | `[Int16 minDb LE][Int16 maxDb LE][Uint32 binCount LE][raw deflate bytes]` — delta+deflate lossless FFT | Variable (~12% of raw) | Broadcast to dongle |
 | `0x0C` | `MSG_AUDIO_OPUS` | `[Uint16 sampleCount LE][Uint8 channels][Opus packet bytes]` — server-side demodulated Opus VBR audio | Variable (~2–24 KB/s) | Per-user |
 
@@ -172,10 +172,12 @@ type ServerMeta =
   | { type: 'welcome'; clientId: string; serverVersion: string }
   | { type: 'subscribed'; dongleId: string; profileId: string;
       centerFreq: number; sampleRate: number; fftSize: number;
-      iqSampleRate: number; mode: string }
+      iqSampleRate: number; mode: string;
+      tuningStep?: number; tuneOffset?: number }
   | { type: 'profile_changed'; dongleId: string; profileId: string;
       centerFreq: number; sampleRate: number; fftSize: number;
-      iqSampleRate: number; mode: string }
+      iqSampleRate: number; mode: string;
+      tuningStep?: number; tuneOffset?: number }
   | { type: 'dongle_status'; dongleId: string; running: boolean;
       clientCount: number }
   | { type: 'error'; message: string; code?: string }
@@ -194,7 +196,7 @@ type ClientCommand =
   | { cmd: 'subscribe'; dongleId: string; profileId?: string }
   | { cmd: 'unsubscribe' }
   | { cmd: 'tune'; offset: number }      // Hz offset from center
-  | { cmd: 'mode'; mode: DemodMode }
+  | { cmd: 'mode'; mode: DemodMode; bandwidth?: number }
   | { cmd: 'bandwidth'; hz: number }
   | { cmd: 'volume'; level: number }      // 0.0 – 1.0
   | { cmd: 'mute'; muted: boolean }
@@ -202,13 +204,15 @@ type ClientCommand =
   | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
   | { cmd: 'audio_enabled'; enabled: boolean }
   | { cmd: 'stereo_enabled'; enabled: boolean }
+  | { cmd: 'request_history' }
+  | { cmd: 'set_pre_filter_nb'; enabled: boolean }
+  | { cmd: 'set_pre_filter_nb_threshold'; threshold: number }
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
-  | { cmd: 'admin_stop_dongle'; dongleId: string }
-  | { cmd: 'admin_start_dongle'; dongleId: string };
+  | { cmd: 'identify_start' };
 
-type FftCodecType = 'none' | 'adpcm' | 'deflate';
-type IqCodecType = 'none' | 'adpcm' | 'opus' | 'opus-hq';
+type FftCodecType = 'none' | 'adpcm' | 'deflate' | 'deflate-floor';
+type IqCodecType = 'none' | 'adpcm' | 'opus-lo' | 'opus' | 'opus-hq';
 type CodecType = FftCodecType | IqCodecType;  // union for backward compat
 ```
 
@@ -750,14 +754,15 @@ Profiles are per-dongle frequency presets. Each profile defines:
 4. All connected clients receive a `profile_changed` meta message (includes `iqSampleRate` and `mode`)
 5. Client waterfall, spectrum, frequency displays, and demodulators update automatically
 
-**Runtime profile CRUD** via admin REST API:
-- Create: `POST /api/admin/dongles/:id/profiles` — auto-saves to disk
-- Update: `PUT /api/admin/dongles/:id/profiles/:pid` — auto-saves to disk
-- Delete: `DELETE /api/admin/dongles/:id/profiles/:pid` — cannot delete active profile or last remaining profile
+**Runtime profile CRUD** via admin REST API (updates in memory; use
+`POST /api/admin/save-config` to persist to YAML):
+- Create: `POST /api/admin/dongles/:id/profiles`
+- Update: `PUT /api/admin/dongles/:id/profiles/:pid` (partial bodies are merged)
+- Delete: `DELETE /api/admin/dongles/:id/profiles/:pid`
 
 ### 7.3 Config Persistence
 
-The `saveConfig()` function serializes the current in-memory config back to YAML and writes it to disk at the resolved config path. This is called automatically on profile CRUD operations.
+The `saveConfig()` function serializes the current in-memory config back to YAML and writes it to disk at the resolved config path. Profile/dongle CRUD only updates the in-memory config; the admin UI calls `save-config` explicitly.
 
 ### 7.4 File Locations
 
@@ -884,7 +889,7 @@ Standard IMA-ADPCM codec providing 4:1 lossy compression (Int16 → 4-bit nibble
 
 **IQ compression:**
 - Per-client `ImaAdpcmEncoder` instance on server, per-client `ImaAdpcmDecoder` on client
-- Wire format: `[0x09][Uint32 sampleCount LE][ADPCM bytes]`
+- Wire format: `[0x09][Uint32 sampleCount LE][Uint32 sampleRate LE][Uint8 channels=2][Uint8 reserved][ADPCM bytes]`
 - Sample count needed because ADPCM output is always even-length (pairs of nibbles)
 
 **Codec negotiation:** Client sends `{ cmd: 'codec', fftCodec: 'deflate', iqCodec: 'adpcm' }`. Server creates per-client encoder instances. FFT codecs: `none` (Uint8), `adpcm` (~8:1), `deflate` (~10:1 lossless, default). IQ codecs: `none` (raw Int16), `adpcm` (4:1, default), `opus` (32kbps server-side demod), `opus-hq` (128kbps server-side demod).

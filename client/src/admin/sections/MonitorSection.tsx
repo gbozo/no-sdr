@@ -31,6 +31,7 @@ interface SystemStats {
   goroutines: number;
   numGC: number;
   uptime: number;
+  runtime?: string;
 }
 
 // ---- Helpers ----
@@ -210,6 +211,7 @@ const MonitorSection: Component = () => {
           goroutines: data.memory?.goroutines || 0,
           numGC: data.memory?.numGC || 0,
           uptime: data.uptime || 0,
+          runtime: data.runtime,
         });
       }
     } catch {}
@@ -256,8 +258,12 @@ const MonitorSection: Component = () => {
             <div class="grid grid-cols-4 gap-2 mb-5">
               <StatCard label="Clients" value={String(clients().length)} sub="connected" />
               <StatCard label="Memory" value={`${s().allocMB.toFixed(1)} MB`} sub={`${s().sysMB.toFixed(0)} MB sys`} />
-              <StatCard label="Goroutines" value={String(s().goroutines)} />
-              <StatCard label="Uptime" value={formatDuration(s().uptime)} sub={`${s().numGC} GCs`} />
+              <StatCard label={s().runtime === 'rust' ? 'Tasks' : 'Goroutines'} value={String(s().goroutines)} />
+              <StatCard
+                label="Uptime"
+                value={formatDuration(s().uptime)}
+                sub={s().runtime === 'rust' ? undefined : `${s().numGC} GCs`}
+              />
             </div>
           )}
         </Show>

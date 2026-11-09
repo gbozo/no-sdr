@@ -183,6 +183,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: read file: %w", err)
 	}
 
+	// YAML `enabled`/`autoStart` default to true when absent, but an
+	// explicit `false` must be preserved.
+	if patched, err := applyYAMLPresenceDefaults(data); err == nil {
+		data = patched
+	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse yaml: %w", err)
 	}
@@ -231,6 +236,51 @@ var DefaultFftCodecs = []string{"none", "adpcm", "deflate", "deflate-floor"}
 // DefaultIqCodecs lists all IQ/audio codecs supported by the server.
 var DefaultIqCodecs = []string{"none", "adpcm", "opus-lo", "opus", "opus-hq"}
 
+// applyYAMLPresenceDefaults injects enabled/autoStart=true for dongles that
+// omit them, so an explicit `false` is meaningful.
+func applyYAMLPresenceDefaults(data []byte) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	if len(root.Content) == 0 {
+		return data, nil
+	}
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return data, nil
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if doc.Content[i].Value != "dongles" {
+			continue
+		}
+		seq := doc.Content[i+1]
+		if seq.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, dongle := range seq.Content {
+			if dongle.Kind != yaml.MappingNode {
+				continue
+			}
+			setMappingDefault(dongle, "enabled", "true")
+			setMappingDefault(dongle, "autoStart", "true")
+		}
+	}
+	return yaml.Marshal(&root)
+}
+
+func setMappingDefault(node *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value},
+	)
+}
+
 func applyDefaults(cfg *Config) {
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 3000
@@ -249,14 +299,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.Server.OpusComplexity < 0 {
 		cfg.Server.OpusComplexity = 5
 	}
-	// Dongles default to enabled + autoStart (matches Node.js behavior)
-	for i := range cfg.Dongles {
-		// If not explicitly set in YAML, default to true
-		// Go zero-value for bool is false, so we always default to true here
-		// (the YAML can explicitly set enabled: false to disable)
-		cfg.Dongles[i].Enabled = true
-		cfg.Dongles[i].AutoStart = true
-	}
+	// Dongles default to enabled + autoStart in applyYAMLPresenceDefaults;
+	// do not force them here so explicit false survives a reload.
 }
 
 func applyProfileDefaults(cfg *Config) {

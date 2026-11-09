@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gbozo/no-sdr/serverng/internal/config"
 	"github.com/gbozo/no-sdr/serverng/internal/ws"
+	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
 	"os"
 )
@@ -22,11 +22,31 @@ import (
 // AdminAuth manages cookie-based admin sessions.
 type AdminAuth struct {
 	password   string
+	passwordMu sync.RWMutex
 	secret     string // per-boot random secret for cookie signing
 	sessions   map[string]time.Time
 	mu         sync.RWMutex
 	cookieName string
 	maxAge     time.Duration
+}
+
+// checkPassword compares a candidate against the current password. An empty
+// configured password always rejects (prevents the "Bearer <empty>" bypass).
+func (a *AdminAuth) checkPassword(candidate string) bool {
+	a.passwordMu.RLock()
+	password := a.password
+	a.passwordMu.RUnlock()
+	if password == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(candidate), []byte(password)) == 1
+}
+
+// SetPassword updates the password used by login and the Bearer fallback.
+func (a *AdminAuth) SetPassword(password string) {
+	a.passwordMu.Lock()
+	a.password = password
+	a.passwordMu.Unlock()
 }
 
 // NewAdminAuth creates a new AdminAuth with per-boot random secret.
@@ -52,7 +72,7 @@ func (a *AdminAuth) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if subtle.ConstantTimeCompare([]byte(body.Password), []byte(a.password)) != 1 {
+	if !a.checkPassword(body.Password) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid password"})
 		return
 	}
@@ -124,7 +144,7 @@ func (a *AdminAuth) CheckAuth(next http.Handler) http.Handler {
 		auth := r.Header.Get("Authorization")
 		if strings.HasPrefix(auth, "Bearer ") {
 			token := strings.TrimPrefix(auth, "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(token), []byte(a.password)) == 1 {
+			if a.checkPassword(token) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -158,23 +178,23 @@ func (a *AdminAuth) IsAuthenticated(w http.ResponseWriter, r *http.Request) {
 
 // adminDongleResponse is the admin version with hardware details.
 type adminDongleResponse struct {
-	ID             string                `json:"id"`
-	Name           string                `json:"name"`
-	Running        bool                  `json:"running"`
-	Enabled        bool                  `json:"enabled"`
-	AutoStart      bool                  `json:"autoStart"`
-	ActiveProfileId string               `json:"activeProfileId"`
-	ClientCount    int                   `json:"clientCount"`
-	Source         config.SourceConfig   `json:"source"`
-	SampleRate     int                   `json:"sampleRate"`
-	Gain           float64               `json:"gain"`
-	PPM            int                   `json:"ppmCorrection"`
-	DeviceIndex    int                   `json:"deviceIndex"`
-	DirectSampling int                   `json:"directSampling"`
-	BiasT          bool                  `json:"biasT"`
-	DigitalAgc     bool                  `json:"digitalAgc"`
-	OffsetTuning   bool                  `json:"offsetTuning"`
-	Profiles       []adminProfileResponse `json:"profiles"`
+	ID              string                 `json:"id"`
+	Name            string                 `json:"name"`
+	Running         bool                   `json:"running"`
+	Enabled         bool                   `json:"enabled"`
+	AutoStart       bool                   `json:"autoStart"`
+	ActiveProfileId string                 `json:"activeProfileId"`
+	ClientCount     int                    `json:"clientCount"`
+	Source          config.SourceConfig    `json:"source"`
+	SampleRate      int                    `json:"sampleRate"`
+	Gain            float64                `json:"gain"`
+	PPM             int                    `json:"ppmCorrection"`
+	DeviceIndex     int                    `json:"deviceIndex"`
+	DirectSampling  int                    `json:"directSampling"`
+	BiasT           bool                   `json:"biasT"`
+	DigitalAgc      bool                   `json:"digitalAgc"`
+	OffsetTuning    bool                   `json:"offsetTuning"`
+	Profiles        []adminProfileResponse `json:"profiles"`
 }
 
 type adminProfileResponse struct {
@@ -203,10 +223,14 @@ func adminDonglesHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc
 	return func(w http.ResponseWriter, r *http.Request) {
 		var resp []adminDongleResponse
 		for _, d := range cfg.Dongles {
+			running := d.Enabled && d.AutoStart
+			if IsDongleRunningFunc != nil {
+				running = IsDongleRunningFunc(d.ID)
+			}
 			dr := adminDongleResponse{
 				ID:             d.ID,
 				Name:           d.Name,
-				Running:        d.Enabled && d.AutoStart,
+				Running:        running,
 				Enabled:        d.Enabled,
 				AutoStart:      d.AutoStart,
 				Source:         d.Source,
@@ -219,7 +243,10 @@ func adminDonglesHandler(cfg *config.Config, wsMgr *ws.Manager) http.HandlerFunc
 				DigitalAgc:     d.DigitalAgc,
 				OffsetTuning:   d.OffsetTuning,
 			}
-			if len(d.Profiles) > 0 {
+			if ActiveProfileFunc != nil {
+				dr.ActiveProfileId = ActiveProfileFunc(d.ID)
+			}
+			if dr.ActiveProfileId == "" && len(d.Profiles) > 0 {
 				dr.ActiveProfileId = d.Profiles[0].ID
 			}
 			dr.ClientCount = len(wsMgr.SubscribedClients(d.ID))
@@ -285,51 +312,77 @@ func createDongleHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 	}
 }
 
-// updateDongleHandler updates an existing dongle.
+// updateDongleHandler updates an existing dongle. The body is merged into the
+// current object, so omitted fields keep their existing values.
 func updateDongleHandler(cfg *config.Config, ver *config.ConfigVersion) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		var updated config.DongleConfig
-		if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		var patch map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
 
-		for i, d := range cfg.Dongles {
-			if d.ID == id {
-				updated.ID = id // Ensure ID cannot be changed
-				// Preserve existing profiles if the PUT body didn't include any
-				// (the edit form only sends dongle-level fields, not profiles).
-				if len(updated.Profiles) == 0 {
-					updated.Profiles = d.Profiles
-				}
-
-				// Detect if hardware config changed (requires reinit)
-				oldCfg := cfg.Dongles[i]
-				cfg.Dongles[i] = updated
-
-				// Bump config version
-				newVer := bumpVersion(ver)
-
-				// Notify all clients
-				if NotifyDongleUpdatedFunc != nil {
-					NotifyDongleUpdatedFunc(&cfg.Dongles[i])
-				}
-
-				// If hardware changed, reinit the dongle (stop + restart)
-				if DongleReinitFunc != nil && needsReinit(&oldCfg, &updated) {
-					go func() {
-						if err := DongleReinitFunc(id); err != nil {
-							// Log but don't fail the HTTP response
-							_ = err
-						}
-					}()
-				}
-
-				setVersionHeader(w, newVer)
-				writeJSON(w, http.StatusOK, updated)
+		for i := range cfg.Dongles {
+			if cfg.Dongles[i].ID != id {
+				continue
+			}
+			d := cfg.Dongles[i]
+			baseBytes, err := json.Marshal(d)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to merge config"})
 				return
 			}
+			var base, merged map[string]any
+			if err := json.Unmarshal(baseBytes, &base); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to merge config"})
+				return
+			}
+			merged = base
+			originalProfiles := base["profiles"]
+			mergeJSONMaps(merged, patch)
+			merged["id"] = id // Ensure ID cannot be changed
+			// Preserve existing profiles if the PUT body omitted them or sent
+			// an empty list (the edit form manages profiles separately).
+			if arr, ok := patch["profiles"].([]any); !ok || len(arr) == 0 {
+				merged["profiles"] = originalProfiles
+			}
+			mergedBytes, err := json.Marshal(merged)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to merge config"})
+				return
+			}
+			var updated config.DongleConfig
+			if err := json.Unmarshal(mergedBytes, &updated); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+				return
+			}
+
+			// Detect if hardware config changed (requires reinit)
+			oldCfg := cfg.Dongles[i]
+			cfg.Dongles[i] = updated
+
+			// Bump config version
+			newVer := bumpVersion(ver)
+
+			// Notify all clients
+			if NotifyDongleUpdatedFunc != nil {
+				NotifyDongleUpdatedFunc(&cfg.Dongles[i])
+			}
+
+			// If hardware changed, reinit the dongle (stop + restart)
+			if DongleReinitFunc != nil && needsReinit(&oldCfg, &updated) {
+				go func() {
+					if err := DongleReinitFunc(id); err != nil {
+						// Log but don't fail the HTTP response
+						_ = err
+					}
+				}()
+			}
+
+			setVersionHeader(w, newVer)
+			writeJSON(w, http.StatusOK, updated)
+			return
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dongle not found"})
 	}
@@ -568,41 +621,65 @@ func createProfileHandler(cfg *config.Config, ver *config.ConfigVersion) http.Ha
 	}
 }
 
-// updateProfileHandler updates a profile within a dongle.
+// updateProfileHandler updates a profile within a dongle. The body is merged
+// into the current profile so omitted fields keep their existing values.
 func updateProfileHandler(cfg *config.Config, ver *config.ConfigVersion) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dongleID := chi.URLParam(r, "id")
 		profileID := chi.URLParam(r, "profileId")
 
-		var updated config.DongleProfile
-		if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		var patch map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
 
-		for i, d := range cfg.Dongles {
-			if d.ID == dongleID {
-				for j, p := range d.Profiles {
-					if p.ID == profileID {
-						updated.ID = profileID // Ensure ID cannot be changed
-						cfg.Dongles[i].Profiles[j] = updated
-
-						// Bump config version
-						newVer := bumpVersion(ver)
-
-						// Notify all clients
-						if NotifyProfileUpdatedFunc != nil {
-							NotifyProfileUpdatedFunc(dongleID, &cfg.Dongles[i].Profiles[j])
-						}
-
-						setVersionHeader(w, newVer)
-						writeJSON(w, http.StatusOK, updated)
-						return
-					}
+		for i := range cfg.Dongles {
+			if cfg.Dongles[i].ID != dongleID {
+				continue
+			}
+			for j := range cfg.Dongles[i].Profiles {
+				if cfg.Dongles[i].Profiles[j].ID != profileID {
+					continue
 				}
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+				baseBytes, err := json.Marshal(cfg.Dongles[i].Profiles[j])
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to merge profile"})
+					return
+				}
+				var merged map[string]any
+				if err := json.Unmarshal(baseBytes, &merged); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to merge profile"})
+					return
+				}
+				mergeJSONMaps(merged, patch)
+				merged["id"] = profileID // Ensure ID cannot be changed
+				mergedBytes, err := json.Marshal(merged)
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to merge profile"})
+					return
+				}
+				var updated config.DongleProfile
+				if err := json.Unmarshal(mergedBytes, &updated); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+					return
+				}
+				cfg.Dongles[i].Profiles[j] = updated
+
+				// Bump config version
+				newVer := bumpVersion(ver)
+
+				// Notify all clients
+				if NotifyProfileUpdatedFunc != nil {
+					NotifyProfileUpdatedFunc(dongleID, &cfg.Dongles[i].Profiles[j])
+				}
+
+				setVersionHeader(w, newVer)
+				writeJSON(w, http.StatusOK, updated)
 				return
 			}
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+			return
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dongle not found"})
 	}
@@ -802,7 +879,7 @@ func serverConfigHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 }
 
 // updateServerConfigHandler updates the server configuration section.
-func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) http.HandlerFunc {
+func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion, auth *AdminAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Callsign              *string  `json:"callsign"`
@@ -898,6 +975,10 @@ func updateServerConfigHandler(cfg *config.Config, ver *config.ConfigVersion) ht
 
 		// Bump config version
 		newVer := bumpVersion(ver)
+
+		if auth != nil {
+			auth.SetPassword(cfg.Server.AdminPassword)
+		}
 
 		// Notify all clients of server config change
 		if NotifyServerConfigUpdatedFunc != nil {

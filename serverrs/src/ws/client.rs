@@ -173,6 +173,10 @@ pub struct ClientState {
     pub mode: String,
     pub tune_offset: i64,
     pub bandwidth: i64,
+    /// True after a successful `admin_auth` on this connection.
+    pub admin: bool,
+    /// Consecutive failed admin password attempts (simple brute-force guard).
+    pub auth_failures: u32,
 }
 
 impl ClientState {
@@ -299,6 +303,29 @@ impl Client {
 
     pub fn set_profile_id(&self, profile_id: &str) {
         self.state.lock().profile_id = profile_id.to_string();
+    }
+
+    /// Update the IQ codec the client believes is active (used when the
+    /// server falls back because an Opus pipeline could not be created).
+    pub fn set_iq_codec(&self, codec: &str) {
+        self.state.lock().iq_codec = codec.to_string();
+    }
+
+    /// True after a successful `admin_auth` on this connection.
+    pub fn is_admin(&self) -> bool {
+        self.state.lock().admin
+    }
+
+    pub fn set_admin(&self, admin: bool) {
+        self.state.lock().admin = admin;
+    }
+
+    pub fn auth_failures(&self) -> u32 {
+        self.state.lock().auth_failures
+    }
+
+    pub fn set_auth_failures(&self, failures: u32) {
+        self.state.lock().auth_failures = failures;
     }
 
     pub fn fft_codec(&self) -> String {

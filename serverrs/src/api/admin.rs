@@ -23,22 +23,28 @@ const MAX_AGE: u64 = 7 * 24 * 3600;
 
 /// Cookie-based admin sessions plus Bearer-password fallback.
 pub struct AdminAuth {
-    password: String,
+    password: Mutex<String>,
     sessions: Mutex<HashMap<String, Instant>>,
 }
 
 impl AdminAuth {
     pub fn new(password: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
-            password: password.into(),
+            password: Mutex::new(password.into()),
             sessions: Mutex::new(HashMap::new()),
         })
     }
 
+    /// Updates the password used by both session login and the Bearer fallback.
+    pub fn set_password(&self, password: &str) {
+        *self.password.lock() = password.to_string();
+    }
+
     fn validate(&self, token: &str) -> bool {
+        let password = self.password.lock();
         let a = token.as_bytes();
-        let b = self.password.as_bytes();
-        if a.len() != b.len() {
+        let b = password.as_bytes();
+        if b.is_empty() || a.len() != b.len() {
             return false;
         }
         a.ct_eq(b).into()
@@ -189,10 +195,10 @@ pub async fn local_devices() -> Response {
 }
 
 pub async fn admin_dongles(State(state): State<AppState>) -> Response {
-    let cfg = state.cfg.read();
-    let mut out = Vec::with_capacity(cfg.dongles.len());
-    for d in &cfg.dongles {
-        let active_profile = d.profiles.first().map(|p| p.id.clone()).unwrap_or_default();
+    let dongles = state.cfg.read().dongles.clone();
+    let mut out = Vec::with_capacity(dongles.len());
+    for d in &dongles {
+        let active_profile = state.mgr.active_profile_id(&d.id).unwrap_or_default();
         let clients = state.ws.subscribed_clients(&d.id).len();
         let profiles: Vec<Value> = d
             .profiles
@@ -223,7 +229,7 @@ pub async fn admin_dongles(State(state): State<AppState>) -> Response {
         out.push(json!({
             "id": d.id,
             "name": d.name,
-            "running": d.enabled && d.auto_start,
+            "running": state.mgr.is_dongle_running(&d.id),
             "enabled": d.enabled,
             "autoStart": d.auto_start,
             "activeProfileId": active_profile,
@@ -283,7 +289,7 @@ pub async fn update_dongle(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let mut updated: DongleConfig = match serde_json::from_slice(&body) {
+    let patch: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
             return json_response(
@@ -293,6 +299,13 @@ pub async fn update_dongle(
             )
         }
     };
+    if !patch.is_object() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "invalid request body"}),
+            None,
+        );
+    }
 
     let (old, new_cfg, version) = {
         let mut cfg = state.cfg.write();
@@ -303,13 +316,43 @@ pub async fn update_dongle(
                 None,
             );
         };
-        updated.id = id.clone();
-        if updated.profiles.is_empty() {
-            updated.profiles = cfg.dongles[idx].profiles.clone();
-        }
         let old = cfg.dongles[idx].clone();
+        let mut merged = serde_json::to_value(&old).unwrap_or_else(|_| json!({}));
+        merge_json(&mut merged, &patch);
+        let Some(obj) = merged.as_object_mut() else {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid request body"}),
+                None,
+            );
+        };
+        obj.insert("id".to_string(), Value::String(id.clone()));
+        // The admin edit form intentionally omits profiles (they are managed
+        // separately); preserve the existing list in that case.
+        let patch_has_profiles = patch
+            .get("profiles")
+            .and_then(|v| v.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        if !patch_has_profiles {
+            obj.insert(
+                "profiles".to_string(),
+                serde_json::to_value(&old.profiles).unwrap_or_else(|_| json!([])),
+            );
+        }
+        let updated: DongleConfig = match serde_json::from_value(merged) {
+            Ok(v) => v,
+            Err(_) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid request body"}),
+                    None,
+                )
+            }
+        };
         cfg.dongles[idx] = updated.clone();
-        (old, updated.clone(), bump_version_locked(&state))
+        let version = bump_version_locked(&state);
+        (old, updated, version)
     };
 
     state.mgr.notify_dongle_updated(&new_cfg);
@@ -388,10 +431,7 @@ pub async fn switch_profile(
 
 pub async fn dongle_start(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.mgr.start_dongle_by_id_async(&id).await {
-        Ok(()) => {
-            state.mgr.notify_dongle_started(&id);
-            json_response(StatusCode::OK, json!({"ok": true, "dongleId": id}), None)
-        }
+        Ok(()) => json_response(StatusCode::OK, json!({"ok": true, "dongleId": id}), None),
         Err(e) => json_response(
             StatusCode::BAD_REQUEST,
             json!({"error": e.to_string()}),
@@ -402,10 +442,7 @@ pub async fn dongle_start(State(state): State<AppState>, Path(id): Path<String>)
 
 pub async fn dongle_stop(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.mgr.stop_dongle_by_id(&id).await {
-        Ok(()) => {
-            state.mgr.notify_dongle_stopped(&id);
-            json_response(StatusCode::OK, json!({"ok": true, "dongleId": id}), None)
-        }
+        Ok(()) => json_response(StatusCode::OK, json!({"ok": true, "dongleId": id}), None),
         Err(e) => json_response(
             StatusCode::BAD_REQUEST,
             json!({"error": e.to_string()}),
@@ -466,7 +503,7 @@ pub async fn update_profile(
     Path((id, profile_id)): Path<(String, String)>,
     body: Bytes,
 ) -> Response {
-    let mut updated: DongleProfile = match serde_json::from_slice(&body) {
+    let patch: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
             return json_response(
@@ -476,8 +513,15 @@ pub async fn update_profile(
             )
         }
     };
+    if !patch.is_object() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "invalid request body"}),
+            None,
+        );
+    }
 
-    let version = {
+    let (updated, version) = {
         let mut cfg = state.cfg.write();
         let Some(d) = cfg.dongles.iter_mut().find(|d| d.id == id) else {
             return json_response(
@@ -493,9 +537,30 @@ pub async fn update_profile(
                 None,
             );
         };
-        updated.id = profile_id.clone();
+        let existing = p.clone();
+        let mut merged = serde_json::to_value(&existing).unwrap_or_else(|_| json!({}));
+        merge_json(&mut merged, &patch);
+        let Some(obj) = merged.as_object_mut() else {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid request body"}),
+                None,
+            );
+        };
+        obj.insert("id".to_string(), Value::String(profile_id.clone()));
+        let updated: DongleProfile = match serde_json::from_value(merged) {
+            Ok(v) => v,
+            Err(_) => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid request body"}),
+                    None,
+                )
+            }
+        };
         *p = updated.clone();
-        bump_version_locked(&state)
+        let version = bump_version_locked(&state);
+        (updated, version)
     };
 
     state.mgr.notify_profile_updated(&id, &updated);
@@ -892,6 +957,10 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         let header = state.cfg.read().server.real_ip_header.clone();
         state.ws.set_real_ip_header(&header);
     }
+    {
+        let password = state.cfg.read().server.admin_password.clone();
+        state.auth.set_password(&password);
+    }
 
     let version = bump_version(&state);
     state.mgr.notify_server_config_updated();
@@ -961,6 +1030,25 @@ pub fn json_response(status: StatusCode, body: Value, version: Option<u64>) -> R
     resp
 }
 
+/// Recursively merges `patch` into `base`. Objects are merged key-by-key;
+/// everything else (arrays, scalars, null) replaces the base value.
+fn merge_json(base: &mut Value, patch: &Value) {
+    let (Some(base_map), Some(patch_map)) = (base.as_object_mut(), patch.as_object()) else {
+        *base = patch.clone();
+        return;
+    };
+    for (key, value) in patch_map {
+        match (base_map.get_mut(key), value) {
+            (Some(existing), Value::Object(_)) if existing.is_object() => {
+                merge_json(existing, value);
+            }
+            _ => {
+                base_map.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 pub fn needs_reinit(old: &DongleConfig, new: &DongleConfig) -> bool {
     let o: &SourceConfig = &old.source;
     let n: &SourceConfig = &new.source;
@@ -973,4 +1061,29 @@ pub fn needs_reinit(old: &DongleConfig, new: &DongleConfig) -> bool {
         || o.spawn_rtl_tcp != n.spawn_rtl_tcp
         || old.sample_rate != new.sample_rate
         || old.iq_correction != new.iq_correction
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn merge_json_preserves_omitted_fields() {
+        let mut merged = json!({
+            "name": "A",
+            "sampleRate": 2400000,
+            "source": { "type": "demo", "host": "old" },
+            "profiles": [{ "id": "p1" }]
+        });
+        merge_json(
+            &mut merged,
+            &json!({ "name": "B", "source": { "host": "new" } }),
+        );
+        assert_eq!(merged["name"], "B");
+        assert_eq!(merged["sampleRate"], 2400000);
+        assert_eq!(merged["source"]["type"], "demo");
+        assert_eq!(merged["source"]["host"], "new");
+        assert_eq!(merged["profiles"][0]["id"], "p1");
+    }
 }

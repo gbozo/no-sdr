@@ -16,7 +16,7 @@ pub const MSG_AUDIO: u8 = 0x05; // Int16Array mono samples
 pub const MSG_DECODER: u8 = 0x06; // JSON-encoded decoder messages
 pub const MSG_SIGNAL_LEVEL: u8 = 0x07; // Float32 dB value
 pub const MSG_FFT_ADPCM: u8 = 0x08; // ADPCM on Int16(dB x 100)
-pub const MSG_IQ_ADPCM: u8 = 0x09; // Uint32(sampleCount) + ADPCM bytes
+pub const MSG_IQ_ADPCM: u8 = 0x09; // Uint32(sampleCount) + Uint32(sampleRate) + Uint8(channels) + Uint8(reserved) + ADPCM bytes
 pub const MSG_RDS: u8 = 0x0A; // UTF-8 JSON (RDS data)
 pub const MSG_FFT_DEFLATE: u8 = 0x0B; // Int16(minDb) + Int16(maxDb) + Uint32(binCount) + deflate
 pub const MSG_AUDIO_OPUS: u8 = 0x0C; // Uint16(sampleCount) + Uint8(channels) + Opus packet
@@ -68,6 +68,11 @@ pub struct ServerMeta {
     pub allowed_fft_codecs: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_iq_codecs: Option<Vec<String>>,
+    // Dongle status fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_count: Option<i64>,
 }
 
 /// Parsed command from the client (JSON text).
@@ -100,6 +105,10 @@ pub struct ClientCommand {
     pub password: String,
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub level: f64,
+    /// Noise-blanker threshold multiplier. The client historically sent
+    /// `threshold` while the server only read `level`; accept both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub muted: Option<bool>,
 }
@@ -398,8 +407,39 @@ mod tests {
         let cmd = parse_client_command(br#"{"cmd":"audio_enabled","enabled":true}"#).unwrap();
         assert_eq!(cmd.enabled, Some(true));
 
+        let cmd = parse_client_command(
+            br#"{"cmd":"set_pre_filter_nb_threshold","threshold":12.5}"#,
+        )
+        .unwrap();
+        assert_eq!(cmd.threshold, Some(12.5));
+        assert_eq!(cmd.level, 0.0);
+
+        let cmd = parse_client_command(
+            br#"{"cmd":"set_pre_filter_nb_threshold","level":8.0}"#,
+        )
+        .unwrap();
+        assert_eq!(cmd.level, 8.0);
+        assert_eq!(cmd.threshold, None);
+
         assert!(parse_client_command(b"not json").is_err());
         assert!(parse_client_command(br#"{"dongleId":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn dongle_status_meta() {
+        let meta = ServerMeta {
+            msg_type: "dongle_status".into(),
+            dongle_id: Some("d1".into()),
+            running: Some(true),
+            client_count: Some(3),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&meta).unwrap();
+        assert_eq!(v["type"], "dongle_status");
+        assert_eq!(v["dongleId"], "d1");
+        assert_eq!(v["running"], true);
+        assert_eq!(v["clientCount"], 3);
+        assert!(v.get("profileId").is_none());
     }
 
     #[test]

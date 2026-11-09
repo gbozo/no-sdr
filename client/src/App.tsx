@@ -208,6 +208,11 @@ const App: Component = () => {
                store.connectionState() === 'unconfigured' ? 'No Receivers' :
                'Offline'}
             </span>
+            <Show when={store.serverVersion()}>
+              <span class="text-[8px] font-mono text-text-dim/50 border-l border-border/40 pl-1.5">
+                v{store.serverVersion()}
+              </span>
+            </Show>
           </div>
         </div>
 

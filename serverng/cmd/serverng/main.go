@@ -72,12 +72,12 @@ func main() {
 	if !codec.OpusAvailable() {
 		filtered := cfg.Server.AllowedIqCodecs[:0]
 		for _, c := range cfg.Server.AllowedIqCodecs {
-			if c != "opus" && c != "opus-hq" {
+			if c != "opus" && c != "opus-hq" && c != "opus-lo" {
 				filtered = append(filtered, c)
 			}
 		}
 		cfg.Server.AllowedIqCodecs = filtered
-		logger.Warn("opus not compiled in — opus/opus-hq removed from allowed IQ codecs")
+		logger.Warn("opus not compiled in — opus/opus-hq/opus-lo removed from allowed IQ codecs")
 	}
 	logger.Info("allowed codecs",
 		"fft", cfg.Server.AllowedFftCodecs,
@@ -130,7 +130,7 @@ func main() {
 	}
 	// IQ recording endpoints
 	api.RecordStartFunc = dongleMgr.Recorder.Start
-	api.RecordStopFunc  = dongleMgr.Recorder.Stop
+	api.RecordStopFunc = dongleMgr.Recorder.Stop
 	api.RecordStatusFunc = func() any { return dongleMgr.Recorder.Status() }
 
 	// Music recognition: PCM is now snapshotted at token-issue time (handleIdentifyStart),
@@ -164,6 +164,7 @@ func main() {
 	cfgVersion := config.NewConfigVersion()
 	api.GetConfigVersionFunc = cfgVersion.Get
 	api.Version = version
+	ws.ServerVersion = version
 	api.GoAMD64 = goamd64
 	api.GetDongleStatesFunc = func() map[string]any {
 		states := dongleMgr.GetAllDongleStates()
@@ -173,6 +174,8 @@ func main() {
 		}
 		return result
 	}
+	api.IsDongleRunningFunc = dongleMgr.IsRunning
+	api.ActiveProfileFunc = dongleMgr.ActiveProfileID
 	dongleMgr.SetVersionFunc(cfgVersion.Get)
 
 	// Graceful shutdown on SIGINT/SIGTERM.

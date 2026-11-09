@@ -57,8 +57,8 @@ async fn async_main() -> Result<()> {
     if !OPUS_AVAILABLE {
         cfg.server
             .allowed_iq_codecs
-            .retain(|c| c != "opus" && c != "opus-hq");
-        tracing::warn!("opus not compiled in - opus/opus-hq removed from allowed IQ codecs");
+            .retain(|c| c != "opus" && c != "opus-hq" && c != "opus-lo");
+        tracing::warn!("opus not compiled in - opus/opus-hq/opus-lo removed from allowed IQ codecs");
     }
 
     tracing::info!(
