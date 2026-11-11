@@ -51,6 +51,10 @@ export interface DongleConfig {
   name: string;
   enabled: boolean;
   autoStart: boolean;
+  /** True while the backend has an active source/pipeline for this dongle. */
+  running?: boolean;
+  clientCount?: number;
+  activeProfileId?: string;
   source: SourceConfig;
   sampleRate: number;
   gain: number;
@@ -289,8 +293,8 @@ function createAdminStore() {
   }
 
   // ---- Dongle CRUD ----
-  async function loadDongles(): Promise<void> {
-    setDonglesLoading(true);
+  async function loadDongles(silent = false): Promise<void> {
+    if (!silent) setDonglesLoading(true);
     try {
       // A source switch reinitialises the dongle in the background. On small
       // hosts the first follow-up request can briefly hit a proxy 502 while
@@ -316,7 +320,7 @@ function createAdminStore() {
     } catch {
       // Silent fail
     } finally {
-      setDonglesLoading(false);
+      if (!silent) setDonglesLoading(false);
     }
   }
 
@@ -387,7 +391,7 @@ function createAdminStore() {
         credentials: 'same-origin',
       });
       if (res.ok) {
-        await loadDongles();
+        await loadDongles(true);
         return true;
       }
     } catch {}
@@ -401,7 +405,7 @@ function createAdminStore() {
         credentials: 'same-origin',
       });
       if (res.ok) {
-        await loadDongles();
+        await loadDongles(true);
         return true;
       }
     } catch {}

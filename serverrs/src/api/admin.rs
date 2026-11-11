@@ -365,6 +365,10 @@ pub async fn update_dongle(
                 tracing::error!(id = %id2, error = %e, "dongle reinit failed");
             }
         });
+    } else if needs_runtime_apply(&old, &new_cfg) {
+        // Gain, PPM, direct sampling, bias-T, AGC and offset tuning can be
+        // applied to a running source without dropping the USB handle.
+        state.mgr.apply_runtime_settings(&new_cfg);
     }
     json_response(StatusCode::OK, serde_json::to_value(&new_cfg).unwrap(), Some(version))
 }
@@ -1061,6 +1065,17 @@ pub fn needs_reinit(old: &DongleConfig, new: &DongleConfig) -> bool {
         || o.spawn_rtl_tcp != n.spawn_rtl_tcp
         || old.sample_rate != new.sample_rate
         || old.iq_correction != new.iq_correction
+}
+
+/// Hardware settings that can be pushed to a running source through the
+/// command channel without closing/reopening the device.
+pub fn needs_runtime_apply(old: &DongleConfig, new: &DongleConfig) -> bool {
+    old.gain != new.gain
+        || old.ppm != new.ppm
+        || old.direct_sampling != new.direct_sampling
+        || old.bias_t != new.bias_t
+        || old.digital_agc != new.digital_agc
+        || old.offset_tuning != new.offset_tuning
 }
 
 #[cfg(test)]

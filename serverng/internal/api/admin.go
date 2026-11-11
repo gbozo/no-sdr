@@ -378,6 +378,8 @@ func updateDongleHandler(cfg *config.Config, ver *config.ConfigVersion) http.Han
 						_ = err
 					}
 				}()
+			} else if DongleApplyRuntimeFunc != nil && needsRuntimeApply(&oldCfg, &updated) {
+				DongleApplyRuntimeFunc(id)
 			}
 
 			setVersionHeader(w, newVer)
@@ -428,9 +430,12 @@ var DongleStartFunc func(dongleID string) error
 // DongleStopFunc stops a dongle. Set by dongle.Manager.
 var DongleStopFunc func(dongleID string) error
 
-// DongleReinitFunc reinitialises a dongle (stop + start with retry).
-// Called when hardware config changes. Set by dongle.Manager.
+// DongleReinitFunc reinitialises a dongle (stop + start with retry). Called when hardware config changes. Set by dongle.Manager.
 var DongleReinitFunc func(dongleID string) error
+
+// DongleApplyRuntimeFunc pushes hardware options (gain, PPM, direct sampling,
+// bias-T, AGC, offset tuning) to a running dongle without reopening it.
+var DongleApplyRuntimeFunc func(dongleID string)
 
 // HandleProfileRemovedFunc cascades profile removal to running dongles.
 // If the active profile is removed, switches to next or stops.
@@ -1032,6 +1037,17 @@ func needsReinit(old, new *config.DongleConfig) bool {
 		return true
 	}
 	return false
+}
+
+// needsRuntimeApply reports whether hardware options changed that can be
+// applied to a running source through the command channel.
+func needsRuntimeApply(old, new *config.DongleConfig) bool {
+	return old.Gain != new.Gain ||
+		old.PPM != new.PPM ||
+		old.DirectSampling != new.DirectSampling ||
+		old.BiasT != new.BiasT ||
+		old.DigitalAgc != new.DigitalAgc ||
+		old.OffsetTuning != new.OffsetTuning
 }
 
 // recordStartHandler begins IQ recording for a dongle.

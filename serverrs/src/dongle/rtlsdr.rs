@@ -47,13 +47,37 @@ mod imp {
         out
     }
 
+    /// Owns an `rtlsdr` device handle and closes it when the last reference
+    /// is dropped.
+    ///
+    /// The device must never be closed while the blocking read loop is still
+    /// inside librtlsdr: `rtlsdr_close()` frees the handle, and a concurrent
+    /// `rtlsdr_read_sync()`/`rtlsdr_set_*()` then dereferences freed memory
+    /// (observed as a SIGSEGV inside `rtlsdr_set_sample_rate`). The read loop
+    /// holds a clone of this `Arc`, so closing can only happen after the loop
+    /// has returned.
+    struct DeviceGuard(Arc<::rtlsdr::Device>);
+
+    impl Drop for DeviceGuard {
+        fn drop(&mut self) {
+            let _ = self.0.close();
+        }
+    }
+
+    impl std::ops::Deref for DeviceGuard {
+        type Target = ::rtlsdr::Device;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
     /// Direct USB RTL-SDR source.
     pub struct RtlSdrSource {
-        device: Arc<::rtlsdr::Device>,
+        device: Arc<DeviceGuard>,
         index: i32,
         cmd_rx: Option<mpsc::UnboundedReceiver<SourceCommand>>,
         cmd_handle: CommandHandle,
-        closed: bool,
     }
 
     impl RtlSdrSource {
@@ -80,25 +104,15 @@ mod imp {
 
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             Ok(Self {
-                device,
+                device: Arc::new(DeviceGuard(device)),
                 index,
                 cmd_rx: Some(cmd_rx),
                 cmd_handle: CommandHandle::new(cmd_tx),
-                closed: false,
             })
         }
 
         pub fn index(&self) -> i32 {
             self.index
-        }
-    }
-
-    impl Drop for RtlSdrSource {
-        fn drop(&mut self) {
-            if !self.closed {
-                let _ = self.device.close();
-                self.closed = true;
-            }
         }
     }
 

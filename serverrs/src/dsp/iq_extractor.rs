@@ -498,6 +498,42 @@ mod tests {
     }
 
     #[test]
+    fn noise_blanker_suppresses_impulse_before_filter() {
+        let n = 48_000;
+        let mut raw = tone_iq(1_000.0, 240_000.0, n, 0.05);
+        let impulse = n / 2;
+        raw[impulse * 2] = 255;
+        raw[impulse * 2 + 1] = 255;
+
+        let mut plain = IqExtractor::new(IqExtractorConfig {
+            input_sample_rate: 240_000,
+            output_sample_rate: 240_000,
+            tune_offset: 0,
+            dc_offset_removal: false,
+        })
+        .unwrap();
+        let out_plain = plain.process(&raw);
+
+        let mut blanked = IqExtractor::new(IqExtractorConfig {
+            input_sample_rate: 240_000,
+            output_sample_rate: 240_000,
+            tune_offset: 0,
+            dc_offset_removal: false,
+        })
+        .unwrap();
+        blanked.set_nb_enabled(true);
+        blanked.set_nb_threshold(10.0);
+        let out_blanked = blanked.process(&raw);
+
+        let peak = |v: &[i16]| v.iter().map(|s| (*s as i32).abs()).max().unwrap_or(0);
+        let (p0, p1) = (peak(&out_plain), peak(&out_blanked));
+        assert!(
+            p1 * 4 < p0 * 3,
+            "NB should suppress the impulse peak (plain={p0}, blanked={p1})"
+        );
+    }
+
+    #[test]
     fn bandwidth_sets_butterworth_cutoff() {
         let mut e = IqExtractor::new(IqExtractorConfig {
             input_sample_rate: 240_000,

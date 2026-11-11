@@ -180,6 +180,11 @@ pub struct Manager {
     pub ws: Arc<WsManager>,
     dongles: RwLock<HashMap<String, Arc<ActiveDongle>>>,
     dongle_states: Mutex<HashMap<String, DongleState>>,
+    /// Monotonic token per dongle start/reinit. A retry loop that has been
+    /// superseded (e.g. a config save switched the source while the old source
+    /// was still retrying) must not keep opening devices or overwrite the
+    /// state of the operation that replaced it.
+    start_generations: Mutex<HashMap<String, u64>>,
     client_pipelines: Mutex<HashMap<String, Arc<Mutex<ClientPipeline>>>>,
     /// Last per-dongle subscribed-client counts, used to broadcast
     /// `dongle_status` only when a count actually changes.
@@ -206,6 +211,7 @@ impl Manager {
             ws: ws.clone(),
             dongles: RwLock::new(HashMap::new()),
             dongle_states: Mutex::new(states),
+            start_generations: Mutex::new(HashMap::new()),
             client_pipelines: Mutex::new(HashMap::new()),
             last_client_counts: Mutex::new(HashMap::new()),
             recorder: Recorder::new("recordings"),
@@ -271,7 +277,8 @@ impl Manager {
                     warn!(id = %dcfg.id, "dongle has no profiles, skipping");
                     continue;
                 }
-                if let Err(e) = mgr.start_dongle_with_retry(dcfg.clone()).await {
+                let generation = mgr.next_start_generation(&dcfg.id);
+                if let Err(e) = mgr.start_dongle_with_retry(dcfg.clone(), generation).await {
                     error!(id = %dcfg.id, error = %e, "dongle failed after all retries");
                 }
             }
@@ -302,7 +309,34 @@ impl Manager {
     // Dongle lifecycle
     // ------------------------------------------------------------------
 
-    async fn start_dongle_with_retry(self: &Arc<Self>, dcfg: DongleConfig) -> Result<()> {
+    /// Marks a new start/reinit operation for `id` as the authoritative one.
+    fn next_start_generation(&self, id: &str) -> u64 {
+        let mut generations = self.start_generations.lock();
+        let generation = generations.entry(id.to_string()).or_insert(0);
+        *generation = generation.wrapping_add(1);
+        *generation
+    }
+
+    fn is_start_generation(&self, id: &str, generation: u64) -> bool {
+        self.start_generations
+            .lock()
+            .get(id)
+            .copied()
+            .is_some_and(|current| current == generation)
+    }
+
+    async fn start_dongle_with_retry(
+        self: &Arc<Self>,
+        dcfg: DongleConfig,
+        generation: u64,
+    ) -> Result<()> {
+        // A newer reinit/start may have superseded this one before it began
+        // (e.g. two config saves in quick succession). Do nothing in that case:
+        // the newer operation owns the dongle and its state.
+        if !self.is_start_generation(&dcfg.id, generation) {
+            debug!(id = %dcfg.id, "start superseded before first attempt");
+            return Ok(());
+        }
         self.set_state(
             &dcfg.id,
             DongleState {
@@ -324,9 +358,17 @@ impl Manager {
                     },
                 );
                 tokio::time::sleep(retry_backoff(attempt - 1)).await;
+                if !self.is_start_generation(&dcfg.id, generation) {
+                    debug!(id = %dcfg.id, attempt, "start superseded during retry backoff");
+                    return Ok(());
+                }
             }
-            match self.start_dongle(dcfg.clone()).await {
+            match self.start_dongle(dcfg.clone(), generation).await {
                 Ok(()) => {
+                    if !self.is_start_generation(&dcfg.id, generation) {
+                        debug!(id = %dcfg.id, "start superseded after opening source");
+                        return Ok(());
+                    }
                     self.set_state(
                         &dcfg.id,
                         DongleState {
@@ -338,12 +380,20 @@ impl Manager {
                     return Ok(());
                 }
                 Err(e) => {
+                    if !self.is_start_generation(&dcfg.id, generation) {
+                        debug!(id = %dcfg.id, attempt, "start superseded after failed attempt");
+                        return Ok(());
+                    }
                     last_error = e.to_string();
                     error!(id = %dcfg.id, attempt, error = %e, "dongle start attempt failed");
                 }
             }
         }
 
+        if !self.is_start_generation(&dcfg.id, generation) {
+            debug!(id = %dcfg.id, "start superseded before final error state");
+            return Ok(());
+        }
         self.set_state(
             &dcfg.id,
             DongleState {
@@ -362,7 +412,7 @@ impl Manager {
         );
     }
 
-    async fn start_dongle(self: &Arc<Self>, dcfg: DongleConfig) -> Result<()> {
+    async fn start_dongle(self: &Arc<Self>, dcfg: DongleConfig, generation: u64) -> Result<()> {
         let id = dcfg.id.clone();
         if self.dongles.read().contains_key(&id) {
             bail!("dongle {id} is already running");
@@ -419,6 +469,14 @@ impl Manager {
             .create_source(&dcfg, &profile)
             .await
             .map_err(|e| anyhow!("create source for dongle {id}: {e}"))?;
+
+        // A newer start/reinit may have been requested while the source was
+        // opening (USB open can take hundreds of ms). Do not insert a dongle
+        // owned by a superseded operation; dropping `source` closes it safely.
+        if !self.is_start_generation(&id, generation) {
+            drop(source);
+            bail!("start superseded");
+        }
 
         let (cancel, cancel_rx) = watch::channel(false);
         let ad = Arc::new(ActiveDongle {
@@ -562,12 +620,24 @@ impl Manager {
         if profile.sample_rate > 0 {
             let _ = cmd.set_sample_rate(profile.sample_rate as u32);
         }
-        if profile.gain > 0.0 {
-            let _ = cmd.set_gain_mode(1);
-            let _ = cmd.set_gain((profile.gain * 10.0) as u32);
+        let gain = if profile.gain > 0.0 {
+            Some(profile.gain)
         } else if dcfg.gain > 0.0 {
-            let _ = cmd.set_gain_mode(1);
-            let _ = cmd.set_gain((dcfg.gain * 10.0) as u32);
+            Some(dcfg.gain)
+        } else {
+            None
+        };
+        match gain {
+            Some(gain) => {
+                let _ = cmd.set_gain_mode(1);
+                let _ = cmd.set_gain((gain * 10.0) as u32);
+            }
+            // No explicit gain means automatic tuner gain. Always send the
+            // mode so a profile switch away from a manual-gain profile does
+            // not leave the tuner stuck at the previous gain.
+            None => {
+                let _ = cmd.set_gain_mode(0);
+            }
         }
         if dcfg.ppm != 0 {
             let _ = cmd.set_frequency_correction(dcfg.ppm as u32);
@@ -583,6 +653,32 @@ impl Manager {
         let _ = cmd.set_offset_tuning(dcfg.offset_tuning as u32);
     }
 
+    /// Pushes updated hardware options (gain, PPM, direct sampling, bias-T,
+    /// RTL AGC, offset tuning) to an already running source. No-op if the
+    /// dongle is stopped; the next start applies the config anyway.
+    pub fn apply_runtime_settings(&self, dcfg: &DongleConfig) {
+        let ad = match self.dongles.read().get(&dcfg.id) {
+            Some(d) => d.clone(),
+            None => return,
+        };
+        let Some(cmd) = &ad.command else {
+            return;
+        };
+        let profile = ad.profile.read().clone();
+        info!(
+            id = %dcfg.id,
+            gain = dcfg.gain,
+            profile_gain = profile.gain,
+            ppm = dcfg.ppm,
+            direct_sampling = dcfg.direct_sampling,
+            bias_t = dcfg.bias_t,
+            digital_agc = dcfg.digital_agc,
+            offset_tuning = dcfg.offset_tuning,
+            "applying runtime dongle settings"
+        );
+        self.apply_dongle_settings(cmd, dcfg, &profile);
+    }
+
     async fn run_dongle(
         self: Arc<Self>,
         ad: Arc<ActiveDongle>,
@@ -594,13 +690,26 @@ impl Manager {
         let src = source.run(tx, src_cancel);
         tokio::pin!(src);
 
+        // Once cancellation is requested, keep draining the IQ channel but stop
+        // processing chunks, and wait for the source future to finish. Dropping
+        // it early would close a local RTL-SDR handle while its blocking
+        // `read_sync` loop is still running (use-after-free in librtlsdr), and
+        // would let a quick stop/start overlap the old USB handle with the new
+        // one.
+        let mut cancelled = false;
         loop {
             tokio::select! {
-                _ = cancel.changed() => break,
                 _ = &mut src => break,
+                _ = cancel.changed(), if !cancelled => {
+                    cancelled = true;
+                }
                 maybe = rx.recv() => {
                     match maybe {
-                        Some(chunk) => self.handle_iq_chunk(&ad, chunk),
+                        Some(chunk) => {
+                            if !cancelled {
+                                self.handle_iq_chunk(&ad, chunk);
+                            }
+                        }
                         None => break,
                     }
                 }
@@ -1502,7 +1611,8 @@ impl Manager {
             .find(|d| d.id == dongle_id)
             .cloned()
             .ok_or_else(|| anyhow!("dongle {dongle_id} not found in config"))?;
-        self.start_dongle_with_retry(dcfg).await
+        let generation = self.next_start_generation(&dcfg.id);
+        self.start_dongle_with_retry(dcfg, generation).await
     }
 
     pub async fn stop_dongle_by_id(&self, dongle_id: &str) -> Result<()> {
@@ -1554,6 +1664,11 @@ impl Manager {
             .cloned()
             .ok_or_else(|| anyhow!("dongle {dongle_id} not found in config"))?;
 
+        // Claim this reinit before stopping/starting. If another config save
+        // arrives while this one is retrying an unreachable source, the newer
+        // reinit takes over and this retry loop exits without touching state.
+        let generation = self.next_start_generation(dongle_id);
+
         let client_ids = self.ws.unsubscribe_from_dongle(dongle_id, "dongle reinitialising");
         for id in client_ids {
             self.destroy_client_pipeline(&id);
@@ -1578,7 +1693,7 @@ impl Manager {
             return Ok(());
         }
         let started = Instant::now();
-        let result = self.start_dongle_with_retry(dcfg).await;
+        let result = self.start_dongle_with_retry(dcfg, generation).await;
         tracing::info!(
             id = %dongle_id,
             elapsed_ms = started.elapsed().as_millis() as u64,
@@ -1646,6 +1761,14 @@ impl Manager {
             if profile.gain > 0.0 {
                 let _ = cmd.set_gain_mode(1);
                 let _ = cmd.set_gain((profile.gain * 10.0) as u32);
+            } else if dcfg.gain > 0.0 {
+                let _ = cmd.set_gain_mode(1);
+                let _ = cmd.set_gain((dcfg.gain * 10.0) as u32);
+            } else {
+                // Explicitly return to automatic tuner gain when the new
+                // profile has no manual gain (otherwise the previous manual
+                // gain stays latched on the tuner).
+                let _ = cmd.set_gain_mode(0);
             }
             let direct = if profile.direct_sampling != 0 {
                 profile.direct_sampling
@@ -1740,6 +1863,21 @@ impl Manager {
             cp.extractor.set_tune_offset(0);
             cp.extractor
                 .set_dc_offset_removal(profile.dc_offset_removal_enabled());
+            // Pre-filter noise blanker is profile-scoped too. Without this a
+            // pipeline created on a profile with NB enabled keeps blanking
+            // after switching to a profile that has it disabled (and vice
+            // versa).
+            cp.nb_enabled = profile.pre_filter_nb;
+            cp.extractor.set_nb_enabled(profile.pre_filter_nb);
+            if profile.pre_filter_nb {
+                let threshold = if profile.pre_filter_nb_threshold > 0 {
+                    profile.pre_filter_nb_threshold as f32
+                } else {
+                    10.0
+                };
+                cp.nb_threshold = threshold;
+                cp.extractor.set_nb_threshold(threshold);
+            }
             Self::update_chunk_size(&mut cp, rate);
             if let Some(opus) = cp.opus_pipeline.as_mut() {
                 opus.update_sample_rate(rate);
@@ -1752,7 +1890,14 @@ impl Manager {
             cp.adpcm_enc.reset();
         }
 
-        info!(dongle = %dongle_id, profile = %profile_id, "profile switched");
+        info!(
+            dongle = %dongle_id,
+            profile = %profile_id,
+            dc_offset_removal = profile.dc_offset_removal_enabled(),
+            pre_filter_nb = profile.pre_filter_nb,
+            pre_filter_nb_threshold = profile.pre_filter_nb_threshold,
+            "profile switched"
+        );
         Ok(())
     }
 
@@ -2217,5 +2362,14 @@ mod tests {
         let mut level_only = base.clone();
         level_only.gain = 10.0;
         assert!(!crate::api::admin::needs_reinit(&base, &level_only));
+        assert!(crate::api::admin::needs_runtime_apply(
+            &base,
+            &level_only
+        ));
+
+        let mut agc = base.clone();
+        agc.digital_agc = true;
+        assert!(!crate::api::admin::needs_reinit(&base, &agc));
+        assert!(crate::api::admin::needs_runtime_apply(&base, &agc));
     }
 }

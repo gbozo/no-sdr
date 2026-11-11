@@ -2,7 +2,7 @@
 // SDR Devices Section — Dongle & Profile management
 // ============================================================
 
-import { Component, Show, For, createSignal, createMemo, onMount } from 'solid-js';
+import { Component, Show, For, createSignal, createMemo, onMount, onCleanup } from 'solid-js';
 import { adminStore, DongleConfig, DongleProfile, SourceConfig } from '../admin-store';
 import { PROFILE_PRESETS, PRESET_CATEGORIES, type PresetCategory } from '~/shared/profile-presets';
 import { DEMOD_MODES } from '~/shared/modes';
@@ -20,6 +20,40 @@ const SOURCE_TYPES = [
 
 const VALID_MODES = Object.keys(DEMOD_MODES) as string[];
 
+type DongleStatus = 'running' | 'stopped' | 'disabled';
+
+/** Runtime state wins over the configured `enabled` flag: a dongle can be
+ *  manually started even if it is not auto-started. */
+function dongleStatus(d: { running?: boolean; enabled: boolean }): DongleStatus {
+  if (d.running) return 'running';
+  if (!d.enabled) return 'disabled';
+  return 'stopped';
+}
+
+const STATUS_DOT: Record<DongleStatus, string> = {
+  running: 'bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]',
+  stopped: 'bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.4)]',
+  disabled: 'bg-text-dim/40',
+};
+
+const STATUS_BADGE: Record<DongleStatus, string> = {
+  running: 'text-green-400 border-green-500/40 bg-green-500/10',
+  stopped: 'text-amber-400 border-amber-500/40 bg-amber-500/10',
+  disabled: 'text-text-dim border-border/60',
+};
+
+const STATUS_LABEL: Record<DongleStatus, string> = {
+  running: 'RUNNING',
+  stopped: 'STOPPED',
+  disabled: 'DISABLED',
+};
+
+const StatusBadge: Component<{ status: DongleStatus }> = (props) => (
+  <span class={`text-[8px] font-mono uppercase tracking-wider border px-1.5 py-0.5 rounded-sm ${STATUS_BADGE[props.status]}`}>
+    {STATUS_LABEL[props.status]}
+  </span>
+);
+
 const DevicesSection: Component = () => {
   const [view, setView] = createSignal<'list' | 'dongle' | 'profile'>('list');
   const [editingDongle, setEditingDongle] = createSignal<DongleConfig | null>(null);
@@ -30,6 +64,13 @@ const DevicesSection: Component = () => {
     if (adminStore.dongles().length === 0 && adminStore.authenticated()) {
       adminStore.loadDongles();
     }
+    // Running state is owned by the backend (auto-start, admin actions from
+    // another tab, retry loops). Refresh it in the background without
+    // replacing the view with the loading state.
+    const poll = setInterval(() => {
+      if (adminStore.authenticated()) adminStore.loadDongles(true);
+    }, 3000);
+    onCleanup(() => clearInterval(poll));
   });
 
   // ---- Navigation ----
@@ -152,20 +193,24 @@ const DongleList: Component<{ onSelect: (id: string) => void; onAdd: () => void 
                    hover:border-cyan/40 hover:bg-sdr-surface/50 transition-colors group"
           >
             <div class="flex items-center gap-3">
-              {/* Status LED */}
+              {/* Status LED: runtime state, not the configured enabled flag */}
               <div class={`w-2 h-2 rounded-full shrink-0 ${
-                dongle.enabled ? 'bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]' : 'bg-text-dim/40'
-              }`} />
+                STATUS_DOT[dongleStatus(dongle)]
+              } ${dongleStatus(dongle) === 'running' ? 'animate-pulse' : ''}`} />
               {/* Info */}
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
                   <span class="text-xs font-mono text-text-primary truncate">{dongle.name}</span>
+                  <StatusBadge status={dongleStatus(dongle)} />
                   <Show when={!dongle.enabled}>
                     <span class="text-[8px] font-mono text-amber/80 uppercase border border-amber/30 px-1 rounded-sm">disabled</span>
                   </Show>
                 </div>
                 <div class="text-[9px] font-mono text-text-dim mt-0.5">
                   {dongle.source?.type || 'unknown'} — {dongle.profiles?.length || 0} profile{(dongle.profiles?.length || 0) !== 1 ? 's' : ''}
+                  <Show when={dongle.running}>
+                    {' · '}{(dongle.clientCount ?? 0)} client{(dongle.clientCount ?? 0) !== 1 ? 's' : ''}
+                  </Show>
                 </div>
               </div>
               {/* Arrow */}
@@ -202,6 +247,28 @@ const DongleEditor: Component<{
   const [localState, setLocalState] = createSignal<Partial<DongleConfig>>({});
   const [confirmDelete, setConfirmDelete] = createSignal(false);
   const [presetOpen, setPresetOpen] = createSignal(false);
+  const [action, setAction] = createSignal<'start' | 'stop' | null>(null);
+  const [actionError, setActionError] = createSignal('');
+
+  async function handleStart() {
+    const d = dongle();
+    if (!d || action()) return;
+    setAction('start');
+    setActionError('');
+    const ok = await adminStore.startDongle(d.id);
+    if (!ok) setActionError('Start failed — check the server log for the source error.');
+    setAction(null);
+  }
+
+  async function handleStop() {
+    const d = dongle();
+    if (!d || action()) return;
+    setAction('stop');
+    setActionError('');
+    const ok = await adminStore.stopDongle(d.id);
+    if (!ok) setActionError('Stop failed — check the server log.');
+    setAction(null);
+  }
 
   function startEditing() {
     const d = dongle();
@@ -301,17 +368,39 @@ const DongleEditor: Component<{
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-3">
                 <div class={`w-2.5 h-2.5 rounded-full ${
-                  d().enabled ? 'bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]' : 'bg-text-dim/40'
-                }`} />
+                  STATUS_DOT[dongleStatus(d())]
+                } ${dongleStatus(d()) === 'running' ? 'animate-pulse' : ''}`} />
                 <h3 class="text-sm font-mono text-text-primary">{d().name}</h3>
+                <StatusBadge status={dongleStatus(d())} />
+                <Show when={d().running}>
+                  <span class="text-[9px] font-mono text-text-dim">
+                    {(d().clientCount ?? 0)} client{(d().clientCount ?? 0) !== 1 ? 's' : ''}
+                  </span>
+                </Show>
                 <Show when={!d().enabled}>
                   <span class="text-[8px] font-mono text-amber/80 uppercase border border-amber/30 px-1 rounded-sm">disabled</span>
                 </Show>
               </div>
               <div class="flex items-center gap-2">
                 <Show when={!editing()}>
-                  <button onClick={() => adminStore.startDongle(d().id)} class="mil-btn text-[9px] px-2 py-1">Start</button>
-                  <button onClick={() => adminStore.stopDongle(d().id)} class="mil-btn text-[9px] px-2 py-1">Stop</button>
+                  <button
+                    onClick={handleStart}
+                    disabled={d().running || action() !== null}
+                    class={`mil-btn text-[9px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                      !d().running && action() === null ? 'border-green-500/50 text-green-400' : ''
+                    }`}
+                  >
+                    {action() === 'start' ? 'Starting…' : 'Start'}
+                  </button>
+                  <button
+                    onClick={handleStop}
+                    disabled={!d().running || action() !== null}
+                    class={`mil-btn text-[9px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                      d().running && action() === null ? 'border-red-500/50 text-red-400' : ''
+                    }`}
+                  >
+                    {action() === 'stop' ? 'Stopping…' : 'Stop'}
+                  </button>
                   <button onClick={startEditing} class="mil-btn text-[9px] px-2 py-1">Edit</button>
                 </Show>
                 <Show when={editing()}>
@@ -320,6 +409,12 @@ const DongleEditor: Component<{
                 </Show>
               </div>
             </div>
+
+            <Show when={actionError()}>
+              <div class="text-[10px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded-sm px-3 py-2">
+                {actionError()}
+              </div>
+            </Show>
 
             {/* Dongle Settings */}
             <div class="border border-border/40 rounded-md bg-sdr-surface/30 p-4 space-y-4">

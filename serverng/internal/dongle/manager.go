@@ -786,13 +786,20 @@ func (m *Manager) applyDongleSettings(src CommandableSource, dcfg *config.Dongle
 		src.SetSampleRate(uint32(profile.SampleRate))
 	}
 
-	// Gain: profile-level overrides dongle-level
+	// Gain: profile-level overrides dongle-level. No explicit gain means
+	// automatic tuner gain; always send the mode so switching away from a
+	// manual-gain profile does not leave the tuner latched.
+	gain := 0.0
 	if profile.Gain > 0 {
-		src.SetGainMode(1)                     // manual gain
-		src.SetGain(uint32(profile.Gain * 10)) // tenths of dB
+		gain = profile.Gain
 	} else if dcfg.Gain > 0 {
-		src.SetGainMode(1)
-		src.SetGain(uint32(dcfg.Gain * 10))
+		gain = dcfg.Gain
+	}
+	if gain > 0 {
+		src.SetGainMode(1)             // manual gain
+		src.SetGain(uint32(gain * 10)) // tenths of dB
+	} else {
+		src.SetGainMode(0) // automatic tuner gain
 	}
 
 	if dcfg.PPM != 0 {
@@ -824,6 +831,45 @@ func (m *Manager) applyDongleSettings(src CommandableSource, dcfg *config.Dongle
 		src.SetOffsetTuning(1)
 	} else {
 		src.SetOffsetTuning(0)
+	}
+}
+
+// ApplyRuntimeSettings pushes updated hardware options (gain, PPM, direct
+// sampling, bias-T, RTL AGC, offset tuning) to a running source without
+// closing/reopening it. No-op when the dongle is stopped; the next start
+// applies the persisted config anyway.
+func (m *Manager) ApplyRuntimeSettings(dongleID string) {
+	m.mu.Lock()
+	d, ok := m.dongles[dongleID]
+	var dcfg *config.DongleConfig
+	if ok {
+		for i := range m.cfg.Dongles {
+			if m.cfg.Dongles[i].ID == dongleID {
+				dcfg = &m.cfg.Dongles[i]
+				break
+			}
+		}
+	}
+	var profile config.DongleProfile
+	if ok && dcfg != nil {
+		profile = *d.profile
+	}
+	m.mu.Unlock()
+
+	if !ok || dcfg == nil {
+		return
+	}
+	if cs, ok := d.source.(CommandableSource); ok {
+		m.logger.Info("applying runtime dongle settings",
+			"id", dongleID,
+			"gain", dcfg.Gain,
+			"profileGain", profile.Gain,
+			"ppm", dcfg.PPM,
+			"directSampling", dcfg.DirectSampling,
+			"biasT", dcfg.BiasT,
+			"digitalAgc", dcfg.DigitalAgc,
+			"offsetTuning", dcfg.OffsetTuning)
+		m.applyDongleSettings(cs, dcfg, &profile)
 	}
 }
 
@@ -859,10 +905,16 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 		if newProfile.SampleRate > 0 {
 			cs.SetSampleRate(uint32(newProfile.SampleRate))
 		}
-		// Per-profile gain (overrides dongle-level)
-		if newProfile.Gain > 0 {
+		// Per-profile gain (overrides dongle-level); zero means automatic gain.
+		switch {
+		case newProfile.Gain > 0:
 			cs.SetGainMode(1)
 			cs.SetGain(uint32(newProfile.Gain * 10))
+		case d.dongleCfg.Gain > 0:
+			cs.SetGainMode(1)
+			cs.SetGain(uint32(d.dongleCfg.Gain * 10))
+		default:
+			cs.SetGainMode(0)
 		}
 		// Per-profile direct sampling (always send, even 0)
 		ds := d.dongleCfg.DirectSampling
@@ -960,6 +1012,19 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 			cp.extractor.SetBandwidth(newBw)
 			cp.extractor.SetTuneOffset(0) // offset is invalid for new center frequency
 			cp.extractor.SetDCOffsetRemoval(newProfile.DCOffsetRemoval == nil || *newProfile.DCOffsetRemoval)
+			// Pre-filter noise blanker follows the active profile, so a
+			// pipeline does not keep blanking after switching to a profile
+			// where it is disabled (and vice versa).
+			cp.nbEnabled = newProfile.PreFilterNb
+			cp.extractor.SetNbEnabled(newProfile.PreFilterNb)
+			if newProfile.PreFilterNb {
+				threshold := float32(10.0)
+				if newProfile.PreFilterNbThreshold > 0 {
+					threshold = float32(newProfile.PreFilterNbThreshold)
+				}
+				cp.nbThreshold = threshold
+				cp.extractor.SetNbThreshold(threshold)
+			}
 			m.updateChunkSize(cp)
 			// Update Opus pipeline if active
 			if p := cp.opusPipeline.Load(); p != nil {
@@ -982,6 +1047,9 @@ func (m *Manager) SwitchProfile(dongleID string, profileID string) error {
 		"dongleID", dongleID,
 		"profileID", profileID,
 		"centerFreq", newProfile.CenterFrequency,
+		"dcOffsetRemoval", newProfile.DCOffsetRemoval == nil || *newProfile.DCOffsetRemoval,
+		"preFilterNb", newProfile.PreFilterNb,
+		"preFilterNbThreshold", newProfile.PreFilterNbThreshold,
 	)
 
 	return nil

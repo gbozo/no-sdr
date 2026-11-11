@@ -117,6 +117,7 @@ func main() {
 	api.DongleStartFunc = dongleMgr.StartDongleByID
 	api.DongleStopFunc = dongleMgr.StopDongleByID
 	api.DongleReinitFunc = dongleMgr.ReinitDongle
+	api.DongleApplyRuntimeFunc = dongleMgr.ApplyRuntimeSettings
 	api.HandleProfileRemovedFunc = dongleMgr.HandleProfileRemoved
 	api.SetAllowedCodecsFunc = wsMgr.SetAllowedCodecs
 	api.SetRealIPHeaderFunc = wsMgr.SetRealIPHeader
