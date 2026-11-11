@@ -6,7 +6,7 @@ SolidJS client (`client/src/shared/protocol.ts`).
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as `serverng`).
 
-## Current status (2.11.6)
+## Current status (2.11.7)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,12 +23,15 @@ protocol as `serverng`).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.11.6-rust` (prerelease). It adds the AM
-  adjacent-channel selectivity fix (191-tap IF FIR before the envelope detector
-  and OpusPipeline bandwidth propagation) on top of 2.11.5's admin reinit
-  stall follow-up. Earlier releases added the hot-path performance pass,
-  direct USB rtlsdr, aggregate bandwidth stats, default Opus+rtlsdr features,
-  and the WFM AVX2 decimator fix.
+- Latest published release: `v2.11.7-rust` (prerelease). It fixes the local USB
+  RTL-SDR use-after-free on stop/reinit, stops stale retry loops from
+  overwriting a newer dongle state, applies hardware settings (gain, PPM,
+  direct sampling, bias-T, RTL AGC, offset tuning) to running dongles without
+  reopening USB, adds admin runtime-state/Start/Stop indicators, and applies
+  the profile noise blanker on profile switches. Earlier releases added the AM
+  adjacent-channel selectivity fix, admin reinit stall follow-ups, the
+  hot-path performance pass, direct USB rtlsdr, aggregate bandwidth stats,
+  default Opus+rtlsdr features, and the WFM AVX2 decimator fix.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
   Go backend on main).
@@ -373,3 +376,23 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   so server-side demod audio/IF filters stayed off until the client sent a
   separate bandwidth command. Creation, mode changes and profile switches now
   call `set_bandwidth`. `cargo test --no-default-features`: 119 passed.
+
+- 2026-11-11: Local USB RTL-SDR lifecycle and admin/runtime fixes. `DeviceGuard`
+  now closes the librtlsdr handle only when the last `Arc` is dropped, after
+  the blocking `read_sync` loop returns; `run_dongle` waits for the source
+  future after cancellation. This fixes a reproducible SIGSEGV in
+  `rtlsdr_set_sample_rate` (and malloc heap corruption) during rapid
+  stop/start: 100 cycles now pass. Per-dongle start generations prevent an
+  older rtl_tcp retry loop from reporting "already running" and overwriting a
+  newer successful local start with `state=error`. The admin API now reports
+  runtime state in the Devices UI (RUNNING/STOPPED/DISABLED, client count,
+  Start/Stop disabled/in-flight states, silent 3 s refresh). Hardware options
+  (gain, PPM, direct sampling, bias-T, RTL AGC, offset tuning) are pushed to a
+  running dongle through the command channel without reopening USB, and a zero
+  gain now explicitly selects automatic tuner gain (both backends). Digital
+  AGC was verified end-to-end from the WS IQ stream (RMS 450 on → 74 off →
+  455 on); profile DC removal drops IQ mean from −260 to −14 LSB. Profile
+  switching now also applies `preFilterNb`/threshold to existing client
+  pipelines instead of leaving the previous profile's blanker latched, with an
+  extractor impulse regression test (peak 3036 → 1699). Version bump to
+  2.11.7 (`package.json`, client, Cargo package).
