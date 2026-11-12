@@ -1204,7 +1204,7 @@ Demo mode is useful for:
 ### 13.1 Docker
 
 Multi-stage build:
-1. **Client stage** — `node:24-slim`, installs deps and builds the SolidJS client
+1. **Client stage** — `node:26-slim`, installs deps and builds the SolidJS client
 2. **Rust stage** — `rust:1.99-alpine`, builds per-CPU `serverrs` binaries with `--all-features`
 3. **Runtime stage** — `alpine:3.20` with the binaries, client dist, config and bookmarks
 
@@ -1239,7 +1239,7 @@ cd no-sdr && npm install && npm run build && npm start
 
 ### 13.4 Raspberry Pi
 
-Tested on Pi 4 (4GB) and Pi 5. Use the Node.js 24 ARM64 build; the Rust backend is built by `npm run build`. Performance considerations:
+Tested on Pi 4 (4GB) and Pi 5. Use the Node.js 26 ARM64 build; the Rust backend is built by `npm run build`. Performance considerations:
 - FFT at 2048 points runs comfortably at 30fps
 - Audio demodulation is client-side, so Pi CPU isn't affected by user count
 - IQ extraction is O(N) per client — consider reducing sample rate on Pi 3

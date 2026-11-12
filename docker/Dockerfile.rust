@@ -8,7 +8,7 @@
 # ============================================
 
 # ---- Client build ----
-FROM node:24-slim AS client-builder
+FROM node:26-slim AS client-builder
 
 WORKDIR /app
 

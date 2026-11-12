@@ -29,7 +29,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^0.1.99",

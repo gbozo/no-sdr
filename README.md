@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/gbozo/no-sdr/actions"><img src="https://img.shields.io/github/actions/workflow/status/gbozo/no-sdr/rust-binaries.yml?branch=main&label=build" alt="Build Status" /></a>
   <a href="https://github.com/gbozo/no-sdr/releases"><img src="https://img.shields.io/github/v/release/gbozo/no-sdr?include_prereleases&label=version&color=blue" alt="Version" /></a>
-  <img src="https://img.shields.io/badge/node-%3E%3D24-brightgreen" alt="Node.js 24+" />
+  <img src="https://img.shields.io/badge/node-%3E%3D26-brightgreen" alt="Node.js 26+" />
   <img src="https://img.shields.io/badge/typescript-5-blue" alt="TypeScript 5" />
   <a href="https://github.com/gbozo/no-sdr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gbozo/no-sdr?color=green" alt="GPL-3.0-or-later License" /></a>
   <img src="https://img.shields.io/badge/RTL--SDR-supported-orange" alt="RTL-SDR" />
@@ -149,7 +149,7 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 
 ### Prerequisites
 
-- **Rust 1.85+** and **Node.js 24+** (LTS recommended)
+- **Rust 1.85+** and **Node.js 26+** (LTS recommended)
 - **RTL-SDR dongle** (native USB support is built in; on Windows bind it to WinUSB with Zadig), a remote `rtl_tcp` server, or just use demo mode
 
 ### Install & Run
