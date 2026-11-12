@@ -1,6 +1,6 @@
 //! Configuration loading, defaults and validation.
 //!
-//! Mirrors `serverng/internal/config/config.go`.
+//! Ported from the original Go backend.
 //!
 //! YAML files use the Go YAML key names (`defaultBandwidth`, `defaultMode`,
 //! `defaultTuneOffset`) while the JSON API uses the Go JSON tags
@@ -102,6 +102,10 @@ pub struct ServerConfig {
     pub location: String,
     #[serde(default)]
     pub demo_mode: bool,
+    /// Tracing/log level: trace, debug, info, warn, error (or off).
+    /// `LOG_LEVEL` in the environment overrides this.
+    #[serde(default)]
+    pub log_level: String,
     #[serde(default)]
     pub fft_history_fft_size: i32,
     #[serde(default)]
@@ -137,6 +141,7 @@ impl Default for ServerConfig {
             description: String::new(),
             location: String::new(),
             demo_mode: false,
+            log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
             allowed_fft_codecs: Vec::new(),
@@ -356,6 +361,10 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.opus_complexity < 0 {
         cfg.server.opus_complexity = 5;
     }
+    cfg.server.log_level = cfg.server.log_level.trim().to_ascii_lowercase();
+    if cfg.server.log_level.is_empty() {
+        cfg.server.log_level = "info".to_string();
+    }
 }
 
 /// YAML `enabled`/`autoStart` default to true only when the keys are absent.
@@ -404,6 +413,14 @@ pub fn apply_profile_defaults(cfg: &mut Config) {
 }
 
 pub fn validate(cfg: &Config) -> Result<()> {
+    const LOG_LEVELS: [&str; 6] = ["trace", "debug", "info", "warn", "error", "off"];
+    if !LOG_LEVELS.contains(&cfg.server.log_level.as_str()) {
+        bail!(
+            "config: server.logLevel must be one of {:?}, got {:?}",
+            LOG_LEVELS,
+            cfg.server.log_level
+        );
+    }
     for (i, d) in cfg.dongles.iter().enumerate() {
         for (j, p) in d.profiles.iter().enumerate() {
             if !is_power_of_two(p.fft_size) || p.fft_size < 256 || p.fft_size > 131072 {

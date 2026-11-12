@@ -1,0 +1,75 @@
+# RTL2832U (RTL-SDR) dongles for serverrs' native USB driver.
+#
+# serverrs talks to the dongle directly with nusb, not through librtlsdr, so
+# there is no distribution rtl-sdr package to install the usual rule for. The
+# invoking user still needs write access to the usbfs node — both to open the
+# device and to detach the `dvb_usb_rtl28xxu` DVB driver.
+#
+# TAG+="uaccess" grants an ACL to whoever is logged in at the active seat.
+# GROUP="plugdev" is the fallback for headless machines, WSL2, containers and
+# systemd services, where there is no seat. It is on its own line because udev
+# discards a whole rule line when the named group does not exist, and plugdev
+# is absent on Arch and Fedora. To use the fallback:
+#
+#   sudo groupadd -f plugdev && sudo usermod -aG plugdev "$USER"
+#
+# then log out and back in.
+#
+# Install:
+#   sudo cp 60-serverrs-rtlsdr.rules /usr/lib/udev/rules.d/
+#   sudo udevadm control --reload
+# then unplug and replug the dongle.
+#
+# If the distribution's rtl-sdr package is already installed, its rules cover
+# the same ids and this file is harmless duplication.
+
+# Generic Realtek ids: every RTL-SDR Blog V3/V4 and most generic sticks.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", ENV{SERVERRS_RTLSDR}="1"
+
+# OEM-branded DVB-T sticks built on the same silicon.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0413", ATTRS{idProduct}=="6680", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0413", ATTRS{idProduct}=="6f0f", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0458", ATTRS{idProduct}=="707f", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00a9", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00b3", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00b4", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00b5", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00b7", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00b8", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00b9", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00c0", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00c6", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00d3", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00d7", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00e0", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1554", ATTRS{idProduct}=="5020", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="15f4", ATTRS{idProduct}=="0131", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="15f4", ATTRS{idProduct}=="0133", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="185b", ATTRS{idProduct}=="0620", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="185b", ATTRS{idProduct}=="0650", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="185b", ATTRS{idProduct}=="0680", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d393", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d394", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d395", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d397", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d398", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d39d", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d3a4", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d3a8", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d3af", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1b80", ATTRS{idProduct}=="d3b0", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d19", ATTRS{idProduct}=="1101", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d19", ATTRS{idProduct}=="1102", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d19", ATTRS{idProduct}=="1103", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d19", ATTRS{idProduct}=="1104", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1f4d", ATTRS{idProduct}=="a803", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1f4d", ATTRS{idProduct}=="b803", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1f4d", ATTRS{idProduct}=="c803", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1f4d", ATTRS{idProduct}=="d286", ENV{SERVERRS_RTLSDR}="1"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1f4d", ATTRS{idProduct}=="d803", ENV{SERVERRS_RTLSDR}="1"
+
+# Permissions, on their own lines so a missing plugdev group cannot take the
+# uaccess ACL down with it.
+ENV{SERVERRS_RTLSDR}=="1", MODE="0660", TAG+="uaccess"
+ENV{SERVERRS_RTLSDR}=="1", GROUP="plugdev"

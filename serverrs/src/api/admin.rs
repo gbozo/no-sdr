@@ -355,8 +355,23 @@ pub async fn update_dongle(
         (old, updated, version)
     };
 
+    let reinit = needs_reinit(&old, &new_cfg);
+    let runtime_apply = needs_runtime_apply(&old, &new_cfg);
+    tracing::info!(
+        id = %id,
+        old_source = %old.source.kind,
+        new_source = %new_cfg.source.kind,
+        old_host = %old.source.host,
+        new_host = %new_cfg.source.host,
+        old_device_index = old.source.device_index,
+        new_device_index = new_cfg.source.device_index,
+        reinit,
+        runtime_apply,
+        "dongle config updated"
+    );
+
     state.mgr.notify_dongle_updated(&new_cfg);
-    if needs_reinit(&old, &new_cfg) {
+    if reinit {
         let mgr = state.mgr.clone();
         let id2 = id.clone();
         tokio::spawn(async move {
@@ -365,7 +380,7 @@ pub async fn update_dongle(
                 tracing::error!(id = %id2, error = %e, "dongle reinit failed");
             }
         });
-    } else if needs_runtime_apply(&old, &new_cfg) {
+    } else if runtime_apply {
         // Gain, PPM, direct sampling, bias-T, AGC and offset tuning can be
         // applied to a running source without dropping the USB handle.
         state.mgr.apply_runtime_settings(&new_cfg);

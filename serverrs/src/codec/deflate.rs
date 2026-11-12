@@ -1,6 +1,6 @@
 //! Deflate-compressed FFT frames (raw deflate, no zlib wrapper).
 //!
-//! Mirrors `serverng/internal/codec/deflate.go`.
+//! Ported from the original Go backend.
 
 use std::io::Write;
 

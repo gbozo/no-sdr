@@ -1,7 +1,7 @@
 //! Opus encoder wrapper.
 //!
 //! Enabled with the `opus` cargo feature. Without it, construction fails and
-//! `OPUS_AVAILABLE` is false (mirrors the Go `opus_stub.go` build tag split).
+//! `OPUS_AVAILABLE` is false (mirroring the original build-tag split).
 
 use anyhow::{bail, Result};
 

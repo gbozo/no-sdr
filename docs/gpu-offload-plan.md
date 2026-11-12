@@ -1,5 +1,7 @@
 # GPU Offload Plan — serverng DSP Pipeline
 
+> **Historical:** written for the former Go backend. The Go server has been removed; this plan is retained as design reference for the Rust port (`serverrs/src/gpu/`, `gpu_vulkan` feature).
+
 ## Motivation
 
 The Go DSP pipeline runs entirely on CPU. At 2.4 MSPS with a 65536-point FFT at 30 fps

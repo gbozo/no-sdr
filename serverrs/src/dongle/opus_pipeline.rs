@@ -1,6 +1,6 @@
 //! Server-side demodulation + Opus encoding pipeline.
 //!
-//! Mirrors `serverng/internal/dongle/opus_pipeline.go`. Used when the client
+//! Ported from the original Go backend. Used when the client
 //! selects an `opus` / `opus-lo` / `opus-hq` IQ codec.
 
 use anyhow::{bail, Result};

@@ -48,6 +48,7 @@ for bin in "$DIST"/serverrs-linux-amd64-*; do
     common "$dir"
     cp "$bin" "$dir/serverrs"
     cp "$ROOT/packaging/run.sh" "$dir/run.sh"
+    cp "$ROOT/packaging/60-serverrs-rtlsdr.rules" "$dir/"
     chmod +x "$dir/serverrs" "$dir/run.sh"
     pack_tar "$name"
 done
@@ -60,6 +61,7 @@ for bin in "$DIST"/serverrs-linux-arm64-*; do
     common "$dir"
     cp "$bin" "$dir/serverrs"
     cp "$ROOT/packaging/run.sh" "$dir/run.sh"
+    cp "$ROOT/packaging/60-serverrs-rtlsdr.rules" "$dir/"
     chmod +x "$dir/serverrs" "$dir/run.sh"
     pack_tar "$name"
 done

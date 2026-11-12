@@ -1,6 +1,6 @@
 //! Connected WebSocket client state and its outgoing write queue.
 //!
-//! Port of `serverng/internal/ws/client.go`.
+//! Ported from the original Go backend.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

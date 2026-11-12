@@ -1,6 +1,6 @@
 //! Demodulators: FM (mono/stereo), AM, SSB, CW, SAM, C-QUAM, RDS.
 //!
-//! Mirrors `serverng/internal/demod`.
+//! Ported from the original Go backend.
 
 use anyhow::Result;
 use num_complex::Complex32;

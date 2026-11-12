@@ -1,6 +1,6 @@
 //! DC offset removal via a leaky integrator (first-order IIR high-pass).
 //!
-//! Mirrors `serverng/internal/dsp/dc_block.go`.
+//! Ported from the original Go backend.
 //!
 //! ```text
 //! y     = x - dcEst

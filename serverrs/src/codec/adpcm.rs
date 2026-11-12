@@ -1,6 +1,6 @@
 //! IMA-ADPCM (4:1) streaming encoder/decoder.
 //!
-//! Wire-compatible with `serverng/internal/codec/adpcm.go` and the client's
+//! Wire-compatible with the original Go implementation and the client's
 //! `shared/src/adpcm.ts`.
 
 /// Step index adjustment table (nibble -> index delta).

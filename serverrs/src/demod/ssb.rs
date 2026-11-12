@@ -1,6 +1,6 @@
 //! SSB demodulator: real-part extraction + DC block + AGC + audio LPF.
 //!
-//! Mirrors `serverng/internal/demod/ssb.go`.
+//! Ported from the original Go backend.
 
 use anyhow::Result;
 use num_complex::Complex32;

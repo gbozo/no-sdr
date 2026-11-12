@@ -1,6 +1,6 @@
 //! WebSocket protocol, client state and connection manager.
 //!
-//! Wire-compatible port of `serverng/internal/ws`.
+//! Wire-compatible with the original Go implementation.
 
 pub mod client;
 pub mod manager;

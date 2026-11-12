@@ -1,6 +1,6 @@
 //! AM envelope demodulator with DC blocking, AGC, and optional audio LPF.
 //!
-//! Mirrors `serverng/internal/demod/am.go`.
+//! Ported from the original Go backend.
 
 use anyhow::Result;
 use num_complex::Complex32;

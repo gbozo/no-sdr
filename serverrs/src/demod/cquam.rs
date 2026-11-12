@@ -1,6 +1,6 @@
 //! Motorola C-QUAM AM stereo demodulator.
 //!
-//! Mirrors `serverng/internal/demod/cquam.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::PI;
 

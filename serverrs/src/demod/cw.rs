@@ -1,6 +1,6 @@
 //! CW (Morse) demodulator: BFO mix + audio LPF.
 //!
-//! Mirrors `serverng/internal/demod/cw.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::PI;
 

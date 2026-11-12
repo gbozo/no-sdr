@@ -1,6 +1,6 @@
 //! Per-IP WebSocket connection limiting.
 //!
-//! Port of `serverng/internal/ws/ratelimit.go`.
+//! Ported from the original Go backend.
 
 use std::collections::HashMap;
 

@@ -12,7 +12,7 @@ export type AdminSection =
   | 'monitor'
   | 'identify';
 
-// ---- Dongle & Profile Types (matches Go backend) ----
+// ---- Dongle & Profile Types (matches the server API) ----
 export interface SourceConfig {
   type: string;
   host?: string;

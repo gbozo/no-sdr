@@ -1,6 +1,6 @@
 //! FFT quantization helpers: float dB -> u8 and delta coding.
 //!
-//! Mirrors `serverng/internal/codec/compress_fft.go`.
+//! Ported from the original Go backend.
 
 /// Quantizes float32 dB magnitudes to u8 over `[min_db, max_db]`.
 pub fn compress_fft(fft: &[f32], min_db: f32, max_db: f32) -> Vec<u8> {

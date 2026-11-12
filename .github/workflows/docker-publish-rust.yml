@@ -1,5 +1,4 @@
 # Build and publish the Rust Docker image (multi-CPU x86-64 + ARM64/Pi).
-# Kept separate from the Go image so both can be published side by side.
 #
 # amd64 and arm64 are built on native runners (no QEMU), each pushing a digest;
 # a final job merges the digests into a multi-arch manifest. Cargo registries
@@ -19,8 +18,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Same repository as the Go image, but only rust-suffixed version tags are
-  # published here. The Go image owns `latest`.
+  # Publishes the release tag (for example 2.11.7-rust) plus a rolling
+  # `latest-rust` tag used by docker-compose.
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -111,6 +110,7 @@ jobs:
           done)
           docker buildx imagetools create \
             --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.value }}" \
+            --tag "${REGISTRY}/${IMAGE_NAME}:latest-rust" \
             $sources
       - name: Inspect manifest
         run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.value }}"

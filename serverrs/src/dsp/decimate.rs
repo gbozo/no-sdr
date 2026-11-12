@@ -1,6 +1,6 @@
 //! Polyphase decimator with windowed-sinc anti-alias FIR.
 //!
-//! Mirrors `serverng/internal/dsp/decimate.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::PI;
 

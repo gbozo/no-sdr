@@ -1,6 +1,6 @@
 //! FM demodulators: mono discriminator + wideband stereo (pilot PLL).
 //!
-//! Mirrors `serverng/internal/demod/fm.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::PI;
 
@@ -906,7 +906,7 @@ mod tests {
             r3 += r * (2.0 * PI * 3000.0 * t).sin();
         }
         // Go's implementation produces L1≈1636.6, R1≈416.9, L3≈-442.9,
-        // R3≈-1394.1 for this exact signal (verified against serverng); the
+        // R3≈-1394.1 for this exact signal (verified against the original implementation); the
         // port matches those figures to f32 precision.
         assert!(l1.abs() > 3.0 * r1.abs(), "L/R leakage at 1k: {l1} {r1}");
         assert!(r3.abs() > 3.0 * l3.abs(), "R/L leakage at 3k: {r3} {l3}");

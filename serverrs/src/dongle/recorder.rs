@@ -1,6 +1,6 @@
 //! SigMF IQ recorder.
 //!
-//! Mirrors `serverng/internal/dongle/recorder.go`: raw uint8 IQ chunks are
+//! Ported from the original Go backend: raw uint8 IQ chunks are
 //! appended to `.sigmf-data` and a `.sigmf-meta` sidecar is written on stop.
 
 use std::collections::HashMap;

@@ -1,6 +1,6 @@
 //! rtl_tcp (and compatible) network IQ sources.
 //!
-//! Mirrors `serverng/internal/dongle/rtltcp.go` and `rsp.go`.
+//! Ported from the original Go backend and its RSP handling.
 
 use std::time::Duration;
 

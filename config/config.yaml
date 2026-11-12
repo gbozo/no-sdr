@@ -6,6 +6,8 @@ server:
   description: ''
   location: ''
   demoMode: false
+  # trace | debug | info | warn | error | off. LOG_LEVEL env overrides this.
+  logLevel: info
   fftHistoryFftSize: 4096
   fftHistoryCompression: deflate
   allowedFftCodecs:
@@ -32,7 +34,7 @@ dongles:
   autoStart: true
   source:
     type: local
-    host: ""
+    host: 192.168.1.3
     port: 0
     deviceIndex: 0
     serial: ''
@@ -74,7 +76,7 @@ dongles:
     sampleRate: 2400000
     dcOffsetRemoval: true
     defaultBandwidth: 8330
-    gain: 40.0
+    gain: 0.0
     fftSize: 8192
     fftFps: 25
     defaultMode: am
@@ -108,7 +110,7 @@ dongles:
     defaultTuneOffset: 0
   - id: profile-mp7f9a3s
     name: Shortwave Broadcast
-    centerFrequency: 6050000
+    centerFrequency: 1300000
     sampleRate: 2400000
     dcOffsetRemoval: true
     defaultBandwidth: 10000
@@ -122,7 +124,7 @@ dongles:
     directSampling: 2
     description: International shortwave 5.9–6.2 MHz (requires direct sampling)
     dongleId: ''
-    preFilterNb: false
+    preFilterNb: true
     preFilterNbThreshold: 0
     defaultTuneOffset: 0
 bookmarks:

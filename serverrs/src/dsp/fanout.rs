@@ -1,6 +1,6 @@
 //! Single-writer / multi-reader ring buffer fan-out.
 //!
-//! Mirrors `serverng/internal/dsp/fanout.go`. Each reader keeps an
+//! Ported from the original Go backend. Each reader keeps an
 //! independent cursor and skips forward (counting dropped bytes) when it
 //! falls more than one buffer behind.
 

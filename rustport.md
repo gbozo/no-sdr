@@ -1,12 +1,13 @@
 # Rust port tracking (`serverrs`)
 
-Port of the Go backend in `serverng/` to Rust, wire-compatible with the existing
-SolidJS client (`client/src/shared/protocol.ts`).
+Port of the original Go backend to Rust, wire-compatible with the existing
+SolidJS client (`client/src/shared/protocol.ts`). The Go backend (`serverng/`)
+has been removed from this branch; `serverrs/` is now the only server.
 
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
-protocol as `serverng`).
+protocol as before).
 
-## Current status (2.11.7)
+## Current status (2.11.8)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -16,10 +17,13 @@ protocol as `serverng`).
   (rtl_tcp-compatible), and **local USB `rtlsdr`** (feature `rtlsdr`).
   Local RTL2838/R820T hardware verified: streaming, FFT, Opus WFM, RDS,
   profile switch, MW direct sampling, stop/start.
-- Features: `opus` (server-side audio) and `rtlsdr` (direct USB, requires
-  librtlsdr) are **default features**. Use `--no-default-features` to build
-  without native dependencies. macOS/Windows release artifacts use
-  `--no-default-features --features opus` (no librtlsdr there).
+- Features: `opus` (server-side audio), `rtlsdr` (native direct USB via
+  `nusb`, no librtlsdr/libusb) and `bias-t` (bias-T GPIO support) are
+  **default features**. The `bias-t` feature decides whether the GPIO path is
+  compiled in; the dongle's `biasT` setting still decides whether it is
+  energized. Use `--no-default-features` to build without optional
+  dependencies. Every release artifact, including macOS and Windows, uses
+  `--all-features`.
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
@@ -33,13 +37,12 @@ protocol as `serverng`).
   hot-path performance pass, direct USB rtlsdr, aggregate bandwidth stats,
   default Opus+rtlsdr features, and the WFM AVX2 decimator fix.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
-  `ghcr.io/gbozo/no-sdr:2.11.0-rust` (never `latest`; that tag belongs to the
-  Go backend on main).
+  `ghcr.io/gbozo/no-sdr:2.11.0-rust`. The Docker workflow also publishes a
+  rolling `latest-rust` tag.
 
 ## Ground rules
 
 - Do not change the client protocol. Existing client must work unmodified.
-- Existing Go backend stays in the tree as the reference implementation.
 - No commits unless explicitly requested.
 - Real-hardware test (USB RTL-SDR) happens only after user provides a dongle —
   **ask the user first**.
@@ -64,12 +67,12 @@ protocol as `serverng`).
 - [x] client end-to-end (in-app browser + raw WebSocket client) for demo,
       rtl_tcp and local USB sources
 - [x] optional feature: `opus` (verified live: AUDIO_OPUS + RDS messages)
-- [x] optional feature: `rtlsdr` (librtlsdr direct USB; RTL2838 hardware test)
+- [x] optional feature: `rtlsdr` (native nusb direct USB; no librtlsdr; hardware-verified on RTL2838/R820T)
 - [x] real USB dongle hardware test
 
 ## Notes / compatibility decisions
 
-- Wire formats copied 1:1 from `serverng/internal/ws/protocol.go`.
+- Wire formats copied 1:1 from the original Go backend (`serverng/internal/ws/protocol.go`, now removed).
 - Deflate uses `flate2` with the `zlib-rs` backend; the quantized+delta
   streams are byte-identical to Go, and zlib-rs typically compresses slightly
   better than Go's `compress/flate`.
@@ -97,6 +100,8 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-12: Version 2.11.8. Rust-only branch: native nusb RTL-SDR driver, bias-T feature, Go backend removed.
+- 2026-11-12: Go backend (`serverng/`), its Docker image/workflow and Go npm scripts removed from the branch. `serverrs/` is now the only server; docs and package scripts are Rust-only.
 - 2026-11-07: branch created; Go backend surveyed; Rust crate scaffolded.
 - 2026-11-07: config, codec and dsp modules ported; `cargo test` green
   (41 tests). Cargo registry had to use `CARGO_HOME=$HOME/.cargo` because
@@ -290,13 +295,25 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   `rtl-sdr` 0.1 crate does not expose bias-T, so `biasT` is accepted but not
   applied yet; offset-tuning is ignored by the R820T (librtlsdr returns
   InvalidParam, harmless).
+- 2026-11-12: Local USB RTL-SDR no longer links librtlsdr. The `rtlsdr`
+  feature now selects a native RTL2832U + R82xx driver in
+  `serverrs/src/dongle/rtlsdr/`, built on `nusb` (pure Rust USB). Adapted from
+  sdroxide's GPL-3.0 driver, which transcribes osmocom librtlsdr. This adds
+  bias-T, ppm correction, Blog V4/R828D support and direct sampling without
+  any libusb/librtlsdr package or DLL, and makes the feature buildable on
+  macOS and Windows. CI/Docker no longer install `librtlsdr-dev`/`libusb`.
+  A new `bias-t` feature gates the GPIO write and is enabled by default;
+  build with `--no-default-features --features rtlsdr` for a binary that
+  cannot put DC on the feedline. Offset tuning remains unsupported by the
+  R82xx hardware. Verified on an
+  RTL2838/R820T: enumeration, open, 100 MHz and 433.92 MHz tuner streaming,
+  14.074 MHz via direct sampling (Q-ADC), return to the tuner, FFT frames and
+  IQ frames through the WebSocket server, and clean shutdown.
 - 2026-11-08: `opus` and `rtlsdr` are now **default Cargo features**.
   `cargo build`/`cargo test` therefore produce the full-featured backend on
-  systems with libopus + librtlsdr. CI/Docker use explicit
+  systems with libopus. CI/Docker use explicit
   `--no-default-features --features "opus rtlsdr"` on Linux so the defaults
-  cannot silently change the build; macOS/Windows artifacts use
-  `--no-default-features --features opus`. The Alpine builder/runtime now
-  install `librtlsdr-dev`/`libusb-dev` and `librtlsdr`/`libusb`.
+  cannot silently change the build.
 - 2026-11-08: CI build caching. Native binary jobs now use sccache (GitHub
   Actions backend) plus cargo registry/cache restore, so the four amd64
   microarchitecture builds and repeat runs reuse compiled dependencies.

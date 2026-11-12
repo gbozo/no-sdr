@@ -26,13 +26,9 @@ fn main() -> Result<()> {
 
 async fn async_main() -> Result<()> {
     if std::env::args().any(|a| a == "--version") {
-        println!("serverng {}", env!("CARGO_PKG_VERSION"));
+        println!("serverrs {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-
-    init_logging();
-
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting serverrs");
 
     let cfg_path = std::env::var("CONFIG_PATH")
         .ok()
@@ -43,12 +39,35 @@ async fn async_main() -> Result<()> {
     let mut cfg = config::load(&cfg_path)
         .with_context(|| format!("failed to load config at {}", cfg_path.display()))?;
 
+    // Logging is initialised from the config file so a container can be
+    // diagnosed by editing `server.logLevel` without changing its environment.
+    // LOG_LEVEL still overrides the file.
+    init_logging(&cfg.server.log_level);
+
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting serverrs");
     tracing::info!(
         port = cfg.server.port,
         host = %cfg.server.host,
         dongles = cfg.dongles.len(),
+        log_level = %cfg.server.log_level,
+        demo_mode = cfg.server.demo_mode,
         "configuration loaded"
     );
+    for d in &cfg.dongles {
+        tracing::info!(
+            id = %d.id,
+            name = %d.name,
+            enabled = d.enabled,
+            auto_start = d.auto_start,
+            source = %d.source.kind,
+            host = %d.source.host,
+            port = d.source.port,
+            device_index = d.source.device_index,
+            serial = %d.source.serial,
+            sample_rate = d.sample_rate,
+            "configured dongle"
+        );
+    }
 
     if std::env::var("NODE_SDR_DEMO").as_deref() == Ok("1") {
         cfg.server.demo_mode = true;
@@ -174,12 +193,15 @@ async fn async_main() -> Result<()> {
     Ok(())
 }
 
-fn init_logging() {
+fn init_logging(config_level: &str) {
     use tracing_subscriber::EnvFilter;
 
-    let level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+    let level = std::env::var("LOG_LEVEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| config_level.to_string());
     let filter = EnvFilter::new(format!(
-        "serverrs={level},serverng={level},info"
+        "serverrs={level},info"
     ));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)

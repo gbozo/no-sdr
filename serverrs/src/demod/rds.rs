@@ -1,6 +1,6 @@
 //! RDS (Radio Data System) decoder for FM broadcast.
 //!
-//! Mirrors `serverng/internal/demod/rds.go` and the TypeScript client decoder.
+//! Ported from the original Go backend and the TypeScript client decoder.
 
 use std::collections::HashMap;
 use std::f64::consts::PI;

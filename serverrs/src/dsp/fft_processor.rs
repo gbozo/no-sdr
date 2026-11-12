@@ -1,6 +1,6 @@
 //! FFT processor: windowing, FFT, magnitude dB, averaging, rate capping.
 //!
-//! Mirrors `serverng/internal/dsp/fft_processor.go`.
+//! Ported from the original Go backend.
 
 use std::time::{Duration, Instant};
 

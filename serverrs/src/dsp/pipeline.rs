@@ -1,6 +1,6 @@
 //! Chains processor blocks together, propagating sample rates.
 //!
-//! Mirrors `serverng/internal/dsp/pipeline.go`. Blocks own their output
+//! Ported from the original Go backend. Blocks own their output
 //! buffers, so the pipeline simply threads each stage's output into the next.
 
 use anyhow::{bail, Context, Result};

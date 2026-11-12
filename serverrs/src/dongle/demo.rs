@@ -1,6 +1,6 @@
 //! Simulated IQ signal generator for demo mode.
 //!
-//! Mirrors `serverng/internal/dongle/demo.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::TAU;
 use std::time::Duration;

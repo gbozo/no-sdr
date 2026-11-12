@@ -1,6 +1,6 @@
 //! Synchronous AM demodulator with a PLL-based carrier lock.
 //!
-//! Mirrors `serverng/internal/demod/sam.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::PI;
 

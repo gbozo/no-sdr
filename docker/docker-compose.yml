@@ -1,5 +1,5 @@
 # ============================================
-# node-sdr — Docker Compose (Go backend, v2+)
+# node-sdr — Docker Compose (Rust backend)
 # ============================================
 # USB passthrough required for RTL-SDR access.
 # On Linux: --device /dev/bus/usb
@@ -8,11 +8,12 @@
 
 services:
   node-sdr:
-    image: ghcr.io/gbozo/no-sdr:latest
-    # To build locally instead of pulling, uncomment below and comment out image:
-    # build:
-    #   context: ..
-    #   dockerfile: docker/Dockerfile
+    image: ghcr.io/gbozo/no-sdr:latest-rust
+    # Build locally with `docker compose up --build`; otherwise this pulls the
+    # newest published Rust image.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rust
     ports:
       - "3000:3000"
     volumes:
@@ -28,7 +29,7 @@ services:
     # Uncomment and adjust to constrain the container.
     # cpus: fractional cores (0.5 = half a core, 2.0 = two cores)
     # memory: hard limit — container is OOM-killed if exceeded
-    #   Typical usage: Go binary ~25MB + FFT history ~25MB + ~2MB per audio client
+    #   Typical usage: Rust binary ~15MB + FFT history ~25MB + ~2MB per audio client
     #   256M is comfortable for a few clients; raise if running many concurrent users
     # memory_reservation: soft limit / scheduling hint (should be < memory)
     # ────────────────────────────────────────────────────────────────────────

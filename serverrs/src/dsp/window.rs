@@ -1,6 +1,6 @@
 //! Window functions.
 //!
-//! Mirrors `serverng/internal/dsp/window.go`.
+//! Ported from the original Go backend.
 
 use anyhow::{bail, Result};
 use std::f64::consts::PI;

@@ -1,6 +1,6 @@
 //! 8th-order Butterworth low-pass filter (4 cascaded biquads).
 //!
-//! Mirrors `serverng/internal/dsp/filter.go`.
+//! Ported from the original Go backend.
 
 use std::f64::consts::PI;
 

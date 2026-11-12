@@ -5,7 +5,7 @@
 <h1 align="center">no-sdr</h1>
 
 <p align="center">
-  <strong>No SDR hardware on your desk? No problem.<br/>Multi-user web receiver with real-time waterfall, stereo FM, and digital mode decoding — all served from Go backend to your browser.</strong>
+  <strong>No SDR hardware on your desk? No problem.<br/>Multi-user web receiver with real-time waterfall, stereo FM, and digital mode decoding — all served from a Rust backend to your browser.</strong>
   <strong>**** Next Major Release 3.0.0 will add Vulkan support for CPU offloading ****</strong>
 </p>
 
@@ -129,7 +129,7 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 - **Multi-codec compression** — per-client codec negotiation for both FFT and IQ streams
   - **FFT**: None (Uint8, 4:1), ADPCM (~8:1), Delta+Deflate (7.5–10:1 lossless, default)
   - **IQ**: None (raw Int16), ADPCM (4:1, default), Opus VBR (server-side demod, 32kbps mono / 64kbps stereo), Opus HQ (128kbps mono / 192kbps stereo)
-- **Server-side Opus audio** — full WFM stereo PLL and C-QUAM demod on server with dynamic mono↔stereo encoder switching (opusscript WASM)
+- **Server-side Opus audio** — full WFM stereo PLL and C-QUAM demod on server with dynamic mono↔stereo encoder switching (libopus)
 - **Server-side FFT rate cap** — configurable fps per profile (default 30) with inter-frame averaging
 - **IQ chunk accumulation** — server buffers IQ into fixed 20ms chunks for consistent WebSocket messages
 - **Client-side resampler** — linear interpolation upsamples SSB (24kHz) and CW (12kHz) to 48kHz
@@ -141,7 +141,7 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 - **Docker ready** — multi-stage Dockerfile with USB passthrough for RTL-SDR, auto-publish to GHCR on release
 - **Raspberry Pi compatible** — runs on ARM64, tested on Pi 4/5
 - **Admin panel** — start/stop dongles, switch profiles, CRUD profiles, monitor status via REST API + UI
-- **YAML config** — validated at startup with Zod schemas, persisted on admin changes
+- **YAML config** — validated at startup by the Rust config layer, persisted on admin changes
 - **Per-client IQ extraction** — server-side NCO frequency shift + 4th-order Butterworth anti-alias filter + decimation
 - **Compression stats** — live wire bytes, raw equivalent, ratio, and savings displayed in UI
 
@@ -149,8 +149,8 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 
 ### Prerequisites
 
-- **Node.js 22+** (LTS recommended)
-- **RTL-SDR dongle** + drivers, or a remote `rtl_tcp` server, or just use demo mode
+- **Rust 1.85+** and **Node.js 22+** (LTS recommended)
+- **RTL-SDR dongle** (native USB support is built in; on Windows bind it to WinUSB with Zadig), a remote `rtl_tcp` server, or just use demo mode
 
 ### Install & Run
 
@@ -181,7 +181,7 @@ RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
                                                          │
                     ┌────────────────────────────────────┘
                     ▼
-             Server (Go)
+             Server (Rust)
              ├─ FFT (shared) ──────────────► WebSocket ──► All clients (waterfall)
              └─ IQ sub-band (per user) ─┐
                 NCO shift + Butterworth ├──► WebSocket ──► One client
@@ -204,21 +204,21 @@ RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
 
 | Component | Technology |
 |-----------|-----------|
-| Runtime | GO 1.23 |
-| Backend | Go 1.23 |
+| Runtime | Rust 1.85+ (tokio) |
+| Backend | axum HTTP/WebSocket server |
 | Frontend | [SolidJS](https://www.solidjs.com) |
 | Build | [Vite 6](https://vite.dev) |
 | Styling | [Tailwind CSS v4](https://tailwindcss.com) |
-| FFT | [fft.js](https://github.com/nicedoc/fft.js) (radix-4, pure JS) |
-| Opus | OPUSlib |
-| Deflate | zlib (server) + [fflate](https://github.com/101arrowz/fflate) (client) |
-| Config | YAML ([js-yaml](https://github.com/nodeca/js-yaml)) + [Zod](https://zod.dev) |
-| Logging | [pino](https://getpino.io) |
-| Language | GO / TypeScript 5 (strict) |
+| FFT | [rustfft](https://github.com/ejmahler/RustFFT) |
+| Opus | libopus via `audiopus_sys` |
+| Deflate | zlib-rs (server) + [fflate](https://github.com/101arrowz/fflate) (client) |
+| Config | YAML via `serde_yaml` + validation |
+| Logging | `tracing` |
+| Language | Rust / TypeScript 5 (strict) |
 
 ## Configuration
 
-All configuration lives in `config/config.yaml`. The file is validated against a Zod schema at startup — invalid configs fail fast with clear error messages.
+All configuration lives in `config/config.yaml`. The file is validated at startup by the Rust config layer — invalid configs fail fast with clear error messages.
 
 ```yaml
 server:
@@ -232,7 +232,7 @@ dongles:
     deviceIndex: 0
     name: "RTL-SDR #0"
     source:
-      type: local              # spawn rtl_sdr child process
+      type: local              # native USB RTL-SDR driver
     autoStart: true
     profiles:
       - id: fm-broadcast
@@ -336,14 +336,14 @@ cd docker
 docker compose up -d
 ```
 
-The Dockerfile uses a multi-stage build and includes `rtl-sdr`, `dump1090`, and `multimon-ng` in the runtime image. USB passthrough requires `privileged: true` on Linux.
+The Dockerfile builds the Rust backend and client in a multi-stage image. USB passthrough requires `privileged: true` on Linux.
 
 ### Docker Compose (spin your own)
 
 ```yaml
 services:
   no-sdr:
-    image: ghcr.io/gbozo/no-sdr:latest
+    image: ghcr.io/gbozo/no-sdr:latest-rust
     ports:
       - "3000:3000"    
     environment:
@@ -435,10 +435,10 @@ npm run clean
 
 ### Project Structure
 
-- **`server/`** — Go backend, hardware management, FFT, IQ extraction, Opus audio pipeline, WebSocket
+- **`serverrs/`** — Rust backend, hardware management, FFT, IQ extraction, Opus audio pipeline, WebSocket
 - **`client/`** — SolidJS frontend, Canvas renderers, DSP, stereo FM, RDS decoder, AudioWorklet + EQ
 
-Build order: `client` → `server` (the server serves the built client).
+Build order: `client` → `serverrs` (the server serves the built client).
 
 ## Contributing
 

@@ -6,6 +6,8 @@ See [WORK.md](./WORK.md) for the current active backlog.
 
 # Go Backend Architecture (serverng)
 
+> **Historical:** the Go backend has been removed from this branch. This document is retained only as design history; see [rustport.md](./rustport.md) and [AGENTS.md](./AGENTS.md) for the active Rust backend.
+
 > **Status: COMPLETE** — Implemented in v2.0.0. This is a reference document for the architecture as built.
 
 **Goal:** Replace Node.js server with Go for native concurrency, lower CPU, single-binary deployment (including RPi)  

@@ -1,6 +1,6 @@
 //! IQ data source abstraction.
 //!
-//! Mirrors `serverng/internal/dongle/source.go`.
+//! Ported from the original Go backend.
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

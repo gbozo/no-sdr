@@ -1,6 +1,6 @@
 //! WebSocket connection manager.
 //!
-//! Port of `serverng/internal/ws/manager.go` using axum's WebSocket support.
+//! Ported from the original Go backend using axum's WebSocket support.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

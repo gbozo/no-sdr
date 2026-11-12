@@ -1,6 +1,6 @@
 //! Dongle lifecycle manager.
 //!
-//! Mirrors `serverng/internal/dongle/manager.go` and `notifications.go`:
+//! Ported from the original Go backend and its notifications module:
 //! owns running dongles, their FFT/IQ processing loops, and per-client
 //! pipelines (sub-band extraction, ADPCM or server-side Opus encoding).
 
@@ -363,6 +363,15 @@ impl Manager {
                     return Ok(());
                 }
             }
+            debug!(
+                id = %dcfg.id,
+                attempt,
+                source = %dcfg.source.kind,
+                host = %dcfg.source.host,
+                port = dcfg.source.port,
+                device_index = dcfg.source.device_index,
+                "dongle start attempt"
+            );
             match self.start_dongle(dcfg.clone(), generation).await {
                 Ok(()) => {
                     if !self.is_start_generation(&dcfg.id, generation) {
@@ -442,6 +451,25 @@ impl Manager {
         } else {
             30
         };
+
+        // Open the source first. This is where local USB can fail (device
+        // missing, busy, or not passed into a container), and retrying it must
+        // not allocate the 1024-frame FFT history (32 MB at 8192 bins) on every
+        // attempt — under a Docker memory limit those repeated allocations can
+        // OOM-kill the container before the error is visible.
+        let (source, command) = self
+            .create_source(&dcfg, &profile)
+            .await
+            .map_err(|e| anyhow!("create source for dongle {id}: {e}"))?;
+
+        // A newer start/reinit may have been requested while the source was
+        // opening (USB open can take hundreds of ms). Do not insert a dongle
+        // owned by a superseded operation; dropping `source` closes it safely.
+        if !self.is_start_generation(&id, generation) {
+            drop(source);
+            bail!("start superseded");
+        }
+
         // Building the rustfft plan and, more importantly, pre-allocating the
         // 1024-frame waterfall history (32 MB at 8192 bins) is CPU/allocation
         // heavy. Keep it off the async workers so an admin-triggered reinit
@@ -465,18 +493,14 @@ impl Manager {
             .await
             .map_err(|e| anyhow!("dongle DSP init task failed: {e}"))??;
 
-        let (source, command) = self
-            .create_source(&dcfg, &profile)
-            .await
-            .map_err(|e| anyhow!("create source for dongle {id}: {e}"))?;
-
-        // A newer start/reinit may have been requested while the source was
-        // opening (USB open can take hundreds of ms). Do not insert a dongle
-        // owned by a superseded operation; dropping `source` closes it safely.
-        if !self.is_start_generation(&id, generation) {
-            drop(source);
-            bail!("start superseded");
-        }
+        debug!(
+            id = %id,
+            fft_size,
+            fft_fps,
+            sample_rate,
+            history_frames = 1024,
+            "dongle DSP initialized"
+        );
 
         let (cancel, cancel_rx) = watch::channel(false);
         let ad = Arc::new(ActiveDongle {
@@ -521,6 +545,17 @@ impl Manager {
         if self.cfg.read().server.demo_mode {
             source_type = "demo".to_string();
         }
+
+        debug!(
+            dongle = %dcfg.id,
+            profile = %profile.id,
+            source = %source_type,
+            host = %dcfg.source.host,
+            port = dcfg.source.port,
+            device_index = dcfg.source.device_index,
+            serial = %dcfg.source.serial,
+            "creating dongle source"
+        );
 
         let sample_rate = if profile.sample_rate > 0 {
             profile.sample_rate
@@ -586,6 +621,37 @@ impl Manager {
                     // HTTP/WebSocket service on a small (1-vCPU) host.
                     let device_index = dcfg.source.device_index;
                     let serial = dcfg.source.serial.clone();
+                    let usb_path = std::path::Path::new("/dev/bus/usb");
+                    match std::fs::read_dir(usb_path) {
+                        Ok(entries) => {
+                            let buses = entries.filter_map(|e| e.ok()).count();
+                            if buses == 0 {
+                                warn!(
+                                    path = %usb_path.display(),
+                                    "local rtlsdr USB bus has no device nodes. In Docker pass \
+                                     --device=/dev/bus/usb (or the specific bus/device node) \
+                                     and keep --privileged or the plugdev group"
+                                );
+                            } else {
+                                debug!(path = %usb_path.display(), buses, "local rtlsdr USB bus present");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                path = %usb_path.display(),
+                                error = %e,
+                                "local rtlsdr USB bus missing/unreadable. In Docker pass \
+                                 --device=/dev/bus/usb (or the specific bus/device node) \
+                                 and keep --privileged or the plugdev group"
+                            );
+                        }
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        device_index,
+                        serial = %serial,
+                        "opening local USB rtlsdr"
+                    );
                     let source = tokio::task::spawn_blocking(move || {
                         RtlSdrSource::open(device_index, &serial)
                     })
@@ -595,6 +661,11 @@ impl Manager {
                     if let Some(cmd) = &command {
                         self.apply_dongle_settings(cmd, dcfg, profile);
                     }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB rtlsdr source ready"
+                    );
                     Ok((Box::new(source), command))
                 }
                 #[cfg(not(feature = "rtlsdr"))]
@@ -687,6 +758,7 @@ impl Manager {
     ) {
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(16);
         let src_cancel = cancel.clone();
+        debug!(id = %ad.id, "dongle run loop starting");
         let src = source.run(tx, src_cancel);
         tokio::pin!(src);
 
@@ -1616,6 +1688,8 @@ impl Manager {
     }
 
     pub async fn stop_dongle_by_id(&self, dongle_id: &str) -> Result<()> {
+        let started = Instant::now();
+        info!(id = %dongle_id, "stopping dongle");
         let ad = match self.dongles.write().remove(dongle_id) {
             Some(d) => d,
             None => bail!("dongle {dongle_id} is not running"),
@@ -1651,6 +1725,11 @@ impl Manager {
         self.ws
             .unsubscribe_from_dongle(dongle_id, "dongle stopped");
         self.notify_dongle_stopped(dongle_id);
+        debug!(
+            id = %dongle_id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "dongle stopped"
+        );
         Ok(())
     }
 
@@ -1663,6 +1742,16 @@ impl Manager {
             .find(|d| d.id == dongle_id)
             .cloned()
             .ok_or_else(|| anyhow!("dongle {dongle_id} not found in config"))?;
+
+        info!(
+            id = %dongle_id,
+            source = %dcfg.source.kind,
+            host = %dcfg.source.host,
+            port = dcfg.source.port,
+            device_index = dcfg.source.device_index,
+            serial = %dcfg.source.serial,
+            "reinit requested"
+        );
 
         // Claim this reinit before stopping/starting. If another config save
         // arrives while this one is retrying an unreachable source, the newer

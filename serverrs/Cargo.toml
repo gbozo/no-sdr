@@ -1,9 +1,9 @@
 [package]
 name = "serverrs"
-version = "2.11.7"
+version = "2.11.8"
 edition = "2021"
-rust-version = "1.82"
-description = "Multi-user WebSDR server (Rust port of serverng)"
+rust-version = "1.85"
+description = "Multi-user WebSDR server"
 license = "GPL-3.0-or-later"
 
 [[bin]]
@@ -45,14 +45,25 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Optional native codecs/hardware.
+# Optional codecs/hardware.
 opus = { version = "0.3", optional = true }
-rtl-sdr = { version = "0.1", optional = true }
+# Pure-Rust USB for the native RTL-SDR driver. No libusb or librtlsdr.
+nusb = { version = "0.2", optional = true }
 
 [features]
-default = ["opus", "rtlsdr"]
+# The default build enables every feature we ship.
+default = ["opus", "rtlsdr", "bias-t"]
 opus = ["dep:opus"]
-rtlsdr = ["dep:rtl-sdr"]
+rtlsdr = ["dep:nusb"]
+# Bias-T (GPIO 0) on the antenna port. Default on so local RTL-SDR builds can
+# power a mast LNA/photodiode; drop it with --no-default-features for a build
+# that must never put DC on the feedline.
+bias-t = ["rtlsdr"]
+
+[[example]]
+name = "rtlsdr_probe"
+path = "examples/rtlsdr_probe.rs"
+required-features = ["rtlsdr"]
 
 [dev-dependencies]
 approx = "0.5"

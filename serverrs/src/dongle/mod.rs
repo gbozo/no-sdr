@@ -1,6 +1,6 @@
 //! Dongle sources, manager, recording, notifications and Opus pipeline.
 //!
-//! Mirrors `serverng/internal/dongle`.
+//! Ported from the original Go backend.
 
 pub mod demo;
 pub mod manager;

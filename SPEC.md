@@ -1221,7 +1221,7 @@ services:
     privileged: true
     command: ["-a", "0.0.0.0", "-p", "1234"]
   no-sdr:
-    build: { context: .., dockerfile: docker/Dockerfile }
+    build: { context: .., dockerfile: docker/Dockerfile.rust }
     ports: ["3000:3000"]
     depends_on: [rtl_tcp]
 ```
@@ -1229,15 +1229,16 @@ services:
 ### 13.3 Bare Metal
 
 ```bash
-sudo apt install rtl-sdr librtlsdr-dev        # prerequisites
-sudo apt install dump1090-mutability multimon-ng  # optional decoders
+sudo apt install build-essential cmake pkg-config libopus-dev  # build deps
+sudo apt install dump1090-mutability multimon-ng               # optional decoders
 git clone https://github.com/gbozo/no-sdr.git
 cd no-sdr && npm install && npm run build && npm start
+# Native USB: install packaging/60-serverrs-rtlsdr.rules for non-root access
 ```
 
 ### 13.4 Raspberry Pi
 
-Tested on Pi 4 (4GB) and Pi 5. Use Node.js 22 ARM64 build. Performance considerations:
+Tested on Pi 4 (4GB) and Pi 5. Use the Node.js 22 ARM64 build; the Rust backend is built by `npm run build`. Performance considerations:
 - FFT at 2048 points runs comfortably at 30fps
 - Audio demodulation is client-side, so Pi CPU isn't affected by user count
 - IQ extraction is O(N) per client — consider reducing sample rate on Pi 3

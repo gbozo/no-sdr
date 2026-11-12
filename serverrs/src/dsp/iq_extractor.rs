@@ -1,6 +1,6 @@
 //! Narrow sub-band IQ extractor.
 //!
-//! Mirrors `serverng/internal/dsp/iq_extractor.go`.
+//! Ported from the original Go backend.
 //!
 //! Pipeline: uint8 -> complex32 -> DC blocker -> noise blanker -> NCO shift
 //! -> polyphase decimation (windowed-sinc anti-alias FIR) -> Butterworth LPF

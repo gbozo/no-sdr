@@ -1,6 +1,6 @@
 //! Impulse noise blanker (pre-filter).
 //!
-//! Mirrors `serverng/internal/dsp/noise_blanker.go`.
+//! Ported from the original Go backend.
 
 use num_complex::Complex32;
 

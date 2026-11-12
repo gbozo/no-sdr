@@ -24,7 +24,7 @@ RUN npm run build --workspace=client
 FROM rust:1.99-alpine AS rust-builder
 
 # cmake is needed by audiopus-sys, which builds the bundled Opus library.
-RUN apk add --no-cache build-base cmake perl pkgconf librtlsdr-dev libusb-dev
+RUN apk add --no-cache build-base cmake perl pkgconf
 
 # The vendored Opus CMakeLists uses an old minimum; CMake 4 rejects it unless
 # this policy override is set.
@@ -48,15 +48,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
         rustup target add x86_64-unknown-linux-musl; \
         for level in v1 v2 v3 v4; do \
             if [ "$level" = "v1" ]; then target_cpu="x86-64"; else target_cpu="x86-64-$level"; fi; \
-            RUSTFLAGS="-C target-cpu=$target_cpu -C link-arg=-lusb-1.0" \
-                cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features "opus rtlsdr" --bin serverrs; \
+            RUSTFLAGS="-C target-cpu=$target_cpu" \
+                cargo build --release --target x86_64-unknown-linux-musl --all-features --bin serverrs; \
             cp target/x86_64-unknown-linux-musl/release/serverrs "/serverrs-$level"; \
         done; \
     elif [ "$TARGETARCH" = "arm64" ]; then \
         rustup target add aarch64-unknown-linux-musl; \
         for cpu in cortex-a53 cortex-a72 cortex-a76; do \
-            RUSTFLAGS="-C target-cpu=$cpu -C link-arg=-lusb-1.0" \
-                cargo build --release --target aarch64-unknown-linux-musl --no-default-features --features "opus rtlsdr" --bin serverrs; \
+            RUSTFLAGS="-C target-cpu=$cpu" \
+                cargo build --release --target aarch64-unknown-linux-musl --all-features --bin serverrs; \
             cp target/aarch64-unknown-linux-musl/release/serverrs "/serverrs-$cpu"; \
         done; \
     else \
@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
 # ---- Runtime ----
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates libgcc librtlsdr libusb
+RUN apk add --no-cache ca-certificates libgcc
 
 WORKDIR /app
 

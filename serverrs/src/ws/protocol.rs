@@ -3,7 +3,7 @@
 //! Server -> client messages use a single type-byte prefix followed by
 //! little-endian typed array payloads. Client -> server messages are JSON text.
 //!
-//! This is a byte-for-byte port of `serverng/internal/ws/protocol.go`.
+//! The binary protocol is byte-compatible with the original Go implementation.
 
 use serde::{Deserialize, Serialize};
 

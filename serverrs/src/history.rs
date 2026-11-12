@@ -1,6 +1,6 @@
 //! Ring-buffer storage for recent FFT frames.
 //!
-//! Mirrors `serverng/internal/history/fft_buffer.go`.
+//! Ported from the original Go backend.
 
 use parking_lot::RwLock;
 

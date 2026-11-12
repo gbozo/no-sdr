@@ -1,7 +1,7 @@
 //! Forward FFT backed by `rustfft`.
 //!
 //! Historically this was a hand-written radix-4 Cooley-Tukey implementation
-//! mirroring the Go backend. `rustfft` performs runtime SIMD dispatch
+//! mirroring the original implementation. `rustfft` performs runtime SIMD dispatch
 //! (SSE/AVX/NEON) and is roughly 18x faster for the 8k/16k transforms used by
 //! the FFT processor, with the same unnormalised forward-DFT convention.
 

@@ -1,6 +1,6 @@
 //! DSP building blocks.
 //!
-//! Mirrors `serverng/internal/dsp`.
+//! Ported from the original Go backend.
 
 pub mod block;
 pub mod dc_block;
