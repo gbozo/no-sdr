@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/gbozo/no-sdr/actions"><img src="https://img.shields.io/github/actions/workflow/status/gbozo/no-sdr/ci.yml?branch=main&label=build" alt="Build Status" /></a>
+  <a href="https://github.com/gbozo/no-sdr/actions"><img src="https://img.shields.io/github/actions/workflow/status/gbozo/no-sdr/rust-binaries.yml?branch=main&label=build" alt="Build Status" /></a>
   <a href="https://github.com/gbozo/no-sdr/releases"><img src="https://img.shields.io/github/v/release/gbozo/no-sdr?include_prereleases&label=version&color=blue" alt="Version" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node.js 22+" />
   <img src="https://img.shields.io/badge/typescript-5-blue" alt="TypeScript 5" />
@@ -343,7 +343,7 @@ The Dockerfile builds the Rust backend and client in a multi-stage image. USB pa
 ```yaml
 services:
   no-sdr:
-    image: ghcr.io/gbozo/no-sdr:latest-rust
+    image: ghcr.io/gbozo/no-sdr:latest
     ports:
       - "3000:3000"    
     environment:

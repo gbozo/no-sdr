@@ -8,10 +8,12 @@ name: Rust Binaries
 
 on:
   push:
-    branches: [main, rustport]
+    branches: [main]
     paths:
       - 'serverrs/**'
       - 'client/**'
+      - 'config/**'
+      - 'bookmarks/**'
       - 'packaging/**'
       - 'package.json'
       - 'package-lock.json'

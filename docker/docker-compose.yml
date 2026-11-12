@@ -8,7 +8,7 @@
 
 services:
   node-sdr:
-    image: ghcr.io/gbozo/no-sdr:latest-rust
+    image: ghcr.io/gbozo/no-sdr:latest
     # Build locally with `docker compose up --build`; otherwise this pulls the
     # newest published Rust image.
     build:

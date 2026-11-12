@@ -210,8 +210,8 @@ npm run start:demo                 # Same but demo mode (simulated signals)
   `--features "rtlsdr bias-t"` covers the native USB driver without libopus.
 - In this environment use `CARGO_HOME=/home/opencode/.cargo` for Cargo.
 - Binary/CI releases are built by GitHub Actions (`Rust Binaries`,
-  `Docker Publish (Rust)`); Docker tags use the `<version>-rust` suffix plus
-  the rolling `latest-rust` tag.
+  `Docker Publish`). Pushes to `main` publish `latest` and `main`; releases add
+  plain semver tags, with historical `<version>-rust` / `latest-rust` aliases.
 - CI caching: native binary jobs use `sccache` + `Swatinem/rust-cache`
   (crates only; compilation objects are shared via sccache). The Docker
   workflow builds amd64 and arm64 on native runners with per-architecture

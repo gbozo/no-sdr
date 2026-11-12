@@ -100,7 +100,7 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
-- 2026-11-12: Version 2.11.8. Rust-only branch: native nusb RTL-SDR driver, bias-T feature, Go backend removed.
+- 2026-11-12: Version 2.11.8. Rust-only branch: native nusb RTL-SDR driver, bias-T feature, Go backend removed. `main` is now the Rust backend and publishes the Docker `latest` tag; `oldgo` keeps the former Go branch.
 - 2026-11-12: Go backend (`serverng/`), its Docker image/workflow and Go npm scripts removed from the branch. `serverrs/` is now the only server; docs and package scripts are Rust-only.
 - 2026-11-07: branch created; Go backend surveyed; Rust crate scaffolded.
 - 2026-11-07: config, codec and dsp modules ported; `cargo test` green
@@ -254,8 +254,8 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
   with the client dist, config and bookmarks baked in; Opus is built statically
   by audiopus-sys (cmake in the builder). Added
   `.github/workflows/rust-binaries.yml` (Linux amd64/arm64 + macOS arm64/Intel
-  artifacts, release attachment) and `.github/workflows/docker-publish-rust.yml`
-  (GHCR `no-sdr-rust`, linux/amd64 + linux/arm64) triggered by release/manual.
+  artifacts, release attachment) and `.github/workflows/docker-publish.yml`
+  (GHCR `no-sdr`, linux/amd64 + linux/arm64) triggered by release/manual.
 - 2026-11-08: Version bump to 2.11.0 (`package.json`, client, `serverrs`
   Cargo package, WS `SERVER_VERSION`). Release packaging added:
   `packaging/package.sh` builds portable archives (binary, web client,
