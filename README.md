@@ -98,8 +98,8 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 - **AM Stereo (C-QUAM) [EXPERIMENTAL]** — auto-detected in AM mode via two-stage verification (25Hz Goertzel pilot + PLL lock confirmation). When a C-QUAM station is detected, stereo decoding activates automatically. *This feature needs testers with access to C-QUAM AM stereo broadcasts — please report results via GitHub issues!*
 - PLANNED -> **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
 - **Multi-user** — everyone shares the same waterfall; each user tunes independently within the dongle's bandwidth
-- **Multi-dongle** — configure multiple RTL-SDR devices, each with its own frequency profiles
-- **Three dongle source types** — local USB (`rtl_sdr`), remote TCP (`rtl_tcp`), or demo simulator
+- **Multi-dongle** — configure multiple RTL-SDR or HackRF devices, each with its own frequency profiles
+- **Many dongle source types** — native USB, vendor-library drivers, remote TCP, or the demo simulator
 - **Profile system** — admins define presets (FM broadcast, aviation, 2m ham, ADS-B, marine) per dongle; switching a profile changes it for all connected users
 - **Profile CRUD** — create, update, and delete profiles at runtime via REST API; changes persist to disk
 
@@ -135,7 +135,8 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 - **Client-side resampler** — linear interpolation upsamples SSB (24kHz) and CW (12kHz) to 48kHz
 - **WebSocket backpressure** — bufferedAmount-based frame skipping prevents server memory bloat
 - **Audio-gated IQ** — server only sends per-user IQ data after client enables audio playback
-- **Dongle hardware options** — directSampling, biasT, digitalAgc, offsetTuning, ifGain, tunerBandwidth via config
+- **Native SDR drivers** — RTL-SDR, HackRF One/Pro, Airspy R2/Mini, Airspy HF+, HydraSDR RFOne, ELAD FDM, RX-888 Mk2 and PlutoSDR with no librtlsdr/libusb/libhackrf/libairspy/libhydrasdr/libiio dependency; SDRplay RSP, LimeSDR and Fobos SDR through their vendor libraries, loaded at runtime
+- **Dongle hardware options** — directSampling, biasT, digitalAgc, offsetTuning, ifGain, tunerBandwidth; HackRF LNA/VGA/amp/filter via the admin page
 - **Demo mode** — built-in signal simulator for development and demos, no hardware needed
 - **rtl_tcp support** — connect to remote RTL-SDR dongles over TCP (Docker sidecars, remote antennas)
 - **Docker ready** — multi-stage Dockerfile with USB passthrough for RTL-SDR, auto-publish to GHCR on release
@@ -151,6 +152,7 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 
 - **Rust 1.85+** and **Node.js 26+** (LTS recommended)
 - **RTL-SDR dongle** (native USB support is built in; on Windows bind it to WinUSB with Zadig), a remote `rtl_tcp` server, or just use demo mode
+- Optional vendor libraries for SDRplay, LimeSDR and Fobos SDR. They are loaded at runtime; install the vendor package/service only if you use that hardware.
 
 ### Install & Run
 
@@ -279,8 +281,11 @@ dongles:
 
 | Type | Description | Config |
 |------|-------------|--------|
-| `local` | Spawns `rtl_sdr` child process, reads IQ from stdout | `deviceIndex`, optional `binary`, `extraArgs` |
-| `rtl_tcp` | TCP client to a remote `rtl_tcp` server | `host`, `port` (required) |
+| `local` | Native USB RTL-SDR (nusb; no librtlsdr) | `deviceIndex` / `serial` |
+| `hackrf`, `airspy`, `airspyhf`, `hydrasdr`, `elad`, `rx888` | Native USB drivers | `serial` + source `settings` |
+| `pluto` | PlutoSDR over IIOD | `host`, `port` |
+| `sdrplay`, `lime`, `fobos` | Vendor-library drivers (`dlopen` at runtime) | `serial`/device string + source `settings` |
+| `rtl_tcp`, `airspy_tcp`, `hfp_tcp`, `rsp_tcp` | TCP clients to remote servers | `host`, `port` |
 | `demo` | Built-in signal simulator, no hardware | No extra config needed |
 
 ### Profile System

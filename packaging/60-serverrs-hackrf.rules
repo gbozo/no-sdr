@@ -1,0 +1,39 @@
+# HackRF One / Pro (and Jawbreaker / rad1o) for serverrs' native USB driver.
+#
+# serverrs talks to the radio directly with nusb, not through libhackrf or
+# libusb. The invoking user still needs write access to the usbfs node.
+#
+# TAG+="uaccess" grants an ACL to whoever is logged in at the active seat.
+# GROUP="plugdev" is the fallback for headless machines, WSL2, containers and
+# systemd services, where there is no seat. It is on its own line because udev
+# discards a whole rule line when the named group does not exist, and plugdev
+# is absent on Arch and Fedora. To use the fallback:
+#
+#   sudo groupadd -f plugdev && sudo usermod -aG plugdev "$USER"
+#
+# then log out and back in.
+#
+# Install:
+#   sudo cp 60-serverrs-hackrf.rules /usr/lib/udev/rules.d/
+#   sudo udevadm control --reload
+# then unplug and replug the radio.
+#
+# Great Scott Gadgets' own 53-hackrf.rules covers the same ids. If it is
+# already installed this file is harmless duplication.
+
+# HackRF One and HackRF Pro share one device descriptor.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6089", ENV{SERVERRS_HACKRF}="1"
+
+# Jawbreaker (10 MHz–6 GHz, no bias tee).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="604b", ENV{SERVERRS_HACKRF}="1"
+
+# rad1o (50 MHz–4 GHz, no bias tee).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="cc15", ENV{SERVERRS_HACKRF}="1"
+
+# DFU bootloader: not used by serverrs, but keeps a stuck radio visible.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="000c", ENV{SERVERRS_HACKRF}="1"
+
+# Permissions, on their own lines so a missing plugdev group cannot take the
+# uaccess ACL down with it.
+ENV{SERVERRS_HACKRF}=="1", MODE="0660", TAG+="uaccess"
+ENV{SERVERRS_HACKRF}=="1", GROUP="plugdev"

@@ -211,6 +211,10 @@ pub struct SourceConfig {
     pub extra_args: Vec<String>,
     #[serde(default)]
     pub spawn_rtl_tcp: bool,
+    /// Per-source hardware settings. Keys are defined by the source driver
+    /// (for example `lnaDb`, `vgaDb`, `amp`, `filterBwHz` for HackRF).
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Frequency/mode preset for a dongle.
@@ -470,7 +474,10 @@ fn rename_key(map: &mut serde_yaml::Mapping, from: &str, to: &str) {
     }
 }
 
-fn for_each_profile_value<F: FnMut(&mut serde_yaml::Mapping)>(value: &mut serde_yaml::Value, mut f: F) {
+fn for_each_profile_value<F: FnMut(&mut serde_yaml::Mapping)>(
+    value: &mut serde_yaml::Value,
+    mut f: F,
+) {
     let Some(root) = value.as_mapping_mut() else {
         return;
     };
@@ -569,6 +576,41 @@ mod tests {
         assert!(!y.contains("realIpHeader:"), "{y}");
         let reparsed = parse(&y);
         assert_eq!(reparsed.dongles[0].profiles[0].tune_offset, 500);
+    }
+
+    #[test]
+    fn hackrf_source_settings_round_trip() {
+        let cfg = parse(
+            "dongles:\n  - id: d1\n    sampleRate: 2000000\n    source:\n      type: hackrf\n      serial: abc123\n      settings:\n        lnaDb: 24\n        vgaDb: 30\n        amp: true\n    profiles:\n      - id: p1\n        sampleRate: 2000000\n        defaultMode: nfm\n",
+        );
+        let d = &cfg.dongles[0];
+        assert_eq!(d.source.kind, "hackrf");
+        assert_eq!(d.source.serial, "abc123");
+        assert_eq!(
+            d.source.settings.get("lnaDb").and_then(|v| v.as_f64()),
+            Some(24.0)
+        );
+        assert_eq!(
+            d.source.settings.get("vgaDb").and_then(|v| v.as_f64()),
+            Some(30.0)
+        );
+        assert_eq!(
+            d.source.settings.get("amp").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        let y = to_yaml_string(&cfg).unwrap();
+        assert!(y.contains("lnaDb: 24"), "{y}");
+        assert!(y.contains("vgaDb: 30"), "{y}");
+        let reparsed = parse(&y);
+        assert_eq!(
+            reparsed.dongles[0]
+                .source
+                .settings
+                .get("lnaDb")
+                .and_then(|v| v.as_f64()),
+            Some(24.0)
+        );
     }
 
     #[test]

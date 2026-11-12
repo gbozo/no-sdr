@@ -28,12 +28,32 @@ use crate::ws::{
     pack_rds_message, ClientCommand, CodecStatus, ServerMeta, WsManager, MSG_META,
 };
 
+#[cfg(feature = "airspy")]
+use super::airspy::{config_from_dongle as airspy_config, AirspySource};
+#[cfg(feature = "airspyhf")]
+use super::airspyhf::{config_from_dongle as airspyhf_config, AirspyHfSource};
 use super::demo::{DemoConfig, DemoSource};
+#[cfg(feature = "elad")]
+use super::elad::{config_from_dongle as elad_config, EladSource};
+#[cfg(feature = "hackrf")]
+use super::hackrf::{config_from_dongle as hackrf_config, HackRfSource};
+#[cfg(feature = "hydrasdr")]
+use super::hydrasdr::{config_from_dongle as hydrasdr_config, HydraSdrSource};
+#[cfg(feature = "lime")]
+use super::lime::{config_from_dongle as lime_config, LimeSource};
+#[cfg(feature = "fobos")]
+use super::fobos::{config_from_dongle as fobos_config, FobosSource};
+#[cfg(feature = "sdrplay")]
+use super::sdrplay::{config_from_dongle as sdrplay_config, SdrPlaySource};
 use super::opus_pipeline::{bitrate_for_quality, OpusPipeline, OpusPipelineConfig};
+#[cfg(feature = "pluto")]
+use super::pluto::{config_from_dongle as pluto_config, PlutoSource};
 use super::recorder::{Recorder, RecordingStatus};
 #[cfg(feature = "rtlsdr")]
 use super::rtlsdr::RtlSdrSource;
 use super::rtltcp::{spawn_rtl_tcp, RtlTcpSource};
+#[cfg(feature = "rx888")]
+use super::rx888::{config_from_dongle as rx888_config, Rx888Source};
 use super::source::{CommandHandle, Source};
 
 pub const STATUS_STOPPED: &str = "stopped";
@@ -288,7 +308,8 @@ impl Manager {
 
     /// Stops every dongle and closes all client pipelines.
     pub fn stop(&self) {
-        let dongles: Vec<Arc<ActiveDongle>> = self.dongles.write().drain().map(|(_, d)| d).collect();
+        let dongles: Vec<Arc<ActiveDongle>> =
+            self.dongles.write().drain().map(|(_, d)| d).collect();
         for d in dongles {
             let _ = d.cancel.send(true);
             if let Some(task) = d.task.lock().take() {
@@ -461,6 +482,12 @@ impl Manager {
             .create_source(&dcfg, &profile)
             .await
             .map_err(|e| anyhow!("create source for dongle {id}: {e}"))?;
+        // Native drivers may snap the requested rate to a hardware-supported
+        // one. Build the DSP pipeline around what actually streams.
+        let sample_rate = source
+            .sample_rate_hz()
+            .map(|rate| rate as i32)
+            .unwrap_or(sample_rate);
 
         // A newer start/reinit may have been requested while the source was
         // opening (USB open can take hundreds of ms). Do not insert a dongle
@@ -585,7 +612,9 @@ impl Manager {
                     .await
                     {
                         Ok(c) => child = Some(c),
-                        Err(e) => warn!(error = %e, "failed to spawn rtl_tcp; connecting to existing"),
+                        Err(e) => {
+                            warn!(error = %e, "failed to spawn rtl_tcp; connecting to existing")
+                        }
                     }
                 }
 
@@ -670,9 +699,339 @@ impl Manager {
                 }
                 #[cfg(not(feature = "rtlsdr"))]
                 {
-                    bail!(
-                        "local rtlsdr support is not compiled in (build with --features rtlsdr)"
-                    )
+                    bail!("local rtlsdr support is not compiled in (build with --features rtlsdr)")
+                }
+            }
+            "airspy" => {
+                #[cfg(feature = "airspy")]
+                {
+                    let cfg = airspy_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %dcfg.source.serial,
+                        sample_rate,
+                        center,
+                        "opening local USB airspy"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || AirspySource::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("airspy open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB airspy source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "airspy"))]
+                {
+                    bail!("Airspy support is not compiled in (build with --features airspy)")
+                }
+            }
+            "airspyhf" => {
+                #[cfg(feature = "airspyhf")]
+                {
+                    let cfg = airspyhf_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %dcfg.source.serial,
+                        sample_rate,
+                        center,
+                        "opening local USB airspyhf"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || AirspyHfSource::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("airspyhf open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB airspyhf source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "airspyhf"))]
+                {
+                    bail!("Airspy HF+ support is not compiled in (build with --features airspyhf)")
+                }
+            }
+            "hydrasdr" => {
+                #[cfg(feature = "hydrasdr")]
+                {
+                    let cfg = hydrasdr_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %dcfg.source.serial,
+                        sample_rate,
+                        center,
+                        "opening local USB hydrasdr"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || HydraSdrSource::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("hydrasdr open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB hydrasdr source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "hydrasdr"))]
+                {
+                    bail!("HydraSDR support is not compiled in (build with --features hydrasdr)")
+                }
+            }
+            "elad" => {
+                #[cfg(feature = "elad")]
+                {
+                    let cfg = elad_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %dcfg.source.serial,
+                        sample_rate,
+                        center,
+                        "opening local USB elad"
+                    );
+                    let source = tokio::task::spawn_blocking(move || EladSource::open(cfg, center))
+                        .await
+                        .map_err(|e| anyhow!("elad open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB elad source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "elad"))]
+                {
+                    bail!("ELAD support is not compiled in (build with --features elad)")
+                }
+            }
+            "rx888" => {
+                #[cfg(feature = "rx888")]
+                {
+                    let cfg = rx888_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %dcfg.source.serial,
+                        adc_hz = cfg.adc_rate_hz,
+                        ddc_bins = cfg.ddc_bins,
+                        center,
+                        "opening local USB rx888"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || Rx888Source::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("rx888 open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB rx888 source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "rx888"))]
+                {
+                    bail!("RX-888 support is not compiled in (build with --features rx888)")
+                }
+            }
+            "pluto" => {
+                #[cfg(feature = "pluto")]
+                {
+                    let (address, cfg) = pluto_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        address = %address,
+                        sample_rate,
+                        center,
+                        "opening Pluto over IIOD"
+                    );
+                    let source = tokio::task::spawn_blocking(move || {
+                        PlutoSource::open(&address, cfg, center)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("pluto open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "Pluto source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "pluto"))]
+                {
+                    bail!("Pluto support is not compiled in (build with --features pluto)")
+                }
+            }
+            "sdrplay" => {
+                #[cfg(feature = "sdrplay")]
+                {
+                    let cfg = sdrplay_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %cfg.serial,
+                        sample_rate,
+                        center,
+                        "opening SDRplay RSP"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || SdrPlaySource::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("sdrplay open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "SDRplay source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "sdrplay"))]
+                {
+                    bail!("SDRplay support is not compiled in (build with --features sdrplay)")
+                }
+            }
+            "lime" => {
+                #[cfg(feature = "lime")]
+                {
+                    let cfg = lime_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        device = %cfg.device,
+                        sample_rate,
+                        center,
+                        "opening LimeSDR"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || LimeSource::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("limesdr open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "LimeSDR source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "lime"))]
+                {
+                    bail!("LimeSDR support is not compiled in (build with --features lime)")
+                }
+            }
+            "fobos" => {
+                #[cfg(feature = "fobos")]
+                {
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    let params = fobos_config(dcfg, profile, sample_rate as u32, center);
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %params.serial,
+                        port = ?params.port,
+                        sample_rate,
+                        center,
+                        "opening Fobos SDR"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || FobosSource::open(params))
+                            .await
+                            .map_err(|e| anyhow!("fobos open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "Fobos source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "fobos"))]
+                {
+                    bail!("Fobos support is not compiled in (build with --features fobos)")
+                }
+            }
+            "hackrf" => {
+                #[cfg(feature = "hackrf")]
+                {
+                    let cfg = hackrf_config(dcfg, profile, sample_rate as u32);
+                    let center =
+                        (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                    info!(
+                        dongle = %dcfg.id,
+                        serial = %dcfg.source.serial,
+                        sample_rate,
+                        center,
+                        "opening local USB hackrf"
+                    );
+                    let source =
+                        tokio::task::spawn_blocking(move || HackRfSource::open(cfg, center))
+                            .await
+                            .map_err(|e| anyhow!("hackrf open task failed: {e}"))??;
+                    let command = Source::command_handle(&source);
+                    if let Some(cmd) = &command {
+                        self.apply_dongle_settings(cmd, dcfg, profile);
+                    }
+                    info!(
+                        dongle = %dcfg.id,
+                        description = %Source::description(&source),
+                        "local USB hackrf source ready"
+                    );
+                    Ok((Box::new(source), command))
+                }
+                #[cfg(not(feature = "hackrf"))]
+                {
+                    bail!("HackRF support is not compiled in (build with --features hackrf)")
                 }
             }
             other => bail!("unsupported source type: {other}"),
@@ -685,12 +1044,226 @@ impl Manager {
         dcfg: &DongleConfig,
         profile: &DongleProfile,
     ) {
-        let _ = cmd.set_frequency(
-            (profile.center_frequency + profile.oscillator_offset as i64) as u32,
-        );
+        let _ =
+            cmd.set_frequency((profile.center_frequency + profile.oscillator_offset as i64) as u32);
         if profile.sample_rate > 0 {
             let _ = cmd.set_sample_rate(profile.sample_rate as u32);
         }
+        if dcfg.ppm != 0 {
+            let _ = cmd.set_frequency_correction(dcfg.ppm as u32);
+        }
+        let _ = cmd.set_bias_t(dcfg.bias_t as u32);
+
+        if dcfg.source.kind == "sdrplay" {
+            let settings = &dcfg.source.settings;
+            let get_i64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_i64);
+            let get_u8 = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+            if let Some(db) = get_i64("ifGrDb") {
+                let _ = cmd.command(0x20, db.clamp(0, 59) as u32);
+            }
+            if let Some(state) = get_u8("lnaState") {
+                let _ = cmd.command(0x21, u32::from(state));
+            }
+            if let Some(agc) = get_u8("agc") {
+                let _ = cmd.command(0x30, u32::from(agc));
+            }
+            if let Some(db) = get_i64("agcSetpointDbfs") {
+                let _ = cmd.command(0x31, db as i32 as u32);
+            }
+            let _ = cmd.command(0x32, u32::from(get_bool("rfNotch").unwrap_or(false)));
+            let _ = cmd.command(0x33, u32::from(get_bool("dabNotch").unwrap_or(false)));
+            let _ = cmd.command(0x34, u32::from(get_bool("hdr").unwrap_or(false)));
+            if let Some(bw) = get_u8("hdrBw") {
+                let _ = cmd.command(0x35, u32::from(bw));
+            }
+            let _ = cmd.command(
+                0x36,
+                u32::from(get_bool("extendedIfGr").unwrap_or(false)),
+            );
+            return;
+        }
+
+        if dcfg.source.kind == "lime" {
+            let settings = &dcfg.source.settings;
+            let get_f64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+            let gain = get_f64("rxGainDb")
+                .or_else(|| (profile.gain > 0.0).then_some(profile.gain))
+                .or_else(|| (dcfg.gain > 0.0).then_some(dcfg.gain));
+            if let Some(db) = gain {
+                let _ = cmd.command(0x30, (db * 10.0).round() as u32);
+            }
+            return;
+        }
+
+        if dcfg.source.kind == "fobos" {
+            let settings = &dcfg.source.settings;
+            let get_u8 = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+            if let Some(gain) = get_u8("lnaGain") {
+                let _ = cmd.command(0x30, u32::from(gain.min(3)));
+            }
+            if let Some(gain) = get_u8("vgaGain") {
+                let _ = cmd.command(0x31, u32::from(gain.min(31)));
+            }
+            let _ = cmd.command(
+                0x32,
+                u32::from(get_bool("clkExternal").unwrap_or(false)),
+            );
+            return;
+        }
+
+        if dcfg.source.kind == "airspyhf" {
+            let settings = &dcfg.source.settings;
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+            let get_f64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+
+            let _ = cmd.command(0x30, u32::from(get_bool("agc").unwrap_or(false)));
+            let _ = cmd.command(
+                0x31,
+                u32::from(get_bool("agcThresholdHigh").unwrap_or(false)),
+            );
+            if let Some(db) = get_f64("attenuatorDb") {
+                let _ = cmd.command(0x32, (db.abs() * 10.0).round() as u32);
+            }
+            let _ = cmd.command(0x33, u32::from(get_bool("lna").unwrap_or(false)));
+            let _ = cmd.command(0x34, u32::from(get_bool("libDsp").unwrap_or(true)));
+            if let Some(ppb) = settings
+                .get("calibrationPpb")
+                .and_then(serde_json::Value::as_i64)
+            {
+                let _ = cmd.command(0x35, ppb as i32 as u32);
+            }
+            return;
+        }
+
+        if dcfg.source.kind == "pluto" {
+            let settings = &dcfg.source.settings;
+            let get_f64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+            let get_u8 = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            let gain = get_f64("rxGainDb")
+                .or_else(|| (profile.gain > 0.0).then_some(profile.gain))
+                .or_else(|| (dcfg.gain > 0.0).then_some(dcfg.gain));
+            if let Some(db) = gain {
+                let _ = cmd.command(0x30, (db * 10.0).round() as u32);
+            }
+            if let Some(agc) = get_u8("agc") {
+                let _ = cmd.command(0x31, u32::from(agc));
+            }
+            return;
+        }
+
+        if dcfg.source.kind == "rx888" {
+            let settings = &dcfg.source.settings;
+            let get_f64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+            if let Some(db) = get_f64("vgaDb") {
+                let _ = cmd.command(0x30, (db * 10.0).round() as u32);
+            }
+            if let Some(db) = get_f64("attenuatorDb") {
+                let _ = cmd.command(0x31, (db.abs() * 10.0).round() as u32);
+            }
+            let _ = cmd.command(0x32, u32::from(get_bool("dither").unwrap_or(false)));
+            let _ = cmd.command(0x33, u32::from(get_bool("pga").unwrap_or(true)));
+            if let Some(db) = get_f64("tunerGainDb") {
+                let _ = cmd.command(0x34, (db * 10.0).round() as u32);
+            }
+            let _ = cmd.command(0x35, u32::from(get_bool("tunerAgc").unwrap_or(false)));
+            let _ = cmd.command(0x36, u32::from(get_bool("biasTeeVhf").unwrap_or(false)));
+            return;
+        }
+
+        if dcfg.source.kind == "elad" {
+            let settings = &dcfg.source.settings;
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+            let _ = cmd.command(0x30, u32::from(get_bool("attenuator").unwrap_or(false)));
+            let _ = cmd.command(0x31, u32::from(get_bool("preselector").unwrap_or(true)));
+            return;
+        }
+
+        if dcfg.source.kind == "hydrasdr" {
+            let settings = &dcfg.source.settings;
+            let get_u8 = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+            if let Some(step) = get_u8("gainStep") {
+                let _ = cmd.command(0x30, u32::from(step.min(21)));
+            }
+            if let Some(curve) = get_u8("gainCurve") {
+                let _ = cmd.command(0x31, u32::from(curve.min(1)));
+            }
+            let _ = cmd.command(0x32, u32::from(get_bool("lnaAgc").unwrap_or(false)));
+            let _ = cmd.command(0x33, u32::from(get_bool("mixerAgc").unwrap_or(false)));
+            let _ = cmd.command(0x34, u32::from(get_bool("dcBlock").unwrap_or(true)));
+            if let Some(port) = get_u8("rfPort") {
+                let _ = cmd.command(0x35, u32::from(port.min(2)));
+            }
+            return;
+        }
+
+        if dcfg.source.kind == "airspy" {
+            let settings = &dcfg.source.settings;
+            let get_u8 = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+
+            if let Some(step) = get_u8("gainStep") {
+                let _ = cmd.command(0x30, u32::from(step.min(21)));
+            }
+            if let Some(curve) = get_u8("gainCurve") {
+                let _ = cmd.command(0x31, u32::from(curve.min(1)));
+            }
+            let _ = cmd.command(0x32, u32::from(get_bool("lnaAgc").unwrap_or(false)));
+            let _ = cmd.command(0x33, u32::from(get_bool("mixerAgc").unwrap_or(false)));
+            let _ = cmd.command(0x34, u32::from(get_bool("dcBlock").unwrap_or(true)));
+            return;
+        }
+
+        if dcfg.source.kind == "hackrf" {
+            let settings = &dcfg.source.settings;
+            let get_f64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+            let get_bool = |key: &str| settings.get(key).and_then(serde_json::Value::as_bool);
+
+            // A single profile/dongle gain maps to the baseband VGA; LNA is
+            // only touched when the operator sets it explicitly.
+            if let Some(db) = get_f64("lnaDb") {
+                let _ = cmd.set_lna_db((db * 10.0).round() as u32);
+            }
+            let vga = get_f64("vgaDb")
+                .or_else(|| (profile.gain > 0.0).then_some(profile.gain))
+                .or_else(|| (dcfg.gain > 0.0).then_some(dcfg.gain));
+            if let Some(db) = vga {
+                let _ = cmd.set_vga_db((db * 10.0).round() as u32);
+            }
+            let _ = cmd.set_amp(u32::from(get_bool("amp").unwrap_or(false)));
+            let filter = get_f64("filterBwHz").unwrap_or(0.0);
+            let _ = cmd.set_filter_bw(filter.round() as u32);
+            return;
+        }
+
         let gain = if profile.gain > 0.0 {
             Some(profile.gain)
         } else if dcfg.gain > 0.0 {
@@ -710,16 +1283,12 @@ impl Manager {
                 let _ = cmd.set_gain_mode(0);
             }
         }
-        if dcfg.ppm != 0 {
-            let _ = cmd.set_frequency_correction(dcfg.ppm as u32);
-        }
         let direct_sampling = if profile.direct_sampling != 0 {
             profile.direct_sampling
         } else {
             dcfg.direct_sampling
         };
         let _ = cmd.set_direct_sampling(direct_sampling as u32);
-        let _ = cmd.set_bias_t(dcfg.bias_t as u32);
         let _ = cmd.set_agc_mode(dcfg.digital_agc as u32);
         let _ = cmd.set_offset_tuning(dcfg.offset_tuning as u32);
     }
@@ -826,8 +1395,9 @@ impl Manager {
             } else {
                 codec.clone()
             };
-            let msg = cache.entry(key.clone()).or_insert_with(|| {
-                match key.as_str() {
+            let msg = cache
+                .entry(key.clone())
+                .or_insert_with(|| match key.as_str() {
                     "deflate" => ad
                         .deflate_enc
                         .lock()
@@ -850,8 +1420,7 @@ impl Manager {
                         ))
                     }
                     other => Err(format!("unknown FFT codec: {other}")),
-                }
-            });
+                });
 
             match msg {
                 Ok(bytes) => self.ws.send_to(&client.id, bytes.clone()),
@@ -876,12 +1445,7 @@ impl Manager {
         }
     }
 
-    fn process_one_client(
-        &self,
-        client_id: &str,
-        cp: &Arc<Mutex<ClientPipeline>>,
-        chunk: &[u8],
-    ) {
+    fn process_one_client(&self, client_id: &str, cp: &Arc<Mutex<ClientPipeline>>, chunk: &[u8]) {
         let mut cp = cp.lock();
         cp.iq_chunk_count += 1;
         if cp.iq_chunk_count % 500 == 0 {
@@ -925,9 +1489,7 @@ impl Manager {
             if cp.accum_pos >= cp.chunk_size {
                 let encoded = if cp.iq_codec == "adpcm" {
                     let cp = &mut *cp;
-                    let n = cp
-                        .adpcm_enc
-                        .encode_into(&cp.accum_buf, &mut cp.adpcm_buf);
+                    let n = cp.adpcm_enc.encode_into(&cp.accum_buf, &mut cp.adpcm_buf);
                     Some(n)
                 } else {
                     None
@@ -1196,7 +1758,11 @@ impl Manager {
         } else {
             client.set_admin(false);
             client.set_auth_failures(client.auth_failures().saturating_add(1));
-            self.send_error(client_id, "Invalid admin password".to_string(), "AUTH_FAILED");
+            self.send_error(
+                client_id,
+                "Invalid admin password".to_string(),
+                "AUTH_FAILED",
+            );
         }
     }
 
@@ -1408,7 +1974,11 @@ impl Manager {
         match (old_opus, new_opus) {
             (false, true) => {
                 let mode = {
-                    let m = self.ws.get_client(client_id).map(|c| c.mode()).unwrap_or_default();
+                    let m = self
+                        .ws
+                        .get_client(client_id)
+                        .map(|c| c.mode())
+                        .unwrap_or_default();
                     if !m.is_empty() {
                         m
                     } else {
@@ -1625,10 +2195,8 @@ impl Manager {
                         delta.push(quantized[i].wrapping_sub(quantized[i - 1]));
                     }
                 }
-                let mut enc = flate2::write::DeflateEncoder::new(
-                    Vec::new(),
-                    flate2::Compression::new(6),
-                );
+                let mut enc =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(6));
                 use std::io::Write;
                 if enc.write_all(&delta).is_err() {
                     return;
@@ -1722,8 +2290,7 @@ impl Manager {
         }
 
         self.set_state(dongle_id, DongleState::stopped());
-        self.ws
-            .unsubscribe_from_dongle(dongle_id, "dongle stopped");
+        self.ws.unsubscribe_from_dongle(dongle_id, "dongle stopped");
         self.notify_dongle_stopped(dongle_id);
         debug!(
             id = %dongle_id,
@@ -1758,7 +2325,9 @@ impl Manager {
         // reinit takes over and this retry loop exits without touching state.
         let generation = self.next_start_generation(dongle_id);
 
-        let client_ids = self.ws.unsubscribe_from_dongle(dongle_id, "dongle reinitialising");
+        let client_ids = self
+            .ws
+            .unsubscribe_from_dongle(dongle_id, "dongle reinitialising");
         for id in client_ids {
             self.destroy_client_pipeline(&id);
         }
@@ -1877,7 +2446,11 @@ impl Manager {
             } else {
                 2_400_000
             };
-            let fft_fps = if profile.fft_fps > 0 { profile.fft_fps } else { 30 };
+            let fft_fps = if profile.fft_fps > 0 {
+                profile.fft_fps
+            } else {
+                30
+            };
             let fft_size = profile.fft_size as usize;
             let fft_proc = FftProcessor::new(FftProcessorConfig {
                 fft_size,
@@ -1929,12 +2502,8 @@ impl Manager {
                 ..Default::default()
             };
             self.ws.send_to(&client.id, pack_meta_message(&meta));
-            self.ws.apply_profile_change_to_client(
-                &client.id,
-                &profile.id,
-                &mode,
-                default_bw,
-            );
+            self.ws
+                .apply_profile_change_to_client(&client.id, &profile.id, &mode, default_bw);
         }
 
         let pipelines: Vec<(String, Arc<Mutex<ClientPipeline>>)> = {
@@ -1948,7 +2517,8 @@ impl Manager {
             let mut cp = cp.lock();
             let rate = output_rate_for_mode(&mode);
             cp.extractor.set_output_sample_rate(rate);
-            cp.extractor.set_bandwidth(default_bandwidth_for_mode(&mode));
+            cp.extractor
+                .set_bandwidth(default_bandwidth_for_mode(&mode));
             cp.extractor.set_tune_offset(0);
             cp.extractor
                 .set_dc_offset_removal(profile.dc_offset_removal_enabled());
@@ -2057,7 +2627,10 @@ impl Manager {
 
     pub fn get_dongle_infos(&self) -> Vec<DongleInfo> {
         let cfg = self.cfg.read();
-        cfg.dongles.iter().map(|d| self.build_dongle_info(d)).collect()
+        cfg.dongles
+            .iter()
+            .map(|d| self.build_dongle_info(d))
+            .collect()
     }
 
     pub fn get_server_config_info(&self) -> ServerConfigInfo {
@@ -2451,10 +3024,7 @@ mod tests {
         let mut level_only = base.clone();
         level_only.gain = 10.0;
         assert!(!crate::api::admin::needs_reinit(&base, &level_only));
-        assert!(crate::api::admin::needs_runtime_apply(
-            &base,
-            &level_only
-        ));
+        assert!(crate::api::admin::needs_runtime_apply(&base, &level_only));
 
         let mut agc = base.clone();
         agc.digital_agc = true;

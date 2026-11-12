@@ -23,6 +23,10 @@ interface SystemInfo {
   features: {
     opusSupport: boolean;
     rtlsdrNative: boolean;
+    hackrfNative?: boolean;
+    sdrplayNative?: boolean;
+    limeNative?: boolean;
+    fobosNative?: boolean;
     allowedFftCodecs: string[];
     allowedIqCodecs: string[];
     supportedSources: string[];
@@ -226,6 +230,10 @@ const FeaturesSection: Component = () => {
               <div class="flex flex-wrap gap-2 py-1">
                 <FeatureBadge name="Opus (libopus)" enabled={data().features.opusSupport} />
                 <FeatureBadge name="RTL-SDR Native" enabled={data().features.rtlsdrNative} />
+                <FeatureBadge name="HackRF Native" enabled={Boolean(data().features.hackrfNative)} />
+                <FeatureBadge name="SDRplay (vendor API)" enabled={Boolean(data().features.sdrplayNative)} />
+                <FeatureBadge name="LimeSDR (LimeSuite)" enabled={Boolean(data().features.limeNative)} />
+                <FeatureBadge name="Fobos (libfobos)" enabled={Boolean(data().features.fobosNative)} />
               </div>
             </InfoGroup>
 

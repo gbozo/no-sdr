@@ -22,6 +22,8 @@ export interface SourceConfig {
   binary?: string;
   extraArgs?: string[];
   spawnRtlTcp?: boolean;
+  /** Source-specific hardware settings, e.g. lnaDb/vgaDb/amp for HackRF. */
+  settings?: Record<string, string | number | boolean>;
 }
 
 export interface DongleProfile {
@@ -66,13 +68,29 @@ export interface DongleConfig {
   offsetTuning: boolean;
   iqCorrection?: boolean;
   profiles: DongleProfile[];
+  /** Runtime state from the manager, including the last source error. */
+  state?: {
+    status: string;
+    retryCount?: number;
+    maxRetries?: number;
+    lastError?: string;
+  };
 }
 
 export interface UsbDevice {
-  index: number;
+  /** Source type this row belongs to (`local`, `hackrf`, `sdrplay`, ...). */
+  source?: string;
+  /** RTL-SDR index, where the source opens by index. */
+  index?: number;
   name: string;
   serial: string;
-  available: boolean;
+  /** Network address for Pluto and other network sources. */
+  address?: string;
+  /** Picker label from the backend. */
+  label?: string;
+  /** Extra state, e.g. firmware upload or permission warnings. */
+  detail?: string;
+  available?: boolean;
   product?: string;
   manufact?: string;
 }
@@ -502,9 +520,10 @@ function createAdminStore() {
   }
 
   // ---- USB Devices ----
-  async function scanUsbDevices(): Promise<void> {
+  async function scanUsbDevices(type?: string): Promise<void> {
     try {
-      const res = await fetch('/api/admin/devices', { credentials: 'same-origin' });
+      const query = type ? `?type=${encodeURIComponent(type)}` : '';
+      const res = await fetch(`/api/admin/devices${query}`, { credentials: 'same-origin' });
       if (res.ok) {
         const data = await res.json();
         setUsbDevices(Array.isArray(data) ? data : []);

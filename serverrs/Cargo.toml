@@ -47,18 +47,48 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # Optional codecs/hardware.
 opus = { version = "0.3", optional = true }
-# Pure-Rust USB for the native RTL-SDR driver. No libusb or librtlsdr.
+# Pure-Rust USB for the native SDR drivers. No libusb or vendor libraries.
 nusb = { version = "0.2", optional = true }
+# HackRF One/Pro driver, pinned to the sdroxide revision we adapted against.
+sdroxide-hackrf = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-types = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-airspy = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-airspyhf = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-hydrasdr = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-elad = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-rx888 = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-pluto = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+# Vendor-library backends. These are dlopen'd at runtime, so the crates build
+# everywhere and simply report a missing service/library at open time.
+sdroxide-sdrplay = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-lime = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-fobos = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 
 [features]
 # The default build enables every feature we ship.
-default = ["opus", "rtlsdr", "bias-t"]
+default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos"]
 opus = ["dep:opus"]
 rtlsdr = ["dep:nusb"]
+hackrf = ["dep:sdroxide-hackrf", "dep:sdroxide-types"]
+airspy = ["dep:sdroxide-airspy", "dep:sdroxide-types"]
+airspyhf = ["dep:sdroxide-airspyhf", "dep:sdroxide-types"]
+hydrasdr = ["dep:sdroxide-hydrasdr", "dep:sdroxide-types"]
+elad = ["dep:sdroxide-elad", "dep:sdroxide-types"]
+rx888 = ["dep:sdroxide-rx888", "dep:sdroxide-types"]
+pluto = ["dep:sdroxide-pluto", "dep:sdroxide-types"]
+sdrplay = ["dep:sdroxide-sdrplay", "dep:sdroxide-types"]
+lime = ["dep:sdroxide-lime", "dep:sdroxide-types"]
+fobos = ["dep:sdroxide-fobos"]
 # Bias-T (GPIO 0) on the antenna port. Default on so local RTL-SDR builds can
 # power a mast LNA/photodiode; drop it with --no-default-features for a build
 # that must never put DC on the feedline.
 bias-t = ["rtlsdr"]
+
+[patch."https://github.com/dividebysandwich/sdroxide"]
+# The drivers only need the DSP primitives (Complex32, WbDdc, ...); the
+# upstream sdroxide-dsp crate also pulls DeepFilterNet/tract for unrelated
+# speech denoising.
+sdroxide-dsp = { path = "vendor/sdroxide-dsp" }
 
 [[example]]
 name = "rtlsdr_probe"

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -182,11 +182,15 @@ pub async fn clients(State(state): State<AppState>) -> Response {
     )
 }
 
-pub async fn local_devices() -> Response {
-    // USB enumeration is blocking; keep it off the async workers.
-    let devices = tokio::task::spawn_blocking(crate::dongle::enumerate_local_devices)
-        .await
-        .unwrap_or_default();
+pub async fn local_devices(Query(q): Query<HashMap<String, String>>) -> Response {
+    // Enumeration (and the vendor-library/service lookups) is blocking; keep
+    // it off the async workers.
+    let kind = q.get("type").cloned();
+    let devices = tokio::task::spawn_blocking(move || {
+        crate::dongle::scan_devices(kind.as_deref())
+    })
+    .await
+    .unwrap_or_default();
     json_response(
         StatusCode::OK,
         serde_json::to_value(devices).unwrap_or_else(|_| json!([])),
@@ -245,6 +249,7 @@ pub async fn admin_dongles(State(state): State<AppState>) -> Response {
             "offsetTuning": d.offset_tuning,
             "iqCorrection": d.iq_correction,
             "profiles": profiles,
+            "state": state.mgr.get_dongle_state(&d.id),
         }));
     }
     json_response(StatusCode::OK, Value::Array(out), None)
@@ -1080,6 +1085,41 @@ pub fn needs_reinit(old: &DongleConfig, new: &DongleConfig) -> bool {
         || o.spawn_rtl_tcp != n.spawn_rtl_tcp
         || old.sample_rate != new.sample_rate
         || old.iq_correction != new.iq_correction
+        || open_time_settings_changed(&o.kind, &o.settings, &n.settings)
+}
+
+/// Settings the driver only reads while opening the device. Changing one of
+/// these while a source is running has to reopen it; the runtime command path
+/// cannot apply them.
+fn open_time_settings_changed(
+    kind: &str,
+    old: &serde_json::Map<String, serde_json::Value>,
+    new: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let keys: &[&str] = match kind {
+        "hackrf" => &["transfers", "transferKib"],
+        "airspy" => &["packing", "transfers", "transferKib"],
+        "airspyhf" => &["libDsp", "calibrationPpb"],
+        "hydrasdr" => &["packing"],
+        "rx888" => &["adcRateHz", "ddcBins"],
+        "pluto" => &["rfBandwidthHz", "rxPort", "bufferSamples"],
+        "sdrplay" => &["bwKhz", "antenna", "duoTuner"],
+        "lime" => &[
+            "channel",
+            "oversample",
+            "antennaRx",
+            "lpfRxHz",
+            "fifoKsamples",
+            "throughputVsLatency",
+            "calibrate",
+        ],
+        "fobos" => &["port"],
+        // RTL-SDR, HF+ and ELAD apply every exposed setting at runtime, and
+        // their rate change is already covered by `sample_rate`.
+        _ => &[],
+    };
+    keys.iter()
+        .any(|key| old.get(*key) != new.get(*key))
 }
 
 /// Hardware settings that can be pushed to a running source through the
@@ -1091,12 +1131,29 @@ pub fn needs_runtime_apply(old: &DongleConfig, new: &DongleConfig) -> bool {
         || old.bias_t != new.bias_t
         || old.digital_agc != new.digital_agc
         || old.offset_tuning != new.offset_tuning
+        || old.source.settings != new.source.settings
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn open_time_source_settings_trigger_reinit() {
+        let mut old = DongleConfig::default();
+        old.source.kind = "sdrplay".into();
+        old.source.settings.insert("bwKhz".into(), json!(1536));
+        let mut new = old.clone();
+        new.source.settings.insert("bwKhz".into(), json!(600));
+        assert!(needs_reinit(&old, &new));
+
+        // A runtime-applicable setting must not force a reopen.
+        new.source.settings.insert("ifGrDb".into(), json!(30));
+        old.source.settings.remove("bwKhz");
+        new.source.settings.remove("bwKhz");
+        assert!(!needs_reinit(&old, &new));
+    }
 
     #[test]
     fn merge_json_preserves_omitted_fields() {

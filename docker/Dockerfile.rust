@@ -24,7 +24,7 @@ RUN npm run build --workspace=client
 FROM rust:1.99-alpine AS rust-builder
 
 # cmake is needed by audiopus-sys, which builds the bundled Opus library.
-RUN apk add --no-cache build-base cmake perl pkgconf
+RUN apk add --no-cache build-base cmake perl pkgconf git ca-certificates
 
 # The vendored Opus CMakeLists uses an old minimum; CMake 4 rejects it unless
 # this policy override is set.
@@ -35,6 +35,7 @@ WORKDIR /app
 COPY serverrs/Cargo.toml serverrs/Cargo.lock ./
 COPY serverrs/src ./src
 COPY serverrs/bands ./bands
+COPY serverrs/vendor ./vendor
 
 ARG TARGETARCH
 

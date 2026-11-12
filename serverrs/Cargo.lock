@@ -157,6 +157,12 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
@@ -286,6 +292,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,7 +371,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -758,12 +779,22 @@ dependencies = [
 
 [[package]]
 name = "io-kit-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617ee6cf8e3f66f3b4ea67a4058564628cde41901316e19f559e14c7c72c5e7b"
+dependencies = [
+ "core-foundation-sys",
+ "mach2 0.4.3",
+]
+
+[[package]]
+name = "io-kit-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06d3a048d09fbb6597dbf7c69f40d14df4a49487db1487191618c893fc3b1c26"
 dependencies = [
  "core-foundation-sys",
- "mach2",
+ "mach2 0.5.0",
 ]
 
 [[package]]
@@ -802,6 +833,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -833,6 +874,15 @@ name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
+
+[[package]]
+name = "mach2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "mach2"
@@ -925,6 +975,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "network-interface"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddcb8865ad3d9950f22f42ffa0ef0aecbfbf191867b3122413602b0a360b2a6"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror",
+ "winapi",
+]
+
+[[package]]
+name = "nix"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b"
+dependencies = [
+ "bitflags 1.3.2",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -969,7 +1042,7 @@ dependencies = [
  "core-foundation",
  "core-foundation-sys",
  "futures-core",
- "io-kit-sys",
+ "io-kit-sys 0.5.0",
  "js-sys",
  "linux-raw-sys",
  "log",
@@ -1127,7 +1200,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1237,12 +1310,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "realfft"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "538895ccf2006b473aafbe8d72770e21038961ab67aae34f3c577485fc703a7d"
+dependencies = [
+ "rustfft",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
 ]
 
 [[package]]
@@ -1317,6 +1399,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "rtrb"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5974e397833d890f2f74963408e0d4a6cd8eda2f6a445ae06750291b5d7a997e"
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1342,11 +1439,11 @@ version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1401,6 +1498,187 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdroxide-airspy"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "nusb",
+ "rtrb",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-airspyhf"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "num-complex",
+ "nusb",
+ "rtrb",
+ "rustfft",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-dsp"
+version = "1.7.2"
+dependencies = [
+ "num-complex",
+ "realfft",
+ "rustfft",
+]
+
+[[package]]
+name = "sdroxide-elad"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "nusb",
+ "rtrb",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-fobos"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "libloading",
+ "rtrb",
+ "sdroxide-dsp",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-hackrf"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "nusb",
+ "rtrb",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-hydrasdr"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "nusb",
+ "rtrb",
+ "sdroxide-airspy",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-lime"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "libloading",
+ "num-complex",
+ "sdroxide-limerfe",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-limerfe"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "sdroxide-types",
+ "serialport",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-pluto"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "network-interface",
+ "roxmltree",
+ "rtrb",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-r82xx"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-rx888"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "nusb",
+ "rtrb",
+ "sdroxide-dsp",
+ "sdroxide-r82xx",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-sdrplay"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "libloading",
+ "rtrb",
+ "sdroxide-types",
+ "thiserror",
+ "tracing",
+ "winreg",
+]
+
+[[package]]
+name = "sdroxide-types"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "serde"
@@ -1482,6 +1760,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "serialport"
+version = "4.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ba5f8f29aa20853c4e3e85a33ec580eb66be1f057142e77a333834a318bacf2"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "core-foundation",
+ "core-foundation-sys",
+ "io-kit-sys 0.4.1",
+ "mach2 0.4.3",
+ "nix",
+ "scopeguard",
+ "unescaper",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "serverrs"
 version = "2.11.8"
 dependencies = [
@@ -1503,6 +1799,17 @@ dependencies = [
  "rand 0.8.8",
  "reqwest",
  "rustfft",
+ "sdroxide-airspy",
+ "sdroxide-airspyhf",
+ "sdroxide-elad",
+ "sdroxide-fobos",
+ "sdroxide-hackrf",
+ "sdroxide-hydrasdr",
+ "sdroxide-lime",
+ "sdroxide-pluto",
+ "sdroxide-rx888",
+ "sdroxide-sdrplay",
+ "sdroxide-types",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1677,7 +1984,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1821,7 +2128,7 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "bytes",
  "futures-core",
  "futures-util",
@@ -1971,6 +2278,15 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unescaper"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7285e83a80ce76f5e7bce79fa41f68d78ba62d1003cf27bf748ab24413808cf4"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "unicase"
@@ -2162,6 +2478,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
 name = "windows-core"
 version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2301,6 +2639,16 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "wit-bindgen"

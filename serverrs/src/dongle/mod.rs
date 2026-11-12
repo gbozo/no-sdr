@@ -2,12 +2,33 @@
 //!
 //! Ported from the original Go backend.
 
+#[cfg(feature = "airspy")]
+pub mod airspy;
+#[cfg(feature = "airspyhf")]
+pub mod airspyhf;
+#[cfg(feature = "hydrasdr")]
+pub mod hydrasdr;
+#[cfg(feature = "elad")]
+pub mod elad;
+#[cfg(feature = "rx888")]
+pub mod rx888;
+#[cfg(feature = "pluto")]
+pub mod pluto;
+#[cfg(feature = "sdrplay")]
+pub mod sdrplay;
+#[cfg(feature = "lime")]
+pub mod lime;
+#[cfg(feature = "fobos")]
+pub mod fobos;
 pub mod demo;
+#[cfg(feature = "hackrf")]
+pub mod hackrf;
 pub mod manager;
 pub mod opus_pipeline;
 pub mod recorder;
 pub mod rtlsdr;
 pub mod rtltcp;
+pub mod scan;
 pub mod source;
 
 pub use demo::{DemoConfig, DemoSource, SignalConfig};
@@ -22,4 +43,5 @@ pub use opus_pipeline::{
 pub use recorder::{Recorder, RecordingStatus};
 pub use rtlsdr::{enumerate_local_devices, LocalDeviceInfo, RtlSdrSource};
 pub use rtltcp::{spawn_rtl_tcp, RtlDongleInfo, RtlTcpSource};
+pub use scan::{scan_devices, ScannedDevice};
 pub use source::{CommandHandle, Source};

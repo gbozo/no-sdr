@@ -1,0 +1,26 @@
+# Airspy R2 and Airspy Mini for serverrs' native USB driver.
+#
+# This is not the Airspy HF+ (different silicon, USB id and protocol), which has
+# its own rule file. Both may be installed together.
+
+# TAG+="uaccess" grants an ACL to whoever is logged in at the active seat.
+# GROUP="plugdev" is the fallback for headless machines, WSL2, containers and
+# systemd services. It is on its own line because udev discards a whole rule
+# line when the named group does not exist. To use the fallback:
+#
+#   sudo groupadd -f plugdev && sudo usermod -aG plugdev "$USER"
+#
+# then log out and back in.
+#
+# Install:
+#   sudo cp 60-serverrs-airspy.rules /usr/lib/udev/rules.d/
+#   sudo udevadm control --reload
+# then unplug and replug the receiver.
+
+# One id for both models; the descriptors do not distinguish R2 from Mini.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60a1", ENV{SERVERRS_AIRSPY}="1"
+
+# Permissions, on their own lines so a missing plugdev group cannot take the
+# uaccess ACL down with it.
+ENV{SERVERRS_AIRSPY}=="1", MODE="0660", TAG+="uaccess"
+ENV{SERVERRS_AIRSPY}=="1", GROUP="plugdev"

@@ -60,7 +60,7 @@ pipelines.
 | Build | npm workspaces (client), Cargo crate (serverrs) |
 | Dev reload | Vite HMR (client), concurrently; Rust runs as a normal process |
 | Config | YAML; `serverrs/src/config.rs` |
-| Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`). All three are default Cargo features |
+| Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`); HackRF (`hackrf`); Airspy R2/Mini (`airspy`); Airspy HF+ (`airspyhf`); HydraSDR (`hydrasdr`); ELAD (`elad`); RX-888 (`rx888`); Pluto (`pluto`); SDRplay (`sdrplay`); LimeSDR (`lime`); Fobos (`fobos`). All are default Cargo features |
 
 ## Key Files (by responsibility)
 
@@ -179,7 +179,7 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 | New admin endpoint | `serverrs/src/api/admin.rs` |
 | New UI panel | `client/src/components/` + import in `App.tsx` |
 | New dongle source | `serverrs/src/dongle/source.rs` trait + `<source>.rs`, wire into `create_source` |
-| New native SDR driver | `serverrs/src/dongle/<radio>/` (nusb; model on `rtlsdr/`), wire into `manager.rs` |
+| New native SDR driver | `serverrs/src/dongle/<radio>/` (nusb; model on `rtlsdr/` or `hackrf/`), wire into `manager.rs`; see `docs/native-sdr-drivers.md` |
 | Config changes | `serverrs/src/config.rs` + `config/config.yaml` |
 | DSP block | `serverrs/src/dsp/` (`ProcessorBlock` trait) |
 
@@ -200,10 +200,20 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 - Hot paths avoid allocation: preallocated buffers, slices, and `rustfft`
   plans are reused.
 - Feature flags gate optional deps: `opus` (libopus via `audiopus_sys`),
-  `rtlsdr` (native RTL2832U via `nusb`, no C library) and `bias-t` (bias-T
-  GPIO support, implies `rtlsdr`). All are **enabled by default**; use
-  `--no-default-features` for a dependency-free build and add features back
-  explicitly. All release targets build with `--all-features`.
+  `rtlsdr` (native RTL2832U via `nusb`, no C library), `bias-t` (bias-T GPIO
+  support, implies `rtlsdr`), `hackrf` (native HackRF via the pinned sdroxide
+  driver), `airspy` (native Airspy R2/Mini), `airspyhf` (native Airspy HF+) and
+  `hydrasdr` (native HydraSDR RFOne), `elad` (native ELAD FDM), `rx888`
+  (native RX-888 Mk2), `pluto` (PlutoSDR over IIOD), `sdrplay` (SDRplay RSP via
+  the vendor API service), `lime` (LimeSDR via LimeSuite) and `fobos`
+  (RigExpert Fobos via libfobos). All are **enabled by default**;
+  use `--no-default-features` for a dependency-free build and add features
+  back explicitly. All release targets build with `--all-features`. The
+  `hackrf`/`airspy`/`airspyhf`/`hydrasdr`/`elad`/`rx888`/`pluto`/`sdrplay`/
+  `lime`/`fobos` drivers use the pinned `sdroxide` git crates and a local
+  `sdroxide-dsp` shim under `serverrs/vendor/`. The last three open their
+  vendor library (SDRplay API service, LimeSuite, libfobos) at runtime with
+  `dlopen`; no SDK is required to build.
 - `cargo test` runs the full default-feature suite; `cargo test
   --no-default-features` verifies the dependency-free stub build;
   `--no-default-features --features opus` covers Opus-only platforms, and

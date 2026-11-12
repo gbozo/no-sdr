@@ -1,0 +1,29 @@
+# Airspy HF+ (Dual / Discovery / Ranger) for serverrs' native USB driver.
+#
+# Different silicon / USB id / protocol from the Airspy R2 and Mini, which have
+# their own rule file.
+#
+# TAG+="uaccess" grants an ACL to whoever is logged in at the active seat.
+# GROUP="plugdev" is the fallback for headless machines, WSL2, containers and
+# systemd services. It is on its own line because udev discards a whole rule
+# line when the named group does not exist. To use the fallback:
+#
+#   sudo groupadd -f plugdev && sudo usermod -aG plugdev "$USER"
+#
+# then log out and back in.
+#
+# Install:
+#   sudo cp 60-serverrs-airspyhf.rules /usr/lib/udev/rules.d/
+#   sudo udevadm control --reload
+# then unplug and replug the receiver.
+
+# Every HF+ model, normal firmware.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="800c", ENV{SERVERRS_AIRSPYHF}="1"
+
+# SAM-BA bootloader: not used by serverrs, but keeps a stuck receiver visible.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="6124", ENV{SERVERRS_AIRSPYHF}="1"
+
+# Permissions, on their own lines so a missing plugdev group cannot take the
+# uaccess ACL down with it.
+ENV{SERVERRS_AIRSPYHF}=="1", MODE="0660", TAG+="uaccess"
+ENV{SERVERRS_AIRSPYHF}=="1", GROUP="plugdev"

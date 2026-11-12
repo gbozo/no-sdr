@@ -1,0 +1,10 @@
+[package]
+name = "sdroxide-dsp"
+version = "1.7.2"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+num-complex = "0.4"
+realfft = "3.5"
+rustfft = "6"

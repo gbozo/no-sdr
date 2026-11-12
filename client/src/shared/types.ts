@@ -6,12 +6,22 @@
 
 /** How to connect to the SDR hardware */
 export type SourceType =
-  | 'local'       // spawn rtl_sdr as child process
+  | 'local'       // native USB RTL-SDR
   | 'rtl_tcp'     // TCP client to remote rtl_tcp server
   | 'demo'        // built-in signal simulator
   | 'airspy_tcp'  // TCP client to airspy_tcp server (AirSpy Mini/R2)
   | 'hfp_tcp'     // TCP client to hfp_tcp server (AirSpy HF+)
-  | 'rsp_tcp';    // TCP client to rsp_tcp server (SDRplay RSP1/2)
+  | 'rsp_tcp'     // TCP client to rsp_tcp server (SDRplay RSP1/2)
+  | 'hackrf'    // native USB HackRF One/Pro
+  | 'airspy'    // native USB Airspy R2/Mini
+  | 'airspyhf'   // native USB Airspy HF+
+  | 'hydrasdr'   // native USB HydraSDR RFOne
+  | 'elad'       // native USB ELAD FDM
+  | 'rx888'      // native USB RX-888 Mk2
+  | 'pluto'      // ADALM-Pluto over IIOD network
+  | 'sdrplay'    // SDRplay RSP through the vendor API service
+  | 'lime'       // LimeSDR through LimeSuite
+  | 'fobos';     // RigExpert Fobos SDR through libfobos
 
 export interface SourceConfig {
   /** Connection type */
@@ -20,7 +30,13 @@ export interface SourceConfig {
   host?: string;
   /** For TCP sources: TCP port (default 1234) */
   port?: number;
-  /** For local: path to rtl_sdr binary (default: "rtl_sdr" from PATH) */
+  /** Native USB: serial string; empty means the first device found. */
+  serial?: string;
+  /** Native USB: device index where the driver supports it. */
+  deviceIndex?: number;
+  /** Source-specific hardware settings (e.g. lnaDb/vgaDb/amp for HackRF). */
+  settings?: Record<string, string | number | boolean>;
+  /** For TCP sources: path to the rtl_tcp binary (default: "rtl_tcp" from PATH) */
   binary?: string;
   /** For local: additional CLI arguments to rtl_sdr */
   extraArgs?: string[];

@@ -72,6 +72,26 @@ impl CommandHandle {
         self.command(0x0E, enabled)
     }
 
+    /// HackRF LNA gain, tenths of a dB (0–400).
+    pub fn set_lna_db(&self, tenths_db: u32) -> Result<()> {
+        self.command(0x30, tenths_db)
+    }
+
+    /// HackRF baseband VGA gain, tenths of a dB (0–620).
+    pub fn set_vga_db(&self, tenths_db: u32) -> Result<()> {
+        self.command(0x31, tenths_db)
+    }
+
+    /// HackRF RX RF amplifier (the shared 14 dB switch).
+    pub fn set_amp(&self, enabled: u32) -> Result<()> {
+        self.command(0x32, enabled)
+    }
+
+    /// HackRF baseband filter bandwidth in Hz; 0 means auto.
+    pub fn set_filter_bw(&self, hz: u32) -> Result<()> {
+        self.command(0x33, hz)
+    }
+
     /// RSP-specific: RF gain reduction (20-59 dB).
     pub fn set_rf_gain_reduction(&self, db: u32) -> Result<()> {
         self.command(0x20, db)
@@ -109,6 +129,11 @@ pub trait Source: Send {
     /// Returns a handle for tune commands, or `None` for non-commandable
     /// sources (e.g. the demo generator).
     fn command_handle(&self) -> Option<CommandHandle> {
+        None
+    }
+
+    /// Actual sample rate after the driver snapped the request, when known.
+    fn sample_rate_hz(&self) -> Option<u32> {
         None
     }
 

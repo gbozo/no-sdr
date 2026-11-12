@@ -18,10 +18,15 @@ protocol as before).
   Local RTL2838/R820T hardware verified: streaming, FFT, Opus WFM, RDS,
   profile switch, MW direct sampling, stop/start.
 - Features: `opus` (server-side audio), `rtlsdr` (native direct USB via
-  `nusb`, no librtlsdr/libusb) and `bias-t` (bias-T GPIO support) are
-  **default features**. The `bias-t` feature decides whether the GPIO path is
-  compiled in; the dongle's `biasT` setting still decides whether it is
-  energized. Use `--no-default-features` to build without optional
+  `nusb`, no librtlsdr/libusb), `bias-t` (bias-T GPIO support), `hackrf`
+  (native HackRF), `airspy` (native Airspy R2/Mini), `airspyhf` (native
+  Airspy HF+), `hydrasdr` (native HydraSDR RFOne), `elad` (native ELAD FDM)
+  `rx888` (native RX-888 Mk2), `pluto` (PlutoSDR over IIOD), `sdrplay`
+  (SDRplay RSP via the vendor API service), `lime` (LimeSDR via LimeSuite) and
+  `fobos` (RigExpert Fobos via libfobos) are **default features**. The last
+  three load their vendor library at runtime; no SDK is needed to build.
+  The `bias-t` feature decides whether the GPIO path is compiled in; the
+  dongle's `biasT` setting still decides whether it is energized. Use `--no-default-features` to build without optional
   dependencies. Every release artifact, including macOS and Windows, uses
   `--all-features`.
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
@@ -100,6 +105,15 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-12: SDRplay RSP, LimeSDR and RigExpert Fobos SDR sources added through the pinned sdroxide crates. All three vendor libraries are `dlopen`'d at runtime, so default builds need no SDK. Admin exposes LNA/IF gain, AGC, notches, antenna/tuner, Lime gain/channel/filter/calibration and Fobos port/gain/clock controls. Receive only; not yet hardware-tested.
+- 2026-11-12: Admin device scan now enumerates RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR, ELAD, RX-888, Pluto, SDRplay, LimeSDR and Fobos without opening a device, and fills the serial/index/address from the picker. Open-time settings now trigger a dongle reinit.
+- 2026-11-12: PlutoSDR source added over the IIOD network protocol (RX gain, AGC, RF bandwidth, RX port, buffer size, 521 kSPS–5 MSPS). No USB/libusb/libiio; not yet hardware-tested.
+- 2026-11-12: RX-888 Mk2 native USB source added (FX3 firmware upload, WOLA DDC, VGA/attenuator/PGA/dither, tuner gain/AGC, HF/VHF bias-T). Uses the extended `sdroxide-dsp` shim; not yet hardware-tested.
+- 2026-11-12: ELAD FDM-DUO/S2/S1 native USB source added (attenuator/preselector, 192 kSPS–6.144 MSPS). Rate changes reopen the receiver; not yet hardware-tested.
+- 2026-11-12: HydraSDR RFOne native USB source added (gain step/curve, LNA/Mixer AGC, three RF ports, DC block, 2.5–12 MSPS). Uses the pinned sdroxide crates; not yet hardware-tested.
+- 2026-11-12: Airspy HF+ native USB source added (AGC/attenuator/LNA/host DSP/calibration, 192–912 kSPS). Uses the same pinned sdroxide crates; not yet hardware-tested.
+- 2026-11-12: Airspy R2/Mini native USB source added (gain step/curve, LNA/Mixer AGC, DC block, 2.5–10 MSPS). Shares the pinned sdroxide driver set and `sdroxide-dsp` shim; not yet hardware-tested.
+- 2026-11-12: HackRF One/Pro native USB source added. Uses pinned `sdroxide-hackrf` with a local `sdroxide-dsp` shim; HTTP admin exposes source type, serial, LNA/VGA/filter/RF-amp and HackRF sample rates. Not yet hardware-tested.
 - 2026-11-12: Version 2.11.8. Rust-only branch: native nusb RTL-SDR driver, bias-T feature, Go backend removed. `main` is now the Rust backend and publishes the Docker `latest` tag; `oldgo` keeps the former Go branch.
 - 2026-11-12: Go backend (`serverng/`), its Docker image/workflow and Go npm scripts removed from the branch. `serverrs/` is now the only server; docs and package scripts are Rust-only.
 - 2026-11-07: branch created; Go backend surveyed; Rust crate scaffolded.

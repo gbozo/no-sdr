@@ -1,0 +1,26 @@
+# HydraSDR RFOne for serverrs' native USB driver.
+#
+# TAG+="uaccess" grants an ACL to whoever is logged in at the active seat.
+# GROUP="plugdev" is the fallback for headless machines, WSL2, containers and
+# systemd services. It is on its own line because udev discards a whole rule
+# line when the named group does not exist. To use the fallback:
+#
+#   sudo groupadd -f plugdev && sudo usermod -aG plugdev "$USER"
+#
+# then log out and back in.
+#
+# Install:
+#   sudo cp 60-serverrs-hydrasdr.rules /usr/lib/udev/rules.d/
+#   sudo udevadm control --reload
+# then unplug and replug the receiver.
+
+# Production boards.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="38af", ATTRS{idProduct}=="0001", ENV{SERVERRS_HYDRASDR}="1"
+
+# Prototype boards, which share the Airspy R2/Mini id.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60a1", ENV{SERVERRS_HYDRASDR}="1"
+
+# Permissions, on their own lines so a missing plugdev group cannot take the
+# uaccess ACL down with it.
+ENV{SERVERRS_HYDRASDR}=="1", MODE="0660", TAG+="uaccess"
+ENV{SERVERRS_HYDRASDR}=="1", GROUP="plugdev"
