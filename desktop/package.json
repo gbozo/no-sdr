@@ -1,6 +1,6 @@
 {
   "name": "@node-sdr/desktop",
-  "version": "2.12.0",
+  "version": "2.13.0",
   "private": true,
   "description": "NO(DE)-SDR desktop application",
   "author": "no-sdr contributors",
@@ -29,7 +29,7 @@
     "appId": "org.nosdr.desktop",
     "productName": "NO(DE)-SDR",
     "executableName": "no-sdr",
-    "copyright": "Copyright © no-sdr contributors",
+    "copyright": "Copyright \u00a9 no-sdr contributors",
     "asar": true,
     "npmRebuild": false,
     "directories": {

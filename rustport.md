@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.12.0)
+## Current status (2.13.0)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,8 +23,9 @@ protocol as before).
   Airspy HF+), `hydrasdr` (native HydraSDR RFOne), `elad` (native ELAD FDM)
   `rx888` (native RX-888 Mk2), `pluto` (PlutoSDR over IIOD), `sdrplay`
   (SDRplay RSP via the vendor API service), `lime` (LimeSDR via LimeSuite) and
-  `fobos` (RigExpert Fobos via libfobos) and `decoders` (background
-  FT8/FT4/FT2 via `mfsk-core`) are **default features**. The three vendor drivers load
+  `fobos` (RigExpert Fobos via libfobos), `decoders` (background FT8/FT4/FT2
+  via `mfsk-core`), `adsb` (raw-IQ 1090 MHz), `ais` (marine VHF) and `vdl2`
+  (VHF datalink) are **default features**. The three vendor drivers load
   their library at runtime; no SDK is needed to build.
   The `bias-t` feature decides whether the GPIO path is compiled in; the
   dongle's `biasT` setting still decides whether it is energized. Use `--no-default-features` to build without optional
@@ -33,14 +34,13 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.12.0`. It adds Electron desktop packages for
-  Linux, macOS and Windows, expands the native SDR driver set (HackRF, Airspy,
-  Airspy HF+, HydraSDR, ELAD, RX-888, Pluto) and vendor-library sources
-  (SDRplay, LimeSDR, Fobos), and completes the admin device scan and per-source
-  settings panels. The previous Rust release, `v2.11.7-rust`, fixed the local USB
-  RTL-SDR use-after-free on stop/reinit, stopped stale retry loops from
-  overwriting a newer dongle state, applied hardware settings to running
-  dongles without reopening USB, and added admin runtime-state indicators.
+- Latest published release: `v2.13.0`. It adds the ADS-B aircraft table +
+  OpenStreetMap view (raw IQ, one-bit CRC repair), ACARS/ARINC 618 and VDL
+  Mode 2 message decoders, an AIS vessel table + map, decoder-aware bookmarks,
+  and the FFT/CPU hot-path work (rate-capped transforms, DC-spike removal,
+  decoder-only clients skip the audio channelizer). The previous release,
+  `v2.12.0`, added Electron desktop packages for Linux/macOS/Windows, the
+  expanded native/vendor SDR driver set and admin device scanning.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust`. The Docker workflow also publishes a
   rolling `latest-rust` tag.
@@ -105,6 +105,7 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-13: Version 2.13.0. Digital decoder expansion: ADS-B raw-IQ decoder with aircraft table and Leaflet/OSM map (DC-blocked IQ, gated/ungated 1-bit CRC repair, aircraft entity persistence, `/api/decoder/aircraft`); ACARS/ARINC 618 VHF AM receiver and table; AIS vessel table + map with `decoder_entities` (kind `vessel`, `/api/decoder/vessels`); VDL Mode 2 message log + station table. Shared decoder worker gained raw-IQ channel kinds, per-profile sample-rate fixes, and bookmarks now capture/restore decoder modes. CPU: FFT transforms are rate-capped and DC-removed in the display path; decoder-only clients with audio off skip NCO/FIR/Opus; chunk-path allocations removed.
 - 2026-11-12: Decoder subsystem extended with foreground per-client decoding (`{"cmd":"decoder","mode":"ft8"}`) and SQLite result persistence with `/api/decoder/messages` and `/api/decoder/stats`. Background decoder work remains the OpenWebRX-style path.
 - 2026-11-12: Background decoder subsystem added (OpenWebRX-style). Each configured decoder gets a per-dongle `mfsk-core` IQ channelizer and UTC-aligned 12 kHz slot receiver; FT8, FT4 and FT2 decode results are broadcast as `MSG_DECODER`. Configured under top-level `decoders:` in `config/config.yaml`; see `docs/decoders.md`.
 - 2026-11-12: Version 2.12.0. Electron desktop packages for Linux (AppImage/deb), macOS (dmg/zip) and Windows (NSIS/portable), alongside the portable server archives on the GitHub release. Adds native and runtime-loaded vendor SDR source expansion, admin device scanning and source controls.
