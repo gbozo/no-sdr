@@ -1599,6 +1599,7 @@ export class SdrEngine {
     store.clearDecoderMessages();
     store.clearAdsb();
     store.clearAcars();
+    store.clearAis();
     this.send({ cmd: 'decoder', mode: next });
   }
 

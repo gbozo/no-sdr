@@ -1688,6 +1688,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdroxide-ais"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "num-complex",
+ "sdroxide-ax25",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "tracing",
+]
+
+[[package]]
+name = "sdroxide-ax25"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "sdroxide-dsp"
 version = "1.7.2"
 dependencies = [
@@ -1963,6 +1986,7 @@ dependencies = [
  "sdroxide-adsb",
  "sdroxide-airspy",
  "sdroxide-airspyhf",
+ "sdroxide-ais",
  "sdroxide-elad",
  "sdroxide-fobos",
  "sdroxide-hackrf",

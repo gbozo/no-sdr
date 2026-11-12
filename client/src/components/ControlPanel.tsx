@@ -40,7 +40,7 @@ const ControlPanel: Component = () => {
           </Show>
         </div>
         <div class="flex flex-wrap gap-1.5">
-          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }, { id: 'adsb', label: 'ADS-B' }, { id: 'acars', label: 'ACARS' }]}>
+          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }, { id: 'adsb', label: 'ADS-B' }, { id: 'acars', label: 'ACARS' }, { id: 'ais', label: 'AIS' }]}>
             {(decoder) => (
               <button
                 onClick={() => engine.setDecoder(store.decoderMode() === decoder.id ? '' : decoder.id)}

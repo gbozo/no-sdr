@@ -32,6 +32,8 @@ mod acars;
 mod acars_channel;
 #[cfg(feature = "adsb")]
 mod adsb;
+#[cfg(feature = "ais")]
+mod ais;
 mod ft2;
 pub mod store;
 
@@ -234,6 +236,11 @@ fn is_acars(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("acars")
 }
 
+#[cfg(feature = "ais")]
+fn is_ais(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("ais")
+}
+
 #[cfg(feature = "adsb")]
 fn is_adsb(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("adsb")
@@ -242,6 +249,10 @@ fn is_adsb(mode: &str) -> bool {
 fn supported_mode(mode: &str) -> bool {
     #[cfg(feature = "adsb")]
     if is_adsb(mode) {
+        return true;
+    }
+    #[cfg(feature = "ais")]
+    if is_ais(mode) {
         return true;
     }
     is_acars(mode) || is_ft2(mode) || mfsk_mode(mode).is_some()
@@ -295,6 +306,8 @@ pub(crate) enum Channel {
     Acars(acars_channel::AcarsChannel),
     #[cfg(feature = "adsb")]
     Adsb(adsb::AdsbChannel),
+    #[cfg(feature = "ais")]
+    Ais(ais::AisChannel),
 }
 
 impl Channel {
@@ -304,6 +317,8 @@ impl Channel {
             Channel::Acars(channel) => &channel.cfg,
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => &channel.cfg,
+            #[cfg(feature = "ais")]
+            Channel::Ais(channel) => &channel.cfg,
         }
     }
 
@@ -313,6 +328,8 @@ impl Channel {
             Channel::Acars(channel) => channel.take_results(),
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => channel.take_results(),
+            #[cfg(feature = "ais")]
+            Channel::Ais(channel) => channel.take_results(),
         }
     }
 
@@ -322,6 +339,8 @@ impl Channel {
             Channel::Acars(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "ais")]
+            Channel::Ais(channel) => channel.process_chunk(chunk, now),
         }
     }
 }
@@ -340,8 +359,15 @@ pub(crate) fn build_channel(
         )));
     }
     if is_acars(&cfg.mode) {
-        return acars_channel::AcarsChannel::new(cfg, center_hz, sample_rate)
-            .map(Channel::Acars);
+        return acars_channel::AcarsChannel::new(cfg, center_hz, sample_rate).map(Channel::Acars);
+    }
+    #[cfg(feature = "ais")]
+    if is_ais(&cfg.mode) {
+        return Ok(Channel::Ais(ais::AisChannel::new(
+            cfg,
+            center_hz,
+            sample_rate as f64,
+        )));
     }
     build_mfsk_channel(cfg, center_hz, sample_rate).map(|channel| Channel::Mfsk(Box::new(channel)))
 }
@@ -527,6 +553,12 @@ fn persist_data(
             .upsert_aircraft(&cfg.id, dongle_id, aircraft, store.retention_days);
         return;
     }
+    if let Some(vessels) = data.get("vessels").and_then(|v| v.as_array()) {
+        store
+            .store
+            .upsert_vessels(&cfg.id, dongle_id, vessels, store.retention_days);
+        return;
+    }
     let text = data
         .get("text")
         .and_then(|v| v.as_str())
@@ -633,6 +665,24 @@ mod tests {
         assert!(supported_mode("acars"));
         #[cfg(feature = "adsb")]
         assert!(supported_mode("adsb"));
+        #[cfg(feature = "ais")]
+        assert!(supported_mode("ais"));
+    }
+
+    #[cfg(feature = "ais")]
+    #[test]
+    fn build_channel_dispatches_ais_to_the_raw_iq_path() {
+        let ais = DecoderConfig {
+            id: "ais-162".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "ais".to_string(),
+            frequency_hz: 162_000_000,
+            bandwidth_hz: 25_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&ais, 162_000_000.0, 2_400_000).expect("ais channel");
+        assert!(matches!(channel, Channel::Ais(_)));
     }
 
     #[test]

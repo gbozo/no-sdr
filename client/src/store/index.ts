@@ -21,6 +21,8 @@ import type {
   AdsbSnapshot,
   AcarsMessage,
   AcarsStatus,
+  AisVessel,
+  AisSnapshot,
 } from '~/shared';
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
@@ -121,6 +123,9 @@ function createStore() {
     bad: 0,
     level: 0,
   });
+  /** Latest AIS vessel table and receiver diagnostics. */
+  const [aisVessels, setAisVessels] = createSignal<AisVessel[]>([]);
+  const [aisStatus, setAisStatus] = createSignal<Omit<AisSnapshot, 'vessels'> | null>(null);
   /** Tuning step in Hz. 0 = auto (use bandwidth). User can override. */
   const [tuningStep, setTuningStep] = createSignal(0);
 
@@ -362,6 +367,32 @@ function createStore() {
     clearAcars: () => {
       setAcarsMessages([]);
       setAcarsStatus({ frames: 0, bad: 0, level: 0 });
+    },
+    aisVessels,
+    aisStatus,
+    /** Fold one `decoderType: "ais"` snapshot into reactive state. */
+    applyAisSnapshot: (data: unknown) => {
+      if (!data || typeof data !== 'object') return;
+      const snapshot = data as Partial<AisSnapshot>;
+      setAisVessels(Array.isArray(snapshot.vessels) ? snapshot.vessels : []);
+      setAisStatus({
+        channels: Array.isArray(snapshot.channels) ? snapshot.channels : [],
+        unavailable: snapshot.unavailable ?? null,
+        degraded: snapshot.degraded ?? null,
+        suggestCenterHz: snapshot.suggestCenterHz ?? null,
+        windowCenterHz: snapshot.windowCenterHz ?? 0,
+        windowRateHz: snapshot.windowRateHz ?? 0,
+        bursts: snapshot.bursts ?? 0,
+        messages: snapshot.messages ?? 0,
+        badFcs: snapshot.badFcs ?? 0,
+        unsupported: snapshot.unsupported ?? 0,
+        samplesPerBit: snapshot.samplesPerBit ?? 0,
+        offsetHz: snapshot.offsetHz ?? null,
+      });
+    },
+    clearAis: () => {
+      setAisVessels([]);
+      setAisStatus(null);
     },
     tuningStep, setTuningStep,
     tunedFrequency,

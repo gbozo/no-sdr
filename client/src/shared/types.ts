@@ -204,6 +204,78 @@ export interface AdsbSnapshot {
   unmatched: number;
 }
 
+// ---- AIS ----
+
+/** One station in an AIS snapshot. `mmsi` is the stable key. */
+export interface AisVessel {
+  mmsi: number;
+  name: string;
+  call_sign: string;
+  imo: number | null;
+  /** ClassA, ClassB, BaseStation, SarAircraft, AidToNavigation, Sart, Craft. */
+  kind: string;
+  ship_type: number | null;
+  aid_type: number | null;
+  virtual_aid: boolean;
+  nav_status: number | null;
+  destination: string;
+  eta: string;
+  draught_m: number | null;
+  dim_bow_m: number;
+  dim_stern_m: number;
+  dim_port_m: number;
+  dim_starboard_m: number;
+  lat: number | null;
+  lon: number | null;
+  /** Past positions, oldest first: [lat, lon]. */
+  track: [number, number][];
+  sog_kt: number | null;
+  cog_deg: number | null;
+  heading_deg: number | null;
+  turn_rate_deg_min: number | null;
+  altitude_m: number | null;
+  accuracy: boolean;
+  raim: boolean;
+  utc: string;
+  /** 'A' or 'B'. */
+  channel: string;
+  rssi_dbfs: number;
+  snr_db: number;
+  messages: number;
+  last_type: number;
+  first_at: number;
+  last_at: number;
+  last_pos_at: number;
+  nmea: string;
+}
+
+export interface AisChannelStatus {
+  freq_hz: number;
+  label: string;
+  live: boolean;
+  reason: string | null;
+  bursts: number;
+  messages: number;
+  floor_dbfs: number;
+}
+
+/** One `MSG_DECODER` payload with `decoderType: "ais"`. */
+export interface AisSnapshot {
+  vessels: AisVessel[];
+  channels: AisChannelStatus[];
+  unavailable: string | null;
+  degraded: string | null;
+  suggestCenterHz: number | null;
+  windowCenterHz: number;
+  windowRateHz: number;
+  bursts: number;
+  messages: number;
+  badFcs: number;
+  unsupported: number;
+  samplesPerBit: number;
+  offsetHz: number | null;
+}
+
 // ---- Client / Session ----
 
 export interface ClientSession {

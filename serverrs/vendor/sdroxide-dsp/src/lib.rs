@@ -5,6 +5,8 @@
 //! spectrum. The real upstream crate also contains speech denoisers and pulls a
 //! large neural-inference dependency tree unrelated to USB I/O.
 
+pub mod ddc;
+pub mod decim;
 pub mod nco;
 pub mod simd;
 pub mod wbddc;
@@ -13,6 +15,8 @@ pub mod window;
 
 pub type Complex32 = num_complex::Complex<f32>;
 
+pub use ddc::Ddc;
+pub use decim::lowpass_taps;
 pub use nco::Nco;
 pub use wbddc::{WbDdc, clamp_center_hz, reachable_range_hz};
 pub use wbspectrum::WideSpectrum;

@@ -47,6 +47,10 @@ const App: Component = () => {
         store.applyAcarsEvent(data);
         return;
       }
+      if (type === 'ais') {
+        store.applyAisSnapshot(data);
+        return;
+      }
       store.addDecoderMessage(type, (data ?? {}) as Record<string, unknown>);
     };
 

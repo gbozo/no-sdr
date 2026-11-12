@@ -27,4 +27,15 @@ impl Nco {
             self.phasor *= self.step;
         }
     }
+
+    /// Mix `input` into `out`, appending the shifted samples.
+    ///
+    /// The shim keeps the simple per-sample recurrence; the upstream crate
+    /// vectorises this with its SIMD kernel, but the drivers and the AIS
+    /// channel only need the API shape.
+    pub fn mix(&mut self, input: &[crate::Complex32], out: &mut Vec<crate::Complex32>) {
+        out.clear();
+        out.extend_from_slice(input);
+        self.mix_in_place(out);
+    }
 }

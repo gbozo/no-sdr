@@ -80,7 +80,11 @@ fn crc16(data: &[u8]) -> u16 {
     for &b in data {
         crc ^= u16::from(b);
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0x8408 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0x8408
+            } else {
+                crc >> 1
+            };
         }
     }
     crc
@@ -92,7 +96,11 @@ fn bytes_lsb_first(bits: &[u8], invert: bool) -> Vec<u8> {
     let flip = u8::from(invert);
     bits.chunks(8)
         .filter(|c| c.len() == 8)
-        .map(|c| c.iter().enumerate().fold(0u8, |b, (i, &v)| b | (((v ^ flip) & 1) << i)))
+        .map(|c| {
+            c.iter()
+                .enumerate()
+                .fold(0u8, |b, (i, &v)| b | (((v ^ flip) & 1) << i))
+        })
         .collect()
 }
 
@@ -124,7 +132,9 @@ fn find_frame(bits: &[u8]) -> Option<(AcarsFrame, usize)> {
     let mut failed = None;
     for invert in [false, true] {
         for shift in 0..8 {
-            let Some(aligned) = bits.get(shift..) else { break };
+            let Some(aligned) = bits.get(shift..) else {
+                break;
+            };
             let bytes = bytes_lsb_first(aligned, invert);
             for (i, &b) in bytes.iter().enumerate() {
                 // SOH, with odd parity, marks the header.
@@ -531,7 +541,10 @@ mod tests {
             crc_ok: true,
         };
         let got = parse_frame(&encode(&msg)).expect("a header-only frame");
-        assert_eq!(got.label, "_d", "the general-response label, as it is written");
+        assert_eq!(
+            got.label, "_d",
+            "the general-response label, as it is written"
+        );
         assert!(got.text.is_empty());
         assert!(got.crc_ok, "the block check covers the header and ETX");
     }
@@ -595,7 +608,10 @@ mod tests {
         msg.text = "A\u{1b}[2JB\r\nC".into();
         let got = parse_frame(&encode(&msg)).expect("a frame");
         assert_eq!(got.ack, "NAK");
-        assert_eq!(got.text, "A·[2JB\r\nC", "the escape is gone, the line break kept");
+        assert_eq!(
+            got.text, "A·[2JB\r\nC",
+            "the escape is gone, the line break kept"
+        );
         assert!(got.crc_ok);
     }
 
@@ -621,7 +637,10 @@ mod tests {
                 ((x >> 16) & 1) as u8
             })
             .collect();
-        assert!(parse_frame(&bits).is_none(), "noise must not fabricate a frame");
+        assert!(
+            parse_frame(&bits).is_none(),
+            "noise must not fabricate a frame"
+        );
     }
 
     /// The block check is the reflected CRC-16 with initial value 0 — the same

@@ -40,3 +40,14 @@ pub async fn aircraft(
         .unwrap_or(500);
     Json(Value::Array(state.decoder_store.entities("aircraft", limit)))
 }
+
+pub async fn vessels(
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(500);
+    Json(Value::Array(state.decoder_store.entities("vessel", limit)))
+}

@@ -48,8 +48,8 @@ See `docs/decoders.md` for the current architecture and config format.
 - [x] **ADS-B** — 1090 MHz raw IQ, 2 MSPS; `sdroxide-adsb`; aircraft table
       plus OpenStreetMap with callsign, altitude, speed, heading, squawk and
       last-seen. Foreground and background; snapshots upsert as entities.
-- [ ] **AIS** — 161.975/162.025 MHz, 25 kHz; use `sdroxide-ais`; vessel table
-      plus map (MMSI, name, position, course, speed).
+- [x] **AIS** — 161.975/162.025 MHz, 25 kHz; `sdroxide-ais`; vessel table
+      plus OSM map (MMSI, name, type, position, course, speed, destination).
 - [ ] **APRS** — 144.39 MHz (regional variants), AX.25 1200/9600 baud; use
       `sdroxide-aprs`; packet table plus map for position reports.
 - [ ] **NAVTEX** — 518/490 kHz and 4209.5 kHz, SITOR-B; text panel with

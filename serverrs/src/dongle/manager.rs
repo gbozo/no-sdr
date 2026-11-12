@@ -1601,6 +1601,14 @@ impl Manager {
                             aircraft,
                             retention,
                         );
+                    } else if let Some(vessels) = data.get("vessels").and_then(|v| v.as_array()) {
+                        let retention = self.cfg.read().database.retention_days;
+                        self.decoder_store.upsert_vessels(
+                            &foreground_id,
+                            &foreground_dongle_id,
+                            vessels,
+                            retention,
+                        );
                     } else {
                         let text = data
                             .get("text")

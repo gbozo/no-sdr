@@ -14,6 +14,7 @@ type DemodMode = keyof typeof DEMOD_MODES;
 const DECODER_BOOKMARK_MODES = [
   { id: 'adsb', label: 'ADS-B — 1090 MHz', defaultBandwidth: 2400000 },
   { id: 'acars', label: 'ACARS — VHF datalink', defaultBandwidth: 6000 },
+  { id: 'ais', label: 'AIS — Marine VHF 162 MHz', defaultBandwidth: 25000 },
   { id: 'ft8', label: 'FT8', defaultBandwidth: 3000 },
   { id: 'ft4', label: 'FT4', defaultBandwidth: 3000 },
   { id: 'ft2', label: 'FT2', defaultBandwidth: 3000 },

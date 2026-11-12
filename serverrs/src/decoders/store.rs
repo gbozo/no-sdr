@@ -39,6 +39,13 @@ pub struct DecoderStore {
     entity_writes: Mutex<HashMap<String, i64>>,
 }
 
+/// Which field of an entity JSON payload is its stable key.
+#[derive(Clone, Copy)]
+enum EntityKey {
+    Icao,
+    Mmsi,
+}
+
 /// Minimum interval between entity-table writes for one decoder. Last-seen
 /// timestamps are minute-scale data, so five seconds is plenty.
 const ENTITY_WRITE_INTERVAL_MS: i64 = 5_000;
@@ -169,9 +176,36 @@ impl DecoderStore {
         aircraft: &[Value],
         retention_days: i64,
     ) {
-        self.upsert_aircraft_at(decoder_id, dongle_id, aircraft, retention_days, now_ms());
+        self.upsert_entities(
+            "aircraft",
+            EntityKey::Icao,
+            decoder_id,
+            dongle_id,
+            aircraft,
+            retention_days,
+            now_ms(),
+        );
     }
 
+    pub fn upsert_vessels(
+        &self,
+        decoder_id: &str,
+        dongle_id: &str,
+        vessels: &[Value],
+        retention_days: i64,
+    ) {
+        self.upsert_entities(
+            "vessel",
+            EntityKey::Mmsi,
+            decoder_id,
+            dongle_id,
+            vessels,
+            retention_days,
+            now_ms(),
+        );
+    }
+
+    #[cfg(test)]
     fn upsert_aircraft_at(
         &self,
         decoder_id: &str,
@@ -180,13 +214,34 @@ impl DecoderStore {
         retention_days: i64,
         now: i64,
     ) {
+        self.upsert_entities(
+            "aircraft",
+            EntityKey::Icao,
+            decoder_id,
+            dongle_id,
+            aircraft,
+            retention_days,
+            now,
+        );
+    }
+
+    fn upsert_entities(
+        &self,
+        kind: &str,
+        key_kind: EntityKey,
+        decoder_id: &str,
+        dongle_id: &str,
+        entities: &[Value],
+        retention_days: i64,
+        now: i64,
+    ) {
         let Some(conn) = &self.conn else {
             return;
         };
-        if aircraft.is_empty() {
+        if entities.is_empty() {
             return;
         }
-        let write_key = format!("{decoder_id}\u{1f}{dongle_id}");
+        let write_key = format!("{kind}\u{1f}{decoder_id}\u{1f}{dongle_id}");
         {
             let mut writes = self.entity_writes.lock();
             if let Some(last) = writes.get(&write_key) {
@@ -197,11 +252,20 @@ impl DecoderStore {
             writes.insert(write_key, now);
         }
         let conn = conn.lock();
-        for entry in aircraft {
-            let Some(icao) = entry.get("icao").and_then(Value::as_u64) else {
+        for entry in entities {
+            let key = match key_kind {
+                EntityKey::Icao => entry
+                    .get("icao")
+                    .and_then(Value::as_u64)
+                    .map(|v| format!("{:06X}", v & 0xff_ffff)),
+                EntityKey::Mmsi => entry
+                    .get("mmsi")
+                    .and_then(Value::as_u64)
+                    .map(|v| v.to_string()),
+            };
+            let Some(key) = key else {
                 continue;
             };
-            let key = format!("{:06X}", icao & 0xff_ffff);
             let first_seen = entry
                 .get("first_at")
                 .and_then(Value::as_i64)
@@ -222,12 +286,12 @@ impl DecoderStore {
             let result = conn.execute(
                 "INSERT INTO decoder_entities
                  (kind, entity_key, payload, first_seen_ms, last_seen_ms)
-                 VALUES ('aircraft', ?1, ?2, ?3, ?4)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(kind, entity_key) DO UPDATE SET
                      payload = excluded.payload,
                      first_seen_ms = MIN(decoder_entities.first_seen_ms, excluded.first_seen_ms),
                      last_seen_ms = excluded.last_seen_ms",
-                params![key, payload.to_string(), first_seen, last_seen],
+                params![kind, key, payload.to_string(), first_seen, last_seen],
             );
             if let Err(e) = result {
                 warn!(error = %e, "decoder entity upsert failed");
@@ -428,6 +492,51 @@ mod tests {
         assert_eq!(rows[0]["payload"]["dongleId"], "d1");
         assert_eq!(rows[0]["firstSeenMs"], 1_760_000_000_000i64);
         assert_eq!(rows[0]["lastSeenMs"], 1_760_000_002_000i64);
+    }
+
+    #[test]
+    fn vessels_upsert_by_mmsi() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DecoderStore::open(dir.path().join("decoders.sqlite"), 0);
+        let first = vec![json!({
+            "mmsi": 237123456,
+            "name": "",
+            "sog_kt": 8.4,
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_001,
+        })];
+        store.upsert_entities(
+            "vessel",
+            EntityKey::Mmsi,
+            "ais-162",
+            "d1",
+            &first,
+            0,
+            1_760_000_000_000,
+        );
+        let second = vec![json!({
+            "mmsi": 237123456,
+            "name": "AGIOS NIKOLAOS",
+            "lat": 37.95,
+            "lon": 23.64,
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_002,
+        })];
+        store.upsert_entities(
+            "vessel",
+            EntityKey::Mmsi,
+            "ais-162",
+            "d1",
+            &second,
+            0,
+            1_760_000_010_000,
+        );
+
+        let rows = store.entities("vessel", 10);
+        assert_eq!(rows.len(), 1, "one row per MMSI");
+        assert_eq!(rows[0]["key"], "237123456");
+        assert_eq!(rows[0]["payload"]["name"], "AGIOS NIKOLAOS");
+        assert_eq!(rows[0]["payload"]["dongleId"], "d1");
     }
 }
 

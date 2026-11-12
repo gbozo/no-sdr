@@ -164,6 +164,25 @@ dongles:
     preFilterNb: false
     preFilterNbThreshold: 0
     defaultTuneOffset: 0
+  - id: profile-ais
+    name: AIS (162.000 MHz)
+    centerFrequency: 162000000
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 25000
+    gain: 0.0
+    fftSize: 4096
+    fftFps: 10
+    defaultMode: nfm
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 0
+    description: Marine VHF AIS channels 161.975 and 162.025 MHz
+    dongleId: dongle-mooroo30
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
 bookmarks:
 - id: bm_mp7dfk7l_4qv3b
   name: Nostos
@@ -181,3 +200,9 @@ decoders:
     mode: acars
     frequencyHz: 131550000
     bandwidthHz: 6000
+  - id: ais-162
+    enabled: false
+    dongleId: dongle-mooroo30
+    mode: ais
+    frequencyHz: 162000000
+    bandwidthHz: 25000

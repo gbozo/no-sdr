@@ -65,6 +65,14 @@ decoders:
     mode: acars
     frequencyHz: 131550000
     bandwidthHz: 6000
+
+  # Marine AIS: both 25 kHz channels, dial between them at 162.000 MHz.
+  - id: ais-162
+    enabled: false
+    dongleId: dongle-mooroo30
+    mode: ais
+    frequencyHz: 162000000
+    bandwidthHz: 25000
 ```
 
 `frequencyHz` is absolute RF, not an offset from the current profile. The
@@ -293,6 +301,55 @@ sent once per accepted block. Message events carry the usual `text`/`rfHz`
 fields so they persist in `decoder_messages` like FT8 results. The client
 shows a rolling table with mode, address, label, block, text and CRC state.
 
+## AIS / Marine VHF
+
+AIS is two 25 kHz GMSK channels at **161.975** (AIS 1) and **162.025** MHz
+(AIS 2), 9600 baud. The dial belongs at **162.000 MHz** — neither channel
+transmits there, so on a zero-IF front end neither lands in the DC spike. The
+decoder is a raw-IQ lane like ADS-B (`sdroxide-ais`); it splits the window into
+whichever channels it reaches itself.
+
+Needs at least **48 kHz** of stream for one channel and **100 kHz** for both.
+Between those it runs on one channel and reports `degraded`: ships alternate,
+so every vessel is still seen at half its reporting rate. The controller emits
+a whole vessel table twice a second.
+
+The snapshot carries the table plus per-channel diagnostics:
+
+```json
+{
+  "decoderType": "ais",
+  "data": {
+    "vessels": [ { "mmsi": 237123456, "name": "AGIOS NIKOLAOS",
+                    "lat": 37.95, "lon": 23.64, "sog_kt": 8.4,
+                    "cog_deg": 214, "heading_deg": 210, "destination": "PIRAEUS",
+                    "kind": "ClassA", "nmea": "!AIVDM,...", "...": "..." } ],
+    "channels": [
+      { "freq_hz": 161975000, "label": "A", "live": true, "reason": null,
+        "bursts": 201, "messages": 88, "floor_dbfs": -71.2 },
+      { "freq_hz": 162025000, "label": "B", "live": true, "reason": null,
+        "bursts": 190, "messages": 81, "floor_dbfs": -70.8 }
+    ],
+    "unavailable": null,
+    "degraded": null,
+    "suggestCenterHz": null,
+    "windowCenterHz": 162000000,
+    "windowRateHz": 2400000,
+    "bursts": 391,
+    "messages": 169,
+    "badFcs": 3,
+    "unsupported": 1,
+    "samplesPerBit": 12.5,
+    "offsetHz": -120.0
+  }
+}
+```
+
+`mmsi` is the stable key. Snapshots upsert into `decoder_entities` with
+`kind = 'vessel'`; `GET /api/decoder/vessels` returns the persisted table.
+The client shows a vessel table plus a Leaflet map with name, type, speed,
+course/heading, destination/ETA, trail and a six-minute leader vector.
+
 ## Roadmap
 
 1. FT8/FT4 background decoders and result transport. *(implemented)*
@@ -301,10 +358,11 @@ shows a rolling table with mode, address, label, block, text and CRC state.
    *(implemented)*
 4. ACARS / ARINC 618 VHF datalink, foreground/background, message table.
    *(implemented)*
-5. VDL2, HFDL, AIS, APRS, ISM, AX.25 packet and NAVTEX: continuous or burst
+5. AIS marine VHF receiver, both channels, vessel table + map. *(implemented)*
+6. VDL2, HFDL, APRS, ISM, AX.25 packet and NAVTEX: continuous or burst
    receivers, each with its own channel kind.
-6. Weather fax, SSTV, Hellschreiber: image/audio decoders with dedicated panels.
-7. Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4,
+7. Weather fax, SSTV, Hellschreiber: image/audio decoders with dedicated panels.
+8. Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4,
    FreeDV RADE, JS8.
 
 The UI should be data-driven by decoder type; ADSB and AIS want maps, FT8 and
