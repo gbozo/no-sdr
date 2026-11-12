@@ -80,7 +80,8 @@ pub fn build_router(state: AppState) -> Router {
     #[cfg(feature = "decoders")]
     let api_router = api_router
         .route("/decoder/messages", get(super::decoders::messages))
-        .route("/decoder/stats", get(super::decoders::stats));
+        .route("/decoder/stats", get(super::decoders::stats))
+        .route("/decoder/aircraft", get(super::decoders::aircraft));
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

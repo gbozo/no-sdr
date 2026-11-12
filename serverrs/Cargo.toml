@@ -63,6 +63,8 @@ sdroxide-pluto = { git = "https://github.com/dividebysandwich/sdroxide", rev = "
 sdroxide-sdrplay = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 sdroxide-lime = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 sdroxide-fobos = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+# 1090 MHz ADS-B / Mode S decoder. Pure Rust, fed from the raw device stream.
+sdroxide-adsb = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 # WSJT-family background decoders (FT8/FT4 first). Pure Rust; GPL-3.0-only.
 mfsk-core = { version = "0.14.0", default-features = false, features = ["std", "ft8", "ft4", "parallel", "fft-rustfft"], optional = true }
 rayon = { version = "1", optional = true }
@@ -70,7 +72,7 @@ rusqlite = { version = "0.42", features = ["bundled"], optional = true }
 
 [features]
 # The default build enables every feature we ship.
-default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders"]
+default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb"]
 opus = ["dep:opus"]
 rtlsdr = ["dep:nusb"]
 hackrf = ["dep:sdroxide-hackrf", "dep:sdroxide-types"]
@@ -84,6 +86,9 @@ sdrplay = ["dep:sdroxide-sdrplay", "dep:sdroxide-types"]
 lime = ["dep:sdroxide-lime", "dep:sdroxide-types"]
 fobos = ["dep:sdroxide-fobos"]
 decoders = ["dep:mfsk-core", "dep:rayon", "dep:rusqlite"]
+# Raw-IQ ADS-B/Mode S decoding. Independent of the slotted mfsk decoders,
+# but hosted by the same worker/transport layer.
+adsb = ["decoders", "dep:sdroxide-adsb", "dep:sdroxide-types"]
 # Bias-T (GPIO 0) on the antenna port. Default on so local RTL-SDR builds can
 # power a mast LNA/photodiode; drop it with --no-default-features for a build
 # that must never put DC on the feedline.

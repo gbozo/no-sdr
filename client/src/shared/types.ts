@@ -153,6 +153,57 @@ export type DigitalMode =
   | 'ft2'
   | 'wspr';
 
+// ---- ADS-B ----
+
+/**
+ * One aircraft in an ADS-B snapshot. The 24-bit ICAO address is the stable
+ * key; the server re-sends the whole table about twice a second.
+ */
+export interface AdsbAircraft {
+  icao: number;
+  callsign: string;
+  category: string | null;
+  lat: number | null;
+  lon: number | null;
+  /** Past positions, oldest first: [lat, lon]. */
+  track: [number, number][];
+  altitude_ft: number | null;
+  gnss_altitude_ft: number | null;
+  ground_speed_kt: number | null;
+  /** Track over ground, degrees true. */
+  track_deg: number | null;
+  vertical_rate_fpm: number | null;
+  turn_rate_deg_s: number;
+  on_ground: boolean;
+  squawk: number | null;
+  emergency: string | null;
+  rssi_dbfs: number;
+  frames: number;
+  source: 'Squitter' | 'Reply';
+  first_at: number;
+  last_at: number;
+  last_pos_at: number;
+  raw_hex: string;
+}
+
+/** One `MSG_DECODER` payload with `decoderType: "adsb"`. */
+export interface AdsbSnapshot {
+  aircraft: AdsbAircraft[];
+  /** Why the decoder cannot run here at all, or null. */
+  unavailable: string | null;
+  /** Why the decoder is running at reduced sensitivity, or null. */
+  degraded: string | null;
+  suggestCenterHz: number | null;
+  windowCenterHz: number;
+  windowRateHz: number;
+  preambles: number;
+  frames: number;
+  /** Frames recovered by the one-bit CRC repair pass. */
+  repaired: number;
+  badCrc: number;
+  unmatched: number;
+}
+
 // ---- Client / Session ----
 
 export interface ClientSession {
@@ -258,29 +309,27 @@ export interface DecoderMessage {
   raw?: string;
 }
 
-export interface AdsbAircraft {
-  icao: string;
-  callsign?: string;
-  altitude?: number;
-  speed?: number;
-  heading?: number;
-  lat?: number;
-  lon?: number;
-  verticalRate?: number;
-  squawk?: string;
-  lastSeen: number;
+export interface AcarsMessage {
+  /** Mode character, as text. */
+  mode: string;
+  /** Aircraft address / registration. */
+  address: string;
+  ack: string;
+  label: string;
+  blockId: string;
+  text: string;
+  crcOk: boolean;
+  /** Unix seconds. */
+  at: number;
+  /** Client reception time (ms). */
+  receivedAt?: number;
 }
 
-export interface AcarsMessage {
-  timestamp: number;
-  frequency: number;
-  registration?: string;
-  flightId?: string;
-  label: string;
-  sublabel?: string;
-  text: string;
-  mode: string;
-  blockId?: string;
+export interface AcarsStatus {
+  frames: number;
+  bad: number;
+  /** Smoothed audio level, 0–1-ish. */
+  level: number;
 }
 
 // ---- Server Status ----

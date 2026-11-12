@@ -98,7 +98,10 @@ pub struct DecoderConfig {
     /// Dongle whose raw IQ stream feeds this decoder. Empty matches no dongle.
     #[serde(default)]
     pub dongle_id: String,
-    /// Decoder family: `ft8` or `ft4` for now.
+    /// Decoder family: `ft8`, `ft4`, `ft2` or `adsb`.
+    ///
+    /// FT8/FT4/FT2 are slotted audio modes (12 kHz channel). ADS-B is a raw-IQ
+    /// mode: it needs a window at 1090 MHz that is at least 2 MSPS wide.
     #[serde(default)]
     pub mode: String,
     /// Absolute RF frequency to decode.

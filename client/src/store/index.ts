@@ -17,6 +17,10 @@ import type {
   DongleProfile,
   PushDongleInfo,
   PushServerConfig,
+  AdsbAircraft,
+  AdsbSnapshot,
+  AcarsMessage,
+  AcarsStatus,
 } from '~/shared';
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
@@ -30,6 +34,8 @@ export interface Bookmark {
   hz: number;
   mode: DemodMode;
   bandwidth: number;
+  /** Foreground decoder to restore ('' / undefined = audio only). */
+  decoder?: string;
 }
 
 // ---- Admin bookmark type (server config, fetched from /api/bookmarks) ----
@@ -104,6 +110,17 @@ function createStore() {
   const [decoderMessages, setDecoderMessages] = createSignal<
     { decoderType: string; data: Record<string, unknown>; receivedAt: number }[]
   >([]);
+  /** Latest ADS-B aircraft table (replaced whole on each snapshot). */
+  const [adsbAircraft, setAdsbAircraft] = createSignal<AdsbAircraft[]>([]);
+  /** ADS-B receiver diagnostics; null until the first snapshot. */
+  const [adsbStatus, setAdsbStatus] = createSignal<Omit<AdsbSnapshot, 'aircraft'> | null>(null);
+  /** Latest ACARS messages (newest first) and receiver diagnostics. */
+  const [acarsMessages, setAcarsMessages] = createSignal<AcarsMessage[]>([]);
+  const [acarsStatus, setAcarsStatus] = createSignal<AcarsStatus>({
+    frames: 0,
+    bad: 0,
+    level: 0,
+  });
   /** Tuning step in Hz. 0 = auto (use bandwidth). User can override. */
   const [tuningStep, setTuningStep] = createSignal(0);
 
@@ -293,6 +310,59 @@ function createStore() {
       ].slice(0, 200));
     },
     clearDecoderMessages: () => setDecoderMessages([]),
+    adsbAircraft,
+    adsbStatus,
+    /** Fold one `decoderType: "adsb"` snapshot into reactive state. */
+    applyAdsbSnapshot: (data: unknown) => {
+      if (!data || typeof data !== 'object') return;
+      const snapshot = data as Partial<AdsbSnapshot>;
+      setAdsbAircraft(Array.isArray(snapshot.aircraft) ? snapshot.aircraft : []);
+      setAdsbStatus({
+        unavailable: snapshot.unavailable ?? null,
+        degraded: snapshot.degraded ?? null,
+        suggestCenterHz: snapshot.suggestCenterHz ?? null,
+        windowCenterHz: snapshot.windowCenterHz ?? 0,
+        windowRateHz: snapshot.windowRateHz ?? 0,
+        preambles: snapshot.preambles ?? 0,
+        frames: snapshot.frames ?? 0,
+        repaired: snapshot.repaired ?? 0,
+        badCrc: snapshot.badCrc ?? 0,
+        unmatched: snapshot.unmatched ?? 0,
+      });
+    },
+    clearAdsb: () => {
+      setAdsbAircraft([]);
+      setAdsbStatus(null);
+    },
+    acarsMessages,
+    acarsStatus,
+    /** Fold one `decoderType: "acars"` event (message or status) into state. */
+    applyAcarsEvent: (data: unknown) => {
+      if (!data || typeof data !== 'object') return;
+      const event = data as {
+        kind?: string;
+        frames?: number;
+        bad?: number;
+        level?: number;
+        acars?: AcarsMessage;
+      };
+      if (event.kind === 'status') {
+        setAcarsStatus({
+          frames: event.frames ?? 0,
+          bad: event.bad ?? 0,
+          level: event.level ?? 0,
+        });
+        return;
+      }
+      if (event.kind === 'message' && event.acars) {
+        const message = { ...event.acars, receivedAt: Date.now() };
+        setAcarsMessages((prev) => [message, ...prev].slice(0, 300));
+      }
+    },
+    clearAcars: () => {
+      setAcarsMessages([]);
+      setAcarsStatus({ frames: 0, bad: 0, level: 0 });
+    },
     tuningStep, setTuningStep,
     tunedFrequency,
 

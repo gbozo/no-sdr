@@ -1597,6 +1597,8 @@ export class SdrEngine {
     const next = mode.trim().toLowerCase();
     store.setDecoderMode(next);
     store.clearDecoderMessages();
+    store.clearAdsb();
+    store.clearAcars();
     this.send({ cmd: 'decoder', mode: next });
   }
 
@@ -2128,6 +2130,7 @@ export class SdrEngine {
       hz: store.tunedFrequency(),
       mode: store.mode(),
       bandwidth: store.bandwidth(),
+      decoder: store.decoderMode() || undefined,
     };
     store.setBookmarks([...store.bookmarks(), bm]);
   }
@@ -2144,14 +2147,19 @@ export class SdrEngine {
     }
   }
 
-  /** Recall a bookmark: tune, set mode and bandwidth. */
+  /** Recall a bookmark: tune, set mode/bandwidth and the foreground decoder. */
   async recallBookmark(bm: Bookmark): Promise<void> {
-    // Ensure audio is started (user gesture satisfies autoplay policy)
-    if (!this.audio.isInitialized) await this.initAudio();
+    const decoder = (bm.decoder ?? '').trim().toLowerCase();
+    // Audio worklets are only needed for audio modes; a decoder bookmark can
+    // be recalled without an audio gesture.
+    if (!decoder && !this.audio.isInitialized) await this.initAudio();
     // Set mode first (may change IQ rate)
     if (bm.mode !== store.mode()) this.setMode(bm.mode);
     if (bm.bandwidth !== store.bandwidth()) this.setBandwidth(bm.bandwidth);
     this.tune(bm.hz - store.centerFrequency());
+    // Restore the decoder last: it is built from the just-applied tune offset,
+    // and an empty value turns any currently active decoder off.
+    if (decoder !== store.decoderMode()) this.setDecoder(decoder);
   }
 
   deleteBookmark(id: string): void {

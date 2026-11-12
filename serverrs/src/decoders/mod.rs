@@ -28,6 +28,10 @@ use crate::demod::{Demodulator, SsbDemod, SsbMode};
 use crate::dsp::{IqExtractor, IqExtractorConfig};
 use crate::ws::{pack_decoder_message, WsManager};
 
+mod acars;
+mod acars_channel;
+#[cfg(feature = "adsb")]
+mod adsb;
 mod ft2;
 pub mod store;
 
@@ -161,7 +165,7 @@ struct DecodeJob {
     period: i64,
 }
 
-pub(crate) struct Channel {
+pub(crate) struct MfskChannel {
     cfg: DecoderConfig,
     extractor: IqExtractor,
     demod: SsbDemod,
@@ -180,14 +184,14 @@ pub(crate) struct Channel {
 
 /// Small linear resampler for the extractor's actual output rate, which is
 /// `input_rate / integer_factor` and therefore not always exactly 12 kHz.
-struct LinearResampler {
+pub(crate) struct LinearResampler {
     step: f64,
     pos: f64,
     previous: Option<f32>,
 }
 
 impl LinearResampler {
-    fn new(source_rate: f64, target_rate: f64) -> Self {
+    pub(crate) fn new(source_rate: f64, target_rate: f64) -> Self {
         Self {
             step: target_rate / source_rate,
             pos: 0.0,
@@ -195,7 +199,7 @@ impl LinearResampler {
         }
     }
 
-    fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
+    pub(crate) fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
         if (self.step - 1.0).abs() < 1e-9 {
             out.extend_from_slice(input);
             self.previous = input.last().copied();
@@ -226,8 +230,21 @@ fn is_ft2(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("ft2")
 }
 
+fn is_acars(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("acars")
+}
+
+#[cfg(feature = "adsb")]
+fn is_adsb(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("adsb")
+}
+
 fn supported_mode(mode: &str) -> bool {
-    is_ft2(mode) || mfsk_mode(mode).is_some()
+    #[cfg(feature = "adsb")]
+    if is_adsb(mode) {
+        return true;
+    }
+    is_acars(mode) || is_ft2(mode) || mfsk_mode(mode).is_some()
 }
 
 fn now_ns() -> i64 {
@@ -237,7 +254,7 @@ fn now_ns() -> i64 {
         .unwrap_or(0)
 }
 
-impl Channel {
+impl MfskChannel {
     pub(crate) fn take_results(&self) -> Vec<serde_json::Value> {
         std::mem::take(&mut *self.results.lock())
     }
@@ -268,11 +285,72 @@ impl Channel {
     }
 }
 
+/// One configured decoder channel.
+///
+/// Slotted WSJT modes take the audio path (extractor → USB demod → 12 kHz);
+/// ADS-B takes the raw I/Q path and must never be routed through the audio
+/// channeliser.
+pub(crate) enum Channel {
+    Mfsk(Box<MfskChannel>),
+    Acars(acars_channel::AcarsChannel),
+    #[cfg(feature = "adsb")]
+    Adsb(adsb::AdsbChannel),
+}
+
+impl Channel {
+    pub(crate) fn config(&self) -> &DecoderConfig {
+        match self {
+            Channel::Mfsk(channel) => &channel.cfg,
+            Channel::Acars(channel) => &channel.cfg,
+            #[cfg(feature = "adsb")]
+            Channel::Adsb(channel) => &channel.cfg,
+        }
+    }
+
+    pub(crate) fn take_results(&mut self) -> Vec<serde_json::Value> {
+        match self {
+            Channel::Mfsk(channel) => channel.take_results(),
+            Channel::Acars(channel) => channel.take_results(),
+            #[cfg(feature = "adsb")]
+            Channel::Adsb(channel) => channel.take_results(),
+        }
+    }
+
+    pub(crate) fn process_chunk(&mut self, chunk: &[u8], now: i64) {
+        match self {
+            Channel::Mfsk(channel) => channel.process_chunk(chunk, now),
+            Channel::Acars(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "adsb")]
+            Channel::Adsb(channel) => channel.process_chunk(chunk, now),
+        }
+    }
+}
+
 pub(crate) fn build_channel(
     cfg: &DecoderConfig,
     center_hz: f64,
     sample_rate: u32,
 ) -> Result<Channel, String> {
+    #[cfg(feature = "adsb")]
+    if is_adsb(&cfg.mode) {
+        return Ok(Channel::Adsb(adsb::AdsbChannel::new(
+            cfg,
+            center_hz,
+            sample_rate as f64,
+        )));
+    }
+    if is_acars(&cfg.mode) {
+        return acars_channel::AcarsChannel::new(cfg, center_hz, sample_rate)
+            .map(Channel::Acars);
+    }
+    build_mfsk_channel(cfg, center_hz, sample_rate).map(|channel| Channel::Mfsk(Box::new(channel)))
+}
+
+fn build_mfsk_channel(
+    cfg: &DecoderConfig,
+    center_hz: f64,
+    sample_rate: u32,
+) -> Result<MfskChannel, String> {
     let ft2 = is_ft2(&cfg.mode);
     let mode = if ft2 {
         None
@@ -331,7 +409,7 @@ pub(crate) fn build_channel(
         .spawn(move || decode_worker(decoder, worker_cfg, worker_results, decode_rx))
         .map_err(|e| format!("decoder slot worker: {e}"))?;
 
-    Ok(Channel {
+    Ok(MfskChannel {
         cfg: cfg.clone(),
         extractor,
         demod,
@@ -398,7 +476,7 @@ fn decode_worker(
     }
 }
 
-fn append_audio(channel: &mut Channel, audio: &[f32], now: i64) {
+fn append_audio(channel: &mut MfskChannel, audio: &[f32], now: i64) {
     let slot_ns = (channel.slot_len as i64 * 1_000_000_000) / AUDIO_RATE as i64;
     let slot = now / slot_ns.max(1);
     if channel.last_slot == 0 {
@@ -441,6 +519,14 @@ fn persist_data(
     cfg: &DecoderConfig,
     data: &serde_json::Value,
 ) {
+    // ADS-B snapshots are aircraft tables, not messages: keep one upserted
+    // entity per ICAO instead of thousands of rows a day.
+    if let Some(aircraft) = data.get("aircraft").and_then(|v| v.as_array()) {
+        store
+            .store
+            .upsert_aircraft(&cfg.id, dongle_id, aircraft, store.retention_days);
+        return;
+    }
     let text = data
         .get("text")
         .and_then(|v| v.as_str())
@@ -520,8 +606,11 @@ fn run_worker(
         for channel in &mut channels {
             channel.process_chunk(&input.chunk, now);
             for data in channel.take_results() {
-                persist_data(&store, &dongle_id, &channel.cfg, &data);
-                ws.broadcast(&dongle_id, pack_decoder_message(&channel.cfg.mode, data));
+                persist_data(&store, &dongle_id, channel.config(), &data);
+                ws.broadcast(
+                    &dongle_id,
+                    pack_decoder_message(&channel.config().mode, data),
+                );
             }
         }
     }
@@ -541,6 +630,50 @@ mod tests {
         assert!(supported_mode("ft2"));
         assert_eq!(mfsk_mode("js8"), None);
         assert!(!supported_mode("js8"));
+        assert!(supported_mode("acars"));
+        #[cfg(feature = "adsb")]
+        assert!(supported_mode("adsb"));
+    }
+
+    #[test]
+    fn build_channel_dispatches_acars_to_the_am_channel() {
+        let acars = DecoderConfig {
+            id: "acars-131".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "acars".to_string(),
+            frequency_hz: 131_550_000,
+            bandwidth_hz: 6_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&acars, 131_550_000.0, 2_400_000).expect("acars channel");
+        assert!(matches!(channel, Channel::Acars(_)));
+    }
+
+    #[cfg(feature = "adsb")]
+    #[test]
+    fn build_channel_dispatches_adsb_to_the_raw_iq_path() {
+        let adsb = DecoderConfig {
+            id: "adsb-local".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "adsb".to_string(),
+            frequency_hz: 1_090_000_000,
+            bandwidth_hz: 2_400_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&adsb, 1_090_000_000.0, 2_400_000).expect("adsb channel");
+        assert!(matches!(channel, Channel::Adsb(_)));
+        drop(channel);
+
+        let ft8 = DecoderConfig {
+            mode: "ft8".to_string(),
+            frequency_hz: 14_074_000,
+            bandwidth_hz: 3_000,
+            ..adsb
+        };
+        let channel = build_channel(&ft8, 14_074_000.0, 2_400_000).expect("ft8 channel");
+        assert!(matches!(channel, Channel::Mfsk(_)));
     }
 
     #[test]

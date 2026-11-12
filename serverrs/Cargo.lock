@@ -1646,6 +1646,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "sdroxide-adsb"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "num-complex",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "tracing",
+]
+
+[[package]]
 name = "sdroxide-airspy"
 version = "1.7.2"
 source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
@@ -1948,6 +1960,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "rustfft",
+ "sdroxide-adsb",
  "sdroxide-airspy",
  "sdroxide-airspyhf",
  "sdroxide-elad",

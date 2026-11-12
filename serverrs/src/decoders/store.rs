@@ -4,6 +4,7 @@
 //! read API: writes are small, occasional and ordered. WAL keeps readers from
 //! blocking a slot's insert.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,7 +33,15 @@ pub struct DecoderRecord<'a> {
 pub struct DecoderStore {
     conn: Option<Mutex<Connection>>,
     path: PathBuf,
+    /// Last entity-table write per decoder/dongle. Snapshots arrive twice a
+    /// second; persisting every one would turn an aircraft table into a
+    /// thousand-row-per-second write storm for no extra information.
+    entity_writes: Mutex<HashMap<String, i64>>,
 }
+
+/// Minimum interval between entity-table writes for one decoder. Last-seen
+/// timestamps are minute-scale data, so five seconds is plenty.
+const ENTITY_WRITE_INTERVAL_MS: i64 = 5_000;
 
 impl DecoderStore {
     pub fn open(path: impl AsRef<Path>, retention_days: i64) -> Arc<Self> {
@@ -61,7 +70,11 @@ impl DecoderStore {
                 );
             }
         }
-        Arc::new(Self { conn, path })
+        Arc::new(Self {
+            conn,
+            path,
+            entity_writes: Mutex::new(HashMap::new()),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -144,6 +157,120 @@ impl DecoderStore {
         out
     }
 
+    /// Upsert one row per aircraft, keyed by its ICAO address.
+    ///
+    /// ADS-B re-sends the whole table twice a second: writing that into
+    /// `decoder_messages` would bury real decodes in position spam, so the
+    /// table is kept as keyed entities instead and only changes are written.
+    pub fn upsert_aircraft(
+        &self,
+        decoder_id: &str,
+        dongle_id: &str,
+        aircraft: &[Value],
+        retention_days: i64,
+    ) {
+        self.upsert_aircraft_at(decoder_id, dongle_id, aircraft, retention_days, now_ms());
+    }
+
+    fn upsert_aircraft_at(
+        &self,
+        decoder_id: &str,
+        dongle_id: &str,
+        aircraft: &[Value],
+        retention_days: i64,
+        now: i64,
+    ) {
+        let Some(conn) = &self.conn else {
+            return;
+        };
+        if aircraft.is_empty() {
+            return;
+        }
+        let write_key = format!("{decoder_id}\u{1f}{dongle_id}");
+        {
+            let mut writes = self.entity_writes.lock();
+            if let Some(last) = writes.get(&write_key) {
+                if now - *last < ENTITY_WRITE_INTERVAL_MS {
+                    return;
+                }
+            }
+            writes.insert(write_key, now);
+        }
+        let conn = conn.lock();
+        for entry in aircraft {
+            let Some(icao) = entry.get("icao").and_then(Value::as_u64) else {
+                continue;
+            };
+            let key = format!("{:06X}", icao & 0xff_ffff);
+            let first_seen = entry
+                .get("first_at")
+                .and_then(Value::as_i64)
+                .filter(|v| *v > 0)
+                .map(|s| s.saturating_mul(1000))
+                .unwrap_or(now);
+            let last_seen = entry
+                .get("last_at")
+                .and_then(Value::as_i64)
+                .filter(|v| *v > 0)
+                .map(|s| s.saturating_mul(1000))
+                .unwrap_or(now);
+            let mut payload = entry.clone();
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("decoderId".to_string(), json!(decoder_id));
+                object.insert("dongleId".to_string(), json!(dongle_id));
+            }
+            let result = conn.execute(
+                "INSERT INTO decoder_entities
+                 (kind, entity_key, payload, first_seen_ms, last_seen_ms)
+                 VALUES ('aircraft', ?1, ?2, ?3, ?4)
+                 ON CONFLICT(kind, entity_key) DO UPDATE SET
+                     payload = excluded.payload,
+                     first_seen_ms = MIN(decoder_entities.first_seen_ms, excluded.first_seen_ms),
+                     last_seen_ms = excluded.last_seen_ms",
+                params![key, payload.to_string(), first_seen, last_seen],
+            );
+            if let Err(e) = result {
+                warn!(error = %e, "decoder entity upsert failed");
+            }
+        }
+        if retention_days > 0 {
+            let cutoff = now - retention_days.saturating_mul(86_400_000);
+            let _ = conn.execute(
+                "DELETE FROM decoder_entities WHERE last_seen_ms < ?1",
+                params![cutoff],
+            );
+        }
+    }
+
+    /// Read keyed entities of one kind, newest first.
+    pub fn entities(&self, kind: &str, limit: usize) -> Vec<Value> {
+        let Some(conn) = &self.conn else {
+            return Vec::new();
+        };
+        let conn = conn.lock();
+        let limit = limit.clamp(1, 1000) as i64;
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT kind, entity_key, payload, first_seen_ms, last_seen_ms
+             FROM decoder_entities
+             WHERE kind = ?1
+             ORDER BY last_seen_ms DESC LIMIT ?2",
+        ) else {
+            return Vec::new();
+        };
+        let rows = stmt.query_map(params![kind, limit], |row| {
+            let payload: String = row.get(2)?;
+            Ok(json!({
+                "kind": row.get::<_, String>(0)?,
+                "key": row.get::<_, String>(1)?,
+                "firstSeenMs": row.get::<_, i64>(3)?,
+                "lastSeenMs": row.get::<_, i64>(4)?,
+                "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null),
+            }))
+        });
+        rows.map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     pub fn stats(&self) -> Value {
         let Some(conn) = &self.conn else {
             return json!({"enabled": false, "path": self.path});
@@ -157,7 +284,20 @@ impl DecoderStore {
             .ok()
             .flatten()
             .unwrap_or(0);
-        json!({"enabled": true, "path": self.path, "messages": count})
+        let entities: i64 = conn
+            .query_row("SELECT COUNT(*) FROM decoder_entities", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        json!({
+            "enabled": true,
+            "path": self.path,
+            "messages": count,
+            "entities": entities,
+        })
     }
 }
 
@@ -257,6 +397,37 @@ mod tests {
         assert_eq!(rows[0]["text"], "CQ N0CALL");
         assert_eq!(rows[0]["mode"], "ft8");
         assert_eq!(rows[0]["frequencyHz"], 14_074_195.0);
+    }
+
+    #[test]
+    fn aircraft_entities_upsert_by_icao() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DecoderStore::open(dir.path().join("decoders.sqlite"), 0);
+        let first = vec![json!({
+            "icao": 0x40621d,
+            "callsign": "",
+            "altitude_ft": 38000,
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_001,
+        })];
+        store.upsert_aircraft_at("adsb-local", "d1", &first, 0, 1_760_000_000_000);
+        let second = vec![json!({
+            "icao": 0x40621d,
+            "callsign": "BAW123",
+            "lat": 51.5,
+            "lon": -0.1,
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_002,
+        })];
+        store.upsert_aircraft_at("adsb-local", "d1", &second, 0, 1_760_000_010_000);
+
+        let rows = store.entities("aircraft", 10);
+        assert_eq!(rows.len(), 1, "one row per ICAO");
+        assert_eq!(rows[0]["key"], "40621D");
+        assert_eq!(rows[0]["payload"]["callsign"], "BAW123");
+        assert_eq!(rows[0]["payload"]["dongleId"], "d1");
+        assert_eq!(rows[0]["firstSeenMs"], 1_760_000_000_000i64);
+        assert_eq!(rows[0]["lastSeenMs"], 1_760_000_002_000i64);
     }
 }
 

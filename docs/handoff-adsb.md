@@ -11,6 +11,23 @@ Implement **ADS-B / Mode S** as the next digital decoder, with:
 
 This is a full implementation task, not just a UI mock-up.
 
+## Status
+
+Implemented in this branch (uncommitted):
+
+- Backend: `adsb` Cargo feature, raw-IQ `AdsbChannel`
+  (`serverrs/src/decoders/adsb.rs`), dispatch through a `Channel` enum,
+  foreground/background wiring, aircraft entity upserts and
+  `GET /api/decoder/aircraft`.
+- Client: `adsbAircraft`/`adsbStatus` store state, `AdsbDisplay` table and
+  `AdsbMap` Leaflet/OSM view, ADS-B in both decoder selectors.
+- Tests: synthetic DF17 demod round-trip, unavailable/degraded windows,
+  snapshot shape, entity upsert; `cargo test`, typecheck and client build pass.
+- Not yet validated against a real 1090 MHz dongle or a live sky.
+
+See `docs/decoders.md#ads-b--mode-s` for the current behaviour and message
+shape.
+
 ## Repository state
 
 - Repo: `/home/opencode/src/no-sdr`
@@ -364,17 +381,18 @@ Docs:
 
 ### Acceptance criteria
 
-- [ ] ADS-B is selectable as foreground and configurable as background.
-- [ ] Aircraft list is on the left.
-- [ ] OpenStreetMap is on the right with attribution.
-- [ ] Markers update without rebuilding the map.
-- [ ] Row selection highlights the aircraft and pans the map.
-- [ ] Track history and leader vector render where available.
-- [ ] Unsupported receiver configurations explain why.
-- [ ] ADS-B snapshots are persisted as entities, not spammed into message
+- [x] ADS-B is selectable as foreground and configurable as background.
+- [x] Aircraft list is on the left.
+- [x] OpenStreetMap is on the right with attribution.
+- [x] Markers update without rebuilding the map.
+- [x] Row selection highlights the aircraft and pans the map.
+- [x] Track history and leader vector render where available.
+- [x] Unsupported receiver configurations explain why.
+- [x] ADS-B snapshots are persisted as entities, not spammed into message
       history.
-- [ ] FT8/FT4/FT2 continue to pass and render correctly.
-- [ ] Typecheck, client build and Rust tests pass.
+- [x] FT8/FT4/FT2 continue to pass and render correctly.
+- [x] Typecheck, client build and Rust tests pass.
+- [ ] Hardware check at 1090 MHz / 2.4 MSPS with a live aircraft table.
 
 ## Constraints
 

@@ -52,13 +52,13 @@ impl Default for FftProcessorConfig {
 
 pub struct FftProcessor {
     fft_size: usize,
-    #[allow(dead_code)]
     sample_rate: i32,
     averaging: f32,
     window_name: String,
 
     fft: Fft,
     window: Vec<f32>,
+    window_sum: f32,
     norm_db: f32,
 
     complex_buf: Vec<Complex32>,
@@ -80,7 +80,21 @@ pub struct FftProcessor {
     last_emit: Option<Instant>,
     pending_buf: Vec<f32>,
     pending_n: u32,
+    /// Blocks skipped between FFTs once the output rate is capped. A waterfall
+    /// at 8–30 fps does not need a transform for every 8192-sample block the
+    /// dongle delivers; without this the processor spends a full FFT ~293
+    /// times a second to throw most of the results away.
+    blocks_per_fft: f64,
+    block_accum: f64,
 }
+
+/// How many transforms to average into one emitted frame when rate-capped.
+///
+/// The previous code averaged *every* block between two emit deadlines (often
+/// 30+ frames), which looked smooth but spent a full FFT on all of them. At
+/// 16 frames the waterfall keeps ~12 dB of noise reduction while the FFT rate
+/// drops by roughly an order of magnitude.
+const FFT_BURST_FRAMES: f64 = 16.0;
 
 impl FftProcessor {
     pub fn new(cfg: FftProcessorConfig) -> Result<Self> {
@@ -95,6 +109,7 @@ impl FftProcessor {
         let averaging = cfg.averaging.clamp(0.0, 1.0);
         let fft = Fft::new(cfg.fft_size)?;
         let window = new_window(&window_name, cfg.fft_size)?;
+        let window_sum: f32 = window.iter().sum();
 
         let mut p = Self {
             fft_size: cfg.fft_size,
@@ -103,6 +118,7 @@ impl FftProcessor {
             window_name,
             fft,
             window,
+            window_sum,
             norm_db: 0.0,
             complex_buf: vec![Complex32::default(); cfg.fft_size],
             mag_buf: vec![0.0; cfg.fft_size],
@@ -113,13 +129,15 @@ impl FftProcessor {
             tap_history: Vec::new(),
             tap_next: 0,
             tap_filled: false,
-            ring: vec![0u8; cfg.fft_size * 2 * 4],
+            ring: Vec::with_capacity(cfg.fft_size * 2 * 4),
             ring_fill: 0,
             samples_need: cfg.fft_size * 2,
             min_interval: Duration::ZERO,
             last_emit: None,
             pending_buf: vec![0.0; cfg.fft_size],
             pending_n: 0,
+            blocks_per_fft: 1.0,
+            block_accum: 0.0,
         };
         p.norm_db = p.compute_normalization();
 
@@ -136,7 +154,15 @@ impl FftProcessor {
 
         if cfg.target_fps > 0 {
             p.min_interval = Duration::from_secs_f64(1.0 / cfg.target_fps as f64);
+            // Blocks delivered per emit interval, divided by the number of
+            // transforms we are willing to average. At least one block is
+            // transformed per call even for very small FFTs.
+            if cfg.sample_rate > 0 {
+                let per_emit = cfg.sample_rate as f64 / cfg.target_fps as f64 / cfg.fft_size as f64;
+                p.blocks_per_fft = (per_emit / FFT_BURST_FRAMES).max(1.0);
+            }
         }
+        p.block_accum = p.blocks_per_fft;
         Ok(p)
     }
 
@@ -150,6 +176,18 @@ impl FftProcessor {
         let mut consumed = 0usize;
 
         while self.ring_fill - consumed >= self.samples_need {
+            // Rate cap: most blocks exist only to keep the ring fed. Spend a
+            // transform on one in every `blocks_per_fft` and let the existing
+            // pending average smooth the emitted frame.
+            if !self.min_interval.is_zero() && self.blocks_per_fft > 1.0 {
+                self.block_accum += 1.0;
+                if self.block_accum < self.blocks_per_fft {
+                    consumed += self.samples_need;
+                    continue;
+                }
+                self.block_accum -= self.blocks_per_fft;
+            }
+
             self.process_one_frame(consumed);
             consumed += self.samples_need;
 
@@ -191,10 +229,28 @@ impl FftProcessor {
 
     fn process_one_frame(&mut self, offset: usize) {
         let fft_size = self.fft_size;
+
+        // Remove the tuner's zero-IF DC/LO spike before windowing. A plain
+        // sample mean is not enough: after applying the window a constant
+        // offset still leaves `sum(x*w) - mean*sum(w)`, which is exactly the
+        // broad centre spike users see. Use the window-weighted mean so the
+        // transformed DC component is zero.
+        let mut weighted_re = 0.0f64;
+        let mut weighted_im = 0.0f64;
+        for i in 0..fft_size {
+            let w = self.window[i] as f64;
+            weighted_re += (self.ring[offset + i * 2] as f64 - 127.5) * (INV_U8_SCALE as f64) * w;
+            weighted_im +=
+                (self.ring[offset + i * 2 + 1] as f64 - 127.5) * (INV_U8_SCALE as f64) * w;
+        }
+        let inv_window_sum = 1.0 / self.window_sum as f64;
+        let dc_re = (weighted_re * inv_window_sum) as f32;
+        let dc_im = (weighted_im * inv_window_sum) as f32;
+
         for i in 0..fft_size {
             let w = self.window[i];
-            let re = (self.ring[offset + i * 2] as f32 - 127.5) * INV_U8_SCALE * w;
-            let im = (self.ring[offset + i * 2 + 1] as f32 - 127.5) * INV_U8_SCALE * w;
+            let re = ((self.ring[offset + i * 2] as f32 - 127.5) * INV_U8_SCALE - dc_re) * w;
+            let im = ((self.ring[offset + i * 2 + 1] as f32 - 127.5) * INV_U8_SCALE - dc_im) * w;
             self.complex_buf[i] = Complex32::new(re, im);
         }
 
@@ -265,18 +321,29 @@ impl FftProcessor {
         }
         let fft = Fft::new(new_size)?;
         let window = new_window(&self.window_name, new_size)?;
+        let window_sum: f32 = window.iter().sum();
 
         self.fft_size = new_size;
         self.fft = fft;
         self.window = window;
+        self.window_sum = window_sum;
         self.samples_need = new_size * 2;
         self.norm_db = self.compute_normalization();
+        self.blocks_per_fft = if self.min_interval.is_zero() {
+            1.0
+        } else {
+            (self.sample_rate as f64 * self.min_interval.as_secs_f64()
+                / new_size as f64
+                / FFT_BURST_FRAMES)
+                .max(1.0)
+        };
+        self.block_accum = 0.0;
 
         self.complex_buf = vec![Complex32::default(); new_size];
         self.mag_buf = vec![0.0; new_size];
         self.pending_buf = vec![0.0; new_size];
         self.pending_n = 0;
-        self.ring = vec![0u8; new_size * 2 * 4];
+        self.ring = Vec::with_capacity(new_size * 2 * 4);
         self.ring_fill = 0;
 
         if self.tap_count > 1 {
@@ -300,6 +367,7 @@ impl FftProcessor {
         self.ring.clear();
         self.pending_n = 0;
         self.last_emit = None;
+        self.block_accum = self.blocks_per_fft;
         self.avg_init = false;
         self.avg_buf.fill(0.0);
         if self.tap_count > 1 {
@@ -378,6 +446,65 @@ mod tests {
         let mut p = FftProcessor::new(cfg).unwrap();
         let frames = p.process_iq_data(&vec![128u8; 64 * 2 * 5]);
         assert_eq!(frames.len(), 5);
+    }
+
+    /// A constant DC offset creates a broad spike at the centre of the
+    /// waterfall (the window's main lobe). It must be removed without
+    /// notching a real tone elsewhere in the passband.
+    #[test]
+    fn dc_spike_is_removed_without_notching_a_tone() {
+        let cfg = FftProcessorConfig {
+            fft_size: 256,
+            sample_rate: 2_400_000,
+            target_fps: 0,
+            averaging: 0.0,
+            ..Default::default()
+        };
+        let mut p = FftProcessor::new(cfg).unwrap();
+        let mut data = Vec::with_capacity(256 * 2);
+        for i in 0..256 {
+            let phase = std::f64::consts::TAU * 32.0 * i as f64 / 256.0;
+            let re = 127.5 + 60.0 + 50.0 * phase.cos();
+            let im = 127.5 + 60.0 + 50.0 * phase.sin();
+            data.push(re.clamp(0.0, 255.0).round() as u8);
+            data.push(im.clamp(0.0, 255.0).round() as u8);
+        }
+        let frames = p.process_iq_data(&data);
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        let centre = frame[128];
+        let tone = frame[128 + 32];
+        assert!(
+            tone > centre + 20.0,
+            "tone {tone:.1} dB, centre {centre:.1} dB"
+        );
+    }
+
+    #[test]
+    fn rate_cap_reduces_transforms_per_emitted_frame() {
+        let cfg = FftProcessorConfig {
+            fft_size: 8192,
+            sample_rate: 2_400_000,
+            target_fps: 8,
+            averaging: 0.0,
+            ..Default::default()
+        };
+        let p = FftProcessor::new(cfg.clone()).unwrap();
+        // 2.4 MSPS / 8 fps / 8192 bins = 36.6 blocks per emitted frame. With
+        // a 16-frame average that is one transform every ~2.3 blocks, not one
+        // transform per block (293/s) for an 8 fps output.
+        assert!(
+            p.blocks_per_fft > 2.0 && p.blocks_per_fft < 3.0,
+            "blocks_per_fft = {}",
+            p.blocks_per_fft
+        );
+
+        let uncapped = FftProcessor::new(FftProcessorConfig {
+            target_fps: 0,
+            ..cfg
+        })
+        .unwrap();
+        assert_eq!(uncapped.blocks_per_fft, 1.0);
     }
 
     #[test]

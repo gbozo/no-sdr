@@ -40,13 +40,14 @@ See `docs/decoders.md` for the current architecture and config format.
 
 - [ ] **VDL2** — 136.9 MHz, D8PSK 10500 baud, 25 kHz channel; use
       `sdroxide-vdl2`; table of messages/stations.
-- [ ] **ACARS** — 131.55/131.725 MHz AM-MSK; use the ACARS decoder from
-      `sdroxide-digi`; table (flight, registration, label, text, time).
+- [x] **ACARS** — 131.55/131.725 MHz AM-MSK; ACARS receiver adapted from
+      `sdroxide-digi`, foreground/background; table (mode, address, label,
+      block, text, CRC, time).
 - [ ] **HFDL** — HF uplink/downlink; use `sdroxide-hfdl`; table of frames and
       stations.
-- [ ] **ADS-B** — 1090 MHz raw IQ, 2 MSPS; use `sdroxide-adsb`; aircraft table
-      plus geographic map with callsign, altitude, speed, heading, squawk and
-      last-seen.
+- [x] **ADS-B** — 1090 MHz raw IQ, 2 MSPS; `sdroxide-adsb`; aircraft table
+      plus OpenStreetMap with callsign, altitude, speed, heading, squawk and
+      last-seen. Foreground and background; snapshots upsert as entities.
 - [ ] **AIS** — 161.975/162.025 MHz, 25 kHz; use `sdroxide-ais`; vessel table
       plus map (MMSI, name, position, course, speed).
 - [ ] **APRS** — 144.39 MHz (regional variants), AX.25 1200/9600 baud; use
@@ -101,16 +102,16 @@ See `docs/decoders.md` for the current architecture and config format.
 - [ ] NAVTEX / PSK31 / RTTY / Olivia / THOR / FSQ / Hell: text log.
 - [ ] SSTV / WEFAX: image panel with received-image history.
 - [ ] RADE: audio/status panel.
-- [ ] Entity selection: clicking a row highlights the map marker and opens
-      details/history.
-- [ ] Decoder-specific secondary pane replaces the zoom waterfall for map and
-      image modes.
+- [x] Entity selection: clicking a row highlights the map marker and opens
+      details/history (ADS-B).
+- [x] Decoder-specific secondary pane replaces the zoom waterfall for map and
+      image modes (ADS-B uses the table + OSM map).
 
 ## Persistence and APIs
 
-- [ ] Store typed entities in `decoder_entities` (aircraft, vessels, APRS
-      stations, message senders) with upsert and last-seen indexes.
-- [ ] Add entity APIs, e.g. `/api/decoder/aircraft`, `/api/decoder/vessels`.
+- [x] Store typed entities in `decoder_entities` for aircraft with upsert and
+      first/last-seen indexes. Vessels, APRS stations and message senders remain.
+- [x] Add `/api/decoder/aircraft`; `/api/decoder/vessels` remains.
 - [ ] Add filters by decoder id, dongle, mode and time range to
       `/api/decoder/messages`.
 - [ ] Add DB schema version/migrations and safe retention/compaction.

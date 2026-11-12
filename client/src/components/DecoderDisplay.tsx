@@ -8,11 +8,15 @@
 import { Component, For, Show, createSignal, createEffect, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
+import AdsbDisplay from './AdsbDisplay.js';
+import AcarsDisplay from './AcarsDisplay.js';
 
 const DECODERS = [
   { id: 'ft8', label: 'FT8' },
   { id: 'ft4', label: 'FT4' },
   { id: 'ft2', label: 'FT2' },
+  { id: 'adsb', label: 'ADS-B' },
+  { id: 'acars', label: 'ACARS' },
 ] as const;
 
 const MAX_ROWS = 160;
@@ -32,6 +36,9 @@ const DecoderDisplay: Component = () => {
   let lastRate = 0;
   const [hasSignal, setHasSignal] = createSignal(false);
   const [frameCount, setFrameCount] = createSignal(0);
+
+  const isAdsb = () => store.decoderMode() === 'adsb';
+  const isAcars = () => store.decoderMode() === 'acars';
 
   const clearZoom = () => {
     history = [];
@@ -116,6 +123,7 @@ const DecoderDisplay: Component = () => {
 
   onMount(() => {
     const poll = window.setInterval(() => {
+      if (isAdsb() || isAcars()) return;
       const frame = engine.getLatestFftFrame();
       if (!frame || frame === lastFrame) return;
       lastFrame = frame;
@@ -159,6 +167,7 @@ const DecoderDisplay: Component = () => {
         </Show>
       </div>
 
+      <Show when={!isAdsb() && !isAcars()}>
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Decode table */}
         <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
@@ -217,6 +226,13 @@ const DecoderDisplay: Component = () => {
           </Show>
         </div>
       </div>
+      </Show>
+      <Show when={isAdsb()}>
+        <AdsbDisplay />
+      </Show>
+      <Show when={isAcars()}>
+        <AcarsDisplay />
+      </Show>
     </div>
   );
 };

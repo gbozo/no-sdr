@@ -29,3 +29,14 @@ pub async fn messages(
 pub async fn stats(State(state): State<AppState>) -> Json<Value> {
     Json(state.decoder_store.stats())
 }
+
+pub async fn aircraft(
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(500);
+    Json(Value::Array(state.decoder_store.entities("aircraft", limit)))
+}

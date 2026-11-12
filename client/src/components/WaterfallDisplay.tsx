@@ -1020,7 +1020,7 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
         .map(b => ({ hz: b.frequency, label: b.name, mode: b.mode, bandwidth: b.bandwidth ?? 0, source: 'admin' as const, implemented: b.implemented !== false })),
       ...store.bookmarks()
         .filter(b => b.hz >= loHz && b.hz <= hiHz)
-        .map(b => ({ hz: b.hz, label: b.label, mode: b.mode, bandwidth: b.bandwidth, source: 'user' as const, implemented: true })),
+        .map(b => ({ hz: b.hz, label: b.label, mode: b.decoder ?? b.mode, bandwidth: b.bandwidth, source: 'user' as const, implemented: true })),
     ];
     // Sort left→right
     return all.sort((a, b) => a.hz - b.hz);
@@ -1229,7 +1229,15 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
                     } else {
                       if (!engine.isAudioInitialized) await engine.initAudio();
                       const ab = store.adminBookmarks().find(b => b.frequency === p.hz && b.name === p.label);
-                      if (ab?.mode) engine.setMode(ab.mode as import('../shared/index.js').DemodMode);
+                      if (ab?.mode) {
+                        const decoderMode = ['adsb', 'acars', 'ft8', 'ft4', 'ft2'].includes(ab.mode);
+                        if (decoderMode) {
+                          engine.setDecoder(ab.mode);
+                        } else {
+                          engine.setDecoder('');
+                          engine.setMode(ab.mode as import('../shared/index.js').DemodMode);
+                        }
+                      }
                       if (ab?.bandwidth) engine.setBandwidth(ab.bandwidth);
                       engine.tune(Math.round(p.hz - store.centerFrequency()));
                     }

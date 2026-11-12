@@ -39,6 +39,14 @@ const App: Component = () => {
     // Foreground decoder results are pushed as MSG_DECODER and fed to the
     // reactive message store for the decoder panel.
     engine.onDecoderData = (type, data) => {
+      if (type === 'adsb') {
+        store.applyAdsbSnapshot(data);
+        return;
+      }
+      if (type === 'acars') {
+        store.applyAcarsEvent(data);
+        return;
+      }
       store.addDecoderMessage(type, (data ?? {}) as Record<string, unknown>);
     };
 

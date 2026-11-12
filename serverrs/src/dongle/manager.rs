@@ -5,6 +5,7 @@
 //! pipelines (sub-band extraction, ADPCM or server-side Opus encoding).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -166,9 +167,12 @@ fn pack_notification(n: &ConfigNotification) -> Vec<u8> {
 struct ActiveDongle {
     id: String,
     profile: RwLock<DongleProfile>,
-    /// Actual rate the source is streaming, after any driver snapping.
+    /// Actual rate the source is streaming, after any driver snapping. A
+    /// profile switch was allowed to change the source rate without updating
+    /// this, which left every client pipeline and decoder using the previous
+    /// rate — an ADS-B demod 20 % off its sample clock decodes nothing.
     #[cfg_attr(not(feature = "decoders"), allow(dead_code))]
-    sample_rate: i32,
+    sample_rate: AtomicI32,
     command: Option<CommandHandle>,
     fft_proc: Mutex<FftProcessor>,
     deflate_enc: Mutex<FftDeflateEncoder>,
@@ -195,6 +199,9 @@ struct ClientPipeline {
     iq_chunk_count: u64,
     stereo_enabled: bool,
     adpcm_buf: Vec<u8>,
+    /// Whether this client has audio switched on. A decoder-only pipeline can
+    /// skip the whole extractor/encoder path and still receive decoder output.
+    audio_enabled: bool,
     /// Per-client foreground decoder, built from the client's tune offset.
     #[cfg(feature = "decoders")]
     foreground: Option<crate::decoders::Channel>,
@@ -589,7 +596,7 @@ impl Manager {
         let ad = Arc::new(ActiveDongle {
             id: id.clone(),
             profile: RwLock::new(profile),
-            sample_rate,
+            sample_rate: AtomicI32::new(sample_rate),
             command,
             fft_proc: Mutex::new(fft_proc),
             deflate_enc: Mutex::new(deflate_enc),
@@ -1417,9 +1424,18 @@ impl Manager {
     }
 
     fn handle_iq_chunk(&self, ad: &Arc<ActiveDongle>, mut chunk: Vec<u8>) {
-        let profile = ad.profile.read().clone();
+        // Snapshot only the two fields this path needs. Cloning the whole
+        // profile here used to allocate several Strings for every 16 KiB USB
+        // transfer (~300 times a second).
+        let (swap_iq, center_hz) = {
+            let profile = ad.profile.read();
+            (
+                profile.swap_iq,
+                (profile.center_frequency + profile.oscillator_offset as i64) as f64,
+            )
+        };
 
-        if profile.swap_iq {
+        if swap_iq {
             for pair in chunk.chunks_exact_mut(2) {
                 pair.swap(0, 1);
             }
@@ -1428,10 +1444,12 @@ impl Manager {
         #[cfg(feature = "decoders")]
         self.decoders.push_chunk(
             &ad.id,
-            (profile.center_frequency + profile.oscillator_offset as i64) as f64,
-            ad.sample_rate.max(1) as u32,
+            center_hz,
+            ad.sample_rate.load(Ordering::Relaxed).max(1) as u32,
             &chunk,
         );
+        #[cfg(not(feature = "decoders"))]
+        let _ = center_hz;
 
         self.recorder.write_iq(&ad.id, &chunk);
         self.process_client_iq(ad, &chunk);
@@ -1501,7 +1519,7 @@ impl Manager {
             let profile = ad.profile.read();
             (
                 (profile.center_frequency + profile.oscillator_offset as i64) as f64,
-                ad.sample_rate.max(1) as u32,
+                ad.sample_rate.load(Ordering::Relaxed).max(1) as u32,
             )
         };
         let pipelines: Vec<(String, Arc<Mutex<ClientPipeline>>)> = {
@@ -1564,37 +1582,52 @@ impl Manager {
                 cp.foreground_rate = sample_rate;
             }
 
-            let foreground_dongle_id = cp.dongle_id.clone();
-            let foreground_mode = cp.foreground_mode.clone();
-            let foreground_id = format!("client-{client_id}");
-            if let Some(foreground) = cp.foreground.as_mut() {
+            let results = if let Some(foreground) = cp.foreground.as_mut() {
                 foreground.process_chunk(chunk, crate::decoders::store::now_ms());
-                for data in foreground.take_results() {
-                    let text = data
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    if !text.is_empty() {
-                        let record = crate::decoders::store::DecoderRecord {
-                            decoder_id: &foreground_id,
-                            dongle_id: &foreground_dongle_id,
-                            mode: &foreground_mode,
-                            text,
-                            frequency_hz: data
-                                .get("rfHz")
-                                .and_then(|v| v.as_f64())
-                                .unwrap_or(0.0),
-                            audio_hz: data
-                                .get("audioHz")
-                                .and_then(|v| v.as_f64())
-                                .unwrap_or(0.0),
-                            snr_db: data.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                            dt_sec: data.get("dtSec").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                            period: data.get("period").and_then(|v| v.as_i64()).unwrap_or(0),
-                            payload: &data.to_string(),
-                        };
+                foreground.take_results()
+            } else {
+                Vec::new()
+            };
+            if !results.is_empty() {
+                let foreground_dongle_id = cp.dongle_id.clone();
+                let foreground_mode = cp.foreground_mode.clone();
+                let foreground_id = format!("client-{client_id}");
+                for data in results {
+                    if let Some(aircraft) = data.get("aircraft").and_then(|v| v.as_array()) {
                         let retention = self.cfg.read().database.retention_days;
-                        self.decoder_store.insert(&record, retention);
+                        self.decoder_store.upsert_aircraft(
+                            &foreground_id,
+                            &foreground_dongle_id,
+                            aircraft,
+                            retention,
+                        );
+                    } else {
+                        let text = data
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            let record = crate::decoders::store::DecoderRecord {
+                                decoder_id: &foreground_id,
+                                dongle_id: &foreground_dongle_id,
+                                mode: &foreground_mode,
+                                text,
+                                frequency_hz: data
+                                    .get("rfHz")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0),
+                                audio_hz: data
+                                    .get("audioHz")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0),
+                                snr_db: data.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                dt_sec: data.get("dtSec").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                period: data.get("period").and_then(|v| v.as_i64()).unwrap_or(0),
+                                payload: &data.to_string(),
+                            };
+                            let retention = self.cfg.read().database.retention_days;
+                            self.decoder_store.insert(&record, retention);
+                        }
                     }
                     self.ws.send_to(
                         client_id,
@@ -1602,6 +1635,14 @@ impl Manager {
                     );
                 }
             }
+        }
+
+        // A client that has not enabled audio does not need the sub-band. The
+        // decoder (if any) has already consumed the raw chunk above; running
+        // the NCO/FIR/decimation and encoding an IQ stream the browser ignores
+        // was pure waste for every muted or decoder-only connection.
+        if !cp.audio_enabled {
+            return;
         }
 
         // Move the scratch buffer out so the extractor and the encoders can
@@ -1756,6 +1797,7 @@ impl Manager {
 
         let chunk_size = (extractor.output_sample_rate() as f64 * 2.0 * 0.020) as usize;
         let stereo_enabled = client.stereo_enabled();
+        let audio_enabled = client.audio_enabled();
 
         let mut cp = ClientPipeline {
             extractor,
@@ -1772,6 +1814,7 @@ impl Manager {
             iq_chunk_count: 0,
             stereo_enabled,
             adpcm_buf: vec![0; (chunk_size + 1) / 2],
+            audio_enabled,
             #[cfg(feature = "decoders")]
             foreground,
             #[cfg(feature = "decoders")]
@@ -2071,6 +2114,12 @@ impl Manager {
     }
 
     fn handle_audio_enabled(&self, client_id: &str, cmd: &ClientCommand) {
+        // Keep an existing decoder-only pipeline in sync even when audio is
+        // switched off: it stays alive for the decoder but can then skip the
+        // audio channeliser entirely.
+        if let Some(cp) = self.client_pipelines.lock().get(client_id).cloned() {
+            cp.lock().audio_enabled = cmd.enabled.unwrap_or(false);
+        }
         match cmd.enabled {
             Some(true) => self.create_client_pipeline(client_id),
             Some(false) => {
@@ -2628,8 +2677,20 @@ impl Manager {
         if let Some(cmd) = &ad.command {
             let freq = (profile.center_frequency + profile.oscillator_offset as i64) as u32;
             let _ = cmd.set_frequency(freq);
-            if profile.sample_rate > 0 {
-                let _ = cmd.set_sample_rate(profile.sample_rate as u32);
+            if profile.sample_rate > 0
+                && profile.sample_rate != ad.sample_rate.load(Ordering::Relaxed)
+            {
+                match cmd.set_sample_rate(profile.sample_rate as u32) {
+                    Ok(()) => ad
+                        .sample_rate
+                        .store(profile.sample_rate, Ordering::Relaxed),
+                    Err(e) => warn!(
+                        dongle = %dongle_id,
+                        rate = profile.sample_rate,
+                        error = %e,
+                        "profile sample rate could not be applied"
+                    ),
+                }
             }
             if profile.gain > 0.0 {
                 let _ = cmd.set_gain_mode(1);

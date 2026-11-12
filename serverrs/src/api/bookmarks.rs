@@ -30,7 +30,20 @@ fn is_zero_i32(v: &i32) -> bool {
 fn implemented_mode(mode: &str) -> bool {
     matches!(
         mode,
-        "wfm" | "nfm" | "am" | "am-stereo" | "sam" | "usb" | "lsb" | "cw" | "raw"
+        "wfm"
+            | "nfm"
+            | "am"
+            | "am-stereo"
+            | "sam"
+            | "usb"
+            | "lsb"
+            | "cw"
+            | "raw"
+            | "adsb"
+            | "acars"
+            | "ft8"
+            | "ft4"
+            | "ft2"
     )
 }
 
@@ -185,5 +198,20 @@ mod tests {
         let out = from_config(&[b]);
         assert_eq!(out[0].source, "config");
         assert!(out[0].implemented);
+    }
+
+    #[test]
+    fn decoder_bookmarks_are_implemented() {
+        for mode in ["adsb", "acars", "ft8", "ft4", "ft2"] {
+            let b = Bookmark {
+                id: "x".into(),
+                name: "n".into(),
+                frequency: 1,
+                mode: mode.into(),
+                ..Default::default()
+            };
+            let out = from_config(&[b]);
+            assert!(out[0].implemented, "{mode} should be marked implemented");
+        }
     }
 }

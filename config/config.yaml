@@ -6,7 +6,6 @@ server:
   description: ''
   location: ''
   demoMode: false
-  # trace | debug | info | warn | error | off. LOG_LEVEL env overrides this.
   logLevel: info
   fftHistoryFftSize: 4096
   fftHistoryCompression: deflate
@@ -49,7 +48,7 @@ dongles:
   biasT: false
   digitalAgc: true
   offsetTuning: false
-  iqCorrection: true
+  iqCorrection: false
   profiles:
   - id: profile-moorpqzg
     name: FM Broadcast
@@ -92,7 +91,7 @@ dongles:
   - id: profile-mp07v3bz
     name: MW Broadcast (AM)
     centerFrequency: 1400000
-    sampleRate: 1800000
+    sampleRate: 2400000
     dcOffsetRemoval: true
     defaultBandwidth: 10000
     gain: 0.0
@@ -127,6 +126,44 @@ dongles:
     preFilterNb: true
     preFilterNbThreshold: 0
     defaultTuneOffset: 0
+  - id: profile-mwdrlvdg
+    name: ADS-B (1090 MHz)
+    centerFrequency: 1090000000
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 2000000
+    gain: 0.0
+    fftSize: 2048
+    fftFps: 10
+    defaultMode: nfm
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 0
+    description: Aircraft transponder 1090 MHz
+    dongleId: dongle-mooroo30
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
+  - id: profile-acars
+    name: ACARS (131.550 MHz)
+    centerFrequency: 131550000
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 6000
+    gain: 0.0
+    fftSize: 4096
+    fftFps: 10
+    defaultMode: am
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 0
+    description: VHF aircraft datalink 131.55 MHz
+    dongleId: dongle-mooroo30
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
 bookmarks:
 - id: bm_mp7dfk7l_4qv3b
   name: Nostos
@@ -134,3 +171,13 @@ bookmarks:
   mode: wfm
   bandwidth: 200000
   description: Cool sttion
+database:
+  decoderPath: ''
+  retentionDays: 0
+decoders:
+  - id: acars-131
+    enabled: false
+    dongleId: dongle-mooroo30
+    mode: acars
+    frequencyHz: 131550000
+    bandwidthHz: 6000

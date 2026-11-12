@@ -40,7 +40,7 @@ const ControlPanel: Component = () => {
           </Show>
         </div>
         <div class="flex flex-wrap gap-1.5">
-          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }]}>
+          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }, { id: 'adsb', label: 'ADS-B' }, { id: 'acars', label: 'ACARS' }]}>
             {(decoder) => (
               <button
                 onClick={() => engine.setDecoder(store.decoderMode() === decoder.id ? '' : decoder.id)}
@@ -2544,13 +2544,18 @@ const Bookmarks: Component = () => {
                     class="flex-1 text-left px-1.5 py-0.5 rounded-sm
                            text-[9px] font-mono text-text-primary
                            hover:bg-sdr-elevated transition-colors truncate"
-                    title={`${formatHz(bm.hz)} · ${bm.mode.toUpperCase()}`}
+                    title={`${formatHz(bm.hz)} · ${(bm.decoder || bm.mode).toUpperCase()}`}
                     onClick={() => handleRecall(bm)}
                     onDblClick={() => startEdit(bm)}
                   >
                     <span class="text-[var(--sdr-accent)] mr-1">▶</span>
                     <span class="text-text-secondary mr-1.5">{bm.label}</span>
                     <span class="text-text-muted text-[8px]">{formatHz(bm.hz)}</span>
+                    <Show when={bm.decoder}>
+                      <span class="ml-1 text-[7px] font-mono uppercase tracking-wide text-cyan">
+                        {bm.decoder}
+                      </span>
+                    </Show>
                   </button>
                 }
               >

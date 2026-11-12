@@ -9,6 +9,16 @@ import { formatFrequency } from '../../shared/modes';
 
 type DemodMode = keyof typeof DEMOD_MODES;
 
+/// Decoder modes a bookmark can restore. These are stored in the same `mode`
+/// string as demod modes; the public bookmark API reports them implemented.
+const DECODER_BOOKMARK_MODES = [
+  { id: 'adsb', label: 'ADS-B — 1090 MHz', defaultBandwidth: 2400000 },
+  { id: 'acars', label: 'ACARS — VHF datalink', defaultBandwidth: 6000 },
+  { id: 'ft8', label: 'FT8', defaultBandwidth: 3000 },
+  { id: 'ft4', label: 'FT4', defaultBandwidth: 3000 },
+  { id: 'ft2', label: 'FT2', defaultBandwidth: 3000 },
+] as const;
+
 // ---- Helpers ----
 function generateId(): string {
   return `bm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -166,7 +176,9 @@ const BookmarkForm: Component<{
               const mode = e.currentTarget.value as DemodMode;
               update('mode', mode);
               // Auto-set default bandwidth for mode if not set
-              const modeInfo = DEMOD_MODES[mode];
+              const modeInfo =
+                DEMOD_MODES[mode] ??
+                DECODER_BOOKMARK_MODES.find((m) => m.id === e.currentTarget.value);
               if (modeInfo && (!form().bandwidth || form().bandwidth === 0)) {
                 update('bandwidth', modeInfo.defaultBandwidth);
               }
@@ -177,6 +189,13 @@ const BookmarkForm: Component<{
                 <option value={mode.id}>{mode.shortName} — {mode.name}</option>
               )}
             </For>
+            <optgroup label="Digital decoders">
+              <For each={DECODER_BOOKMARK_MODES}>
+                {(mode) => (
+                  <option value={mode.id}>{mode.label}</option>
+                )}
+              </For>
+            </optgroup>
           </select>
         </div>
         <div class="flex flex-col gap-1">
