@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.11.8)
+## Current status (2.12.0)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -32,15 +32,14 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.11.7-rust` (prerelease). It fixes the local USB
-  RTL-SDR use-after-free on stop/reinit, stops stale retry loops from
-  overwriting a newer dongle state, applies hardware settings (gain, PPM,
-  direct sampling, bias-T, RTL AGC, offset tuning) to running dongles without
-  reopening USB, adds admin runtime-state/Start/Stop indicators, and applies
-  the profile noise blanker on profile switches. Earlier releases added the AM
-  adjacent-channel selectivity fix, admin reinit stall follow-ups, the
-  hot-path performance pass, direct USB rtlsdr, aggregate bandwidth stats,
-  default Opus+rtlsdr features, and the WFM AVX2 decimator fix.
+- Latest published release: `v2.12.0`. It adds Electron desktop packages for
+  Linux, macOS and Windows, expands the native SDR driver set (HackRF, Airspy,
+  Airspy HF+, HydraSDR, ELAD, RX-888, Pluto) and vendor-library sources
+  (SDRplay, LimeSDR, Fobos), and completes the admin device scan and per-source
+  settings panels. The previous Rust release, `v2.11.7-rust`, fixed the local USB
+  RTL-SDR use-after-free on stop/reinit, stopped stale retry loops from
+  overwriting a newer dongle state, applied hardware settings to running
+  dongles without reopening USB, and added admin runtime-state indicators.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust`. The Docker workflow also publishes a
   rolling `latest-rust` tag.
@@ -105,6 +104,8 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-12: Version 2.12.0. Electron desktop packages for Linux (AppImage/deb), macOS (dmg/zip) and Windows (NSIS/portable), alongside the portable server archives on the GitHub release. Adds native and runtime-loaded vendor SDR source expansion, admin device scanning and source controls.
+- 2026-11-12: Electron desktop packaging for Linux (AppImage/deb), macOS (dmg/zip) and Windows (NSIS/portable). The app bundles the platform `serverrs`, client and default config; it starts the server on a free loopback port and keeps config/logs in the per-user data directory. Release CI builds each target alongside the portable server archives.
 - 2026-11-12: SDRplay RSP, LimeSDR and RigExpert Fobos SDR sources added through the pinned sdroxide crates. All three vendor libraries are `dlopen`'d at runtime, so default builds need no SDK. Admin exposes LNA/IF gain, AGC, notches, antenna/tuner, Lime gain/channel/filter/calibration and Fobos port/gain/clock controls. Receive only; not yet hardware-tested.
 - 2026-11-12: Admin device scan now enumerates RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR, ELAD, RX-888, Pluto, SDRplay, LimeSDR and Fobos without opening a device, and fills the serial/index/address from the picker. Open-time settings now trigger a dongle reinit.
 - 2026-11-12: PlutoSDR source added over the IIOD network protocol (RX gain, AGC, RF bandwidth, RX port, buffer size, 521 kSPS–5 MSPS). No USB/libusb/libiio; not yet hardware-tested.

@@ -166,6 +166,19 @@ npm start
 
 Open `http://localhost:3000` in your browser.
 
+### Desktop App
+
+Release downloads also include an Electron desktop build for Windows, macOS
+and Linux. It bundles the Rust server and web client, creates a per-user config
+on first launch, and opens the receiver in a native window. See
+[`desktop/README.md`](desktop/README.md) for local packaging and target details.
+
+```bash
+npm run build:client
+cd serverrs && cargo build --release --all-features --bin serverrs && cd ..
+npm run dist:linux --workspace=desktop  # or dist:mac / dist:win
+```
+
 ### Demo Mode (No Hardware)
 
 Don't have an RTL-SDR? No problem — demo mode simulates realistic radio signals:
@@ -209,6 +222,7 @@ RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
 | Runtime | Rust 1.85+ (tokio) |
 | Backend | axum HTTP/WebSocket server |
 | Frontend | [SolidJS](https://www.solidjs.com) |
+| Desktop | [Electron](https://www.electronjs.org/) + electron-builder |
 | Build | [Vite 6](https://vite.dev) |
 | Styling | [Tailwind CSS v4](https://tailwindcss.com) |
 | FFT | [rustfft](https://github.com/ejmahler/RustFFT) |
@@ -298,10 +312,13 @@ Profiles can be created, updated, and deleted at runtime via the admin REST API.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NODE_SDR_CONFIG` | `config/config.yaml` | Path to config file |
+| `CONFIG_PATH` | `../config/config.yaml` | Path to config file |
+| `STATIC_DIR` | `../client/dist` | Built client assets |
+| `BOOKMARKS_DIR` | `../bookmarks` | Bookmark JSON directory |
+| `HOST` | config `server.host` | Override bind host (Electron uses `127.0.0.1`) |
+| `PORT` | config `server.port` | Override bind port |
 | `NODE_SDR_DEMO` | — | Set to `1` to enable demo mode (overrides per-dongle source) |
-| `LOG_LEVEL` | `info` | pino log level |
-| `NODE_ENV` | — | Set to `production` for optimized serving |
+| `LOG_LEVEL` | config `server.logLevel` | Override server log level |
 
 ## Demodulation Modes
 

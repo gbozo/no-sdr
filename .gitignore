@@ -34,6 +34,10 @@ logs/
 # PWA dev-time generated (vite-plugin-pwa)
 client/dev-dist/
 
+# Electron packaging staging/output
+desktop/runtime/
+desktop/release/
+
 # Graphify
 graphify-out/cache/
 graphify-out/manifest.json

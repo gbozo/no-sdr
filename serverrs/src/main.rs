@@ -73,6 +73,27 @@ async fn async_main() -> Result<()> {
         cfg.server.demo_mode = true;
     }
 
+    // Desktop launchers bind an ephemeral port chosen by the wrapper and keep
+    // the server on loopback. Container/systemd deployments keep using the
+    // YAML values, so these overrides stay opt-in.
+    if let Ok(port) = std::env::var("PORT") {
+        if let Ok(port) = port.parse::<u16>() {
+            if port > 0 {
+                cfg.server.port = i32::from(port);
+            }
+        }
+    }
+    if let Ok(host) = std::env::var("HOST") {
+        if !host.trim().is_empty() {
+            cfg.server.host = host;
+        }
+    }
+    tracing::info!(
+        host = %cfg.server.host,
+        port = cfg.server.port,
+        "bind address"
+    );
+
     if !OPUS_AVAILABLE {
         cfg.server
             .allowed_iq_codecs

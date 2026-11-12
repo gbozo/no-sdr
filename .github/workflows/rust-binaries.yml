@@ -1,8 +1,9 @@
 # Build native serverrs binaries for Linux (x86-64 v1..v4, ARM64 Pi cores),
 # macOS (Apple Silicon + Intel) and Windows 11 (x86-64). On a release (or a
 # manual dispatch) the binaries are packaged into portable archives together
-# with the web client, config, bookmarks and launchers. Published releases
-# attach those archives.
+# with the web client, config, bookmarks and launchers. The same trigger builds
+# Electron desktop packages for Linux/macOS/Windows and publishes both sets of
+# artifacts on the release.
 
 name: Rust Binaries
 
@@ -12,6 +13,7 @@ on:
     paths:
       - 'serverrs/**'
       - 'client/**'
+      - 'desktop/**'
       - 'config/**'
       - 'bookmarks/**'
       - 'packaging/**'
@@ -187,6 +189,184 @@ jobs:
           name: client-dist
           path: client/dist
 
+  electron-linux-amd64:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: serverrs -> target
+          cache-targets: false
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+      - name: Sync desktop version
+        env:
+          NO_SDR_VERSION: ${{ github.event.release.tag_name }}
+        run: node desktop/scripts/sync-version.cjs
+      - name: Build server
+        run: cargo build --release --all-features --bin serverrs --manifest-path serverrs/Cargo.toml
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Build client and Electron packages
+        run: |
+          npm ci
+          npm run build:client
+          npm run dist:linux --workspace=desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: no-sdr-electron-linux-amd64
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+
+  electron-linux-arm64:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: serverrs -> target
+          cache-targets: false
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+      - name: Sync desktop version
+        env:
+          NO_SDR_VERSION: ${{ github.event.release.tag_name }}
+        run: node desktop/scripts/sync-version.cjs
+      - name: Build server
+        run: cargo build --release --all-features --bin serverrs --manifest-path serverrs/Cargo.toml
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Build client and Electron packages
+        run: |
+          npm ci
+          npm run build:client
+          npm run dist:linux --workspace=desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: no-sdr-electron-linux-arm64
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+
+  electron-macos-arm64:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: serverrs -> target
+          cache-targets: false
+      - name: Build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Sync desktop version
+        env:
+          NO_SDR_VERSION: ${{ github.event.release.tag_name }}
+        run: node desktop/scripts/sync-version.cjs
+      - name: Build server
+        run: cargo build --release --all-features --bin serverrs --manifest-path serverrs/Cargo.toml
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Build client and Electron packages
+        run: |
+          npm ci
+          npm run build:client
+          npm run dist:mac --workspace=desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: no-sdr-electron-macos-arm64
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+
+  electron-macos-x86_64:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15-intel
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: serverrs -> target
+          cache-targets: false
+      - name: Build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Sync desktop version
+        env:
+          NO_SDR_VERSION: ${{ github.event.release.tag_name }}
+        run: node desktop/scripts/sync-version.cjs
+      - name: Build server
+        run: cargo build --release --all-features --bin serverrs --manifest-path serverrs/Cargo.toml
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Build client and Electron packages
+        run: |
+          npm ci
+          npm run build:client
+          npm run dist:mac --workspace=desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: no-sdr-electron-macos-x86_64
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+
+  electron-windows-amd64:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: serverrs -> target
+          cache-targets: false
+      - name: Sync desktop version
+        shell: pwsh
+        env:
+          NO_SDR_VERSION: ${{ github.event.release.tag_name }}
+        run: node desktop/scripts/sync-version.cjs
+      - name: Build server
+        shell: pwsh
+        run: cargo build --release --all-features --bin serverrs --manifest-path serverrs/Cargo.toml
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Build client and Electron packages
+        shell: pwsh
+        run: |
+          npm ci
+          npm run build:client
+          npm run dist:win --workspace=desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: no-sdr-electron-windows-amd64
+          path: desktop/release/*.exe
+
   package:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64, windows-amd64, client]
@@ -227,7 +407,13 @@ jobs:
 
   release:
     if: github.event_name == 'release'
-    needs: [package]
+    needs:
+      - package
+      - electron-linux-amd64
+      - electron-linux-arm64
+      - electron-macos-arm64
+      - electron-macos-x86_64
+      - electron-windows-amd64
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -236,10 +422,25 @@ jobs:
         with:
           name: serverrs-release-archives
           path: dist
-      - name: Attach portable archives to release
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: no-sdr-electron-*
+          path: electron-dist
+          merge-multiple: true
+      - name: Checksums for desktop packages
+        run: |
+          cd electron-dist
+          sha256sum ./* > SHA256SUMS
+      - name: Attach portable archives and desktop packages to release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.tar.gz
             dist/*.zip
             dist/SHA256SUMS
+            electron-dist/*.AppImage
+            electron-dist/*.deb
+            electron-dist/*.dmg
+            electron-dist/*.zip
+            electron-dist/*.exe
+            electron-dist/SHA256SUMS

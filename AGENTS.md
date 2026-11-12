@@ -30,6 +30,7 @@ client/src/components/ → SolidJS UI: ControlPanel, WaterfallDisplay, Frequency
 client/src/admin/      → Admin page: AdminPage, admin-store, sections/
 client/src/store/      → SolidJS reactive state
 client/src/styles/     → Tailwind v4 @theme (design tokens in CSS, no JS config)
+desktop/               → Electron shell + electron-builder packaging for Win/macOS/Linux
 config/config.yaml     → Dongle + profile definitions
 packaging/             → portable release archive builder + launchers + udev rule
 docker/Dockerfile.rust → multi-CPU Rust image (amd64 v1-v4, arm64 Pi cores)
@@ -56,8 +57,9 @@ pipelines.
 | Backend | Rust 1.85+, axum 0.8, tokio, rustfft, serde, tracing |
 | Native USB | `nusb` (pure Rust; no librtlsdr/libusb) |
 | Frontend | SolidJS, TypeScript, Vite, Tailwind v4 |
+| Desktop | Electron 45 + electron-builder (Windows/macOS/Linux) |
 | Shared types | TypeScript, merged into `client/src/shared/` |
-| Build | npm workspaces (client), Cargo crate (serverrs) |
+| Build | npm workspaces (client + desktop), Cargo crate (serverrs) |
 | Dev reload | Vite HMR (client), concurrently; Rust runs as a normal process |
 | Config | YAML; `serverrs/src/config.rs` |
 | Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`); HackRF (`hackrf`); Airspy R2/Mini (`airspy`); Airspy HF+ (`airspyhf`); HydraSDR (`hydrasdr`); ELAD (`elad`); RX-888 (`rx888`); Pluto (`pluto`); SDRplay (`sdrplay`); LimeSDR (`lime`); Fobos (`fobos`). All are default Cargo features |
@@ -82,6 +84,8 @@ pipelines.
 | `client/src/engine/audio.ts` | AudioWorklet + 5-band EQ + jitter buffer | Per audio frame |
 | `client/src/shared/protocol.ts` | Binary WS protocol: client-side pack/unpack, codec helpers | Every WS message |
 | `client/src/shared/adpcm.ts` | IMA-ADPCM decoder (TypeScript, browser-side) | Every IQ/FFT frame |
+| `desktop/main.cjs` | Electron shell: user config, free port, spawns bundled serverrs, opens client | Startup |
+| `desktop/scripts/stage-runtime.cjs` | Copies the host `serverrs` binary into the Electron package | Build |
 
 ## GPU Acceleration (planned)
 
@@ -143,6 +147,8 @@ npm run build:rust:full            # release build with --all-features
 npm run build:rust:native          # --all-features with target-cpu=native
 npm run start:rust                 # run built Rust binary
 npm run start:rust:demo            # demo source, no hardware
+npm run start:desktop              # run the Electron shell against local builds
+npm run build:desktop:linux        # AppImage + deb (also :mac, :win on their hosts)
 ```
 
 Manual:
@@ -167,6 +173,9 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 |----------|---------|---------|
 | `CONFIG_PATH` | `../config/config.yaml` | Path to YAML config |
 | `STATIC_DIR` | `../client/dist` | Path to built client assets |
+| `BOOKMARKS_DIR` | `../bookmarks` | Bookmark JSON directory |
+| `HOST` | config `server.host` | Override bind host (Electron uses `127.0.0.1`) |
+| `PORT` | config `server.port` | Override bind port (Electron uses a free loopback port) |
 | `NODE_SDR_DEMO` | unset | Set to `1` to force demo mode |
 
 ## Common Modifications
@@ -220,8 +229,10 @@ npm run start:demo                 # Same but demo mode (simulated signals)
   `--features "rtlsdr bias-t"` covers the native USB driver without libopus.
 - In this environment use `CARGO_HOME=/home/opencode/.cargo` for Cargo.
 - Binary/CI releases are built by GitHub Actions (`Rust Binaries`,
-  `Docker Publish`). Pushes to `main` publish `latest` and `main`; releases add
-  plain semver tags, with historical `<version>-rust` / `latest-rust` aliases.
+  `Docker Publish`). `Rust Binaries` also builds Electron packages for Linux
+  (AppImage/deb), macOS (dmg/zip) and Windows (NSIS/portable). Pushes to `main`
+  publish `latest` and `main`; releases add plain semver tags, with historical
+  `<version>-rust` / `latest-rust` aliases.
 - CI caching: native binary jobs use `sccache` + `Swatinem/rust-cache`
   (crates only; compilation objects are shared via sccache). The Docker
   workflow builds amd64 and arm64 on native runners with per-architecture

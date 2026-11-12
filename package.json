@@ -1,12 +1,13 @@
 {
   "name": "no-sdr",
-  "version": "2.11.8",
+  "version": "2.12.0",
   "private": true,
-  "description": "Multi-user WebSDR server for RTL-SDR dongles \u2014 real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
+  "description": "Multi-user WebSDR server for RTL-SDR dongles — real-time waterfall, stereo FM, AM/SSB/CW, digital mode decoding",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "workspaces": [
-    "client"
+    "client",
+    "desktop"
   ],
   "scripts": {
     "dev": "concurrently --raw -k \"npm run dev:rust\" \"npm run dev:client\"",
@@ -25,7 +26,11 @@
     "start:rust": "npm run start",
     "start:demo": "cd serverrs && STATIC_DIR=../client/dist CONFIG_PATH=../config/config.yaml NODE_SDR_DEMO=1 ./target/release/serverrs",
     "start:rust:demo": "npm run start:demo",
-    "clean": "rimraf client/dist serverrs/target node_modules/.cache",
+    "start:desktop": "npm run start --workspace=desktop",
+    "build:desktop:linux": "npm run dist:linux --workspace=desktop",
+    "build:desktop:mac": "npm run dist:mac --workspace=desktop",
+    "build:desktop:win": "npm run dist:win --workspace=desktop",
+    "clean": "rimraf client/dist serverrs/target desktop/runtime desktop/release node_modules/.cache",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {

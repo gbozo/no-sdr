@@ -1,0 +1,109 @@
+{
+  "name": "@node-sdr/desktop",
+  "version": "2.12.0",
+  "private": true,
+  "description": "NO(DE)-SDR desktop application",
+  "author": "no-sdr contributors",
+  "license": "GPL-3.0-or-later",
+  "homepage": "https://github.com/gbozo/no-sdr",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gbozo/no-sdr.git"
+  },
+  "desktopName": "no-sdr.desktop",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "sync-version": "node scripts/sync-version.cjs",
+    "stage": "node scripts/stage-runtime.cjs",
+    "dist:linux": "npm run stage && electron-builder --linux AppImage deb --publish never",
+    "dist:mac": "npm run stage && electron-builder --mac dmg zip --publish never",
+    "dist:win": "npm run stage && electron-builder --win nsis portable --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.3.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "electronVersion": "45.3.1",
+    "appId": "org.nosdr.desktop",
+    "productName": "NO(DE)-SDR",
+    "executableName": "no-sdr",
+    "copyright": "Copyright © no-sdr contributors",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "loading.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "runtime"
+      },
+      {
+        "from": "../client/dist",
+        "to": "client"
+      },
+      {
+        "from": "../config/config.yaml",
+        "to": "config/config.yaml"
+      },
+      {
+        "from": "../bookmarks",
+        "to": "bookmarks-default"
+      },
+      {
+        "from": "../packaging",
+        "to": "udev",
+        "filter": [
+          "*.rules"
+        ]
+      }
+    ],
+    "artifactName": "no-sdr-desktop-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities",
+      "icon": "../client/public/icons/icon-512.png",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "../client/public/icons/icon-512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "artifactName": "no-sdr-desktop-${version}-win-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "no-sdr-desktop-${version}-win-${arch}-portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "AudioVideo",
+      "icon": "../client/public/icons/icon-512.png",
+      "maintainer": "no-sdr contributors",
+      "synopsis": "Multi-user WebSDR receiver",
+      "description": "Multi-user WebSDR receiver for RTL-SDR and other SDR hardware.",
+      "syncDesktopName": true
+    }
+  }
+}

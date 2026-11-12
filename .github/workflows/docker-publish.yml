@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Extra image tag to publish (e.g. 2.11.8)"
+        description: "Extra image tag to publish (e.g. 2.12.0)"
         required: false
 
 concurrency:
