@@ -73,6 +73,14 @@ decoders:
     mode: ais
     frequencyHz: 162000000
     bandwidthHz: 25000
+
+  # VHF VDL Mode 2: fourteen 25 kHz channels, dial 136.8125 MHz.
+  - id: vdl2-136
+    enabled: false
+    dongleId: dongle-mooroo30
+    mode: vdl2
+    frequencyHz: 136812500
+    bandwidthHz: 25000
 ```
 
 `frequencyHz` is absolute RF, not an offset from the current profile. The
@@ -350,6 +358,48 @@ The snapshot carries the table plus per-channel diagnostics:
 The client shows a vessel table plus a Leaflet map with name, type, speed,
 course/heading, destination/ETA, trail and a six-minute leader vector.
 
+## VDL Mode 2
+
+VDL2 is fourteen 25 kHz channels between **136.650 and 136.975 MHz**, carrying
+ACARS over 10500-symbol/s D8PSK. The dial belongs at **136.8125 MHz**, the
+centre of the plan. Like ADS-B/AIS this is a raw-IQ lane (`sdroxide-vdl2`); it
+opens one down-converter per channel the window reaches.
+
+Needs at least **34 kHz** for one channel and about **350 kHz** for the whole
+plan; a 2.4 MSPS profile comfortably covers all fourteen. With a narrower
+window it runs on the channels it can see and reports `degraded`.
+
+The snapshot is a message log plus a station table, twice a second:
+
+```json
+{
+  "decoderType": "vdl2",
+  "data": {
+    "channels": [ { "freq_hz": 136675000, "live": true, "reason": null,
+                    "bursts": 40, "frames": 31, "floor_dbfs": -72.1 } ],
+    "stations": [ { "addr": 4627761, "kind": "Aircraft", "registration": "OE-LWA",
+                    "flight": "AUA123", "messages": 12, "last_snr_db": 18.4,
+                    "last_label": "H1", "...": "..." } ],
+    "messages": [ { "at": 1760000000, "freq_hz": 136675000,
+                    "src": 4627761, "srcHex": "469C71",
+                    "dst": 1141234, "dstHex": "1169F2",
+                    "frameLabel": "I 3/2", "summary": "[H1] AUA123 ...",
+                    "snr_db": 18.4, "rssi_dbfs": -31.2, "evm_deg": 6.1,
+                    "raw_hex": "..." } ],
+    "unavailable": null, "degraded": null, "suggestCenterHz": null,
+    "windowCenterHz": 136812500, "windowRateHz": 2400000,
+    "bursts": 40, "syncs": 38, "headers": 35, "headerBad": 3,
+    "frames": 31, "fcsBad": 1, "samplesPerSymbol": 9.1
+  }
+}
+```
+
+The client shows the message log with a station table; clicking a station
+filters the log, clicking a message opens the frame details and raw AVLC hex.
+VDL2's rolling log lives in the snapshot rather than `decoder_messages`: it is
+a live message service, and re-persisting a whole re-sent log every 500 ms
+would duplicate it.
+
 ## Roadmap
 
 1. FT8/FT4 background decoders and result transport. *(implemented)*
@@ -359,10 +409,12 @@ course/heading, destination/ETA, trail and a six-minute leader vector.
 4. ACARS / ARINC 618 VHF datalink, foreground/background, message table.
    *(implemented)*
 5. AIS marine VHF receiver, both channels, vessel table + map. *(implemented)*
-6. VDL2, HFDL, APRS, ISM, AX.25 packet and NAVTEX: continuous or burst
-   receivers, each with its own channel kind.
-7. Weather fax, SSTV, Hellschreiber: image/audio decoders with dedicated panels.
-8. Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4,
+6. VDL2 VHF datalink, foreground/background, message log + stations.
+   *(implemented)*
+7. HFDL, APRS, ISM, AX.25 packet and NAVTEX: continuous or burst receivers,
+   each with its own channel kind.
+8. Weather fax, SSTV, Hellschreiber: image/audio decoders with dedicated panels.
+9. Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4,
    FreeDV RADE, JS8.
 
 The UI should be data-driven by decoder type; ADSB and AIS want maps, FT8 and

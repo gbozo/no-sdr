@@ -276,6 +276,77 @@ export interface AisSnapshot {
   offsetHz: number | null;
 }
 
+// ---- VDL Mode 2 ----
+
+export interface Vdl2Message {
+  at: number;
+  freq_hz: number;
+  src: number;
+  dst: number;
+  src_kind: string;
+  dst_kind: string;
+  command: boolean;
+  summary: string;
+  srcHex: string;
+  dstHex: string;
+  frameLabel: string;
+  snr_db: number;
+  rssi_dbfs: number;
+  evm_deg: number;
+  freq_err_hz: number;
+  rs_corrected: number;
+  raw_hex: string;
+  payload?: unknown;
+}
+
+export interface Vdl2Station {
+  addr: number;
+  kind: string;
+  registration: string;
+  flight: string;
+  lat: number | null;
+  lon: number | null;
+  first_at: number;
+  last_at: number;
+  messages: number;
+  last_freq_hz: number;
+  last_snr_db: number;
+  last_label: string;
+}
+
+export interface Vdl2ChannelStatus {
+  freq_hz: number;
+  live: boolean;
+  reason: string | null;
+  bursts: number;
+  frames: number;
+  floor_dbfs: number;
+}
+
+export interface Vdl2Snapshot {
+  channels: Vdl2ChannelStatus[];
+  stations: Vdl2Station[];
+  messages: Vdl2Message[];
+  unavailable: string | null;
+  degraded: string | null;
+  suggestCenterHz: number | null;
+  windowCenterHz: number;
+  windowRateHz: number;
+  bursts: number;
+  syncs: number;
+  headers: number;
+  headerBad: number;
+  rsFail: number;
+  rsCorrected: number;
+  hdlcBad: number;
+  fecBypassed: number;
+  fcsBad: number;
+  frames: number;
+  multiblock: number;
+  multiblockOk: number;
+  samplesPerSymbol: number;
+}
+
 // ---- Client / Session ----
 
 export interface ClientSession {

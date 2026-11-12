@@ -1600,6 +1600,7 @@ export class SdrEngine {
     store.clearAdsb();
     store.clearAcars();
     store.clearAis();
+    store.clearVdl2();
     this.send({ cmd: 'decoder', mode: next });
   }
 

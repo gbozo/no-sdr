@@ -51,6 +51,10 @@ const App: Component = () => {
         store.applyAisSnapshot(data);
         return;
       }
+      if (type === 'vdl2') {
+        store.applyVdl2Snapshot(data);
+        return;
+      }
       store.addDecoderMessage(type, (data ?? {}) as Record<string, unknown>);
     };
 

@@ -1862,6 +1862,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdroxide-vdl2"
+version = "1.7.2"
+source = "git+https://github.com/dividebysandwich/sdroxide?rev=6f0994e72850a15d2a7440d1fde742934a38aea0#6f0994e72850a15d2a7440d1fde742934a38aea0"
+dependencies = [
+ "crossbeam-channel",
+ "num-complex",
+ "sdroxide-ax25",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "tracing",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1996,6 +2009,7 @@ dependencies = [
  "sdroxide-rx888",
  "sdroxide-sdrplay",
  "sdroxide-types",
+ "sdroxide-vdl2",
  "serde",
  "serde_json",
  "serde_yaml",

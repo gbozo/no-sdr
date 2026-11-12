@@ -23,6 +23,9 @@ import type {
   AcarsStatus,
   AisVessel,
   AisSnapshot,
+  Vdl2Message,
+  Vdl2Station,
+  Vdl2Snapshot,
 } from '~/shared';
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
@@ -126,6 +129,10 @@ function createStore() {
   /** Latest AIS vessel table and receiver diagnostics. */
   const [aisVessels, setAisVessels] = createSignal<AisVessel[]>([]);
   const [aisStatus, setAisStatus] = createSignal<Omit<AisSnapshot, 'vessels'> | null>(null);
+  /** Latest VDL2 message log, station table and diagnostics. */
+  const [vdl2Messages, setVdl2Messages] = createSignal<Vdl2Message[]>([]);
+  const [vdl2Stations, setVdl2Stations] = createSignal<Vdl2Station[]>([]);
+  const [vdl2Status, setVdl2Status] = createSignal<Omit<Vdl2Snapshot, 'messages' | 'stations'> | null>(null);
   /** Tuning step in Hz. 0 = auto (use bandwidth). User can override. */
   const [tuningStep, setTuningStep] = createSignal(0);
 
@@ -393,6 +400,42 @@ function createStore() {
     clearAis: () => {
       setAisVessels([]);
       setAisStatus(null);
+    },
+    vdl2Messages,
+    vdl2Stations,
+    vdl2Status,
+    /** Fold one `decoderType: "vdl2"` snapshot into reactive state. */
+    applyVdl2Snapshot: (data: unknown) => {
+      if (!data || typeof data !== 'object') return;
+      const snapshot = data as Partial<Vdl2Snapshot>;
+      setVdl2Messages(Array.isArray(snapshot.messages) ? snapshot.messages : []);
+      setVdl2Stations(Array.isArray(snapshot.stations) ? snapshot.stations : []);
+      setVdl2Status({
+        channels: Array.isArray(snapshot.channels) ? snapshot.channels : [],
+        unavailable: snapshot.unavailable ?? null,
+        degraded: snapshot.degraded ?? null,
+        suggestCenterHz: snapshot.suggestCenterHz ?? null,
+        windowCenterHz: snapshot.windowCenterHz ?? 0,
+        windowRateHz: snapshot.windowRateHz ?? 0,
+        bursts: snapshot.bursts ?? 0,
+        syncs: snapshot.syncs ?? 0,
+        headers: snapshot.headers ?? 0,
+        headerBad: snapshot.headerBad ?? 0,
+        rsFail: snapshot.rsFail ?? 0,
+        rsCorrected: snapshot.rsCorrected ?? 0,
+        hdlcBad: snapshot.hdlcBad ?? 0,
+        fecBypassed: snapshot.fecBypassed ?? 0,
+        fcsBad: snapshot.fcsBad ?? 0,
+        frames: snapshot.frames ?? 0,
+        multiblock: snapshot.multiblock ?? 0,
+        multiblockOk: snapshot.multiblockOk ?? 0,
+        samplesPerSymbol: snapshot.samplesPerSymbol ?? 0,
+      });
+    },
+    clearVdl2: () => {
+      setVdl2Messages([]);
+      setVdl2Stations([]);
+      setVdl2Status(null);
     },
     tuningStep, setTuningStep,
     tunedFrequency,

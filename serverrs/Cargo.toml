@@ -67,6 +67,8 @@ sdroxide-fobos = { git = "https://github.com/dividebysandwich/sdroxide", rev = "
 sdroxide-adsb = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 # VHF marine AIS receiver. Raw IQ, both channels; pure Rust.
 sdroxide-ais = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+# VHF air/ground VDL Mode 2. Raw IQ, fourteen 25 kHz channels.
+sdroxide-vdl2 = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 # WSJT-family background decoders (FT8/FT4 first). Pure Rust; GPL-3.0-only.
 mfsk-core = { version = "0.14.0", default-features = false, features = ["std", "ft8", "ft4", "parallel", "fft-rustfft"], optional = true }
 rayon = { version = "1", optional = true }
@@ -74,7 +76,7 @@ rusqlite = { version = "0.42", features = ["bundled"], optional = true }
 
 [features]
 # The default build enables every feature we ship.
-default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb", "ais"]
+default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb", "ais", "vdl2"]
 opus = ["dep:opus"]
 rtlsdr = ["dep:nusb"]
 hackrf = ["dep:sdroxide-hackrf", "dep:sdroxide-types"]
@@ -93,6 +95,8 @@ decoders = ["dep:mfsk-core", "dep:rayon", "dep:rusqlite"]
 adsb = ["decoders", "dep:sdroxide-adsb", "dep:sdroxide-types"]
 # Raw-IQ AIS/Marine VHF decoding, hosted by the same decoder worker.
 ais = ["decoders", "dep:sdroxide-ais", "dep:sdroxide-types"]
+# Raw-IQ VDL Mode 2 decoding, hosted by the same decoder worker.
+vdl2 = ["decoders", "dep:sdroxide-vdl2", "dep:sdroxide-types"]
 # Bias-T (GPIO 0) on the antenna port. Default on so local RTL-SDR builds can
 # power a mast LNA/photodiode; drop it with --no-default-features for a build
 # that must never put DC on the feedline.

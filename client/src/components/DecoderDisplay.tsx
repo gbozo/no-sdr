@@ -11,6 +11,7 @@ import { engine } from '../engine/sdr-engine.js';
 import AdsbDisplay from './AdsbDisplay.js';
 import AcarsDisplay from './AcarsDisplay.js';
 import AisDisplay from './AisDisplay.js';
+import Vdl2Display from './Vdl2Display.js';
 
 const DECODERS = [
   { id: 'ft8', label: 'FT8' },
@@ -19,6 +20,7 @@ const DECODERS = [
   { id: 'adsb', label: 'ADS-B' },
   { id: 'acars', label: 'ACARS' },
   { id: 'ais', label: 'AIS' },
+  { id: 'vdl2', label: 'VDL2' },
 ] as const;
 
 const MAX_ROWS = 160;
@@ -42,6 +44,7 @@ const DecoderDisplay: Component = () => {
   const isAdsb = () => store.decoderMode() === 'adsb';
   const isAcars = () => store.decoderMode() === 'acars';
   const isAis = () => store.decoderMode() === 'ais';
+  const isVdl2 = () => store.decoderMode() === 'vdl2';
 
   const clearZoom = () => {
     history = [];
@@ -126,7 +129,7 @@ const DecoderDisplay: Component = () => {
 
   onMount(() => {
     const poll = window.setInterval(() => {
-      if (isAdsb() || isAcars() || isAis()) return;
+      if (isAdsb() || isAcars() || isAis() || isVdl2()) return;
       const frame = engine.getLatestFftFrame();
       if (!frame || frame === lastFrame) return;
       lastFrame = frame;
@@ -170,7 +173,7 @@ const DecoderDisplay: Component = () => {
         </Show>
       </div>
 
-      <Show when={!isAdsb() && !isAcars() && !isAis()}>
+      <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2()}>
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Decode table */}
         <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
@@ -238,6 +241,9 @@ const DecoderDisplay: Component = () => {
       </Show>
       <Show when={isAis()}>
         <AisDisplay />
+      </Show>
+      <Show when={isVdl2()}>
+        <Vdl2Display />
       </Show>
     </div>
   );

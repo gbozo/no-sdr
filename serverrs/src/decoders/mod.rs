@@ -36,6 +36,8 @@ mod adsb;
 mod ais;
 mod ft2;
 pub mod store;
+#[cfg(feature = "vdl2")]
+mod vdl2;
 
 /// Decoder channel audio rate. Every slotted mfsk-core mode uses 12 kHz.
 const AUDIO_RATE: u32 = 12_000;
@@ -241,6 +243,11 @@ fn is_ais(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("ais")
 }
 
+#[cfg(feature = "vdl2")]
+fn is_vdl2(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("vdl2")
+}
+
 #[cfg(feature = "adsb")]
 fn is_adsb(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("adsb")
@@ -253,6 +260,10 @@ fn supported_mode(mode: &str) -> bool {
     }
     #[cfg(feature = "ais")]
     if is_ais(mode) {
+        return true;
+    }
+    #[cfg(feature = "vdl2")]
+    if is_vdl2(mode) {
         return true;
     }
     is_acars(mode) || is_ft2(mode) || mfsk_mode(mode).is_some()
@@ -308,6 +319,8 @@ pub(crate) enum Channel {
     Adsb(adsb::AdsbChannel),
     #[cfg(feature = "ais")]
     Ais(ais::AisChannel),
+    #[cfg(feature = "vdl2")]
+    Vdl2(vdl2::Vdl2Channel),
 }
 
 impl Channel {
@@ -319,6 +332,8 @@ impl Channel {
             Channel::Adsb(channel) => &channel.cfg,
             #[cfg(feature = "ais")]
             Channel::Ais(channel) => &channel.cfg,
+            #[cfg(feature = "vdl2")]
+            Channel::Vdl2(channel) => &channel.cfg,
         }
     }
 
@@ -330,6 +345,8 @@ impl Channel {
             Channel::Adsb(channel) => channel.take_results(),
             #[cfg(feature = "ais")]
             Channel::Ais(channel) => channel.take_results(),
+            #[cfg(feature = "vdl2")]
+            Channel::Vdl2(channel) => channel.take_results(),
         }
     }
 
@@ -341,6 +358,8 @@ impl Channel {
             Channel::Adsb(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "ais")]
             Channel::Ais(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "vdl2")]
+            Channel::Vdl2(channel) => channel.process_chunk(chunk, now),
         }
     }
 }
@@ -364,6 +383,14 @@ pub(crate) fn build_channel(
     #[cfg(feature = "ais")]
     if is_ais(&cfg.mode) {
         return Ok(Channel::Ais(ais::AisChannel::new(
+            cfg,
+            center_hz,
+            sample_rate as f64,
+        )));
+    }
+    #[cfg(feature = "vdl2")]
+    if is_vdl2(&cfg.mode) {
+        return Ok(Channel::Vdl2(vdl2::Vdl2Channel::new(
             cfg,
             center_hz,
             sample_rate as f64,
@@ -667,6 +694,24 @@ mod tests {
         assert!(supported_mode("adsb"));
         #[cfg(feature = "ais")]
         assert!(supported_mode("ais"));
+        #[cfg(feature = "vdl2")]
+        assert!(supported_mode("vdl2"));
+    }
+
+    #[cfg(feature = "vdl2")]
+    #[test]
+    fn build_channel_dispatches_vdl2_to_the_raw_iq_path() {
+        let vdl2 = DecoderConfig {
+            id: "vdl2-136".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "vdl2".to_string(),
+            frequency_hz: 136_812_500,
+            bandwidth_hz: 25_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&vdl2, 136_812_500.0, 2_400_000).expect("vdl2 channel");
+        assert!(matches!(channel, Channel::Vdl2(_)));
     }
 
     #[cfg(feature = "ais")]

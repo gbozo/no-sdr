@@ -42,6 +42,7 @@ fn implemented_mode(mode: &str) -> bool {
             | "adsb"
             | "acars"
             | "ais"
+            | "vdl2"
             | "ft8"
             | "ft4"
             | "ft2"
@@ -203,7 +204,7 @@ mod tests {
 
     #[test]
     fn decoder_bookmarks_are_implemented() {
-        for mode in ["adsb", "acars", "ais", "ft8", "ft4", "ft2"] {
+        for mode in ["adsb", "acars", "ais", "vdl2", "ft8", "ft4", "ft2"] {
             let b = Bookmark {
                 id: "x".into(),
                 name: "n".into(),

@@ -38,8 +38,8 @@ See `docs/decoders.md` for the current architecture and config format.
 
 ## Aviation and marine data
 
-- [ ] **VDL2** — 136.9 MHz, D8PSK 10500 baud, 25 kHz channel; use
-      `sdroxide-vdl2`; table of messages/stations.
+- [x] **VDL2** — 136.8125 MHz, D8PSK 10500 baud, fourteen 25 kHz channels;
+      `sdroxide-vdl2`; message log + station table, filter by station.
 - [x] **ACARS** — 131.55/131.725 MHz AM-MSK; ACARS receiver adapted from
       `sdroxide-digi`, foreground/background; table (mode, address, label,
       block, text, CRC, time).

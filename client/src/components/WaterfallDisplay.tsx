@@ -1230,7 +1230,7 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
                       if (!engine.isAudioInitialized) await engine.initAudio();
                       const ab = store.adminBookmarks().find(b => b.frequency === p.hz && b.name === p.label);
                       if (ab?.mode) {
-                        const decoderMode = ['adsb', 'acars', 'ais', 'ft8', 'ft4', 'ft2'].includes(ab.mode);
+                        const decoderMode = ['adsb', 'acars', 'ais', 'vdl2', 'ft8', 'ft4', 'ft2'].includes(ab.mode);
                         if (decoderMode) {
                           engine.setDecoder(ab.mode);
                         } else {

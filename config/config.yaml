@@ -183,6 +183,25 @@ dongles:
     preFilterNb: false
     preFilterNbThreshold: 0
     defaultTuneOffset: 0
+  - id: profile-vdl2
+    name: VDL2 (136.8125 MHz)
+    centerFrequency: 136812500
+    sampleRate: 2400000
+    dcOffsetRemoval: true
+    defaultBandwidth: 25000
+    gain: 0.0
+    fftSize: 4096
+    fftFps: 10
+    defaultMode: nfm
+    tuningStep: 1000
+    swapIQ: false
+    oscillatorOffset: 0
+    directSampling: 0
+    description: VHF VDL Mode 2 datalink, 136.650–136.975 MHz
+    dongleId: dongle-mooroo30
+    preFilterNb: false
+    preFilterNbThreshold: 0
+    defaultTuneOffset: 0
 bookmarks:
 - id: bm_mp7dfk7l_4qv3b
   name: Nostos
@@ -205,4 +224,10 @@ decoders:
     dongleId: dongle-mooroo30
     mode: ais
     frequencyHz: 162000000
+    bandwidthHz: 25000
+  - id: vdl2-136
+    enabled: false
+    dongleId: dongle-mooroo30
+    mode: vdl2
+    frequencyHz: 136812500
     bandwidthHz: 25000
