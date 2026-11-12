@@ -1204,10 +1204,11 @@ Demo mode is useful for:
 ### 13.1 Docker
 
 Multi-stage build:
-1. **Builder stage** — `node:22-slim`, installs deps, builds all workspaces
-2. **Runtime stage** — `node:22-slim` + `rtl-sdr` + `dump1090-mutability` + `multimon-ng`, copies built artifacts, installs production deps only
+1. **Client stage** — `node:24-slim`, installs deps and builds the SolidJS client
+2. **Rust stage** — `rust:1.99-alpine`, builds per-CPU `serverrs` binaries with `--all-features`
+3. **Runtime stage** — `alpine:3.20` with the binaries, client dist, config and bookmarks
 
-USB passthrough requires `privileged: true` and `devices: [/dev/bus/usb:/dev/bus/usb]` on Linux.
+The native RTL-SDR driver uses `nusb`, so the image needs no librtlsdr or libusb package. USB passthrough requires `privileged: true` and `devices: [/dev/bus/usb:/dev/bus/usb]` on Linux.
 
 ### 13.2 Docker with rtl_tcp Sidecar
 
@@ -1238,7 +1239,7 @@ cd no-sdr && npm install && npm run build && npm start
 
 ### 13.4 Raspberry Pi
 
-Tested on Pi 4 (4GB) and Pi 5. Use the Node.js 22 ARM64 build; the Rust backend is built by `npm run build`. Performance considerations:
+Tested on Pi 4 (4GB) and Pi 5. Use the Node.js 24 ARM64 build; the Rust backend is built by `npm run build`. Performance considerations:
 - FFT at 2048 points runs comfortably at 30fps
 - Audio demodulation is client-side, so Pi CPU isn't affected by user count
 - IQ extraction is O(N) per client — consider reducing sample rate on Pi 3

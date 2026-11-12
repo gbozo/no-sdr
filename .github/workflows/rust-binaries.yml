@@ -34,9 +34,9 @@ jobs:
   linux-amd64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: serverrs -> target
@@ -62,7 +62,7 @@ jobs:
             cp serverrs/target/x86_64-unknown-linux-gnu/release/serverrs \
               "dist/serverrs-linux-amd64-$level"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: serverrs-linux-amd64
           path: dist/serverrs-linux-amd64-*
@@ -70,9 +70,9 @@ jobs:
   linux-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: serverrs -> target
@@ -88,7 +88,7 @@ jobs:
               --manifest-path serverrs/Cargo.toml
             cp serverrs/target/release/serverrs "dist/serverrs-linux-arm64-$cpu"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: serverrs-linux-arm64
           path: dist/serverrs-linux-arm64-*
@@ -100,9 +100,9 @@ jobs:
       # vendored Opus build used by audiopus_sys.
       CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: serverrs -> target
@@ -115,7 +115,7 @@ jobs:
             --manifest-path serverrs/Cargo.toml
           mkdir -p dist
           cp serverrs/target/release/serverrs dist/serverrs-macos-arm64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: serverrs-macos-arm64
           path: dist/serverrs-macos-arm64
@@ -125,9 +125,9 @@ jobs:
     env:
       CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: serverrs -> target
@@ -140,7 +140,7 @@ jobs:
             --manifest-path serverrs/Cargo.toml
           mkdir -p dist
           cp serverrs/target/release/serverrs dist/serverrs-macos-x86_64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: serverrs-macos-x86_64
           path: dist/serverrs-macos-x86_64
@@ -151,9 +151,9 @@ jobs:
       # Keep the vendored Opus build compatible with newer CMake.
       CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: serverrs -> target
@@ -166,7 +166,7 @@ jobs:
             --manifest-path serverrs/Cargo.toml
           Copy-Item serverrs/target/release/serverrs.exe `
             dist/serverrs-windows-amd64.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: serverrs-windows-amd64
           path: dist/serverrs-windows-amd64.exe
@@ -174,15 +174,15 @@ jobs:
   client:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
       - name: Build web client
         run: |
           npm ci --workspace=client
           npm run build --workspace=client
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: client-dist
           path: client/dist
@@ -192,7 +192,7 @@ jobs:
     needs: [linux-amd64, linux-arm64, macos-arm64, macos-x86_64, windows-amd64, client]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Resolve version
         id: version
         shell: bash
@@ -204,11 +204,11 @@ jobs:
           fi
           version="${version#v}"
           echo "value=$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: client-dist
           path: client-dist
@@ -220,7 +220,7 @@ jobs:
             artifacts \
             client-dist \
             package-out
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: serverrs-release-archives
           path: package-out/archives/*
@@ -232,12 +232,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: serverrs-release-archives
           path: dist
       - name: Attach portable archives to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.tar.gz
