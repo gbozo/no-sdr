@@ -171,6 +171,8 @@ pub struct ClientState {
     pub fft_codec: String,
     pub iq_codec: String,
     pub mode: String,
+    /// Foreground digital decoder (ft8/ft4/ft2); empty means audio only.
+    pub decoder: String,
     pub tune_offset: i64,
     pub bandwidth: i64,
     /// True after a successful `admin_auth` on this connection.
@@ -340,6 +342,10 @@ impl Client {
         self.state.lock().mode.clone()
     }
 
+    pub fn decoder(&self) -> String {
+        self.state.lock().decoder.clone()
+    }
+
     pub fn tune_offset(&self) -> i64 {
         self.state.lock().tune_offset
     }
@@ -400,6 +406,7 @@ impl Client {
                     st.audio_enabled = false;
                     st.stereo_enabled = false;
                     st.mode.clear();
+                    st.decoder.clear();
                     st.tune_offset = 0;
                     st.bandwidth = 0;
                 }
@@ -416,6 +423,10 @@ impl Client {
                 if cmd.bandwidth > 0 {
                     st.bandwidth = cmd.bandwidth;
                 }
+                None
+            }
+            "decoder" => {
+                st.decoder = cmd.mode.clone();
                 None
             }
             "bandwidth" => {

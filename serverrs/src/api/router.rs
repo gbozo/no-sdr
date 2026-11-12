@@ -77,6 +77,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/identify", get(identify).post(identify))
         .route("/identify/status", get(identify_status))
         .nest("/admin", admin_router);
+    #[cfg(feature = "decoders")]
+    let api_router = api_router
+        .route("/decoder/messages", get(super::decoders::messages))
+        .route("/decoder/stats", get(super::decoders::stats));
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

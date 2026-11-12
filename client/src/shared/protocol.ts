@@ -82,6 +82,7 @@ export type ClientCommand =
   | { cmd: 'unsubscribe' }
   | { cmd: 'tune'; offset: number } // frequency offset from center in Hz
   | { cmd: 'mode'; mode: string; bandwidth?: number }
+  | { cmd: 'decoder'; mode: string }
   | { cmd: 'bandwidth'; hz: number }
   | { cmd: 'squelch'; db: number | null }
   | { cmd: 'volume'; level: number }

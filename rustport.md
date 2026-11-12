@@ -23,8 +23,9 @@ protocol as before).
   Airspy HF+), `hydrasdr` (native HydraSDR RFOne), `elad` (native ELAD FDM)
   `rx888` (native RX-888 Mk2), `pluto` (PlutoSDR over IIOD), `sdrplay`
   (SDRplay RSP via the vendor API service), `lime` (LimeSDR via LimeSuite) and
-  `fobos` (RigExpert Fobos via libfobos) are **default features**. The last
-  three load their vendor library at runtime; no SDK is needed to build.
+  `fobos` (RigExpert Fobos via libfobos) and `decoders` (background
+  FT8/FT4/FT2 via `mfsk-core`) are **default features**. The three vendor drivers load
+  their library at runtime; no SDK is needed to build.
   The `bias-t` feature decides whether the GPIO path is compiled in; the
   dongle's `biasT` setting still decides whether it is energized. Use `--no-default-features` to build without optional
   dependencies. Every release artifact, including macOS and Windows, uses
@@ -104,6 +105,8 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-12: Decoder subsystem extended with foreground per-client decoding (`{"cmd":"decoder","mode":"ft8"}`) and SQLite result persistence with `/api/decoder/messages` and `/api/decoder/stats`. Background decoder work remains the OpenWebRX-style path.
+- 2026-11-12: Background decoder subsystem added (OpenWebRX-style). Each configured decoder gets a per-dongle `mfsk-core` IQ channelizer and UTC-aligned 12 kHz slot receiver; FT8, FT4 and FT2 decode results are broadcast as `MSG_DECODER`. Configured under top-level `decoders:` in `config/config.yaml`; see `docs/decoders.md`.
 - 2026-11-12: Version 2.12.0. Electron desktop packages for Linux (AppImage/deb), macOS (dmg/zip) and Windows (NSIS/portable), alongside the portable server archives on the GitHub release. Adds native and runtime-loaded vendor SDR source expansion, admin device scanning and source controls.
 - 2026-11-12: Electron desktop packaging for Linux (AppImage/deb), macOS (dmg/zip) and Windows (NSIS/portable). The app bundles the platform `serverrs`, client and default config; it starts the server on a free loopback port and keeps config/logs in the per-user data directory. Release CI builds each target alongside the portable server archives.
 - 2026-11-12: SDRplay RSP, LimeSDR and RigExpert Fobos SDR sources added through the pinned sdroxide crates. All three vendor libraries are `dlopen`'d at runtime, so default builds need no SDK. Admin exposes LNA/IF gain, AGC, notches, antenna/tuner, Lime gain/channel/filter/calibration and Fobos port/gain/clock controls. Receive only; not yet hardware-tested.

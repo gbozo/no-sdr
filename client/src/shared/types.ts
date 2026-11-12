@@ -150,6 +150,7 @@ export type DigitalMode =
   | 'pocsag'
   | 'ft8'
   | 'ft4'
+  | 'ft2'
   | 'wspr';
 
 // ---- Client / Session ----

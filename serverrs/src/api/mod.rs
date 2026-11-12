@@ -3,6 +3,8 @@
 pub mod admin;
 pub mod bandplan;
 pub mod bookmarks;
+#[cfg(feature = "decoders")]
+pub mod decoders;
 pub mod identify;
 pub mod recognizer;
 pub mod router;
@@ -38,4 +40,6 @@ pub struct AppState {
     pub auth: Arc<admin::AdminAuth>,
     pub static_dir: PathBuf,
     pub start_time: Instant,
+    #[cfg(feature = "decoders")]
+    pub decoder_store: Arc<crate::decoders::store::DecoderStore>,
 }

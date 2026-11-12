@@ -65,6 +65,51 @@ pub struct Config {
     pub dongles: Vec<DongleConfig>,
     #[serde(default)]
     pub bookmarks: Vec<Bookmark>,
+    /// Background digital-mode decoders. They run independently of connected
+    /// clients and broadcast results to clients subscribed to their dongle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decoders: Vec<DecoderConfig>,
+    /// Decoder result persistence.
+    #[serde(default)]
+    pub database: DatabaseConfig,
+}
+
+/// Decoder result database settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseConfig {
+    /// SQLite path. Empty means `decoders.sqlite` beside the config file.
+    #[serde(default)]
+    pub decoder_path: String,
+    /// Delete decoder messages older than this after insert. 0 disables
+    /// automatic retention (the default).
+    #[serde(default)]
+    pub retention_days: i64,
+}
+
+/// One background decoder task.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecoderConfig {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub enabled: bool,
+    /// Dongle whose raw IQ stream feeds this decoder. Empty matches no dongle.
+    #[serde(default)]
+    pub dongle_id: String,
+    /// Decoder family: `ft8` or `ft4` for now.
+    #[serde(default)]
+    pub mode: String,
+    /// Absolute RF frequency to decode.
+    #[serde(default)]
+    pub frequency_hz: i64,
+    /// Requested audio passband, informational for the FT8/FT4 channelizer.
+    #[serde(default)]
+    pub bandwidth_hz: i32,
+    /// Decoder-specific options reserved for later modes.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// User-defined frequency/mode preset.
@@ -425,6 +470,21 @@ pub fn validate(cfg: &Config) -> Result<()> {
             cfg.server.log_level
         );
     }
+    for (i, d) in cfg.decoders.iter().enumerate() {
+        if d.id.trim().is_empty() {
+            bail!("config: decoders[{i}]: id is required");
+        }
+        if d.mode.trim().is_empty() {
+            bail!("config: decoders[{i}] ({}): mode is required", d.id);
+        }
+        if d.frequency_hz <= 0 {
+            bail!(
+                "config: decoders[{i}] ({}): frequencyHz must be > 0, got {}",
+                d.id,
+                d.frequency_hz
+            );
+        }
+    }
     for (i, d) in cfg.dongles.iter().enumerate() {
         for (j, p) in d.profiles.iter().enumerate() {
             if !is_power_of_two(p.fft_size) || p.fft_size < 256 || p.fft_size > 131072 {
@@ -611,6 +671,21 @@ mod tests {
                 .and_then(|v| v.as_f64()),
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn background_decoders_round_trip() {
+        let cfg = parse(
+            "dongles:\n  - id: d1\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: usb\ndecoders:\n  - id: ft8-20m\n    enabled: true\n    dongleId: d1\n    mode: ft8\n    frequencyHz: 14074000\n    bandwidthHz: 3000\n",
+        );
+        assert_eq!(cfg.decoders.len(), 1);
+        let d = &cfg.decoders[0];
+        assert_eq!(d.id, "ft8-20m");
+        assert!(d.enabled);
+        assert_eq!(d.dongle_id, "d1");
+        assert_eq!(d.mode, "ft8");
+        assert_eq!(d.frequency_hz, 14_074_000);
+        assert_eq!(d.bandwidth_hz, 3000);
     }
 
     #[test]

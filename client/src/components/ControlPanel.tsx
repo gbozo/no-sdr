@@ -26,6 +26,35 @@ const ControlPanel: Component = () => {
       {/* Mode Selector */}
       <ModeSelector />
 
+      {/* Foreground digital decoder selector — the decode table opens below the waterfall */}
+      <div class="border border-border/40 rounded-md bg-sdr-surface/30 p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Digital Decoder</span>
+          <Show when={store.decoderMode()}>
+            <button
+              onClick={() => engine.setDecoder('')}
+              class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-amber"
+            >
+              Off
+            </button>
+          </Show>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }]}>
+            {(decoder) => (
+              <button
+                onClick={() => engine.setDecoder(store.decoderMode() === decoder.id ? '' : decoder.id)}
+                class={`mil-btn text-[9px] px-2 py-1 ${
+                  store.decoderMode() === decoder.id ? 'active border-cyan text-cyan' : ''
+                }`}
+              >
+                {decoder.label}
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+
       {/* Music Identification — only meaningful for broadcast/music modes */}
       <Show when={(['wfm', 'nfm', 'am', 'am-stereo', 'sam'] as DemodMode[]).includes(store.mode())}>
         <IdentifyPanel />

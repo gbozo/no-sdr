@@ -136,6 +136,7 @@ There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s
 - **WebSocket backpressure** — bufferedAmount-based frame skipping prevents server memory bloat
 - **Audio-gated IQ** — server only sends per-user IQ data after client enables audio playback
 - **Native SDR drivers** — RTL-SDR, HackRF One/Pro, Airspy R2/Mini, Airspy HF+, HydraSDR RFOne, ELAD FDM, RX-888 Mk2 and PlutoSDR with no librtlsdr/libusb/libhackrf/libairspy/libhydrasdr/libiio dependency; SDRplay RSP, LimeSDR and Fobos SDR through their vendor libraries, loaded at runtime
+- **Foreground and background decoders** — per-client FT8/FT4/FT2 plus OpenWebRX-style per-dongle background workers, persisted to SQLite and broadcast as `MSG_DECODER`. See `docs/decoders.md`.
 - **Dongle hardware options** — directSampling, biasT, digitalAgc, offsetTuning, ifGain, tunerBandwidth; HackRF LNA/VGA/amp/filter via the admin page
 - **Demo mode** — built-in signal simulator for development and demos, no hardware needed
 - **rtl_tcp support** — connect to remote RTL-SDR dongles over TCP (Docker sidecars, remote antennas)

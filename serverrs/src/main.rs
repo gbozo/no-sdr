@@ -135,7 +135,7 @@ async fn async_main() -> Result<()> {
     let cfg = Arc::new(RwLock::new(cfg));
     let cfg_version = Arc::new(ConfigVersion::new());
 
-    let mgr = Manager::new(cfg.clone(), ws.clone());
+    let mgr = Manager::new(cfg.clone(), ws.clone(), &cfg_path);
     mgr.set_version_func({
         let v = cfg_version.clone();
         move || v.get()
@@ -180,6 +180,8 @@ async fn async_main() -> Result<()> {
         auth: AdminAuth::new(admin_password),
         static_dir: PathBuf::from(static_dir),
         start_time: Instant::now(),
+        #[cfg(feature = "decoders")]
+        decoder_store: mgr.decoder_store(),
     };
 
     // Start dongles + stats loop (non-fatal).

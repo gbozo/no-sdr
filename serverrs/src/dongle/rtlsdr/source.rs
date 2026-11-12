@@ -169,6 +169,8 @@ fn run_stream(
     let mut rtl_auto = cfg.agc.rtl_auto();
     let mut gain_db = cfg.tuner_gain_db;
     let mut shutdown = false;
+    let mut last_data = Instant::now();
+    let mut constant_run = 0u32;
 
     loop {
         if *cancel.borrow() {
@@ -213,6 +215,17 @@ fn run_stream(
             ep.submit(ep.allocate(xfer_bytes));
         }
 
+        // A dongle that stops delivering samples, or delivers the same byte
+        // forever, is wedged even though USB still reports success. Reopening
+        // is the only recovery short of replugging; let the manager's retry
+        // loop do it rather than feeding the client a constant stream.
+        if last_data.elapsed() > Duration::from_secs(3) {
+            return Err(anyhow!(
+                "no IQ samples for {} s; reinitialising the RTL-SDR",
+                last_data.elapsed().as_secs()
+            ));
+        }
+
         let Some(completion) = ep.wait_next_complete(COMPLETE_TIMEOUT) else {
             continue;
         };
@@ -221,9 +234,25 @@ fn run_stream(
         match completion.status {
             Ok(()) => {
                 let data = take_even(&buf, &mut odd_carry);
-                if !data.is_empty() && out.blocking_send(data).is_err() {
-                    debug!("rtlsdr output channel closed");
-                    break;
+                if !data.is_empty() {
+                    last_data = Instant::now();
+                    if data.iter().all(|b| *b == data[0]) {
+                        constant_run += 1;
+                        if constant_run >= 500 {
+                            return Err(anyhow!(
+                                "RTL-SDR IQ stream is constant ({} bytes of {:#04x}); \
+                                 reinitialising the device",
+                                data.len(),
+                                data[0]
+                            ));
+                        }
+                    } else {
+                        constant_run = 0;
+                    }
+                    if out.blocking_send(data).is_err() {
+                        debug!("rtlsdr output channel closed");
+                        break;
+                    }
                 }
             }
             Err(TransferError::Disconnected) => {

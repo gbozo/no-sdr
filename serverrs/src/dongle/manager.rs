@@ -166,6 +166,9 @@ fn pack_notification(n: &ConfigNotification) -> Vec<u8> {
 struct ActiveDongle {
     id: String,
     profile: RwLock<DongleProfile>,
+    /// Actual rate the source is streaming, after any driver snapping.
+    #[cfg_attr(not(feature = "decoders"), allow(dead_code))]
+    sample_rate: i32,
     command: Option<CommandHandle>,
     fft_proc: Mutex<FftProcessor>,
     deflate_enc: Mutex<FftDeflateEncoder>,
@@ -192,6 +195,17 @@ struct ClientPipeline {
     iq_chunk_count: u64,
     stereo_enabled: bool,
     adpcm_buf: Vec<u8>,
+    /// Per-client foreground decoder, built from the client's tune offset.
+    #[cfg(feature = "decoders")]
+    foreground: Option<crate::decoders::Channel>,
+    #[cfg(feature = "decoders")]
+    foreground_mode: String,
+    #[cfg(feature = "decoders")]
+    foreground_offset: i32,
+    #[cfg(feature = "decoders")]
+    foreground_center: i64,
+    #[cfg(feature = "decoders")]
+    foreground_rate: u32,
 }
 
 /// Shared dongle manager.
@@ -206,6 +220,12 @@ pub struct Manager {
     /// state of the operation that replaced it.
     start_generations: Mutex<HashMap<String, u64>>,
     client_pipelines: Mutex<HashMap<String, Arc<Mutex<ClientPipeline>>>>,
+    /// OpenWebRX-style background decoders, one worker per dongle.
+    #[cfg(feature = "decoders")]
+    decoders: Arc<crate::decoders::DecoderManager>,
+    /// Persisted decoder results, shared with the REST query layer.
+    #[cfg(feature = "decoders")]
+    decoder_store: Arc<crate::decoders::store::DecoderStore>,
     /// Last per-dongle subscribed-client counts, used to broadcast
     /// `dongle_status` only when a count actually changes.
     last_client_counts: Mutex<HashMap<String, usize>>,
@@ -217,7 +237,11 @@ pub struct Manager {
 
 impl Manager {
     /// Creates the manager and registers WebSocket handlers.
-    pub fn new(cfg: Arc<RwLock<Config>>, ws: Arc<WsManager>) -> Arc<Self> {
+    pub fn new(
+        cfg: Arc<RwLock<Config>>,
+        ws: Arc<WsManager>,
+        _cfg_path: &std::path::Path,
+    ) -> Arc<Self> {
         let mut states = HashMap::new();
         {
             let cfg = cfg.read();
@@ -226,6 +250,27 @@ impl Manager {
             }
         }
 
+        #[cfg(feature = "decoders")]
+        let (decoder_store, decoders) = {
+            let cfg = cfg.read();
+            let db_path = if cfg.database.decoder_path.trim().is_empty() {
+                crate::decoders::store::default_path(_cfg_path)
+            } else {
+                std::path::PathBuf::from(cfg.database.decoder_path.trim())
+            };
+            let decoder_store = crate::decoders::store::DecoderStore::open(
+                db_path,
+                cfg.database.retention_days,
+            );
+            let decoders = Arc::new(crate::decoders::DecoderManager::new(
+                &cfg.decoders,
+                ws.clone(),
+                decoder_store.clone(),
+                cfg.database.retention_days,
+            ));
+            (decoder_store, decoders)
+        };
+
         let mgr = Arc::new(Self {
             cfg,
             ws: ws.clone(),
@@ -233,6 +278,10 @@ impl Manager {
             dongle_states: Mutex::new(states),
             start_generations: Mutex::new(HashMap::new()),
             client_pipelines: Mutex::new(HashMap::new()),
+            #[cfg(feature = "decoders")]
+            decoders,
+            #[cfg(feature = "decoders")]
+            decoder_store,
             last_client_counts: Mutex::new(HashMap::new()),
             recorder: Recorder::new("recordings"),
             get_version: Mutex::new(None),
@@ -277,6 +326,11 @@ impl Manager {
 
     pub fn current_version(&self) -> u64 {
         self.get_version.lock().as_ref().map(|f| f()).unwrap_or(0)
+    }
+
+    #[cfg(feature = "decoders")]
+    pub fn decoder_store(&self) -> Arc<crate::decoders::store::DecoderStore> {
+        Arc::clone(&self.decoder_store)
     }
 
     pub fn recorder(&self) -> &Recorder {
@@ -324,6 +378,8 @@ impl Manager {
                 opus.close();
             }
         }
+        #[cfg(feature = "decoders")]
+        self.decoders.shutdown();
     }
 
     // ------------------------------------------------------------------
@@ -533,6 +589,7 @@ impl Manager {
         let ad = Arc::new(ActiveDongle {
             id: id.clone(),
             profile: RwLock::new(profile),
+            sample_rate,
             command,
             fft_proc: Mutex::new(fft_proc),
             deflate_enc: Mutex::new(deflate_enc),
@@ -1368,6 +1425,14 @@ impl Manager {
             }
         }
 
+        #[cfg(feature = "decoders")]
+        self.decoders.push_chunk(
+            &ad.id,
+            (profile.center_frequency + profile.oscillator_offset as i64) as f64,
+            ad.sample_rate.max(1) as u32,
+            &chunk,
+        );
+
         self.recorder.write_iq(&ad.id, &chunk);
         self.process_client_iq(ad, &chunk);
 
@@ -1432,6 +1497,13 @@ impl Manager {
     }
 
     fn process_client_iq(&self, ad: &Arc<ActiveDongle>, chunk: &[u8]) {
+        let (center_hz, sample_rate) = {
+            let profile = ad.profile.read();
+            (
+                (profile.center_frequency + profile.oscillator_offset as i64) as f64,
+                ad.sample_rate.max(1) as u32,
+            )
+        };
         let pipelines: Vec<(String, Arc<Mutex<ClientPipeline>>)> = {
             let map = self.client_pipelines.lock();
             map.iter()
@@ -1441,15 +1513,95 @@ impl Manager {
         };
 
         for (client_id, cp) in pipelines {
-            self.process_one_client(&client_id, &cp, chunk);
+            self.process_one_client(&client_id, &cp, chunk, center_hz, sample_rate);
         }
     }
 
-    fn process_one_client(&self, client_id: &str, cp: &Arc<Mutex<ClientPipeline>>, chunk: &[u8]) {
+    fn process_one_client(
+        &self,
+        client_id: &str,
+        cp: &Arc<Mutex<ClientPipeline>>,
+        chunk: &[u8],
+        center_hz: f64,
+        sample_rate: u32,
+    ) {
+        #[cfg(not(feature = "decoders"))]
+        let _ = (center_hz, sample_rate);
         let mut cp = cp.lock();
         cp.iq_chunk_count += 1;
         if cp.iq_chunk_count % 500 == 0 {
             debug!(client = %client_id, chunks = cp.iq_chunk_count, "IQ chunks processed");
+        }
+
+        #[cfg(feature = "decoders")]
+        if !cp.foreground_mode.is_empty() {
+            if cp.foreground.is_none()
+                || cp.foreground_rate != sample_rate
+                || cp.foreground_center != center_hz as i64
+            {
+                let cfg = crate::config::DecoderConfig {
+                    id: format!("client-{client_id}"),
+                    enabled: true,
+                    dongle_id: cp.dongle_id.clone(),
+                    mode: cp.foreground_mode.clone(),
+                    frequency_hz: center_hz as i64 + cp.foreground_offset as i64,
+                    bandwidth_hz: 3000,
+                    settings: Default::default(),
+                };
+                cp.foreground = match crate::decoders::build_channel(&cfg, center_hz, sample_rate) {
+                    Ok(channel) => Some(channel),
+                    Err(e) => {
+                        warn!(
+                            client = %client_id,
+                            decoder = %cp.foreground_mode,
+                            error = %e,
+                            "foreground decoder could not be created"
+                        );
+                        None
+                    }
+                };
+                cp.foreground_center = center_hz as i64;
+                cp.foreground_rate = sample_rate;
+            }
+
+            let foreground_dongle_id = cp.dongle_id.clone();
+            let foreground_mode = cp.foreground_mode.clone();
+            let foreground_id = format!("client-{client_id}");
+            if let Some(foreground) = cp.foreground.as_mut() {
+                foreground.process_chunk(chunk, crate::decoders::store::now_ms());
+                for data in foreground.take_results() {
+                    let text = data
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if !text.is_empty() {
+                        let record = crate::decoders::store::DecoderRecord {
+                            decoder_id: &foreground_id,
+                            dongle_id: &foreground_dongle_id,
+                            mode: &foreground_mode,
+                            text,
+                            frequency_hz: data
+                                .get("rfHz")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0),
+                            audio_hz: data
+                                .get("audioHz")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0),
+                            snr_db: data.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            dt_sec: data.get("dtSec").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            period: data.get("period").and_then(|v| v.as_i64()).unwrap_or(0),
+                            payload: &data.to_string(),
+                        };
+                        let retention = self.cfg.read().database.retention_days;
+                        self.decoder_store.insert(&record, retention);
+                    }
+                    self.ws.send_to(
+                        client_id,
+                        crate::ws::pack_decoder_message(&foreground_mode, data),
+                    );
+                }
+            }
         }
 
         // Move the scratch buffer out so the extractor and the encoders can
@@ -1555,6 +1707,39 @@ impl Manager {
         } else {
             2_400_000
         };
+        #[cfg(feature = "decoders")]
+        let center_hz = profile.center_frequency + profile.oscillator_offset as i64;
+        #[cfg(feature = "decoders")]
+        let decoder_mode = client.decoder();
+        #[cfg(feature = "decoders")]
+        let foreground = if decoder_mode.is_empty() {
+            None
+        } else {
+            let cfg = crate::config::DecoderConfig {
+                id: format!("client-{client_id}"),
+                enabled: true,
+                dongle_id: dongle_id.clone(),
+                mode: decoder_mode.clone(),
+                frequency_hz: center_hz + tune_offset as i64,
+                bandwidth_hz: 3000,
+                settings: Default::default(),
+            };
+            match crate::decoders::build_channel(&cfg, center_hz as f64, input_rate as u32) {
+                Ok(channel) => {
+                    info!(client = %client_id, decoder = %decoder_mode, "foreground decoder ready");
+                    Some(channel)
+                }
+                Err(e) => {
+                    warn!(
+                        client = %client_id,
+                        mode = %decoder_mode,
+                        error = %e,
+                        "foreground decoder could not be created"
+                    );
+                    None
+                }
+            }
+        };
 
         let extractor = match IqExtractor::new(IqExtractorConfig {
             input_sample_rate: input_rate,
@@ -1587,6 +1772,16 @@ impl Manager {
             iq_chunk_count: 0,
             stereo_enabled,
             adpcm_buf: vec![0; (chunk_size + 1) / 2],
+            #[cfg(feature = "decoders")]
+            foreground,
+            #[cfg(feature = "decoders")]
+            foreground_mode: decoder_mode,
+            #[cfg(feature = "decoders")]
+            foreground_offset: tune_offset,
+            #[cfg(feature = "decoders")]
+            foreground_center: center_hz,
+            #[cfg(feature = "decoders")]
+            foreground_rate: input_rate as u32,
         };
 
         if profile.pre_filter_nb {
@@ -1689,6 +1884,7 @@ impl Manager {
             "subscribe" => self.handle_subscribe(client_id, cmd),
             "unsubscribe" => self.handle_unsubscribe(client_id),
             "audio_enabled" => self.handle_audio_enabled(client_id, cmd),
+            "decoder" => self.handle_decoder(client_id),
             "tune" => self.handle_tune(client_id, cmd),
             "bandwidth" => self.handle_bandwidth(client_id, cmd),
             "mode" => self.handle_mode(client_id, cmd),
@@ -1877,9 +2073,23 @@ impl Manager {
     fn handle_audio_enabled(&self, client_id: &str, cmd: &ClientCommand) {
         match cmd.enabled {
             Some(true) => self.create_client_pipeline(client_id),
-            Some(false) => self.destroy_client_pipeline(client_id),
+            Some(false) => {
+                let decoder_active = self
+                    .ws
+                    .get_client(client_id)
+                    .map(|c| !c.decoder().is_empty())
+                    .unwrap_or(false);
+                if !decoder_active {
+                    self.destroy_client_pipeline(client_id);
+                }
+            }
             None => {}
         }
+    }
+
+    fn handle_decoder(&self, client_id: &str) {
+        self.destroy_client_pipeline(client_id);
+        self.create_client_pipeline(client_id);
     }
 
     fn handle_tune(&self, client_id: &str, cmd: &ClientCommand) {
@@ -1889,6 +2099,11 @@ impl Manager {
             cp.extractor.reset();
             cp.accum_pos = 0;
             cp.adpcm_enc.reset();
+            #[cfg(feature = "decoders")]
+            {
+                cp.foreground_offset = cmd.offset as i32;
+                cp.foreground = None;
+            }
         }
     }
 

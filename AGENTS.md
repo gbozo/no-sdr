@@ -41,10 +41,15 @@ docker/Dockerfile.rust → multi-CPU Rust image (amd64 v1-v4, arm64 Pi cores)
 ```
 Dongle (uint8 IQ @ 2.4 MSPS, demo/rtl_tcp/local USB)
   ├─► FftProcessor (1× per dongle) → Float32 dB → codec encode → broadcast all clients
+  ├─► DecoderManager (1× per dongle) → channel IQ → 12 kHz slots → FT8/FT4/FT2 → MSG_DECODER
   └─► IqExtractor (1× per client) → NCO + Butterworth + decimate → Int16 sub-band
+        ├─► Foreground decoder (FT8/FT4/FT2) → MSG_DECODER → that client + SQLite
         ├─► ADPCM/raw → WS → client demod (FM/AM/SSB/CW/SAM/C-QUAM) → audio
         └─► OpusPipeline → server demod + Opus encode → WS → client decode → audio
 ```
+
+Background and foreground decoder results both persist to `decoders.sqlite`
+(`decoder_messages`); `/api/decoder/messages` and `/api/decoder/stats` read it.
 
 `serverrs/src/dongle/manager.rs` owns the dongle loop. Optional
 `iqCorrection` runs on the raw device stream before recording/FFT/client
@@ -62,7 +67,7 @@ pipelines.
 | Build | npm workspaces (client + desktop), Cargo crate (serverrs) |
 | Dev reload | Vite HMR (client), concurrently; Rust runs as a normal process |
 | Config | YAML; `serverrs/src/config.rs` |
-| Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`); HackRF (`hackrf`); Airspy R2/Mini (`airspy`); Airspy HF+ (`airspyhf`); HydraSDR (`hydrasdr`); ELAD (`elad`); RX-888 (`rx888`); Pluto (`pluto`); SDRplay (`sdrplay`); LimeSDR (`lime`); Fobos (`fobos`). All are default Cargo features |
+| Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`); HackRF (`hackrf`); Airspy R2/Mini (`airspy`); Airspy HF+ (`airspyhf`); HydraSDR (`hydrasdr`); ELAD (`elad`); RX-888 (`rx888`); Pluto (`pluto`); SDRplay (`sdrplay`); LimeSDR (`lime`); Fobos (`fobos`); background decoders (`decoders`, `mfsk-core`). All are default Cargo features |
 
 ## Key Files (by responsibility)
 
@@ -76,6 +81,7 @@ pipelines.
 | `serverrs/src/demod/fm.rs` | Server-side FM demodulator (stereo + RDS) | Per Opus-client |
 | `serverrs/src/dongle/opus_pipeline.rs` | Server-side demod + Opus encode per client | Per Opus-client |
 | `serverrs/src/codec/adpcm.rs` | IMA-ADPCM encoder/decoder (4:1 lossy) | Every IQ/FFT frame |
+| `serverrs/src/decoders/mod.rs` | OpenWebRX-style background decoder workers, FT8/FT4 channelisation and results | YES (per dongle) |
 | `serverrs/src/ws/manager.rs` | WS lifecycle, broadcast, aggregate traffic stats | YES |
 | `serverrs/src/ws/protocol.rs` | Binary WS protocol: pack/unpack, message types, client commands | Every WS message |
 | `serverrs/src/api/router.rs` | axum routes, admin API, static SPA, WebSocket upgrade | Request handler |
@@ -189,6 +195,7 @@ npm run start:demo                 # Same but demo mode (simulated signals)
 | New UI panel | `client/src/components/` + import in `App.tsx` |
 | New dongle source | `serverrs/src/dongle/source.rs` trait + `<source>.rs`, wire into `create_source` |
 | New native SDR driver | `serverrs/src/dongle/<radio>/` (nusb; model on `rtlsdr/` or `hackrf/`), wire into `manager.rs`; see `docs/native-sdr-drivers.md` |
+| New background decoder | `serverrs/src/decoders/mod.rs` + `config.rs`; emit `MSG_DECODER` via `ws::pack_decoder_message`; see `docs/decoders.md` |
 | Config changes | `serverrs/src/config.rs` + `config/config.yaml` |
 | DSP block | `serverrs/src/dsp/` (`ProcessorBlock` trait) |
 

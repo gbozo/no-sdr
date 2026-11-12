@@ -1506,6 +1506,9 @@ export class SdrEngine {
       this.hadPriorSubscription = false;
     }
     this.send({ cmd: 'subscribe', dongleId, profileId });
+    if (store.decoderMode()) {
+      this.send({ cmd: 'decoder', mode: store.decoderMode() });
+    }
   }
 
   unsubscribe(): void {
@@ -1587,6 +1590,14 @@ export class SdrEngine {
     // Send mode + bandwidth together so server can set RF filter correctly
     this.send({ cmd: 'mode', mode, bandwidth: store.bandwidth() });
     this.updateMediaSession();
+  }
+
+  /** Select a foreground digital decoder (empty string disables it). */
+  setDecoder(mode: string): void {
+    const next = mode.trim().toLowerCase();
+    store.setDecoderMode(next);
+    store.clearDecoderMessages();
+    this.send({ cmd: 'decoder', mode: next });
   }
 
   setBandwidth(hz: number): void {
@@ -2032,6 +2043,12 @@ export class SdrEngine {
   // ---- Seek-back ----
 
   get fftBufferCount(): number { return this.fftBuffer.count; }
+
+  /** Latest decoded FFT frame, for decoder-specific zoom displays. */
+  getLatestFftFrame(): Float32Array | null {
+    const frames = this.fftBuffer.getFrames();
+    return frames.length ? frames[frames.length - 1] : null;
+  }
 
   /** Whether audio has been initialised (user has clicked to enable). */
   get isAudioInitialized(): boolean { return this.audio.isInitialized; }

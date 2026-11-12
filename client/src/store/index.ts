@@ -99,6 +99,11 @@ function createStore() {
   const [tuneOffset, setTuneOffset] = createSignal(0);
   const [mode, setMode] = createSignal<DemodMode>('nfm');
   const [bandwidth, setBandwidth] = createSignal(12_500);
+  /** Foreground digital decoder: '' = audio, otherwise ft8/ft4/ft2. */
+  const [decoderMode, setDecoderMode] = createSignal('');
+  const [decoderMessages, setDecoderMessages] = createSignal<
+    { decoderType: string; data: Record<string, unknown>; receivedAt: number }[]
+  >([]);
   /** Tuning step in Hz. 0 = auto (use bandwidth). User can override. */
   const [tuningStep, setTuningStep] = createSignal(0);
 
@@ -279,6 +284,15 @@ function createStore() {
     tuneOffset, setTuneOffset,
     mode, setMode,
     bandwidth, setBandwidth,
+    decoderMode, setDecoderMode,
+    decoderMessages,
+    addDecoderMessage: (decoderType: string, data: Record<string, unknown>) => {
+      setDecoderMessages((prev) => [
+        { decoderType, data, receivedAt: Date.now() },
+        ...prev,
+      ].slice(0, 200));
+    },
+    clearDecoderMessages: () => setDecoderMessages([]),
     tuningStep, setTuningStep,
     tunedFrequency,
 

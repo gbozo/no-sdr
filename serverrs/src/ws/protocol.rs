@@ -6,6 +6,7 @@
 //! The binary protocol is byte-compatible with the original Go implementation.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // Message type bytes (server -> client)
 pub const MSG_FFT: u8 = 0x01; // Float32Array (dB magnitudes)
@@ -140,6 +141,23 @@ pub fn pack_meta_message(meta: &ServerMeta) -> Vec<u8> {
     let json = serde_json::to_vec(meta).unwrap_or_default();
     let mut buf = Vec::with_capacity(1 + json.len());
     buf.push(MSG_META);
+    buf.extend_from_slice(&json);
+    buf
+}
+
+/// Pack a decoder result as `[MSG_DECODER][UTF-8 JSON]`.
+///
+/// The client consumes `{ decoderType, data }`; `data` is intentionally
+/// decoder-specific so a panel can be added without changing the wire
+/// envelope.
+pub fn pack_decoder_message(decoder_type: &str, data: Value) -> Vec<u8> {
+    let value = serde_json::json!({
+        "decoderType": decoder_type,
+        "data": data,
+    });
+    let json = serde_json::to_vec(&value).unwrap_or_default();
+    let mut buf = Vec::with_capacity(1 + json.len());
+    buf.push(MSG_DECODER);
     buf.extend_from_slice(&json);
     buf
 }
@@ -440,6 +458,15 @@ mod tests {
         assert_eq!(v["running"], true);
         assert_eq!(v["clientCount"], 3);
         assert!(v.get("profileId").is_none());
+    }
+
+    #[test]
+    fn decoder_message_shape() {
+        let msg = pack_decoder_message("ft8", serde_json::json!({"text": "CQ N0CALL"}));
+        assert_eq!(msg[0], MSG_DECODER);
+        let value: Value = serde_json::from_slice(&msg[1..]).unwrap();
+        assert_eq!(value["decoderType"], "ft8");
+        assert_eq!(value["data"]["text"], "CQ N0CALL");
     }
 
     #[test]

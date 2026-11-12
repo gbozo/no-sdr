@@ -7,6 +7,7 @@ import { useNavigate } from '@solidjs/router';
 import { store } from './store/index.js';
 import { engine } from './engine/sdr-engine.js';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
+import DecoderDisplay from './components/DecoderDisplay.js';
 import FrequencyDisplay from './components/FrequencyDisplay.js';
 import ControlPanel from './components/ControlPanel.js';
 import ConnectionOverlay from './components/ConnectionOverlay.js';
@@ -35,6 +36,12 @@ const App: Component = () => {
   (globalThis as any).__sdrEngine = engine;
 
   onMount(() => {
+    // Foreground decoder results are pushed as MSG_DECODER and fed to the
+    // reactive message store for the decoder panel.
+    engine.onDecoderData = (type, data) => {
+      store.addDecoderMessage(type, (data ?? {}) as Record<string, unknown>);
+    };
+
     // Connect to WebSocket on first mount. On HMR the engine singleton is reused
     // and already connected, so connect() is a no-op (readyState guard).
     engine.connect();
@@ -314,11 +321,18 @@ const App: Component = () => {
             <FrequencyDisplay />
           </div>
 
-          {/* Waterfall — mobile: 50vh / desktop: flex-1 */}
-          <div class="md:flex-1 md:min-h-0 p-2 flex flex-col" style="min-height: 50vh">
-            <div class="flex-1 min-h-0 rounded-md overflow-hidden border border-border bg-black flex flex-col">
+          {/* Main waterfall, split with the decoder workspace when active */}
+          <div class="md:flex-1 md:min-h-0 p-2 flex flex-col gap-2" style="min-height: 50vh">
+            <div class={`flex-1 min-h-0 rounded-md overflow-hidden border border-border bg-black flex flex-col ${
+              store.decoderMode() ? 'min-h-[240px]' : ''
+            }`}>
               <WaterfallDisplay />
             </div>
+            <Show when={store.decoderMode()}>
+              <div class="flex-1 min-h-[240px] md:min-h-0 rounded-md overflow-hidden border border-border bg-black">
+                <DecoderDisplay />
+              </div>
+            </Show>
           </div>
         </div>
       </div>

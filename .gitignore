@@ -26,6 +26,9 @@ logs/
 # Database
 *.db
 *.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # Build caches
 .cache/
