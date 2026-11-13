@@ -12,6 +12,7 @@
 //! rather than being forced into this slotted path.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -26,21 +27,83 @@ use tracing::{info, warn};
 use crate::config::DecoderConfig;
 use crate::demod::{Demodulator, SsbDemod, SsbMode};
 use crate::dsp::{IqExtractor, IqExtractorConfig};
-use crate::ws::{pack_decoder_message, WsManager};
+use crate::ws::{pack_audio_message, pack_decoder_message, WsManager};
 
 mod acars;
 mod acars_channel;
 #[cfg(feature = "adsb")]
 mod adsb;
+#[cfg(any(
+    feature = "aprs",
+    feature = "navtex",
+    feature = "packet",
+    feature = "wefax",
+    feature = "sstv",
+    feature = "hell",
+    feature = "text"
+))]
+mod afsk;
 #[cfg(feature = "ais")]
 mod ais;
+#[cfg(feature = "aprs")]
+mod aprs;
+#[cfg(feature = "meteor")]
+pub(crate) mod fsk441_rx;
 mod ft2;
+#[cfg(feature = "packet")]
+mod g3ruh;
+#[cfg(feature = "hell")]
+mod hell;
+#[cfg(feature = "hell")]
+mod hell_font;
+#[cfg(all(test, feature = "hell"))]
+mod hell_ref_font;
+#[cfg(feature = "hell")]
+mod hell_rx;
+#[cfg(feature = "hfdl")]
+mod hfdl;
+#[cfg(feature = "js8")]
+mod js8;
+#[cfg(feature = "js8")]
+mod js8_channel;
+#[cfg(feature = "ism")]
+mod ism;
+#[cfg(feature = "meteor")]
+mod meteor;
+#[cfg(feature = "rade")]
+mod rade;
+#[cfg(feature = "navtex")]
+mod navtex;
+#[cfg(feature = "navtex")]
+mod navtex_sitor;
+#[cfg(feature = "packet")]
+mod packet;
+#[cfg(feature = "pi4")]
+mod pi4;
+#[cfg(feature = "sstv")]
+mod sstv;
+#[cfg(feature = "sstv")]
+mod sstv_rx;
+#[cfg(feature = "sstv")]
+mod sstv_slant;
 pub mod store;
+#[cfg(feature = "text")]
+mod text;
+#[cfg(feature = "time")]
+mod als162;
+#[cfg(feature = "time")]
+mod dcf77;
+#[cfg(feature = "time")]
+mod timecode;
 #[cfg(feature = "vdl2")]
 mod vdl2;
+#[cfg(feature = "wefax")]
+mod wefax;
+#[cfg(feature = "wefax")]
+mod wefax_rx;
 
 /// Decoder channel audio rate. Every slotted mfsk-core mode uses 12 kHz.
-const AUDIO_RATE: u32 = 12_000;
+pub(crate) const AUDIO_RATE: u32 = 12_000;
 
 struct DecoderInput {
     center_hz: f64,
@@ -162,6 +225,8 @@ impl Drop for DecoderManager {
 enum DecoderKind {
     Mfsk(AnyDecoder),
     Ft2,
+    #[cfg(feature = "pi4")]
+    Pi4,
 }
 
 struct DecodeJob {
@@ -184,6 +249,8 @@ pub(crate) struct MfskChannel {
     resampled: Vec<f32>,
     slot_len: usize,
     last_slot: i64,
+    last_status: i64,
+    decodes: Arc<AtomicU64>,
 }
 
 /// Small linear resampler for the extractor's actual output rate, which is
@@ -223,15 +290,22 @@ impl LinearResampler {
 }
 
 fn mfsk_mode(mode: &str) -> Option<MfskMode> {
-    match mode.trim().to_ascii_lowercase().as_str() {
-        "ft8" => Some(MfskMode::Ft8),
-        "ft4" => Some(MfskMode::Ft4),
-        _ => None,
-    }
+    let key = mode.trim().to_ascii_uppercase().replace('_', "-");
+    let key = match key.as_str() {
+        "FST4" | "FST4-60" => "FST4-60A",
+        "Q65" => "Q65-30A",
+        _ => key.as_str(),
+    };
+    MfskMode::from_name(key)
 }
 
 fn is_ft2(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("ft2")
+}
+
+#[cfg(feature = "pi4")]
+fn is_pi4(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("pi4")
 }
 
 fn is_acars(mode: &str) -> bool {
@@ -248,9 +322,79 @@ fn is_vdl2(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("vdl2")
 }
 
+#[cfg(feature = "hfdl")]
+fn is_hfdl(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("hfdl")
+}
+
 #[cfg(feature = "adsb")]
 fn is_adsb(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("adsb")
+}
+
+#[cfg(feature = "aprs")]
+fn is_aprs(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("aprs")
+}
+
+#[cfg(feature = "navtex")]
+fn is_navtex(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("navtex")
+}
+
+#[cfg(feature = "ism")]
+fn is_ism(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("ism")
+}
+
+#[cfg(feature = "packet")]
+fn is_packet(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("packet")
+}
+
+#[cfg(feature = "wefax")]
+fn is_wefax(mode: &str) -> bool {
+    wefax::is_wefax(mode)
+}
+
+#[cfg(feature = "sstv")]
+fn is_sstv(mode: &str) -> bool {
+    sstv::is_sstv(mode)
+}
+
+#[cfg(feature = "hell")]
+fn is_hell(mode: &str) -> bool {
+    hell::is_hell(mode)
+}
+
+#[cfg(feature = "text")]
+fn is_text(mode: &str) -> bool {
+    text::is_text_mode(mode)
+}
+
+#[cfg(feature = "meteor")]
+fn is_meteor_mode(mode: &str) -> bool {
+    meteor::is_meteor(mode)
+}
+
+#[cfg(feature = "rade")]
+fn is_rade(mode: &str) -> bool {
+    rade::is_rade(mode)
+}
+
+#[cfg(feature = "js8")]
+fn is_js8(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("js8")
+}
+
+#[cfg(feature = "time")]
+fn is_dcf77(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("dcf77")
+}
+
+#[cfg(feature = "time")]
+fn is_als162(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("als162")
 }
 
 fn supported_mode(mode: &str) -> bool {
@@ -264,6 +408,62 @@ fn supported_mode(mode: &str) -> bool {
     }
     #[cfg(feature = "vdl2")]
     if is_vdl2(mode) {
+        return true;
+    }
+    #[cfg(feature = "hfdl")]
+    if is_hfdl(mode) {
+        return true;
+    }
+    #[cfg(feature = "aprs")]
+    if is_aprs(mode) {
+        return true;
+    }
+    #[cfg(feature = "navtex")]
+    if is_navtex(mode) {
+        return true;
+    }
+    #[cfg(feature = "ism")]
+    if is_ism(mode) {
+        return true;
+    }
+    #[cfg(feature = "packet")]
+    if is_packet(mode) {
+        return true;
+    }
+    #[cfg(feature = "wefax")]
+    if is_wefax(mode) {
+        return true;
+    }
+    #[cfg(feature = "sstv")]
+    if is_sstv(mode) {
+        return true;
+    }
+    #[cfg(feature = "hell")]
+    if is_hell(mode) {
+        return true;
+    }
+    #[cfg(feature = "text")]
+    if is_text(mode) {
+        return true;
+    }
+    #[cfg(feature = "meteor")]
+    if is_meteor_mode(mode) {
+        return true;
+    }
+    #[cfg(feature = "rade")]
+    if is_rade(mode) {
+        return true;
+    }
+    #[cfg(feature = "pi4")]
+    if is_pi4(mode) {
+        return true;
+    }
+    #[cfg(feature = "js8")]
+    if is_js8(mode) {
+        return true;
+    }
+    #[cfg(feature = "time")]
+    if is_dcf77(mode) || is_als162(mode) {
         return true;
     }
     is_acars(mode) || is_ft2(mode) || mfsk_mode(mode).is_some()
@@ -304,6 +504,30 @@ impl MfskChannel {
         append_audio(self, &resampled, now);
         self.resampled = resampled;
         self.pcm = pcm;
+
+        let weak_mode = {
+            let mode = self.cfg.mode.to_ascii_lowercase();
+            mode.starts_with("fst4")
+                || mode.starts_with("q65")
+                || mode == "jt65"
+                || mode == "jt9"
+                || mode == "wspr"
+                || mode == "pi4"
+        };
+        if weak_mode && now.saturating_sub(self.last_status) >= 500_000_000 {
+            self.last_status = now;
+            let status = json!({
+                "kind": "status",
+                "id": self.cfg.id,
+                "mode": self.cfg.mode,
+                "level": 0.0,
+                "audioHz": 1500.0,
+                "period": (self.slot_len / AUDIO_RATE as usize) as i64,
+                "decodes": self.decodes.load(Ordering::Relaxed),
+                "listening": true,
+            });
+            self.results.lock().push(status);
+        }
     }
 }
 
@@ -317,10 +541,38 @@ pub(crate) enum Channel {
     Acars(acars_channel::AcarsChannel),
     #[cfg(feature = "adsb")]
     Adsb(adsb::AdsbChannel),
+    #[cfg(feature = "aprs")]
+    Aprs(aprs::AprsChannel),
     #[cfg(feature = "ais")]
     Ais(ais::AisChannel),
     #[cfg(feature = "vdl2")]
     Vdl2(vdl2::Vdl2Channel),
+    #[cfg(feature = "hfdl")]
+    Hfdl(hfdl::HfdlChannel),
+    #[cfg(feature = "navtex")]
+    Navtex(navtex::NavtexChannel),
+    #[cfg(feature = "ism")]
+    Ism(ism::IsmChannel),
+    #[cfg(feature = "packet")]
+    Packet(packet::PacketChannel),
+    #[cfg(feature = "wefax")]
+    Wefax(wefax::WefaxChannel),
+    #[cfg(feature = "sstv")]
+    Sstv(sstv::SstvChannel),
+    #[cfg(feature = "hell")]
+    Hell(hell::HellChannel),
+    #[cfg(feature = "text")]
+    Text(text::TextChannel),
+    #[cfg(feature = "meteor")]
+    Meteor(meteor::MeteorChannel),
+    #[cfg(feature = "rade")]
+    Rade(rade::RadeChannel),
+    #[cfg(feature = "js8")]
+    Js8(js8_channel::Js8Channel),
+    #[cfg(feature = "time")]
+    Dcf77(dcf77::Dcf77Channel),
+    #[cfg(feature = "time")]
+    Als162(als162::Als162Channel),
 }
 
 impl Channel {
@@ -330,10 +582,38 @@ impl Channel {
             Channel::Acars(channel) => &channel.cfg,
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => &channel.cfg,
+            #[cfg(feature = "aprs")]
+            Channel::Aprs(channel) => &channel.cfg,
             #[cfg(feature = "ais")]
             Channel::Ais(channel) => &channel.cfg,
             #[cfg(feature = "vdl2")]
             Channel::Vdl2(channel) => &channel.cfg,
+            #[cfg(feature = "hfdl")]
+            Channel::Hfdl(channel) => &channel.cfg,
+            #[cfg(feature = "navtex")]
+            Channel::Navtex(channel) => &channel.cfg,
+            #[cfg(feature = "ism")]
+            Channel::Ism(channel) => &channel.cfg,
+            #[cfg(feature = "packet")]
+            Channel::Packet(channel) => &channel.cfg,
+            #[cfg(feature = "wefax")]
+            Channel::Wefax(channel) => &channel.cfg,
+            #[cfg(feature = "sstv")]
+            Channel::Sstv(channel) => &channel.cfg,
+            #[cfg(feature = "hell")]
+            Channel::Hell(channel) => &channel.cfg,
+            #[cfg(feature = "text")]
+            Channel::Text(channel) => &channel.cfg,
+            #[cfg(feature = "meteor")]
+            Channel::Meteor(channel) => &channel.cfg,
+            #[cfg(feature = "rade")]
+            Channel::Rade(channel) => &channel.cfg,
+            #[cfg(feature = "js8")]
+            Channel::Js8(channel) => &channel.cfg,
+            #[cfg(feature = "time")]
+            Channel::Dcf77(channel) => &channel.cfg,
+            #[cfg(feature = "time")]
+            Channel::Als162(channel) => &channel.cfg,
         }
     }
 
@@ -343,10 +623,48 @@ impl Channel {
             Channel::Acars(channel) => channel.take_results(),
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => channel.take_results(),
+            #[cfg(feature = "aprs")]
+            Channel::Aprs(channel) => channel.take_results(),
             #[cfg(feature = "ais")]
             Channel::Ais(channel) => channel.take_results(),
             #[cfg(feature = "vdl2")]
             Channel::Vdl2(channel) => channel.take_results(),
+            #[cfg(feature = "hfdl")]
+            Channel::Hfdl(channel) => channel.take_results(),
+            #[cfg(feature = "navtex")]
+            Channel::Navtex(channel) => channel.take_results(),
+            #[cfg(feature = "ism")]
+            Channel::Ism(channel) => channel.take_results(),
+            #[cfg(feature = "packet")]
+            Channel::Packet(channel) => channel.take_results(),
+            #[cfg(feature = "wefax")]
+            Channel::Wefax(channel) => channel.take_results(),
+            #[cfg(feature = "sstv")]
+            Channel::Sstv(channel) => channel.take_results(),
+            #[cfg(feature = "hell")]
+            Channel::Hell(channel) => channel.take_results(),
+            #[cfg(feature = "text")]
+            Channel::Text(channel) => channel.take_results(),
+            #[cfg(feature = "meteor")]
+            Channel::Meteor(channel) => channel.take_results(),
+            #[cfg(feature = "rade")]
+            Channel::Rade(channel) => channel.take_results(),
+            #[cfg(feature = "js8")]
+            Channel::Js8(channel) => channel.take_results(),
+            #[cfg(feature = "time")]
+            Channel::Dcf77(channel) => channel.take_results(),
+            #[cfg(feature = "time")]
+            Channel::Als162(channel) => channel.take_results(),
+        }
+    }
+
+    /// Decoded speech audio, when the decoder produces audio instead of text
+    /// or JSON. Empty for every non-audio decoder.
+    pub(crate) fn take_audio(&mut self) -> Vec<i16> {
+        match self {
+            #[cfg(feature = "rade")]
+            Channel::Rade(channel) => channel.take_audio(),
+            _ => Vec::new(),
         }
     }
 
@@ -356,10 +674,41 @@ impl Channel {
             Channel::Acars(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "aprs")]
+            Channel::Aprs(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "ais")]
             Channel::Ais(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "vdl2")]
             Channel::Vdl2(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "hfdl")]
+            Channel::Hfdl(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "navtex")]
+            Channel::Navtex(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "ism")]
+            Channel::Ism(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "packet")]
+            Channel::Packet(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "wefax")]
+            Channel::Wefax(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "sstv")]
+            Channel::Sstv(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "hell")]
+            Channel::Hell(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "text")]
+            Channel::Text(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "meteor")]
+            Channel::Meteor(channel) => {
+                let results = channel.process(chunk, now);
+                channel.pending.extend(results);
+            }
+            #[cfg(feature = "rade")]
+            Channel::Rade(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "js8")]
+            Channel::Js8(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "time")]
+            Channel::Dcf77(channel) => channel.process_chunk(chunk, now),
+            #[cfg(feature = "time")]
+            Channel::Als162(channel) => channel.process_chunk(chunk, now),
         }
     }
 }
@@ -380,6 +729,10 @@ pub(crate) fn build_channel(
     if is_acars(&cfg.mode) {
         return acars_channel::AcarsChannel::new(cfg, center_hz, sample_rate).map(Channel::Acars);
     }
+    #[cfg(feature = "aprs")]
+    if is_aprs(&cfg.mode) {
+        return aprs::AprsChannel::new(cfg, center_hz, sample_rate).map(Channel::Aprs);
+    }
     #[cfg(feature = "ais")]
     if is_ais(&cfg.mode) {
         return Ok(Channel::Ais(ais::AisChannel::new(
@@ -396,6 +749,66 @@ pub(crate) fn build_channel(
             sample_rate as f64,
         )));
     }
+    #[cfg(feature = "hfdl")]
+    if is_hfdl(&cfg.mode) {
+        return Ok(Channel::Hfdl(hfdl::HfdlChannel::new(
+            cfg,
+            center_hz,
+            sample_rate as f64,
+        )));
+    }
+    #[cfg(feature = "navtex")]
+    if is_navtex(&cfg.mode) {
+        return navtex::NavtexChannel::new(cfg, center_hz, sample_rate).map(Channel::Navtex);
+    }
+    #[cfg(feature = "ism")]
+    if is_ism(&cfg.mode) {
+        return Ok(Channel::Ism(ism::IsmChannel::new(
+            cfg,
+            center_hz,
+            sample_rate as f64,
+        )));
+    }
+    #[cfg(feature = "packet")]
+    if is_packet(&cfg.mode) {
+        return packet::PacketChannel::new(cfg, center_hz, sample_rate).map(Channel::Packet);
+    }
+    #[cfg(feature = "wefax")]
+    if is_wefax(&cfg.mode) {
+        return wefax::WefaxChannel::build(cfg, center_hz, sample_rate).map(Channel::Wefax);
+    }
+    #[cfg(feature = "sstv")]
+    if is_sstv(&cfg.mode) {
+        return sstv::SstvChannel::build(cfg, center_hz, sample_rate).map(Channel::Sstv);
+    }
+    #[cfg(feature = "hell")]
+    if is_hell(&cfg.mode) {
+        return hell::HellChannel::build(cfg, center_hz, sample_rate).map(Channel::Hell);
+    }
+    #[cfg(feature = "text")]
+    if is_text(&cfg.mode) {
+        return text::TextChannel::build(cfg, center_hz, sample_rate).map(Channel::Text);
+    }
+    #[cfg(feature = "meteor")]
+    if is_meteor_mode(&cfg.mode) {
+        return meteor::MeteorChannel::build(cfg, center_hz, sample_rate).map(Channel::Meteor);
+    }
+    #[cfg(feature = "rade")]
+    if is_rade(&cfg.mode) {
+        return rade::RadeChannel::new(cfg, center_hz, sample_rate).map(Channel::Rade);
+    }
+    #[cfg(feature = "js8")]
+    if is_js8(&cfg.mode) {
+        return js8_channel::build_channel(cfg, center_hz, sample_rate).map(Channel::Js8);
+    }
+    #[cfg(feature = "time")]
+    if is_dcf77(&cfg.mode) {
+        return dcf77::Dcf77Channel::new(cfg, center_hz, sample_rate).map(Channel::Dcf77);
+    }
+    #[cfg(feature = "time")]
+    if is_als162(&cfg.mode) {
+        return als162::Als162Channel::new(cfg, center_hz, sample_rate).map(Channel::Als162);
+    }
     build_mfsk_channel(cfg, center_hz, sample_rate).map(|channel| Channel::Mfsk(Box::new(channel)))
 }
 
@@ -405,7 +818,11 @@ fn build_mfsk_channel(
     sample_rate: u32,
 ) -> Result<MfskChannel, String> {
     let ft2 = is_ft2(&cfg.mode);
-    let mode = if ft2 {
+    #[cfg(feature = "pi4")]
+    let pi4 = is_pi4(&cfg.mode);
+    #[cfg(not(feature = "pi4"))]
+    let pi4 = false;
+    let mode = if ft2 || pi4 {
         None
     } else {
         Some(mfsk_mode(&cfg.mode).ok_or_else(|| format!("unsupported mode {}", cfg.mode))?)
@@ -440,26 +857,38 @@ fn build_mfsk_channel(
         .map_err(|e| format!("USB demodulator: {e}"))?;
     demod.set_bandwidth(cfg.bandwidth_hz.max(3000) as f64);
 
+    #[cfg(feature = "pi4")]
+    let (decoder, slot_len) = if pi4 {
+        (DecoderKind::Pi4, 60 * AUDIO_RATE as usize) // one-minute beacon window
+    } else if ft2 {
+        (DecoderKind::Ft2, 45_000usize) // 3.75 s at 12 kHz
+    } else {
+        mfsk_decoder(cfg, mode.expect("non-FT2 mode"))
+    };
+    #[cfg(not(feature = "pi4"))]
     let (decoder, slot_len) = if ft2 {
         (DecoderKind::Ft2, 45_000usize) // 3.75 s at 12 kHz
     } else {
-        let mode = mode.expect("non-FT2 mode");
-        (
-            DecoderKind::Mfsk(AnyDecoder::new(
-                mode,
-                DecodeParams::for_band((100.0, 3000.0)),
-            )),
-            mode.meta().slot_samples_12k as usize,
-        )
+        mfsk_decoder(cfg, mode.expect("non-FT2 mode"))
     };
 
     let (decode_tx, decode_rx) = mpsc::channel();
     let results = Arc::new(Mutex::new(Vec::new()));
+    let decodes = Arc::new(AtomicU64::new(0));
     let worker_results = Arc::clone(&results);
+    let worker_decodes = Arc::clone(&decodes);
     let worker_cfg = cfg.clone();
     thread::Builder::new()
         .name(format!("decoder-slot-{}", cfg.id))
-        .spawn(move || decode_worker(decoder, worker_cfg, worker_results, decode_rx))
+        .spawn(move || {
+            decode_worker(
+                decoder,
+                worker_cfg,
+                worker_results,
+                worker_decodes,
+                decode_rx,
+            )
+        })
         .map_err(|e| format!("decoder slot worker: {e}"))?;
 
     Ok(MfskChannel {
@@ -475,13 +904,29 @@ fn build_mfsk_channel(
         resampled: Vec::new(),
         slot_len,
         last_slot: 0,
+        last_status: 0,
+        decodes,
     })
+}
+
+fn mfsk_decoder(cfg: &DecoderConfig, mode: MfskMode) -> (DecoderKind, usize) {
+    let band = if mode == MfskMode::Wspr {
+        (1400.0, 1600.0)
+    } else {
+        (100.0, 3000.0)
+    };
+    let _ = cfg;
+    (
+        DecoderKind::Mfsk(AnyDecoder::new(mode, DecodeParams::for_band(band))),
+        mode.meta().slot_samples_12k as usize,
+    )
 }
 
 fn decode_worker(
     mut decoder: DecoderKind,
     cfg: DecoderConfig,
     results: Arc<Mutex<Vec<serde_json::Value>>>,
+    decodes: Arc<AtomicU64>,
     rx: Receiver<DecodeJob>,
 ) {
     while let Ok(job) = rx.recv() {
@@ -492,6 +937,7 @@ fn decode_worker(
                 for row in result.rows {
                     let decoded = &row.decoded;
                     out.push(json!({
+                        "kind": "decode",
                         "id": cfg.id,
                         "mode": cfg.mode,
                         "text": decoded.text,
@@ -510,6 +956,7 @@ fn decode_worker(
                         continue;
                     };
                     out.push(json!({
+                        "kind": "decode",
                         "id": cfg.id,
                         "mode": cfg.mode,
                         "text": text,
@@ -522,8 +969,34 @@ fn decode_worker(
                     }));
                 }
             }
+            #[cfg(feature = "pi4")]
+            DecoderKind::Pi4 => {
+                let audio: Vec<f32> = job
+                    .audio
+                    .iter()
+                    .map(|sample| *sample as f32 / 32768.0)
+                    .collect();
+                for result in pi4::decode::decode_window(&audio, AUDIO_RATE, 0) {
+                    out.push(json!({
+                        "kind": "decode",
+                        "id": cfg.id,
+                        "mode": cfg.mode,
+                        "text": result.text,
+                        "audioHz": result.tone0_hz,
+                        "rfHz": cfg.frequency_hz as f64 + result.tone0_hz as f64,
+                        "snrDb": result.snr_db,
+                        "dtSec": result.dt_sec,
+                        "period": job.period,
+                        "dialHz": cfg.frequency_hz,
+                        "variant": result.variant.label(),
+                        "fit": result.fit,
+                        "hardErrors": result.hard_errors,
+                    }));
+                }
+            }
         }
         if !out.is_empty() {
+            decodes.fetch_add(out.len() as u64, Ordering::Relaxed);
             results.lock().extend(out);
         }
     }
@@ -664,6 +1137,10 @@ fn run_worker(
         let now = now_ns();
         for channel in &mut channels {
             channel.process_chunk(&input.chunk, now);
+            let audio = channel.take_audio();
+            if !audio.is_empty() {
+                ws.broadcast(&dongle_id, pack_audio_message(&audio));
+            }
             for data in channel.take_results() {
                 persist_data(&store, &dongle_id, channel.config(), &data);
                 ws.broadcast(
@@ -687,8 +1164,27 @@ mod tests {
         assert_eq!(mfsk_mode("ft4"), Some(MfskMode::Ft4));
         assert!(is_ft2("FT2"));
         assert!(supported_mode("ft2"));
+        assert_eq!(mfsk_mode("fst4").map(|m| m.name()), Some("FST4-60A"));
+        assert_eq!(mfsk_mode("fst4-60").map(|m| m.name()), Some("FST4-60A"));
+        assert_eq!(mfsk_mode("fst4-120").map(|m| m.name()), Some("FST4-120"));
+        assert_eq!(mfsk_mode("q65").map(|m| m.name()), Some("Q65-30A"));
+        assert_eq!(mfsk_mode("q65-60d").map(|m| m.name()), Some("Q65-60D"));
+        assert_eq!(mfsk_mode("jt65").map(|m| m.name()), Some("JT65"));
+        assert_eq!(mfsk_mode("jt9").map(|m| m.name()), Some("JT9"));
+        assert!(supported_mode("fst4-120"));
+        assert!(supported_mode("q65-60d"));
+        assert!(supported_mode("jt65"));
+        assert!(supported_mode("jt9"));
+        assert_eq!(mfsk_mode("wspr").map(|m| m.name()), Some("WSPR"));
+        assert!(supported_mode("wspr"));
+        #[cfg(feature = "pi4")]
+        {
+            assert!(is_pi4("PI4"));
+            assert!(supported_mode("pi4"));
+        }
         assert_eq!(mfsk_mode("js8"), None);
-        assert!(!supported_mode("js8"));
+        #[cfg(feature = "js8")]
+        assert!(supported_mode("js8"));
         assert!(supported_mode("acars"));
         #[cfg(feature = "adsb")]
         assert!(supported_mode("adsb"));
@@ -696,6 +1192,257 @@ mod tests {
         assert!(supported_mode("ais"));
         #[cfg(feature = "vdl2")]
         assert!(supported_mode("vdl2"));
+        #[cfg(feature = "hfdl")]
+        assert!(supported_mode("hfdl"));
+        #[cfg(feature = "packet")]
+        assert!(supported_mode("packet"));
+        assert!(supported_mode("sstv"));
+        #[cfg(feature = "hell")]
+        assert!(supported_mode("hell"));
+        #[cfg(feature = "meteor")]
+        {
+            assert!(supported_mode("msk144"));
+            assert!(supported_mode("fsk441"));
+        }
+        #[cfg(feature = "rade")]
+        assert!(supported_mode("rade"));
+    }
+
+    #[cfg(feature = "rade")]
+    #[test]
+    fn build_channel_dispatches_rade_to_the_voice_channel() {
+        let cfg = DecoderConfig {
+            id: "rade-test".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "rade".to_string(),
+            frequency_hz: 14_236_000,
+            bandwidth_hz: 3000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&cfg, 14_236_000.0, 2_400_000).expect("build RADE channel");
+        assert!(matches!(channel, Channel::Rade(_)));
+    }
+
+    #[cfg(feature = "wefax")]
+    #[test]
+    fn build_channel_dispatches_wefax_to_the_audio_channel() {
+        let wefax = DecoderConfig {
+            id: "wefax-7880".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "wefax".to_string(),
+            frequency_hz: 7_880_000,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&wefax, 7_880_000.0, 2_400_000).expect("wefax channel");
+        assert!(matches!(channel, Channel::Wefax(_)));
+        drop(channel);
+
+        assert!(build_channel(&wefax, 9_200_000.0, 2_400_000).is_err());
+    }
+
+    #[cfg(feature = "sstv")]
+    #[test]
+    fn build_channel_dispatches_sstv_to_the_audio_channel() {
+        let sstv = DecoderConfig {
+            id: "sstv-14230".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "sstv".to_string(),
+            frequency_hz: 14_230_000,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&sstv, 14_230_000.0, 2_400_000).expect("sstv channel");
+        assert!(matches!(channel, Channel::Sstv(_)));
+        drop(channel);
+
+        assert!(build_channel(&sstv, 9_200_000.0, 2_400_000).is_err());
+    }
+
+    #[cfg(feature = "hell")]
+    #[test]
+    fn build_channel_dispatches_hell_to_the_audio_channel() {
+        let hell = DecoderConfig {
+            id: "hell-40m".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "hell".to_string(),
+            frequency_hz: 7_040_000,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&hell, 7_040_000.0, 2_400_000).expect("hell channel");
+        assert!(matches!(channel, Channel::Hell(_)));
+        drop(channel);
+
+        assert!(build_channel(&hell, 9_200_000.0, 2_400_000).is_err());
+    }
+
+    #[cfg(feature = "text")]
+    #[test]
+    fn build_channel_dispatches_text_modes_to_the_audio_channel() {
+        for mode in ["olivia", "thor", "fsq", "psk31", "rtty"] {
+            let cfg = DecoderConfig {
+                id: format!("{mode}-test"),
+                enabled: true,
+                dongle_id: "d1".to_string(),
+                mode: mode.to_string(),
+                frequency_hz: 7_040_000,
+                bandwidth_hz: 3_000,
+                settings: Default::default(),
+            };
+            let channel = build_channel(&cfg, 7_040_000.0, 2_400_000)
+                .unwrap_or_else(|e| panic!("{mode} channel: {e}"));
+            assert!(matches!(channel, Channel::Text(_)));
+        }
+
+        let cfg = DecoderConfig {
+            id: "olivia-test".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "olivia".to_string(),
+            frequency_hz: 7_040_000,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        assert!(build_channel(&cfg, 9_200_000.0, 2_400_000).is_err());
+    }
+
+    #[cfg(feature = "meteor")]
+    #[test]
+    fn build_channel_dispatches_meteor_modes() {
+        for (mode, hz) in [("msk144", 50_260_000), ("fsk441", 50_260_000)] {
+            let cfg = DecoderConfig {
+                id: format!("{mode}-test"),
+                enabled: true,
+                dongle_id: "d1".to_string(),
+                mode: mode.to_string(),
+                frequency_hz: hz,
+                bandwidth_hz: 3_000,
+                settings: Default::default(),
+            };
+            let channel =
+                build_channel(&cfg, hz as f64, 2_400_000).unwrap_or_else(|e| panic!("{mode}: {e}"));
+            assert!(matches!(channel, Channel::Meteor(_)));
+        }
+        let cfg = DecoderConfig {
+            id: "msk144-test".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "msk144".to_string(),
+            frequency_hz: 50_260_000,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        assert!(build_channel(&cfg, 9_200_000.0, 2_400_000).is_err());
+    }
+
+    #[test]
+    fn build_channel_dispatches_weak_signal_modes() {
+        for (mode, hz) in [
+            ("fst4", 7_078_000),
+            ("fst4-120", 7_078_000),
+            ("q65", 50_275_000),
+            ("q65-60d", 50_275_000),
+            ("jt65", 14_076_000),
+            ("jt9", 14_078_000),
+            ("wspr", 14_095_600),
+        ] {
+            let cfg = DecoderConfig {
+                id: format!("{mode}-test"),
+                enabled: true,
+                dongle_id: "d1".to_string(),
+                mode: mode.to_string(),
+                frequency_hz: hz,
+                bandwidth_hz: 3_000,
+                settings: Default::default(),
+            };
+            let channel =
+                build_channel(&cfg, hz as f64, 2_400_000).unwrap_or_else(|e| panic!("{mode}: {e}"));
+            assert!(matches!(channel, Channel::Mfsk(_)));
+        }
+    }
+
+    #[cfg(feature = "pi4")]
+    #[test]
+    fn build_channel_dispatches_pi4_to_the_audio_channel() {
+        let cfg = DecoderConfig {
+            id: "pi4-test".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "pi4".to_string(),
+            frequency_hz: 144_471_000,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&cfg, 144_471_000.0, 2_400_000).expect("pi4 channel");
+        match channel {
+            Channel::Mfsk(channel) => assert_eq!(channel.slot_len, 720_000),
+            _ => panic!("PI4 did not use the audio channel"),
+        }
+        assert!(build_channel(&cfg, 9_200_000.0, 2_400_000).is_err());
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn build_channel_dispatches_time_signals() {
+        let dcf77 = DecoderConfig {
+            id: "dcf77".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "dcf77".to_string(),
+            frequency_hz: 77_500,
+            bandwidth_hz: 200,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&dcf77, 100_000.0, 2_400_000).expect("DCF77 channel");
+        assert!(matches!(channel, Channel::Dcf77(_)));
+        drop(channel);
+
+        let als162 = DecoderConfig {
+            mode: "als162".to_string(),
+            frequency_hz: 162_000,
+            ..dcf77
+        };
+        let channel = build_channel(&als162, 100_000.0, 2_400_000).expect("ALS162 channel");
+        assert!(matches!(channel, Channel::Als162(_)));
+    }
+
+    #[cfg(feature = "packet")]
+    #[test]
+    fn build_channel_dispatches_packet_to_the_ax25_channel() {
+        let packet = DecoderConfig {
+            id: "packet-2m".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "packet".to_string(),
+            frequency_hz: 145_010_000,
+            bandwidth_hz: 12_500,
+            settings: serde_json::Map::new(),
+        };
+        let channel = build_channel(&packet, 145_000_000.0, 2_400_000).expect("packet channel");
+        assert!(matches!(channel, Channel::Packet(_)));
+        drop(channel);
+    }
+
+    #[cfg(feature = "hfdl")]
+    #[test]
+    fn build_channel_dispatches_hfdl_to_the_lane_path() {
+        let hfdl = DecoderConfig {
+            id: "hfdl-21931".to_string(),
+            enabled: true,
+            dongle_id: "d1".to_string(),
+            mode: "hfdl".to_string(),
+            frequency_hz: 21_931_000,
+            bandwidth_hz: 24_000,
+            settings: Default::default(),
+        };
+        let channel = build_channel(&hfdl, 21_931_000.0, 2_400_000).expect("hfdl channel");
+        assert!(matches!(channel, Channel::Hfdl(_)));
+        drop(channel);
     }
 
     #[cfg(feature = "vdl2")]
@@ -801,6 +1548,28 @@ mod tests {
         assert!(!result.is_empty(), "synthetic FT2 slot did not decode");
         let text = mfsk_core::msg::wsjt77::unpack77(result[0].message77()).unwrap();
         assert!(text.contains("OE1ABC"), "decoded {text}");
+    }
+
+    #[test]
+    fn any_decoder_decodes_synthetic_fst4_and_q65_slots() {
+        use mfsk_core::prelude::{encode, SlotInput, TxAudio};
+
+        for mode_name in ["FST4-15", "Q65-15A"] {
+            let mode = MfskMode::from_name(mode_name).expect("mode available");
+            let tx = encode(mode, "CQ N0CALL").expect("encode weak-signal mode");
+            let frame = tx.synthesize(&TxAudio::new(12_000, 1_500.0));
+            let slot_len = mode.meta().slot_samples_12k as usize;
+            let mut slot = vec![0.0f32; slot_len];
+            let start = 6_000.min(slot_len.saturating_sub(frame.len()));
+            slot[start..start + frame.len()].copy_from_slice(&frame);
+
+            let mut decoder = AnyDecoder::new(mode, DecodeParams::for_band((100.0, 3000.0)));
+            let result = decoder.decode(&SlotInput::f32(&slot));
+            assert!(
+                !result.rows.is_empty(),
+                "synthetic {mode_name} slot did not decode"
+            );
+        }
     }
 
     #[test]

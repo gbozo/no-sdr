@@ -55,6 +55,58 @@ const App: Component = () => {
         store.applyVdl2Snapshot(data);
         return;
       }
+      if (type === 'hfdl') {
+        store.applyHfdlSnapshot(data);
+        return;
+      }
+      if (type === 'aprs') {
+        store.applyAprsEvent(data);
+        return;
+      }
+      if (type === 'navtex') {
+        store.applyNavtexEvent(data);
+        return;
+      }
+      if (type === 'packet') {
+        store.applyPacketEvent(data);
+        return;
+      }
+      if (type === 'ism') {
+        store.applyIsmEvent(data);
+        return;
+      }
+      if (type === 'wefax') {
+        store.applyWefaxEvent(data);
+        return;
+      }
+      if (type === 'sstv') {
+        store.applySstvEvent(data);
+        return;
+      }
+      if (type === 'hell') {
+        store.applyHellEvent(data);
+        return;
+      }
+      if (type === 'olivia' || type === 'thor' || type === 'fsq' || type === 'psk31' || type === 'rtty') {
+        store.applyTextEvent(data);
+        return;
+      }
+      if (type === 'msk144' || type === 'fsk441' || type === 'fst4' || type === 'q65' || type === 'jt65' || type === 'jt9' || type === 'wspr' || type === 'pi4') {
+        store.applyMeteorEvent(data);
+        return;
+      }
+      if (type === 'rade') {
+        store.applyRadeEvent(data);
+        return;
+      }
+      if (type === 'js8') {
+        store.applyJs8Event(data);
+        return;
+      }
+      if (type === 'dcf77' || type === 'als162') {
+        store.applyTimeSignalEvent(data);
+        return;
+      }
       store.addDecoderMessage(type, (data ?? {}) as Record<string, unknown>);
     };
 

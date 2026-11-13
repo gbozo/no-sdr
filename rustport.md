@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.14.0)
+## Current status (2.15.0)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -23,10 +23,16 @@ protocol as before).
   Airspy HF+), `hydrasdr` (native HydraSDR RFOne), `elad` (native ELAD FDM)
   `rx888` (native RX-888 Mk2), `pluto` (PlutoSDR over IIOD), `sdrplay`
   (SDRplay RSP via the vendor API service), `lime` (LimeSDR via LimeSuite) and
-  `fobos` (RigExpert Fobos via libfobos), `decoders` (background FT8/FT4/FT2
-  via `mfsk-core`), `adsb` (raw-IQ 1090 MHz), `ais` (marine VHF) and `vdl2`
-  (VHF datalink) are **default features**. The three vendor drivers load
-  their library at runtime; no SDK is needed to build.
+  `fobos` (RigExpert Fobos via libfobos), `decoders` (background
+  FT8/FT4/FT2/FST4/Q65/JT65/JT9 via `mfsk-core`), `adsb` (raw-IQ 1090 MHz), `ais` (marine VHF), `vdl2`
+  (VHF datalink), `hfdl` (ARINC 635 HF datalink), `aprs` (VHF AX.25),
+  `navtex` (SITOR-B), `ism` (868 MHz sensors/meters), `packet` (AX.25
+  1200/9600 packet), `wefax` (HF weather fax), `sstv` (slow-scan TV) and
+  `hell` (Hellschreiber raster), `text` (Olivia/THOR/FSQ/PSK31/RTTY) and
+  `meteor` (MSK144/FSK441), `wspr` (WSPR), `pi4` (PI4 beacons), `rade`
+  (FreeDV RADE V1 voice), `js8` (JS8Call messaging) and `time` (DCF77/ALS162
+  time signals) are **default features**. The three vendor drivers load their
+  library at runtime; no SDK is needed to build.
   The `bias-t` feature decides whether the GPIO path is compiled in; the
   dongle's `biasT` setting still decides whether it is energized. Use `--no-default-features` to build without optional
   dependencies. Every release artifact, including macOS and Windows, uses
@@ -34,19 +40,18 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.14.0`. It is a noise-reduction and filter
-  overhaul: corrected WDSP LMS constants (the ANR/auto-notch had an inverted
-  leak term and added gain), a mapped noise-blanker threshold restore, a
-  one-sided SSB passband in the extractor, a rate-scaled pre-filter blanker, a
-  decimating FIR for WFM stereo, polyphase client upsampling, selectable
-  50/75 µs FM de-emphasis and an auto hi-blend, plus removal of the dead
-  spectral-NR code. The previous release, `v2.13.0`, added the ADS-B aircraft
-  table + OpenStreetMap view, ACARS/ARINC 618 and VDL Mode 2 message decoders,
-  an AIS vessel table + map, decoder-aware bookmarks, and the FFT/CPU hot-path
-  work (rate-capped transforms, DC-spike removal, decoder-only clients skip
-  the audio channelizer). Release `v2.12.0` added Electron desktop packages
-  for Linux/macOS/Windows, the expanded native/vendor SDR driver set and admin
-  device scanning.
+- Latest published release: `v2.15.0`. It completes the requested decoder
+  suite with HFDL, APRS, NAVTEX, ISM, AX.25 packet, WEFAX, SSTV,
+  Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65,
+  JT65/JT9, WSPR/PI4, FreeDV RADE, JS8, DCF77 and ALS162 — all with
+  foreground/background operation, WebSocket result transport, SQLite history
+  and dedicated client panels. The previous release, `v2.14.0`, was a
+  noise-reduction and filter overhaul: corrected WDSP LMS constants, a mapped
+  noise-blanker threshold restore, a one-sided SSB passband, a rate-scaled
+  pre-filter blanker, a decimating FIR for WFM stereo, polyphase client
+  upsampling, selectable 50/75 µs FM de-emphasis and auto hi-blend.
+  `v2.13.0` added ADS-B, ACARS, VDL2 and AIS; `v2.12.0` added Electron
+  desktop packages and the expanded native/vendor SDR driver set.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust`. The Docker workflow also publishes a
   rolling `latest-rust` tag.
@@ -111,6 +116,23 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-13: DCF77 (77.5 kHz amplitude pulse-width) and ALS162 (162 kHz phase-modulated) time-signal decoders added. Both share a 59-bit BCD/parity minute parser with CET/CEST, DST, leap-second, holiday and clock-change flags; raw-IQ envelope/phase receivers feed foreground/background workers and a dedicated time-signal panel.
+- 2026-11-13: JT65 and JT9 weak-signal decoders added through mfsk-core's 60-second slot decoders, with the shared foreground/background worker, SQLite persistence and weak-signal decode table.
+- 2026-11-13: FST4 and Q65 weak-signal decoders added. mfsk-core registry sub-modes (FST4-15…1800, Q65-15A…300A) map through the shared 12 kHz slot worker; the table reports text, RF/audio frequency, DT, SNR and slot period, with the same foreground/background and SQLite path as the other slotted modes.
+- 2026-11-13: WSPR (120 s mfsk-core slots) and PI4 (one-minute 4-FSK beacon search, local adaptation of `sdroxide-digi`) added to the weak-signal workspace. WSPR rows show text/frequency/DT/SNR; PI4 rows add variant, fit and hard-error count.
+- 2026-11-13: MSK144 and FSK441 meteor-scatter decoders added. MSK144 uses mfsk-core's 15 s sliding-window receiver at 12 kHz; FSK441 adapts `sdroxide-dsp`'s 11 025 Hz ping search with 15/30 s periods. Burst table shows time, text, RF, DT, SNR, duration and confidence; foreground/background operation.
+- 2026-11-13: PSK31 and RTTY added to the text-mode decoder family. Local `sdroxide-dsp` PSK/RTTY receivers adapted; USB audio channel at 8 kHz, BPSK31 Varicode, RTTY Baudot with configurable baud/shift/AFC/reverse, streaming text and status (baud, shift, AFC, tone sense) in the shared text workspace.
+- 2026-11-13: Hellschreiber decoder added. `sdroxide-dsp` HellRx/hell font adapted locally; USB audio channel at 12 kHz, Feld/Slow/X5/X9/FSK245/FSK105/Hell80 variants, print-sync/slant-aware dot raster, base64 column transport and a scrolling canvas panel; foreground/background operation.
+- 2026-11-13: Olivia/THOR/FSQ text decoders added. `sdroxide-dsp` MFSK/Olivia/THOR/FSQ receivers and Varicode tables adapted locally; USB audio channel resampled to 8 kHz, configurable Olivia tones/bandwidth and THOR/FSQ baud, streamed text chunks and status; shared text workspace with running log and chunk table.
+- 2026-11-13: SSTV decoder added. `sdroxide-dsp` SSTV receiver adapted locally; USB audio channel at 12 kHz, VIS auto-detection for Scottie/Martin/Robot/Wraase/PD modes, progressive RGB row transport, FSK callsign ID, mode/progress/signal status and a colour canvas with a 12-picture history; foreground/background operation.
+- 2026-11-13: Weather fax (WEFAX) decoder added. `sdroxide-dsp` WefaxRx adapted locally; USB audio channel at 12 kHz, start/phasing/line/complete events, IOC 576/288, 60-240 LPM, slant trim, line-by-line base64 image transport and a canvas image viewer with receiver status; foreground/background operation.
+- 2026-11-13: AX.25 PACKET decoder added. 1200 baud Bell 202 and 9600 baud G3RUH over an NBFM/48 kHz audio channel, `sdroxide-ax25` HDLC/FCS and packet codec, packet monitor table with raw-frame inspector. Select 9600 with `settings.baud: 9600`; foreground/background operation.
+- 2026-11-13: ISM 868 MHz decoder added. Raw-IQ window to `sdroxide-ism`, native weather/meter/home-automation families, device table with readings, channel plan/status, foreground/background operation, device table panel.
+- 2026-11-13: NAVTEX decoder added. SITOR-B at 518/490/4209.5 kHz, 100 baud, 170 Hz shift, CCIR 476 with time-diversity FEC; USB audio path, ZCZC/NNNN framing with repeat replacement, message table and full-text panel, foreground and background.
+- 2026-11-13: Version 2.15.0. Decoder suite completion: HFDL, APRS, NAVTEX, ISM, AX.25 packet, WEFAX, SSTV, Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4, FreeDV RADE, JS8, DCF77 and ALS162. Foreground/background workers, `MSG_DECODER` transport, SQLite history and decoder-specific client panels.
+- 2026-11-13: JS8 decoder added. The JS8Call-derived 8-FSK protocol/varicode/frame/assembler layers are local to `serverrs/src/decoders/js8/`; the channel supports NORMAL/FAST/TURBO/SLOW speeds, directed/group message assembly, heard-station status and a message-table client panel.
+- 2026-11-13: FreeDV RADE V1 voice decoder added. `sdroxide-rade` on the 48 kHz USB audio path supplies neural-decoded speech, sent as raw `MSG_AUDIO` while `MSG_DECODER` carries sync/SNR/offset/callsign status. The client mutes its local demodulator for RADE and shows a sync/callsign panel.
+- 2026-11-13: APRS decoder added. 1200 baud Bell 202 AX.25 on the regional VHF channel: NBFM/48 kHz audio path, local AFSK receiver, `sdroxide-ax25` HDLC/FCS and `sdroxide-aprs` information-field parser. Packet table plus Leaflet/OSM map for position reports; foreground/background, with events persisted through `decoder_messages`.
 - 2026-11-13: Version 2.14.0. Noise-reduction and filter overhaul. Client: WDSP ANR/ANF constants restored (`den_mult` 6.25e-10, `lidx` ranges and +1/−3 ramp, 64-tap/16-delay auto-notch) — the old quartic leakage inverted the leak factor every sample and the "NR" added ~17 dB of gain; noise-blanker threshold now mapped when re-sent after a reconnect (sending the raw 0–1 level blanked every sample); polyphase windowed-sinc upsampling replaces linear interpolation for SSB/CW (−100 dB images vs −55 dB); selectable 50/75 µs FM de-emphasis; auto hi-blend that tracks signal level; dead spectral NR / audio NB code removed. Server: one-sided extractor bandwidth for USB/LSB (a 2400 Hz SSB request no longer halves the passband), sample-rate-scaled pre-filter noise blanker (2 ms average, 100 µs guard), decimating FIR for WFM stereo (proper 24–34 kHz rejection, cheaper than the old LPF+drop chain), block-form audio LPFs, `{cmd:'deemphasis'}` per-client de-emphasis, 0.45 anti-alias cutoff.
 - 2026-11-13: Version 2.13.0. Digital decoder expansion: ADS-B raw-IQ decoder with aircraft table and Leaflet/OSM map (DC-blocked IQ, gated/ungated 1-bit CRC repair, aircraft entity persistence, `/api/decoder/aircraft`); ACARS/ARINC 618 VHF AM receiver and table; AIS vessel table + map with `decoder_entities` (kind `vessel`, `/api/decoder/vessels`); VDL Mode 2 message log + station table. Shared decoder worker gained raw-IQ channel kinds, per-profile sample-rate fixes, and bookmarks now capture/restore decoder modes. CPU: FFT transforms are rate-capped and DC-removed in the display path; decoder-only clients with audio off skip NCO/FIR/Opus; chunk-path allocations removed.
 - 2026-11-12: Decoder subsystem extended with foreground per-client decoding (`{"cmd":"decoder","mode":"ft8"}`) and SQLite result persistence with `/api/decoder/messages` and `/api/decoder/stats`. Background decoder work remains the OpenWebRX-style path.

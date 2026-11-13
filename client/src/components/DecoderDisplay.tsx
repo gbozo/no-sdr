@@ -12,15 +12,53 @@ import AdsbDisplay from './AdsbDisplay.js';
 import AcarsDisplay from './AcarsDisplay.js';
 import AisDisplay from './AisDisplay.js';
 import Vdl2Display from './Vdl2Display.js';
+import HfdlDisplay from './HfdlDisplay.js';
+import AprsDisplay from './AprsDisplay.js';
+import NavtexDisplay from './NavtexDisplay.js';
+import IsmDisplay from './IsmDisplay.js';
+import PacketDisplay from './PacketDisplay.js';
+import WefaxDisplay from './WefaxDisplay.js';
+import SstvDisplay from './SstvDisplay.js';
+import HellDisplay from './HellDisplay.js';
+import TextModeDisplay from './TextModeDisplay.js';
+import MeteorDisplay from './MeteorDisplay.js';
+import RadeDisplay from './RadeDisplay.js';
+import Js8Display from './Js8Display.js';
+import TimeSignalDisplay from './TimeSignalDisplay.js';
 
 const DECODERS = [
   { id: 'ft8', label: 'FT8' },
   { id: 'ft4', label: 'FT4' },
   { id: 'ft2', label: 'FT2' },
+  { id: 'fst4', label: 'FST4' },
+  { id: 'q65', label: 'Q65' },
+  { id: 'jt65', label: 'JT65' },
+  { id: 'jt9', label: 'JT9' },
+  { id: 'wspr', label: 'WSPR' },
+  { id: 'pi4', label: 'PI4' },
   { id: 'adsb', label: 'ADS-B' },
   { id: 'acars', label: 'ACARS' },
   { id: 'ais', label: 'AIS' },
   { id: 'vdl2', label: 'VDL2' },
+  { id: 'hfdl', label: 'HFDL' },
+  { id: 'aprs', label: 'APRS' },
+  { id: 'navtex', label: 'NAVTEX' },
+  { id: 'packet', label: 'PACKET' },
+  { id: 'ism', label: 'ISM' },
+  { id: 'wefax', label: 'WEFAX' },
+  { id: 'sstv', label: 'SSTV' },
+  { id: 'hell', label: 'HELL' },
+  { id: 'msk144', label: 'MSK144' },
+  { id: 'fsk441', label: 'FSK441' },
+  { id: 'olivia', label: 'OLIVIA' },
+  { id: 'thor', label: 'THOR' },
+  { id: 'fsq', label: 'FSQ' },
+  { id: 'psk31', label: 'PSK31' },
+  { id: 'rtty', label: 'RTTY' },
+  { id: 'rade', label: 'RADE' },
+  { id: 'js8', label: 'JS8' },
+  { id: 'dcf77', label: 'DCF77' },
+  { id: 'als162', label: 'ALS162' },
 ] as const;
 
 const MAX_ROWS = 160;
@@ -45,6 +83,32 @@ const DecoderDisplay: Component = () => {
   const isAcars = () => store.decoderMode() === 'acars';
   const isAis = () => store.decoderMode() === 'ais';
   const isVdl2 = () => store.decoderMode() === 'vdl2';
+  const isHfdl = () => store.decoderMode() === 'hfdl';
+  const isAprs = () => store.decoderMode() === 'aprs';
+  const isNavtex = () => store.decoderMode() === 'navtex';
+  const isPacket = () => store.decoderMode() === 'packet';
+  const isIsm = () => store.decoderMode() === 'ism';
+  const isWefax = () => store.decoderMode() === 'wefax';
+  const isSstv = () => store.decoderMode() === 'sstv';
+  const isHell = () => store.decoderMode() === 'hell';
+  const isRade = () => store.decoderMode() === 'rade';
+  const isJs8 = () => store.decoderMode() === 'js8';
+  const isTimeSignal = () => store.decoderMode() === 'dcf77' || store.decoderMode() === 'als162';
+  const isText = () =>
+    store.decoderMode() === 'olivia' ||
+    store.decoderMode() === 'thor' ||
+    store.decoderMode() === 'fsq' ||
+    store.decoderMode() === 'psk31' ||
+    store.decoderMode() === 'rtty';
+  const isMeteor = () =>
+    store.decoderMode() === 'msk144' ||
+    store.decoderMode() === 'fsk441' ||
+    store.decoderMode() === 'fst4' ||
+    store.decoderMode() === 'q65' ||
+    store.decoderMode() === 'jt65' ||
+    store.decoderMode() === 'jt9' ||
+    store.decoderMode() === 'wspr' ||
+    store.decoderMode() === 'pi4';
 
   const clearZoom = () => {
     history = [];
@@ -129,7 +193,7 @@ const DecoderDisplay: Component = () => {
 
   onMount(() => {
     const poll = window.setInterval(() => {
-      if (isAdsb() || isAcars() || isAis() || isVdl2()) return;
+      if (isAdsb() || isAcars() || isAis() || isVdl2() || isHfdl() || isAprs() || isNavtex() || isPacket() || isIsm() || isWefax() || isSstv() || isHell() || isText() || isRade() || isJs8() || isTimeSignal()) return;
       const frame = engine.getLatestFftFrame();
       if (!frame || frame === lastFrame) return;
       lastFrame = frame;
@@ -173,7 +237,7 @@ const DecoderDisplay: Component = () => {
         </Show>
       </div>
 
-      <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2()}>
+      <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2() && !isHfdl() && !isAprs() && !isNavtex() && !isPacket() && !isIsm() && !isWefax() && !isSstv() && !isHell() && !isText() && !isRade() && !isJs8()}>
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Decode table */}
         <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
@@ -244,6 +308,45 @@ const DecoderDisplay: Component = () => {
       </Show>
       <Show when={isVdl2()}>
         <Vdl2Display />
+      </Show>
+      <Show when={isHfdl()}>
+        <HfdlDisplay />
+      </Show>
+      <Show when={isAprs()}>
+        <AprsDisplay />
+      </Show>
+      <Show when={isNavtex()}>
+        <NavtexDisplay />
+      </Show>
+      <Show when={isPacket()}>
+        <PacketDisplay />
+      </Show>
+      <Show when={isIsm()}>
+        <IsmDisplay />
+      </Show>
+      <Show when={isWefax()}>
+        <WefaxDisplay />
+      </Show>
+      <Show when={isSstv()}>
+        <SstvDisplay />
+      </Show>
+      <Show when={isHell()}>
+        <HellDisplay />
+      </Show>
+      <Show when={isText()}>
+        <TextModeDisplay />
+      </Show>
+      <Show when={isMeteor()}>
+        <MeteorDisplay />
+      </Show>
+      <Show when={isRade()}>
+        <RadeDisplay />
+      </Show>
+      <Show when={isJs8()}>
+        <Js8Display />
+      </Show>
+      <Show when={isTimeSignal()}>
+        <TimeSignalDisplay />
       </Show>
     </div>
   );

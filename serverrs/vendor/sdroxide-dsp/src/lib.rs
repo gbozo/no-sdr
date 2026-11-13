@@ -8,6 +8,7 @@
 pub mod ddc;
 pub mod decim;
 pub mod nco;
+pub mod resample;
 pub mod simd;
 pub mod wbddc;
 pub mod wbspectrum;
@@ -18,6 +19,7 @@ pub type Complex32 = num_complex::Complex<f32>;
 pub use ddc::Ddc;
 pub use decim::{lowpass_taps, FirDecim, HalfbandDecim};
 pub use nco::Nco;
+pub use resample::MonoResampler;
 pub use wbddc::{WbDdc, clamp_center_hz, reachable_range_hz};
 pub use wbspectrum::WideSpectrum;
 pub use window::{blackman_harris, blackman_harris_derivative, hann};

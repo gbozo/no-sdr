@@ -1,6 +1,6 @@
 [package]
 name = "serverrs"
-version = "2.14.0"
+version = "2.15.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Multi-user WebSDR server"
@@ -69,14 +69,20 @@ sdroxide-adsb = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6
 sdroxide-ais = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 # VHF air/ground VDL Mode 2. Raw IQ, fourteen 25 kHz channels.
 sdroxide-vdl2 = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-hfdl = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-aprs = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-ax25 = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+sdroxide-ism = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
+# FreeDV RADE V1 (vendored C modem + Opus FARGAN vocoder).
+sdroxide-rade = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f0994e72850a15d2a7440d1fde742934a38aea0", optional = true }
 # WSJT-family background decoders (FT8/FT4 first). Pure Rust; GPL-3.0-only.
-mfsk-core = { version = "0.14.0", default-features = false, features = ["std", "ft8", "ft4", "parallel", "fft-rustfft"], optional = true }
+mfsk-core = { version = "0.14.0", default-features = false, features = ["std", "ft8", "ft4", "fst4", "q65", "jt65", "jt9", "wspr", "msk144", "parallel", "fft-rustfft"], optional = true }
 rayon = { version = "1", optional = true }
 rusqlite = { version = "0.42", features = ["bundled"], optional = true }
 
 [features]
 # The default build enables every feature we ship.
-default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb", "ais", "vdl2"]
+default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb", "ais", "vdl2", "hfdl", "aprs", "navtex", "ism", "packet", "wefax", "sstv", "hell", "text", "meteor", "wspr", "pi4", "rade", "js8", "time"]
 opus = ["dep:opus"]
 rtlsdr = ["dep:nusb"]
 hackrf = ["dep:sdroxide-hackrf", "dep:sdroxide-types"]
@@ -97,6 +103,21 @@ adsb = ["decoders", "dep:sdroxide-adsb", "dep:sdroxide-types"]
 ais = ["decoders", "dep:sdroxide-ais", "dep:sdroxide-types"]
 # Raw-IQ VDL Mode 2 decoding, hosted by the same decoder worker.
 vdl2 = ["decoders", "dep:sdroxide-vdl2", "dep:sdroxide-types"]
+hfdl = ["decoders", "dep:sdroxide-hfdl", "dep:sdroxide-types"]
+aprs = ["decoders", "dep:sdroxide-aprs", "dep:sdroxide-ax25"]
+packet = ["decoders", "dep:sdroxide-ax25"]
+navtex = ["decoders"]
+ism = ["decoders", "dep:sdroxide-ism", "dep:sdroxide-types"]
+wefax = ["decoders"]
+sstv = ["decoders", "dep:sdroxide-types"]
+hell = ["decoders", "dep:sdroxide-types"]
+text = ["decoders"]
+meteor = ["decoders"]
+wspr = ["decoders"]
+pi4 = ["decoders"]
+rade = ["decoders", "dep:sdroxide-rade", "dep:sdroxide-types"]
+js8 = ["decoders", "dep:sdroxide-types"]
+time = ["decoders"]
 # Bias-T (GPIO 0) on the antenna port. Default on so local RTL-SDR builds can
 # power a mast LNA/photodiode; drop it with --no-default-features for a build
 # that must never put DC on the feedline.

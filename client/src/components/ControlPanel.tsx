@@ -40,7 +40,7 @@ const ControlPanel: Component = () => {
           </Show>
         </div>
         <div class="flex flex-wrap gap-1.5">
-          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }, { id: 'adsb', label: 'ADS-B' }, { id: 'acars', label: 'ACARS' }, { id: 'ais', label: 'AIS' }, { id: 'vdl2', label: 'VDL2' }]}>
+          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }, { id: 'fst4', label: 'FST4' }, { id: 'q65', label: 'Q65' }, { id: 'jt65', label: 'JT65' }, { id: 'jt9', label: 'JT9' }, { id: 'wspr', label: 'WSPR' }, { id: 'pi4', label: 'PI4' }, { id: 'adsb', label: 'ADS-B' }, { id: 'acars', label: 'ACARS' }, { id: 'ais', label: 'AIS' }, { id: 'vdl2', label: 'VDL2' }, { id: 'hfdl', label: 'HFDL' }, { id: 'aprs', label: 'APRS' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'packet', label: 'PACKET' }, { id: 'ism', label: 'ISM' }, { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' }, { id: 'hell', label: 'HELL' }, { id: 'msk144', label: 'MSK144' }, { id: 'fsk441', label: 'FSK441' }, { id: 'olivia', label: 'OLIVIA' }, { id: 'thor', label: 'THOR' }, { id: 'fsq', label: 'FSQ' }, { id: 'psk31', label: 'PSK31' }, { id: 'rtty', label: 'RTTY' }, { id: 'rade', label: 'RADE' }, { id: 'js8', label: 'JS8' }, { id: 'dcf77', label: 'DCF77' }, { id: 'als162', label: 'ALS162' }]}>
             {(decoder) => (
               <button
                 onClick={() => engine.setDecoder(store.decoderMode() === decoder.id ? '' : decoder.id)}

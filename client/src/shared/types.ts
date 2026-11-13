@@ -146,12 +146,35 @@ export type DigitalMode =
   | 'acars'
   | 'vdl2'
   | 'ais'
+  | 'hfdl'
   | 'aprs'
+  | 'navtex'
+  | 'ism'
+  | 'packet'
   | 'pocsag'
   | 'ft8'
   | 'ft4'
   | 'ft2'
-  | 'wspr';
+  | 'fst4'
+  | 'q65'
+  | 'jt65'
+  | 'jt9'
+  | 'wefax'
+  | 'sstv'
+  | 'hell'
+  | 'olivia'
+  | 'thor'
+  | 'fsq'
+  | 'psk31'
+  | 'rtty'
+  | 'msk144'
+  | 'fsk441'
+  | 'wspr'
+  | 'pi4'
+  | 'rade'
+  | 'js8'
+  | 'dcf77'
+  | 'als162';
 
 // ---- ADS-B ----
 
@@ -345,6 +368,372 @@ export interface Vdl2Snapshot {
   multiblock: number;
   multiblockOk: number;
   samplesPerSymbol: number;
+}
+
+// ---- HFDL ----
+
+export interface HfdlFix {
+  lat: number;
+  lon: number;
+  aircraftId: number | null;
+  icao: string | null;
+  flight: string | null;
+}
+
+export interface HfdlDecode {
+  unix: number;
+  kind: string;
+  gs: string | null;
+  freqKhz: number;
+  snrDb: number | null;
+  freqSkewHz: number | null;
+  fecCorrected: number | null;
+  details: string;
+  position: HfdlFix | null;
+}
+
+export interface HfdlSnapshot {
+  running: boolean;
+  levelDbfs: number;
+  bursts: number;
+  decodes: number;
+  log: HfdlDecode[];
+  unavailable: string | null;
+  degraded: string | null;
+  suggestCenterHz: number | null;
+  windowCenterHz: number;
+  windowRateHz: number;
+}
+
+// ---- APRS ----
+
+export interface AprsPacket {
+  at: number;
+  from: string;
+  to: string;
+  via: string[];
+  kind: string;
+  raw: string;
+  text?: string;
+  lat?: number;
+  lon?: number;
+  ambiguity?: number;
+  symbol?: string;
+  courseDeg?: number | null;
+  speedKn?: number | null;
+  altitudeM?: number | null;
+  comment?: string;
+  status?: string;
+  message?: {
+    addressee: string;
+    text: string;
+    id: string;
+    replyAck: string;
+    messageKind: string;
+  };
+  weather?: Record<string, unknown>;
+  telemetry?: Record<string, unknown>;
+  object?: { name: string; live: boolean };
+  item?: { name: string; live: boolean };
+  timestamp?: {
+    day: number | null;
+    hour: number;
+    minute: number;
+    second: number | null;
+    zulu: boolean;
+  };
+  error?: string;
+}
+
+export interface AprsStatus {
+  frames: number;
+  badFcs: number;
+  nonAprs: number;
+  level: number;
+}
+
+// ---- AX.25 PACKET ----
+
+export interface PacketFrame {
+  at: number;
+  from: string;
+  to: string;
+  via: string[];
+  type: string;
+  pid: number;
+  payload: string;
+  raw: string;
+  length: number;
+}
+
+export interface PacketStatus {
+  frames: number;
+  badFcs: number;
+  nonAx25: number;
+  level: number;
+  baud: number;
+}
+
+// ---- WEFAX ----
+
+export interface WefaxImage {
+  imageId: number;
+  width: number;
+  height: number;
+  ioc: string;
+  lpm: number;
+  complete: boolean;
+  byTone?: boolean;
+  rows: Uint8Array[];
+}
+
+export interface WefaxStatus {
+  receiving: boolean;
+  phasing: boolean;
+  lines: number;
+  ioc: string;
+  lpm: number;
+  signal: number;
+  subcarrierHz: number;
+  slantPpm: number;
+  imageId: number;
+  width: number;
+  height: number;
+}
+
+// ---- SSTV ----
+
+export interface SstvImage {
+  imageId: number;
+  width: number;
+  height: number;
+  mode: string | null;
+  complete: boolean;
+  callsign?: string | null;
+  /** Interleaved RGB rows, 3 bytes per pixel. */
+  rows: Uint8Array[];
+}
+
+export interface SstvStatus {
+  receiving: boolean;
+  progress: number;
+  signal: number;
+  imageId: number;
+  mode: string | null;
+  width: number;
+  height: number;
+  callsign?: string | null;
+  unsupported?: string | null;
+}
+
+// ---- Hellschreiber ----
+
+export interface HellStatus {
+  receiving: boolean;
+  variant: string;
+  columns: number;
+  seq: number;
+  level: number;
+  audioHz: number;
+}
+
+// ---- Continuous text modes (Olivia / THOR / FSQ) ----
+
+export interface TextModeMessage {
+  at: number;
+  mode: string;
+  text: string;
+  rfHz: number;
+  audioHz: number;
+  level: number;
+}
+
+export interface TextModeStatus {
+  mode: string;
+  level: number;
+  audioHz: number;
+  listening: boolean;
+  /** PSK31: symbol rate; RTTY: baud rate. */
+  baud?: number;
+  /** RTTY shift in Hz. */
+  shiftHz?: number;
+  /** RTTY mark/space reversal. */
+  reverse?: boolean;
+  /** RTTY AFC offset in Hz. */
+  afcHz?: number;
+  /** RTTY decoder confidence. */
+  confidence?: number;
+}
+
+// ---- Meteor scatter (MSK144 / FSK441) ----
+
+export interface MeteorMessage {
+  at: number;
+  mode: string;
+  text: string;
+  rfHz: number;
+  audioHz: number;
+  snrDb: number;
+  dtSec: number;
+  durationSec?: number;
+  confidence?: number;
+  variant?: string;
+  fit?: number;
+  hardErrors?: number;
+  period: number;
+}
+
+export interface MeteorStatus {
+  mode: string;
+  level: number;
+  audioHz: number;
+  period: number;
+  decodes: number;
+  listening: boolean;
+}
+
+// ---- FreeDV RADE ----
+
+export interface RadeStatus {
+  sync: boolean;
+  snrDb: number;
+  freqOffsetHz: number;
+  rxLevel: number;
+  eooCount: number;
+  dropped: number;
+  callsign?: string | null;
+  audioHz?: number;
+  listening?: boolean;
+}
+
+// ---- JS8 ----
+
+export interface Js8Message {
+  at: number;
+  from: string;
+  to: string;
+  cmd?: string | null;
+  text: string;
+  rfHz: number;
+  audioHz: number;
+  snrDb: number;
+  firstSlotUtc: number;
+  lastSlotUtc: number;
+  frames: number;
+  complete: boolean;
+  toMe: boolean;
+  speed: string;
+}
+
+export interface Js8Heard {
+  call: string;
+  lastSlotUtc: number;
+}
+
+export interface Js8Status {
+  speed: string;
+  period: number;
+  level: number;
+  decodes: number;
+  listening: boolean;
+  heard: Js8Heard[];
+}
+
+// ---- DCF77 / ALS162 time signals ----
+
+export interface TimeSignalClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  weekday: number;
+  utcOffsetMin: number;
+  unix: number;
+  dst: boolean;
+  leapSecond: boolean;
+  clockChange: boolean;
+  holidayToday: boolean;
+  holidayTomorrow: boolean;
+  text: string;
+}
+
+export interface TimeSignalStatus {
+  mode: string;
+  sync: boolean;
+  bits: number;
+  second?: number;
+  pulses?: number;
+  level: number;
+  listening: boolean;
+  time?: TimeSignalClock | null;
+}
+
+// ---- NAVTEX ----
+
+export interface NavtexMessage {
+  at: number;
+  station: string;
+  subject: string;
+  serial: number;
+  text: string;
+  complete: boolean;
+  lost: number;
+}
+
+export interface NavtexStatus {
+  inSync: boolean;
+  level: number;
+  reverse: boolean;
+  direct: number;
+  repaired: number;
+  lost: number;
+  messages: number;
+  live?: NavtexMessage | null;
+}
+
+// ---- ISM ----
+
+export interface IsmReading {
+  quantity: string;
+  value: number;
+  unit: string;
+  decimals: number;
+}
+
+export interface IsmDevice {
+  id: number;
+  protocol: string;
+  kind: string;
+  model: string | null;
+  device: string;
+  freqHz: number;
+  snrDb: number;
+  firstAt: number;
+  lastAt: number;
+  count: number;
+  readings: IsmReading[];
+  readingsText: string;
+  extra: [string, string][];
+  encrypted: boolean;
+  rawHex: string;
+}
+
+export interface IsmChannelStatus {
+  freqHz: number;
+  label: string;
+  live: boolean;
+  reason: string | null;
+}
+
+export interface IsmStatus {
+  channels: IsmChannelStatus[];
+  unavailable: string | null;
+  suggestCenterHz: number | null;
+  bursts: number;
+  decodes: number;
+  windowCenterHz: number;
+  windowRateHz: number;
 }
 
 // ---- Client / Session ----
