@@ -24,7 +24,9 @@ RUN npm run build --workspace=client
 FROM rust:1.99-alpine AS rust-builder
 
 # cmake is needed by audiopus-sys, which builds the bundled Opus library.
-RUN apk add --no-cache build-base cmake perl pkgconf git ca-certificates
+# RADE's vendored patched Opus uses autogen.sh, so the autotools are needed too.
+RUN apk add --no-cache build-base cmake perl pkgconf git ca-certificates \
+    autoconf automake libtool patch
 
 # The vendored Opus CMakeLists uses an old minimum; CMake 4 rejects it unless
 # this policy override is set.
