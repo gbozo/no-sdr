@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.13.0)
+## Current status (2.14.0)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -34,13 +34,19 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.13.0`. It adds the ADS-B aircraft table +
-  OpenStreetMap view (raw IQ, one-bit CRC repair), ACARS/ARINC 618 and VDL
-  Mode 2 message decoders, an AIS vessel table + map, decoder-aware bookmarks,
-  and the FFT/CPU hot-path work (rate-capped transforms, DC-spike removal,
-  decoder-only clients skip the audio channelizer). The previous release,
-  `v2.12.0`, added Electron desktop packages for Linux/macOS/Windows, the
-  expanded native/vendor SDR driver set and admin device scanning.
+- Latest published release: `v2.14.0`. It is a noise-reduction and filter
+  overhaul: corrected WDSP LMS constants (the ANR/auto-notch had an inverted
+  leak term and added gain), a mapped noise-blanker threshold restore, a
+  one-sided SSB passband in the extractor, a rate-scaled pre-filter blanker, a
+  decimating FIR for WFM stereo, polyphase client upsampling, selectable
+  50/75 µs FM de-emphasis and an auto hi-blend, plus removal of the dead
+  spectral-NR code. The previous release, `v2.13.0`, added the ADS-B aircraft
+  table + OpenStreetMap view, ACARS/ARINC 618 and VDL Mode 2 message decoders,
+  an AIS vessel table + map, decoder-aware bookmarks, and the FFT/CPU hot-path
+  work (rate-capped transforms, DC-spike removal, decoder-only clients skip
+  the audio channelizer). Release `v2.12.0` added Electron desktop packages
+  for Linux/macOS/Windows, the expanded native/vendor SDR driver set and admin
+  device scanning.
 - Release `v2.11.0-rust` (prerelease): portable archives + multi-arch image
   `ghcr.io/gbozo/no-sdr:2.11.0-rust`. The Docker workflow also publishes a
   rolling `latest-rust` tag.
@@ -105,6 +111,7 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-13: Version 2.14.0. Noise-reduction and filter overhaul. Client: WDSP ANR/ANF constants restored (`den_mult` 6.25e-10, `lidx` ranges and +1/−3 ramp, 64-tap/16-delay auto-notch) — the old quartic leakage inverted the leak factor every sample and the "NR" added ~17 dB of gain; noise-blanker threshold now mapped when re-sent after a reconnect (sending the raw 0–1 level blanked every sample); polyphase windowed-sinc upsampling replaces linear interpolation for SSB/CW (−100 dB images vs −55 dB); selectable 50/75 µs FM de-emphasis; auto hi-blend that tracks signal level; dead spectral NR / audio NB code removed. Server: one-sided extractor bandwidth for USB/LSB (a 2400 Hz SSB request no longer halves the passband), sample-rate-scaled pre-filter noise blanker (2 ms average, 100 µs guard), decimating FIR for WFM stereo (proper 24–34 kHz rejection, cheaper than the old LPF+drop chain), block-form audio LPFs, `{cmd:'deemphasis'}` per-client de-emphasis, 0.45 anti-alias cutoff.
 - 2026-11-13: Version 2.13.0. Digital decoder expansion: ADS-B raw-IQ decoder with aircraft table and Leaflet/OSM map (DC-blocked IQ, gated/ungated 1-bit CRC repair, aircraft entity persistence, `/api/decoder/aircraft`); ACARS/ARINC 618 VHF AM receiver and table; AIS vessel table + map with `decoder_entities` (kind `vessel`, `/api/decoder/vessels`); VDL Mode 2 message log + station table. Shared decoder worker gained raw-IQ channel kinds, per-profile sample-rate fixes, and bookmarks now capture/restore decoder modes. CPU: FFT transforms are rate-capped and DC-removed in the display path; decoder-only clients with audio off skip NCO/FIR/Opus; chunk-path allocations removed.
 - 2026-11-12: Decoder subsystem extended with foreground per-client decoding (`{"cmd":"decoder","mode":"ft8"}`) and SQLite result persistence with `/api/decoder/messages` and `/api/decoder/stats`. Background decoder work remains the OpenWebRX-style path.
 - 2026-11-12: Background decoder subsystem added (OpenWebRX-style). Each configured decoder gets a per-dongle `mfsk-core` IQ channelizer and UTC-aligned 12 kHz slot receiver; FT8, FT4 and FT2 decode results are broadcast as `MSG_DECODER`. Configured under top-level `decoders:` in `config/config.yaml`; see `docs/decoders.md`.
