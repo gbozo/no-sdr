@@ -1,0 +1,7 @@
+# audiopus_sys builds the bundled Opus library with its own CMakeLists, which
+# declares cmake_minimum_required(VERSION 3.1). CMake 4 removed compatibility
+# with policy versions below 3.5, so opt new build trees back in. Cargo passes
+# this through to build scripts, which keeps `cargo build` working on distros
+# (and CI images) that ship CMake >= 4 without pinning an older CMake.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

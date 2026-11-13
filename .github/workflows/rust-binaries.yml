@@ -31,6 +31,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # audiopus_sys builds the bundled Opus with a CMakeLists that declares
+  # cmake_minimum_required(VERSION 3.1); CMake 4 (Ubuntu 25.10+ runners)
+  # rejects policy versions below 3.5. .cargo/config.toml sets the same value
+  # for local builds. Harmless on CMake 3.x.
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
 jobs:
   linux-amd64:
@@ -97,10 +102,6 @@ jobs:
 
   macos-arm64:
     runs-on: macos-15
-    env:
-      # CMake 4 no longer accepts the old cmake_minimum_required in the
-      # vendored Opus build used by audiopus_sys.
-      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -124,8 +125,6 @@ jobs:
 
   macos-x86_64:
     runs-on: macos-15-intel
-    env:
-      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -149,9 +148,6 @@ jobs:
 
   windows-amd64:
     runs-on: windows-latest
-    env:
-      # Keep the vendored Opus build compatible with newer CMake.
-      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -261,7 +257,6 @@ jobs:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     env:
-      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v5
@@ -298,7 +293,6 @@ jobs:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
     env:
-      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v5
@@ -335,7 +329,6 @@ jobs:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     env:
-      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v5
