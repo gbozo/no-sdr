@@ -95,10 +95,6 @@ const App: Component = () => {
         store.applyMeteorEvent(data);
         return;
       }
-      if (type === 'rade') {
-        store.applyRadeEvent(data);
-        return;
-      }
       if (type === 'js8') {
         store.applyJs8Event(data);
         return;

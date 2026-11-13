@@ -67,7 +67,7 @@ pipelines.
 | Build | npm workspaces (client + desktop), Cargo crate (serverrs) |
 | Dev reload | Vite HMR (client), concurrently; Rust runs as a normal process |
 | Config | YAML; `serverrs/src/config.rs` |
-| Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`); HackRF (`hackrf`); Airspy R2/Mini (`airspy`); Airspy HF+ (`airspyhf`); HydraSDR (`hydrasdr`); ELAD (`elad`); RX-888 (`rx888`); Pluto (`pluto`); SDRplay (`sdrplay`); LimeSDR (`lime`); Fobos (`fobos`); background decoders (`decoders`, `mfsk-core`, `adsb`, `ais`, `vdl2`, `hfdl`, `aprs`, `navtex`, `ism`, `packet`, `wefax`, `sstv`, `hell`, `text`, `meteor`, `wspr`, `pi4`, `rade`, `js8`, `time`). All are default Cargo features |
+| Optional deps | libopus (`opus`); native RTL-SDR (`rtlsdr`); bias-T (`bias-t`); HackRF (`hackrf`); Airspy R2/Mini (`airspy`); Airspy HF+ (`airspyhf`); HydraSDR (`hydrasdr`); ELAD (`elad`); RX-888 (`rx888`); Pluto (`pluto`); SDRplay (`sdrplay`); LimeSDR (`lime`); Fobos (`fobos`); background decoders (`decoders`, `mfsk-core`, `adsb`, `ais`, `vdl2`, `hfdl`, `aprs`, `navtex`, `ism`, `packet`, `wefax`, `sstv`, `hell`, `text`, `meteor`, `wspr`, `pi4`, `js8`, `time`). All are default Cargo features |
 
 ## Key Files (by responsibility)
 
@@ -81,7 +81,7 @@ pipelines.
 | `serverrs/src/demod/fm.rs` | Server-side FM demodulator (stereo + RDS) | Per Opus-client |
 | `serverrs/src/dongle/opus_pipeline.rs` | Server-side demod + Opus encode per client | Per Opus-client |
 | `serverrs/src/codec/adpcm.rs` | IMA-ADPCM encoder/decoder (4:1 lossy) | Every IQ/FFT frame |
-| `serverrs/src/decoders/mod.rs` | OpenWebRX-style decoder workers: slotted FT8/FT4/FT2/FST4/Q65/JT65/JT9, raw-IQ ADS-B/AIS/VDL2/HFDL/ISM, APRS/NAVTEX/PACKET/WEFAX/SSTV/HELL/OLIVIA/THOR/FSQ/PSK31/RTTY/MSK144/FSK441/FREEDV RADE/JS8 audio and DCF77/ALS162 time signals | YES (per dongle) |
+| `serverrs/src/decoders/mod.rs` | OpenWebRX-style decoder workers: slotted FT8/FT4/FT2/FST4/Q65/JT65/JT9, raw-IQ ADS-B/AIS/VDL2/HFDL/ISM, APRS/NAVTEX/PACKET/WEFAX/SSTV/HELL/OLIVIA/THOR/FSQ/PSK31/RTTY/MSK144/FSK441/JS8 audio and DCF77/ALS162 time signals | YES (per dongle) |
 | `serverrs/src/ws/manager.rs` | WS lifecycle, broadcast, aggregate traffic stats | YES |
 | `serverrs/src/ws/protocol.rs` | Binary WS protocol: pack/unpack, message types, client commands | Every WS message |
 | `serverrs/src/api/router.rs` | axum routes, admin API, static SPA, WebSocket upgrade | Request handler |

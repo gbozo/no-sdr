@@ -1021,29 +1021,6 @@ FSK441 also reports `durationSec` and `confidence`. Status snapshots carry
 level, audio frequency, period and decode count. The client table shows time,
 mode, text, RF, DT, SNR and confidence.
 
-## FreeDV RADE
-
-RADE is a digital-voice mode: the server runs the RADE V1 modem and neural
-vocoder, then sends decoded 48 kHz speech as normal `MSG_AUDIO` frames. The
-client mutes its local demodulator while RADE is selected so only synthesized
-speech is heard.
-
-```yaml
-decoders:
-  - id: rade-20m
-    enabled: true
-    dongleId: d1
-    mode: rade
-    frequencyHz: 14236000
-    bandwidthHz: 3000
-```
-
-The server emits `kind:"status"` snapshots with sync, SNR, frequency offset,
-RX level, end-of-over count, dropped samples and the last decoded callsign.
-A `kind:"callsign"` event is emitted when a remote end-of-over frame identifies
-the station. The RADE panel shows those fields; audio uses the normal volume,
-EQ and audio controls.
-
 ## Roadmap
 
 1. FT8/FT4 background decoders and result transport. *(implemented)*
@@ -1070,9 +1047,8 @@ EQ and audio controls.
 18. FST4/Q65 weak-signal slots. *(implemented)*
 19. JT65/JT9. *(implemented)*
 20. WSPR/PI4. *(implemented)*
-21. FreeDV RADE. *(implemented)*
-22. JS8. *(implemented)*
-23. DCF77/ALS162 time signals. *(implemented)*
+21. JS8. *(implemented)*
+22. DCF77/ALS162 time signals. *(implemented)*
 
 ## JS8
 

@@ -111,7 +111,7 @@ jobs:
           workspaces: serverrs -> target
           cache-targets: false
       - name: Build tools
-        run: brew install cmake autoconf automake libtool pkg-config
+        run: command -v cmake >/dev/null || brew install cmake
       - name: Build Apple Silicon
         run: |
           cargo build --release --all-features --bin serverrs \
@@ -134,7 +134,7 @@ jobs:
           workspaces: serverrs -> target
           cache-targets: false
       - name: Build tools
-        run: brew install cmake autoconf automake libtool pkg-config
+        run: command -v cmake >/dev/null || brew install cmake
       - name: Build Intel
         run: |
           cargo build --release --all-features --bin serverrs \
@@ -160,13 +160,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $meta = cargo metadata --no-deps --format-version 1 `
-            --manifest-path serverrs/Cargo.toml | ConvertFrom-Json
-          $pkg = $meta.packages | Where-Object { $_.name -eq 'serverrs' }
-          $features = $pkg.features.PSObject.Properties.Name |
-            Where-Object { $_ -ne 'default' -and $_ -ne 'rade' }
-          cargo build --release --no-default-features `
-            --features ($features -join ',') --bin serverrs `
+          cargo build --release --all-features --bin serverrs `
             --manifest-path serverrs/Cargo.toml
           Copy-Item serverrs/target/release/serverrs.exe `
             dist/serverrs-windows-amd64.exe
@@ -273,7 +267,7 @@ jobs:
           workspaces: serverrs -> target
           cache-targets: false
       - name: Build tools
-        run: brew install cmake autoconf automake libtool pkg-config
+        run: command -v cmake >/dev/null || brew install cmake
       - name: Sync desktop version
         env:
           NO_SDR_VERSION: ${{ github.event.release.tag_name }}
@@ -309,7 +303,7 @@ jobs:
           workspaces: serverrs -> target
           cache-targets: false
       - name: Build tools
-        run: brew install cmake autoconf automake libtool pkg-config
+        run: command -v cmake >/dev/null || brew install cmake
       - name: Sync desktop version
         env:
           NO_SDR_VERSION: ${{ github.event.release.tag_name }}
@@ -352,13 +346,7 @@ jobs:
       - name: Build server
         shell: pwsh
         run: |
-          $meta = cargo metadata --no-deps --format-version 1 `
-            --manifest-path serverrs/Cargo.toml | ConvertFrom-Json
-          $pkg = $meta.packages | Where-Object { $_.name -eq 'serverrs' }
-          $features = $pkg.features.PSObject.Properties.Name |
-            Where-Object { $_ -ne 'default' -and $_ -ne 'rade' }
-          cargo build --release --no-default-features `
-            --features ($features -join ',') --bin serverrs `
+          cargo build --release --all-features --bin serverrs `
             --manifest-path serverrs/Cargo.toml
       - uses: actions/setup-node@v5
         with:

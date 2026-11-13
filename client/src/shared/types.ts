@@ -171,7 +171,6 @@ export type DigitalMode =
   | 'fsk441'
   | 'wspr'
   | 'pi4'
-  | 'rade'
   | 'js8'
   | 'dcf77'
   | 'als162';
@@ -590,20 +589,6 @@ export interface MeteorStatus {
   period: number;
   decodes: number;
   listening: boolean;
-}
-
-// ---- FreeDV RADE ----
-
-export interface RadeStatus {
-  sync: boolean;
-  snrDb: number;
-  freqOffsetHz: number;
-  rxLevel: number;
-  eooCount: number;
-  dropped: number;
-  callsign?: string | null;
-  audioHz?: number;
-  listening?: boolean;
 }
 
 // ---- JS8 ----

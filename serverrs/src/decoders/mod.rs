@@ -27,7 +27,7 @@ use tracing::{info, warn};
 use crate::config::DecoderConfig;
 use crate::demod::{Demodulator, SsbDemod, SsbMode};
 use crate::dsp::{IqExtractor, IqExtractorConfig};
-use crate::ws::{pack_audio_message, pack_decoder_message, WsManager};
+use crate::ws::{pack_decoder_message, WsManager};
 
 mod acars;
 mod acars_channel;
@@ -70,8 +70,6 @@ mod js8_channel;
 mod ism;
 #[cfg(feature = "meteor")]
 mod meteor;
-#[cfg(feature = "rade")]
-mod rade;
 #[cfg(feature = "navtex")]
 mod navtex;
 #[cfg(feature = "navtex")]
@@ -377,11 +375,6 @@ fn is_meteor_mode(mode: &str) -> bool {
     meteor::is_meteor(mode)
 }
 
-#[cfg(feature = "rade")]
-fn is_rade(mode: &str) -> bool {
-    rade::is_rade(mode)
-}
-
 #[cfg(feature = "js8")]
 fn is_js8(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("js8")
@@ -448,10 +441,6 @@ fn supported_mode(mode: &str) -> bool {
     }
     #[cfg(feature = "meteor")]
     if is_meteor_mode(mode) {
-        return true;
-    }
-    #[cfg(feature = "rade")]
-    if is_rade(mode) {
         return true;
     }
     #[cfg(feature = "pi4")]
@@ -565,8 +554,6 @@ pub(crate) enum Channel {
     Text(text::TextChannel),
     #[cfg(feature = "meteor")]
     Meteor(meteor::MeteorChannel),
-    #[cfg(feature = "rade")]
-    Rade(rade::RadeChannel),
     #[cfg(feature = "js8")]
     Js8(js8_channel::Js8Channel),
     #[cfg(feature = "time")]
@@ -606,8 +593,6 @@ impl Channel {
             Channel::Text(channel) => &channel.cfg,
             #[cfg(feature = "meteor")]
             Channel::Meteor(channel) => &channel.cfg,
-            #[cfg(feature = "rade")]
-            Channel::Rade(channel) => &channel.cfg,
             #[cfg(feature = "js8")]
             Channel::Js8(channel) => &channel.cfg,
             #[cfg(feature = "time")]
@@ -647,24 +632,12 @@ impl Channel {
             Channel::Text(channel) => channel.take_results(),
             #[cfg(feature = "meteor")]
             Channel::Meteor(channel) => channel.take_results(),
-            #[cfg(feature = "rade")]
-            Channel::Rade(channel) => channel.take_results(),
             #[cfg(feature = "js8")]
             Channel::Js8(channel) => channel.take_results(),
             #[cfg(feature = "time")]
             Channel::Dcf77(channel) => channel.take_results(),
             #[cfg(feature = "time")]
             Channel::Als162(channel) => channel.take_results(),
-        }
-    }
-
-    /// Decoded speech audio, when the decoder produces audio instead of text
-    /// or JSON. Empty for every non-audio decoder.
-    pub(crate) fn take_audio(&mut self) -> Vec<i16> {
-        match self {
-            #[cfg(feature = "rade")]
-            Channel::Rade(channel) => channel.take_audio(),
-            _ => Vec::new(),
         }
     }
 
@@ -701,8 +674,6 @@ impl Channel {
                 let results = channel.process(chunk, now);
                 channel.pending.extend(results);
             }
-            #[cfg(feature = "rade")]
-            Channel::Rade(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "js8")]
             Channel::Js8(channel) => channel.process_chunk(chunk, now),
             #[cfg(feature = "time")]
@@ -792,10 +763,6 @@ pub(crate) fn build_channel(
     #[cfg(feature = "meteor")]
     if is_meteor_mode(&cfg.mode) {
         return meteor::MeteorChannel::build(cfg, center_hz, sample_rate).map(Channel::Meteor);
-    }
-    #[cfg(feature = "rade")]
-    if is_rade(&cfg.mode) {
-        return rade::RadeChannel::new(cfg, center_hz, sample_rate).map(Channel::Rade);
     }
     #[cfg(feature = "js8")]
     if is_js8(&cfg.mode) {
@@ -1137,10 +1104,6 @@ fn run_worker(
         let now = now_ns();
         for channel in &mut channels {
             channel.process_chunk(&input.chunk, now);
-            let audio = channel.take_audio();
-            if !audio.is_empty() {
-                ws.broadcast(&dongle_id, pack_audio_message(&audio));
-            }
             for data in channel.take_results() {
                 persist_data(&store, &dongle_id, channel.config(), &data);
                 ws.broadcast(
@@ -1204,24 +1167,6 @@ mod tests {
             assert!(supported_mode("msk144"));
             assert!(supported_mode("fsk441"));
         }
-        #[cfg(feature = "rade")]
-        assert!(supported_mode("rade"));
-    }
-
-    #[cfg(feature = "rade")]
-    #[test]
-    fn build_channel_dispatches_rade_to_the_voice_channel() {
-        let cfg = DecoderConfig {
-            id: "rade-test".to_string(),
-            enabled: true,
-            dongle_id: "d1".to_string(),
-            mode: "rade".to_string(),
-            frequency_hz: 14_236_000,
-            bandwidth_hz: 3000,
-            settings: Default::default(),
-        };
-        let channel = build_channel(&cfg, 14_236_000.0, 2_400_000).expect("build RADE channel");
-        assert!(matches!(channel, Channel::Rade(_)));
     }
 
     #[cfg(feature = "wefax")]

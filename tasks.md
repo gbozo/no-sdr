@@ -111,8 +111,6 @@ See `docs/decoders.md` for the current architecture and config format.
 
 ## Voice and messaging
 
-- [x] **FreeDV RADE** — `sdroxide-rade`; server-decoded speech over `MSG_AUDIO`
-      plus callsign/sync status panel.
 - [x] **JS8** — JS8Call protocol adapted locally; message table with directed
       and group traffic plus heard-station list.
 
@@ -129,7 +127,6 @@ See `docs/decoders.md` for the current architecture and config format.
 - [x] Hellschreiber: scrolling dot-raster panel.
 - [x] WEFAX: image panel with IOC/LPM, phasing, subcarrier and line status.
 - [x] SSTV: image panel with received-image history.
-- [x] RADE: audio/status panel.
 - [x] JS8: message table + heard-station list.
 - [x] Entity selection: clicking a row highlights the map marker and opens
       details/history (ADS-B).

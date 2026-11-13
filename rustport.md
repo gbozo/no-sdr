@@ -29,9 +29,9 @@ protocol as before).
   `navtex` (SITOR-B), `ism` (868 MHz sensors/meters), `packet` (AX.25
   1200/9600 packet), `wefax` (HF weather fax), `sstv` (slow-scan TV) and
   `hell` (Hellschreiber raster), `text` (Olivia/THOR/FSQ/PSK31/RTTY) and
-  `meteor` (MSK144/FSK441), `wspr` (WSPR), `pi4` (PI4 beacons), `rade`
-  (FreeDV RADE V1 voice), `js8` (JS8Call messaging) and `time` (DCF77/ALS162
-  time signals) are **default features**. The three vendor drivers load their
+  `meteor` (MSK144/FSK441), `wspr` (WSPR), `pi4` (PI4 beacons), `js8`
+  (JS8Call messaging) and `time` (DCF77/ALS162 time signals) are **default
+  features**. The three vendor drivers load their
   library at runtime; no SDK is needed to build.
   The `bias-t` feature decides whether the GPIO path is compiled in; the
   dongle's `biasT` setting still decides whether it is energized. Use `--no-default-features` to build without optional
@@ -43,7 +43,7 @@ protocol as before).
 - Latest published release: `v2.15.0`. It completes the requested decoder
   suite with HFDL, APRS, NAVTEX, ISM, AX.25 packet, WEFAX, SSTV,
   Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65,
-  JT65/JT9, WSPR/PI4, FreeDV RADE, JS8, DCF77 and ALS162 — all with
+  JT65/JT9, WSPR/PI4, JS8, DCF77 and ALS162 — all with
   foreground/background operation, WebSocket result transport, SQLite history
   and dedicated client panels. The previous release, `v2.14.0`, was a
   noise-reduction and filter overhaul: corrected WDSP LMS constants, a mapped
@@ -129,9 +129,8 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 - 2026-11-13: AX.25 PACKET decoder added. 1200 baud Bell 202 and 9600 baud G3RUH over an NBFM/48 kHz audio channel, `sdroxide-ax25` HDLC/FCS and packet codec, packet monitor table with raw-frame inspector. Select 9600 with `settings.baud: 9600`; foreground/background operation.
 - 2026-11-13: ISM 868 MHz decoder added. Raw-IQ window to `sdroxide-ism`, native weather/meter/home-automation families, device table with readings, channel plan/status, foreground/background operation, device table panel.
 - 2026-11-13: NAVTEX decoder added. SITOR-B at 518/490/4209.5 kHz, 100 baud, 170 Hz shift, CCIR 476 with time-diversity FEC; USB audio path, ZCZC/NNNN framing with repeat replacement, message table and full-text panel, foreground and background.
-- 2026-11-13: Version 2.15.0. Decoder suite completion: HFDL, APRS, NAVTEX, ISM, AX.25 packet, WEFAX, SSTV, Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4, FreeDV RADE, JS8, DCF77 and ALS162. Foreground/background workers, `MSG_DECODER` transport, SQLite history and decoder-specific client panels.
+- 2026-11-13: Version 2.15.0. Decoder suite completion: HFDL, APRS, NAVTEX, ISM, AX.25 packet, WEFAX, SSTV, Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65, JT65/JT9, WSPR/PI4, JS8, DCF77 and ALS162. Foreground/background workers, `MSG_DECODER` transport, SQLite history and decoder-specific client panels.
 - 2026-11-13: JS8 decoder added. The JS8Call-derived 8-FSK protocol/varicode/frame/assembler layers are local to `serverrs/src/decoders/js8/`; the channel supports NORMAL/FAST/TURBO/SLOW speeds, directed/group message assembly, heard-station status and a message-table client panel.
-- 2026-11-13: FreeDV RADE V1 voice decoder added. `sdroxide-rade` on the 48 kHz USB audio path supplies neural-decoded speech, sent as raw `MSG_AUDIO` while `MSG_DECODER` carries sync/SNR/offset/callsign status. The client mutes its local demodulator for RADE and shows a sync/callsign panel.
 - 2026-11-13: APRS decoder added. 1200 baud Bell 202 AX.25 on the regional VHF channel: NBFM/48 kHz audio path, local AFSK receiver, `sdroxide-ax25` HDLC/FCS and `sdroxide-aprs` information-field parser. Packet table plus Leaflet/OSM map for position reports; foreground/background, with events persisted through `decoder_messages`.
 - 2026-11-13: Version 2.14.0. Noise-reduction and filter overhaul. Client: WDSP ANR/ANF constants restored (`den_mult` 6.25e-10, `lidx` ranges and +1/−3 ramp, 64-tap/16-delay auto-notch) — the old quartic leakage inverted the leak factor every sample and the "NR" added ~17 dB of gain; noise-blanker threshold now mapped when re-sent after a reconnect (sending the raw 0–1 level blanked every sample); polyphase windowed-sinc upsampling replaces linear interpolation for SSB/CW (−100 dB images vs −55 dB); selectable 50/75 µs FM de-emphasis; auto hi-blend that tracks signal level; dead spectral NR / audio NB code removed. Server: one-sided extractor bandwidth for USB/LSB (a 2400 Hz SSB request no longer halves the passband), sample-rate-scaled pre-filter noise blanker (2 ms average, 100 µs guard), decimating FIR for WFM stereo (proper 24–34 kHz rejection, cheaper than the old LPF+drop chain), block-form audio LPFs, `{cmd:'deemphasis'}` per-client de-emphasis, 0.45 anti-alias cutoff.
 - 2026-11-13: Version 2.13.0. Digital decoder expansion: ADS-B raw-IQ decoder with aircraft table and Leaflet/OSM map (DC-blocked IQ, gated/ungated 1-bit CRC repair, aircraft entity persistence, `/api/decoder/aircraft`); ACARS/ARINC 618 VHF AM receiver and table; AIS vessel table + map with `decoder_entities` (kind `vessel`, `/api/decoder/vessels`); VDL Mode 2 message log + station table. Shared decoder worker gained raw-IQ channel kinds, per-profile sample-rate fixes, and bookmarks now capture/restore decoder modes. CPU: FFT transforms are rate-capped and DC-removed in the display path; decoder-only clients with audio off skip NCO/FIR/Opus; chunk-path allocations removed.

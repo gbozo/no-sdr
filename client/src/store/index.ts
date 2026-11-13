@@ -47,7 +47,6 @@ import type {
   TextModeStatus,
   MeteorMessage,
   MeteorStatus,
-  RadeStatus,
   Js8Message,
   Js8Status,
 } from '~/shared';
@@ -248,8 +247,6 @@ function createStore() {
     decodes: 0,
     listening: false,
   });
-  /** FreeDV RADE voice decoder status. */
-  const [radeStatus, setRadeStatus] = createSignal<RadeStatus | null>(null);
   /** JS8 messages, newest first, and the last station/status snapshot. */
   const [js8Messages, setJs8Messages] = createSignal<Js8Message[]>([]);
   const [js8Status, setJs8Status] = createSignal<Js8Status>({
@@ -1071,42 +1068,6 @@ function createStore() {
         listening: false,
       });
     },
-    radeStatus,
-    /** Fold one `decoderType: "rade"` status/callsign event into state. */
-    applyRadeEvent: (data: unknown) => {
-      if (!data || typeof data !== 'object') return;
-      const event = data as Partial<RadeStatus> & {
-        kind?: string;
-        call?: string;
-      };
-      if (event.kind === 'callsign') {
-        setRadeStatus((previous) => ({
-          ...(previous ?? {
-            sync: false,
-            snrDb: 0,
-            freqOffsetHz: 0,
-            rxLevel: 0,
-            eooCount: 0,
-            dropped: 0,
-          }),
-          callsign: event.call ?? null,
-        }));
-        return;
-      }
-      if (event.kind !== 'status') return;
-      setRadeStatus({
-        sync: event.sync ?? false,
-        snrDb: event.snrDb ?? 0,
-        freqOffsetHz: event.freqOffsetHz ?? 0,
-        rxLevel: event.rxLevel ?? 0,
-        eooCount: event.eooCount ?? 0,
-        dropped: event.dropped ?? 0,
-        callsign: event.callsign ?? null,
-        audioHz: event.audioHz ?? 1470,
-        listening: event.listening ?? true,
-      });
-    },
-    clearRade: () => setRadeStatus(null),
     js8Messages,
     js8Status,
     /** Fold one `decoderType: "js8"` message or status event into state. */

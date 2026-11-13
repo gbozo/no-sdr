@@ -22,7 +22,6 @@ import SstvDisplay from './SstvDisplay.js';
 import HellDisplay from './HellDisplay.js';
 import TextModeDisplay from './TextModeDisplay.js';
 import MeteorDisplay from './MeteorDisplay.js';
-import RadeDisplay from './RadeDisplay.js';
 import Js8Display from './Js8Display.js';
 import TimeSignalDisplay from './TimeSignalDisplay.js';
 
@@ -55,7 +54,6 @@ const DECODERS = [
   { id: 'fsq', label: 'FSQ' },
   { id: 'psk31', label: 'PSK31' },
   { id: 'rtty', label: 'RTTY' },
-  { id: 'rade', label: 'RADE' },
   { id: 'js8', label: 'JS8' },
   { id: 'dcf77', label: 'DCF77' },
   { id: 'als162', label: 'ALS162' },
@@ -91,7 +89,6 @@ const DecoderDisplay: Component = () => {
   const isWefax = () => store.decoderMode() === 'wefax';
   const isSstv = () => store.decoderMode() === 'sstv';
   const isHell = () => store.decoderMode() === 'hell';
-  const isRade = () => store.decoderMode() === 'rade';
   const isJs8 = () => store.decoderMode() === 'js8';
   const isTimeSignal = () => store.decoderMode() === 'dcf77' || store.decoderMode() === 'als162';
   const isText = () =>
@@ -193,7 +190,7 @@ const DecoderDisplay: Component = () => {
 
   onMount(() => {
     const poll = window.setInterval(() => {
-      if (isAdsb() || isAcars() || isAis() || isVdl2() || isHfdl() || isAprs() || isNavtex() || isPacket() || isIsm() || isWefax() || isSstv() || isHell() || isText() || isRade() || isJs8() || isTimeSignal()) return;
+      if (isAdsb() || isAcars() || isAis() || isVdl2() || isHfdl() || isAprs() || isNavtex() || isPacket() || isIsm() || isWefax() || isSstv() || isHell() || isText() || isJs8() || isTimeSignal()) return;
       const frame = engine.getLatestFftFrame();
       if (!frame || frame === lastFrame) return;
       lastFrame = frame;
@@ -237,7 +234,7 @@ const DecoderDisplay: Component = () => {
         </Show>
       </div>
 
-      <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2() && !isHfdl() && !isAprs() && !isNavtex() && !isPacket() && !isIsm() && !isWefax() && !isSstv() && !isHell() && !isText() && !isRade() && !isJs8()}>
+      <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2() && !isHfdl() && !isAprs() && !isNavtex() && !isPacket() && !isIsm() && !isWefax() && !isSstv() && !isHell() && !isText() && !isJs8()}>
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Decode table */}
         <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
@@ -338,9 +335,6 @@ const DecoderDisplay: Component = () => {
       </Show>
       <Show when={isMeteor()}>
         <MeteorDisplay />
-      </Show>
-      <Show when={isRade()}>
-        <RadeDisplay />
       </Show>
       <Show when={isJs8()}>
         <Js8Display />

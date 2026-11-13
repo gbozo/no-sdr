@@ -28,8 +28,6 @@ use crate::ws::{
     pack_fft_compressed_message, pack_iq_adpcm_message, pack_iq_message, pack_meta_message,
     pack_rds_message, ClientCommand, CodecStatus, ServerMeta, WsManager, MSG_META,
 };
-#[cfg(feature = "decoders")]
-use crate::ws::pack_audio_message;
 
 #[cfg(feature = "airspy")]
 use super::airspy::{config_from_dongle as airspy_config, AirspySource};
@@ -1605,15 +1603,12 @@ impl Manager {
                 cp.foreground_rate = sample_rate;
             }
 
-            let (results, audio) = if let Some(foreground) = cp.foreground.as_mut() {
+            let results = if let Some(foreground) = cp.foreground.as_mut() {
                 foreground.process_chunk(chunk, crate::decoders::store::now_ms());
-                (foreground.take_results(), foreground.take_audio())
+                foreground.take_results()
             } else {
-                (Vec::new(), Vec::new())
+                Vec::new()
             };
-            if !audio.is_empty() {
-                self.ws.send_to(client_id, pack_audio_message(&audio));
-            }
             if !results.is_empty() {
                 let foreground_dongle_id = cp.dongle_id.clone();
                 let foreground_mode = cp.foreground_mode.clone();

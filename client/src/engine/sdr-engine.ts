@@ -1049,10 +1049,6 @@ export class SdrEngine {
     const squelchLevel = store.squelch();
     const inGracePeriod = performance.now() < this.squelchBypassUntil;
     const squelchOpen = squelchLevel === null || inGracePeriod || store.signalLevel() >= squelchLevel;
-    // RADE produces synthesized speech on the server; the local demodulated
-    // signal must not play over it.
-    const decodedAudioActive = store.decoderMode() === 'rade';
-
     // Determine if stereo decoding should be attempted:
     // 1. User has stereo enabled (toggle switch)
     // 2. Demodulator supports it
@@ -1083,7 +1079,7 @@ export class SdrEngine {
           this.agc.processStereo(resampled.left, resampled.right);
         }
         this.audioOutCount += resampled.left.length;
-        if (resampled.left.length > 0 && squelchOpen && !decodedAudioActive) {
+        if (resampled.left.length > 0 && squelchOpen) {
           this.applySoftMuteStereo(resampled.left, resampled.right);
           this.audio.pushStereoAudio(resampled.left, resampled.right);
         }
@@ -1103,7 +1099,7 @@ export class SdrEngine {
           this.agc.process(resampled);
         }
         this.audioOutCount += resampled.length;
-        if (resampled.length > 0 && squelchOpen && !decodedAudioActive) {
+        if (resampled.length > 0 && squelchOpen) {
           this.applySoftMute(resampled);
           this.audio.pushDemodulatedAudio(resampled);
         }
@@ -1126,7 +1122,7 @@ export class SdrEngine {
         this.agc.process(resampled);
       }
       this.audioOutCount += resampled.length;
-      if (resampled.length > 0 && squelchOpen && !decodedAudioActive) {
+      if (resampled.length > 0 && squelchOpen) {
         this.applySoftMute(resampled);
         this.audio.pushDemodulatedAudio(resampled);
       }
@@ -1773,7 +1769,6 @@ export class SdrEngine {
     store.clearHell();
     store.clearText();
     store.clearMeteor();
-    store.clearRade();
     store.clearJs8();
     store.clearTimeSignal();
     this.send({ cmd: 'decoder', mode: next });
