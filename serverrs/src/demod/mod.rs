@@ -34,6 +34,10 @@ pub trait Demodulator: Send {
     /// Optional bandwidth hint. Default is a no-op.
     fn set_bandwidth(&mut self, _hz: f64) {}
 
+    /// FM only: de-emphasis time constant in microseconds (75 µs Americas,
+    /// 50 µs Europe/Asia). Default is a no-op.
+    fn set_deemphasis(&mut self, _us: f64) {}
+
     /// FM stereo only: composite baseband from the last `process` call.
     fn composite(&self) -> Option<&[f32]> {
         None

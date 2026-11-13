@@ -194,8 +194,14 @@ struct ClientPipeline {
     chunk_size: usize,
     iq_codec: String,
     dongle_id: String,
+    /// Current demod mode — decides whether the extractor bandwidth is a full
+    /// channel width (DSB) or a one-sided passband (USB/LSB).
+    mode: String,
     nb_enabled: bool,
     nb_threshold: f32,
+    /// FM de-emphasis time constant (µs), re-applied when an Opus pipeline is
+    /// (re)created for this client.
+    deemphasis_us: f64,
     iq_chunk_count: u64,
     stereo_enabled: bool,
     adpcm_buf: Vec<u8>,
@@ -213,6 +219,21 @@ struct ClientPipeline {
     foreground_center: i64,
     #[cfg(feature = "decoders")]
     foreground_rate: u32,
+}
+
+/// Modes whose audio sits entirely above the tuning point, so a symmetric
+/// `bandwidth / 2` IF filter would throw away half the sideband.
+fn is_one_sided_mode(mode: &str) -> bool {
+    matches!(mode, "usb" | "lsb")
+}
+
+impl ClientPipeline {
+    /// Applies a bandwidth hint using the mode's sidedness. `hz` is the full
+    /// channel width for DSB modes and the passband width for SSB.
+    fn set_bandwidth(&mut self, hz: i32) {
+        self.extractor.set_one_sided(is_one_sided_mode(&self.mode));
+        self.extractor.set_bandwidth(hz);
+    }
 }
 
 /// Shared dongle manager.
@@ -1817,8 +1838,10 @@ impl Manager {
             chunk_size: chunk_size.max(2),
             iq_codec: iq_codec.clone(),
             dongle_id: dongle_id.clone(),
+            mode: mode.clone(),
             nb_enabled: false,
             nb_threshold: 10.0,
+            deemphasis_us: 75.0,
             iq_chunk_count: 0,
             stereo_enabled,
             adpcm_buf: vec![0; (chunk_size + 1) / 2],
@@ -1853,7 +1876,7 @@ impl Manager {
                 default_bandwidth_for_mode(&mode)
             }
         };
-        cp.extractor.set_bandwidth(bandwidth);
+        cp.set_bandwidth(bandwidth);
 
         let mut fallback_status: Option<CodecStatus> = None;
         if is_opus_codec(&iq_codec) {
@@ -1872,6 +1895,7 @@ impl Manager {
                     // disabled until the client sends a separate bandwidth
                     // command.
                     p.set_bandwidth(bandwidth);
+                    p.set_deemphasis(cp.deemphasis_us);
                     cp.opus_pipeline = Some(p);
                 }
                 Err(e) => {
@@ -1950,6 +1974,7 @@ impl Manager {
                 self.handle_codec_change(client_id, cmd);
             }
             "stereo_enabled" => self.handle_stereo_enabled(client_id, cmd),
+            "deemphasis" => self.handle_set_deemphasis(client_id, cmd),
             "admin_set_profile" => self.handle_admin_set_profile(client_id, cmd),
             "admin_auth" => self.handle_admin_auth(client_id, cmd),
             "request_history" => self.handle_request_history(client_id),
@@ -2167,7 +2192,7 @@ impl Manager {
     fn handle_bandwidth(&self, client_id: &str, cmd: &ClientCommand) {
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
-            cp.extractor.set_bandwidth(cmd.hz as i32);
+            cp.set_bandwidth(cmd.hz as i32);
             if let Some(opus) = cp.opus_pipeline.as_mut() {
                 opus.set_bandwidth(cmd.hz as i32);
             }
@@ -2183,12 +2208,13 @@ impl Manager {
 
         let rate = output_rate_for_mode(&cmd.mode);
         cp.extractor.set_output_sample_rate(rate);
+        cp.mode = cmd.mode.clone();
         let bandwidth = if cmd.bandwidth > 0 {
             cmd.bandwidth as i32
         } else {
             default_bandwidth_for_mode(&cmd.mode)
         };
-        cp.extractor.set_bandwidth(bandwidth);
+        cp.set_bandwidth(bandwidth);
         let out_rate = cp.extractor.output_sample_rate();
         Self::update_chunk_size(&mut cp, out_rate);
 
@@ -2201,6 +2227,23 @@ impl Manager {
         }
         cp.accum_pos = 0;
         cp.adpcm_enc.reset();
+    }
+
+    fn handle_set_deemphasis(&self, client_id: &str, cmd: &ClientCommand) {
+        // Regional FM standard: 75 µs (Americas, Japan, Korea) or 50 µs
+        // (Europe, Australia, most of Asia). Clamp to a sane range so a bad
+        // client cannot make the de-emphasis a no-op or an aggressive LPF.
+        let us = match cmd.deemphasis {
+            Some(v) if v.is_finite() => v.clamp(10.0, 200.0),
+            _ => return,
+        };
+        if let Some(cp) = self.client_pipelines.lock().get(client_id) {
+            let mut cp = cp.lock();
+            cp.deemphasis_us = us;
+            if let Some(opus) = cp.opus_pipeline.as_mut() {
+                opus.set_deemphasis(us);
+            }
+        }
     }
 
     fn handle_stereo_enabled(&self, client_id: &str, cmd: &ClientCommand) {
@@ -2376,7 +2419,10 @@ impl Manager {
         if threshold <= 0.0 {
             return;
         }
-        let threshold = threshold as f32;
+        // The UI maps its 0-1 slider to 2..20; clamp to a range that can never
+        // blank everything (<= 1 would make the threshold below the running
+        // mean) or be so high it never triggers.
+        let threshold = (threshold as f32).clamp(1.5, 200.0);
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
             cp.nb_threshold = threshold;
@@ -2801,8 +2847,8 @@ impl Manager {
             let mut cp = cp.lock();
             let rate = output_rate_for_mode(&mode);
             cp.extractor.set_output_sample_rate(rate);
-            cp.extractor
-                .set_bandwidth(default_bandwidth_for_mode(&mode));
+            cp.mode = mode.clone();
+            cp.set_bandwidth(default_bandwidth_for_mode(&mode));
             cp.extractor.set_tune_offset(0);
             cp.extractor
                 .set_dc_offset_removal(profile.dc_offset_removal_enabled());

@@ -172,9 +172,15 @@ function createStore() {
   const [autoNotchEnabled, setAutoNotchEnabled] = persist<boolean>('audio.autoNotch', false);
   const [hiBlendEnabled, setHiBlendEnabled] = persist<boolean>('audio.hiBlend', false);
   const [hiBlendCutoff, setHiBlendCutoff] = persist<number>('audio.hiBlendCutoff', 2500);
+  /** Track signal level: strong signals keep stereo, weak ones fade to mono. */
+  const [hiBlendAuto, setHiBlendAuto] = persist<boolean>('audio.hiBlendAuto', false);
+  /** Live cutoff when auto hi-blend is on (not persisted: updated per level tick). */
+  const [hiBlendAutoCutoff, setHiBlendAutoCutoff] = createSignal(2500);
   const [softMuteEnabled, setSoftMuteEnabled] = persist<boolean>('audio.softMute', false);
   /** Soft mute threshold in dB — below this level, volume is progressively reduced */
   const [softMuteThreshold, setSoftMuteThreshold] = persist<number>('audio.softMuteThreshold', -40);
+  /** FM de-emphasis time constant: 75 µs (Americas) or 50 µs (Europe/Asia). */
+  const [deemphasisUs, setDeemphasisUs] = persist<number>('audio.deemphasisUs', 75);
 
   // ---- Display ----
   const [waterfallTheme, setWaterfallTheme] = persist<WaterfallColorTheme>('waterfallTheme', 'classic');
@@ -473,8 +479,11 @@ function createStore() {
     autoNotchEnabled, setAutoNotchEnabled,
     hiBlendEnabled, setHiBlendEnabled,
     hiBlendCutoff, setHiBlendCutoff,
+    hiBlendAuto, setHiBlendAuto,
+    hiBlendAutoCutoff, setHiBlendAutoCutoff,
     softMuteEnabled, setSoftMuteEnabled,
     softMuteThreshold, setSoftMuteThreshold,
+    deemphasisUs, setDeemphasisUs,
 
     // Display
     waterfallTheme, setWaterfallTheme,

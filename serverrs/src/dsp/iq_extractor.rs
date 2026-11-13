@@ -49,6 +49,10 @@ pub struct IqExtractor {
     output_rate: i32,
     factor: i32,
     bandwidth: i32,
+    /// True for one-sided modes (SSB): the audio band starts at the tuning
+    /// point, so the IF filter must pass `bandwidth` Hz above it rather than
+    /// `bandwidth / 2` on either side.
+    one_sided: bool,
 
     // Output level normalization (disabled by default).
     normalize: bool,
@@ -94,7 +98,7 @@ impl IqExtractor {
 
         let mut nco = NcoBlock::new(cfg.tune_offset as f64);
         let mut decimate = DecimateBlock::new(factor as usize);
-        let mut butter = ButterworthBlock::new(5000.0);
+        let mut butter = ButterworthBlock::new(actual_output_rate as f64 * 0.45);
 
         nco.init(cfg.input_sample_rate as f64)
             .map_err(|e| anyhow::anyhow!("iq_extractor: pipeline init failed: {e}"))?;
@@ -111,12 +115,13 @@ impl IqExtractor {
             nco,
             decimate,
             butter,
-            noise_blanker: NoiseBlanker::new(10.0),
+            noise_blanker: NoiseBlanker::new(10.0, cfg.input_sample_rate as f64),
             dc_blocker,
             input_rate: cfg.input_sample_rate,
             output_rate: actual_output_rate,
             factor,
             bandwidth: 0,
+            one_sided: false,
 
             normalize: false,
             norm_gain: 1.0,
@@ -245,28 +250,54 @@ impl IqExtractor {
 
         let mut decimate = DecimateBlock::new(factor as usize);
         let _ = decimate.init(self.input_rate as f64);
-        if self.bandwidth > 0 {
-            decimate.set_bandwidth(self.bandwidth);
-        }
         self.decimate = decimate;
 
         // Equivalent to rebuilding the pipeline: reinitialize the rate-dependent
-        // stages at their (unchanged) rates.
+        // stages at their (unchanged) rates, then re-apply the bandwidth so the
+        // new output rate gets the matching filter.
         let _ = self.nco.init(self.input_rate as f64);
         let _ = self.butter.init(self.output_rate as f64);
+        self.apply_bandwidth();
     }
 
     /// Sets the RF filter bandwidth in Hz. `0` reverts to Nyquist defaults.
+    ///
+    /// The bandwidth is the full channel width for double-sideband modes
+    /// (AM/NFM/WFM/SAM/C-QUAM). For one-sided modes call [`set_one_sided`]
+    /// first so the audio band is not halved.
     pub fn set_bandwidth(&mut self, hz: i32) {
-        if hz <= 0 {
-            self.bandwidth = 0;
-            self.decimate.set_bandwidth(0);
-            self.butter.set_cutoff(self.output_rate as f64 * 0.45);
-        } else {
-            self.bandwidth = hz;
-            self.decimate.set_bandwidth(hz);
-            self.butter.set_cutoff(hz as f64 / 2.0);
+        self.bandwidth = if hz <= 0 { 0 } else { hz };
+        self.apply_bandwidth();
+    }
+
+    /// Switches the bandwidth interpretation between full width (DSB, default)
+    /// and one-sided passband (USB/LSB). Re-applies the current bandwidth.
+    pub fn set_one_sided(&mut self, one_sided: bool) {
+        if self.one_sided == one_sided {
+            return;
         }
+        self.one_sided = one_sided;
+        self.apply_bandwidth();
+    }
+
+    pub fn is_one_sided(&self) -> bool {
+        self.one_sided
+    }
+
+    fn apply_bandwidth(&mut self) {
+        let cutoff_hz = if self.bandwidth <= 0 {
+            (self.output_rate as f64 * 0.45).round() as i32
+        } else if self.one_sided {
+            self.bandwidth
+        } else {
+            self.bandwidth / 2
+        };
+        if self.bandwidth <= 0 {
+            self.decimate.set_bandwidth(0);
+        } else {
+            self.decimate.set_cutoff(cutoff_hz);
+        }
+        self.butter.set_cutoff(cutoff_hz as f64);
     }
 
     pub fn bandwidth(&self) -> i32 {
@@ -546,6 +577,45 @@ mod tests {
         assert!((e.butterworth_cutoff() - 5000.0).abs() < 1e-9);
         e.set_bandwidth(0);
         assert!((e.butterworth_cutoff() - 48_000.0 * 0.45).abs() < 1e-9);
+    }
+
+    #[test]
+    fn one_sided_bandwidth_keeps_the_upper_sideband() {
+        // A 2400 Hz SSB request must pass the whole 0..2400 Hz band, not just
+        // the lower half of a symmetric +-1200 Hz filter.
+        let rms_for = |one_sided: bool, offset: f64| -> f64 {
+            let mut e = IqExtractor::new(IqExtractorConfig {
+                input_sample_rate: 240_000,
+                output_sample_rate: 24_000,
+                tune_offset: 0,
+                dc_offset_removal: true,
+            })
+            .unwrap();
+            e.set_one_sided(one_sided);
+            e.set_bandwidth(2400);
+            let raw = tone_iq(offset, 240_000.0, 96_000, 0.5);
+            let out = e.process(&raw);
+            rms_i16(&out[out.len() - 4000..])
+        };
+
+        let dsb_near = rms_for(false, 1000.0);
+        let dsb_far = rms_for(false, 2000.0);
+        let ssb_near = rms_for(true, 1000.0);
+        let ssb_far = rms_for(true, 2000.0);
+
+        assert!(dsb_far < dsb_near * 0.1, "DSB filter should cut 2 kHz");
+        assert!(
+            ssb_far > dsb_far * 5.0,
+            "one-sided filter must pass 2 kHz (ssb {ssb_far}, dsb {dsb_far})"
+        );
+        assert!(
+            (ssb_far - ssb_near).abs() < ssb_near * 0.25,
+            "one-sided passband should be flat (1k {ssb_near}, 2k {ssb_far})"
+        );
+        assert!(
+            rms_for(true, -2000.0) > dsb_far * 5.0,
+            "the complex filter is symmetric; both signs survive"
+        );
     }
 
     #[test]

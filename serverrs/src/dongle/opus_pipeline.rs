@@ -72,6 +72,8 @@ pub struct OpusPipeline {
     last_sample: f32,
 
     bandwidth: i32,
+    /// FM de-emphasis time constant in microseconds (75 Americas, 50 EU/Asia).
+    deemphasis_us: f64,
     stereo_enabled: bool,
     stereo_hold_counter: usize,
     pending_channels: usize,
@@ -180,6 +182,7 @@ impl OpusPipeline {
             upsample_accum: 0.0,
             last_sample: 0.0,
             bandwidth: 0,
+            deemphasis_us: 75.0,
             stereo_enabled,
             stereo_hold_counter: 0,
             pending_channels: 0,
@@ -447,6 +450,7 @@ impl OpusPipeline {
         }
 
         self.demodulator = new_demod;
+        self.demodulator.set_deemphasis(self.deemphasis_us);
         self.mode = mode.to_string();
         self.update_sample_rate(self.sample_rate);
         if self.bandwidth > 0 {
@@ -586,6 +590,13 @@ impl OpusPipeline {
     pub fn set_bandwidth(&mut self, hz: i32) {
         self.bandwidth = hz;
         self.demodulator.set_bandwidth(hz as f64);
+    }
+
+    /// Sets the FM de-emphasis time constant (microseconds). Remembered so a
+    /// later mode change can re-apply it to the rebuilt demodulator.
+    pub fn set_deemphasis(&mut self, us: f64) {
+        self.deemphasis_us = us;
+        self.demodulator.set_deemphasis(us);
     }
 }
 

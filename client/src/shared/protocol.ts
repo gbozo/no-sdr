@@ -91,6 +91,7 @@ export type ClientCommand =
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
   | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
   | { cmd: 'stereo_enabled'; enabled: boolean }
+  | { cmd: 'deemphasis'; deemphasis: number }
   | { cmd: 'request_history' }
   | { cmd: 'set_pre_filter_nb'; enabled: boolean }
   | { cmd: 'set_pre_filter_nb_threshold'; threshold: number }

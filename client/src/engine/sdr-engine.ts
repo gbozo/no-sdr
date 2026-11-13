@@ -41,13 +41,117 @@ import { AudioEngine } from './audio.js';
 import { FftFrameBuffer } from './fft-frame-buffer.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
 import type { RdsData } from './demodulators.js';
-import { NoiseReductionEngine } from './noise-reduction.js';
-import { LmsAnr } from './lms-anr.js';
+import { LmsAnr, anrGainForStrength } from './lms-anr.js';
 import { HangAgc, AGC_PRESETS } from './agc.js';
 import { RumbleFilter, AutoNotch, HiBlendFilter } from './audio-filters.js';
 import { store } from '../store/index.js';
 import type { Bookmark } from '../store/index.js';
 import { ALL_FFT_CODECS, ALL_IQ_CODECS } from '../store/index.js';
+
+/**
+ * Map the 0-1 noise-blanker slider to the server's threshold multiplier.
+ * Higher level = lower threshold = more aggressive (20x .. 2x the running mean).
+ * Used both for live slider moves and for restoring state after a reconnect —
+ * sending the raw 0-1 level makes the server blank every sample.
+ */
+function nbThresholdForLevel(level: number): number {
+  const l = Math.max(0, Math.min(1, level));
+  return Math.round(20 - l * 18);
+}
+
+/**
+ * Polyphase windowed-sinc upsampler for integer ratios (2x, 4x).
+ *
+ * Every phase is a fractional-delay FIR normalised to unity DC gain, so a
+ * constant input stays constant and imaging is suppressed by the sinc's
+ * stopband instead of the ~-29 dB of 2-tap linear interpolation.
+ */
+class SincUpsampler {
+  readonly ratio: number;
+  private readonly tapsPerPhase: number;
+  private readonly hist: Float32Array;
+  private readonly mask: number;
+  private readonly phases: Float32Array[];
+  private pos = 0;
+
+  constructor(ratio: number, halfTaps = 16) {
+    this.ratio = ratio;
+    const n = 2 * halfTaps * ratio;
+    // Every phase spans the whole kernel (2 * halfTaps taps), i.e. the filter
+    // looks `2 * halfTaps - 1` inputs back. Using only half of the kernel per
+    // phase would throw away the negative-frequency side of the interpolator
+    // and leave the images completely unfiltered.
+    this.tapsPerPhase = 2 * halfTaps;
+
+    let size = 1;
+    while (size < 2 * halfTaps + 1) size <<= 1;
+    this.hist = new Float32Array(size);
+    this.mask = size - 1;
+
+    // Windowed-sinc prototype (Blackman-Harris), centred in the tap window.
+    const proto = new Float32Array(n);
+    const c = (n - 1) / 2;
+    const den = n - 1;
+    for (let i = 0; i < n; i++) {
+      const x = (i - c) / ratio;
+      const sinc = Math.abs(x) < 1e-9 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+      const w =
+        0.35875 -
+        0.48829 * Math.cos((2 * Math.PI * i) / den) +
+        0.14128 * Math.cos((4 * Math.PI * i) / den) -
+        0.01168 * Math.cos((6 * Math.PI * i) / den);
+      proto[i] = sinc * w;
+    }
+
+    this.phases = [];
+    for (let p = 0; p < ratio; p++) {
+      const ph = new Float32Array(this.tapsPerPhase);
+      let sum = 0;
+      for (let j = 0; j < this.tapsPerPhase; j++) {
+        const idx = p + j * ratio;
+        ph[j] = idx < n ? proto[idx] : 0;
+        sum += ph[j];
+      }
+      if (Math.abs(sum) > 1e-12) {
+        for (let j = 0; j < this.tapsPerPhase; j++) ph[j] /= sum;
+      }
+      this.phases.push(ph);
+    }
+  }
+
+  reset(): void {
+    this.hist.fill(0);
+    this.pos = 0;
+  }
+
+  /** Writes `input.length * ratio` samples into `out`; returns the count. */
+  process(input: Float32Array, out: Float32Array): number {
+    const L = this.ratio;
+    const hist = this.hist;
+    const mask = this.mask;
+    const taps = this.tapsPerPhase;
+    let pos = this.pos;
+    let written = 0;
+
+    for (let i = 0; i < input.length; i++) {
+      hist[pos] = input[i];
+      for (let p = 0; p < L; p++) {
+        const ph = this.phases[p];
+        let acc = 0;
+        let idx = pos;
+        for (let j = 0; j < taps; j++) {
+          acc += ph[j] * hist[idx];
+          idx = (idx - 1) & mask;
+        }
+        out[written++] = acc;
+      }
+      pos = (pos + 1) & mask;
+    }
+
+    this.pos = pos;
+    return written;
+  }
+}
 
 export class SdrEngine {
   private ws: WebSocket | null = null;
@@ -118,10 +222,7 @@ export class SdrEngine {
   private opusDecoderReady = false;
   private opusDecoderChannels = 1;
 
-  // Noise reduction engine (spectral NR + noise blanker — legacy)
-  private nr = new NoiseReductionEngine();
-
-  // LMS Adaptive NR (replaces spectral NR for CW/SSB/AM)
+  // LMS adaptive NR (time-domain, no musical-noise artifacts)
   private anr = new LmsAnr();
 
   // Audio filters (rumble HPF + auto-notch + hi-blend for FM stereo)
@@ -138,6 +239,12 @@ export class SdrEngine {
   // Resampler state for sub-48kHz modes (SSB 24kHz, CW 12kHz → 48kHz)
   private resampleRatio = 1; // inputRate / 48000 (1 = no resampling needed)
   private resamplePhase = 0; // fractional sample position for interpolation
+  private resampleBuf = new Float32Array(8192);
+  private resampleBufL = new Float32Array(8192);
+  private resampleBufR = new Float32Array(8192);
+  private upsampler: SincUpsampler | null = null;
+  private upsamplerL: SincUpsampler | null = null;
+  private upsamplerR: SincUpsampler | null = null;
 
 
   // Audio diagnostics
@@ -174,7 +281,7 @@ export class SdrEngine {
 
   constructor() {
     this.audio = new AudioEngine();
-    this.demodulator = getDemodulator(store.mode());
+    this.demodulator = this.newDemodulator(store.mode());
     this.attachRdsCallback();
 
     // Spin up FFT decode worker
@@ -244,6 +351,13 @@ export class SdrEngine {
     navigator.mediaSession.playbackState = 'playing';
   }
 
+  /** Create a demodulator and apply the persisted FM de-emphasis setting. */
+  private newDemodulator(mode: DemodMode): Demodulator {
+    const d = getDemodulator(mode);
+    d.setDeemphasis?.(store.deemphasisUs());
+    return d;
+  }
+
   /** Attach RDS callback to current demodulator if it supports RDS */
   private attachRdsCallback(): void {
     if (this.demodulator.setRdsCallback) {
@@ -283,15 +397,40 @@ export class SdrEngine {
     }
     this.resampleRatio = demodOutputRate >= 48000 ? 1 : 48000 / demodOutputRate;
     this.resamplePhase = 0;
+    this.resampleBuf = new Float32Array(8192);
+    this.resampleBufL = new Float32Array(8192);
+    this.resampleBufR = new Float32Array(8192);
+
+    const ratio = this.resampleRatio;
+    const isInteger = ratio > 1 && Math.abs(ratio - Math.round(ratio)) < 1e-9;
+    this.upsampler = null;
+    this.upsamplerL = null;
+    this.upsamplerR = null;
+    if (isInteger) {
+      const l = Math.round(ratio);
+      this.upsampler = new SincUpsampler(l);
+      this.upsamplerL = new SincUpsampler(l);
+      this.upsamplerR = new SincUpsampler(l);
+    }
   }
 
   /**
-   * Resample audio from a lower sample rate to 48kHz using linear interpolation.
-   * Returns the input unchanged if resampleRatio is 1.
+   * Resample audio from a lower sample rate to 48 kHz.
+   *
+   * Integer ratios (24k→48k, 12k→48k) use a polyphase windowed-sinc
+   * interpolator; linear interpolation would leave images only ~29 dB down
+   * around 4 kHz. Non-integer ratios fall back to linear.
+   * Returns the input unchanged when no conversion is needed.
    */
   private resampleTo48k(samples: Float32Array): Float32Array {
     if (this.resampleRatio <= 1) return samples;
+    if (this.upsampler) {
+      return this.upsampleWith(this.upsampler, samples, 'mono');
+    }
+    return this.resampleLinearTo48k(samples);
+  }
 
+  private resampleLinearTo48k(samples: Float32Array): Float32Array {
     const ratio = this.resampleRatio;
     const outLen = Math.floor(samples.length * ratio);
     const out = new Float32Array(outLen);
@@ -299,34 +438,54 @@ export class SdrEngine {
     let outIdx = 0;
 
     for (let i = 0; outIdx < outLen; ) {
-      // Integer and fractional parts of the source position
       const srcPos = phase;
       const srcIdx = Math.floor(srcPos);
       const frac = srcPos - srcIdx;
 
       if (srcIdx >= samples.length - 1) break;
 
-      // Linear interpolation between adjacent source samples
       out[outIdx++] = samples[srcIdx] * (1 - frac) + samples[srcIdx + 1] * frac;
-      phase += 1 / ratio; // advance by one output sample's worth of input
+      phase += 1 / ratio;
     }
 
-    // Save fractional phase for next call (maintain continuity)
     this.resamplePhase = phase - Math.floor(phase);
-
     return out.subarray(0, outIdx);
   }
 
+  private upsampleWith(
+    up: SincUpsampler,
+    samples: Float32Array,
+    which: 'mono' | 'left' | 'right',
+  ): Float32Array {
+    const needed = samples.length * up.ratio + 4;
+    let buf =
+      which === 'mono' ? this.resampleBuf : which === 'left' ? this.resampleBufL : this.resampleBufR;
+    if (buf.length < needed) {
+      buf = new Float32Array(Math.ceil(needed * 1.5));
+      if (which === 'mono') this.resampleBuf = buf;
+      else if (which === 'left') this.resampleBufL = buf;
+      else this.resampleBufR = buf;
+    }
+    const n = up.process(samples, buf);
+    return buf.subarray(0, n);
+  }
+
   /**
-   * Resample stereo audio from a lower sample rate to 48kHz.
+   * Resample stereo audio from a lower sample rate to 48 kHz.
+   * Uses one interpolator per channel so both share the same timing without
+   * overwriting each other's history.
    */
   private resampleStereoTo48k(left: Float32Array, right: Float32Array): { left: Float32Array; right: Float32Array } {
     if (this.resampleRatio <= 1) return { left, right };
-    // Save/restore phase so both channels use the same timing
-    const savedPhase = this.resamplePhase;
-    const resLeft = this.resampleTo48k(left);
-    this.resamplePhase = savedPhase;
-    const resRight = this.resampleTo48k(right);
+    if (!this.upsamplerL || !this.upsamplerR) {
+      const savedPhase = this.resamplePhase;
+      const l = this.resampleLinearTo48k(left);
+      this.resamplePhase = savedPhase;
+      const r = this.resampleLinearTo48k(right);
+      return { left: l, right: r };
+    }
+    const resLeft = this.upsampleWith(this.upsamplerL, left, 'left');
+    const resRight = this.upsampleWith(this.upsamplerR, right, 'right');
     return { left: resLeft, right: resRight };
   }
 
@@ -799,6 +958,7 @@ export class SdrEngine {
       case MSG_SIGNAL_LEVEL: {
         const level = new Float32Array(payload)[0];
         store.setSignalLevel(level);
+        this.updateAutoHiBlend(level);
         break;
       }
 
@@ -905,13 +1065,12 @@ export class SdrEngine {
       this.iqInCount += iqData.length / 2;
 
       if (stereoResult.stereo) {
-        // Apply noise reduction to stereo audio
-        const filtered = this.nr.processStereo(stereoResult.left, stereoResult.right);
-        // Apply LMS adaptive NR
-        this.anr.process(filtered.left);
-        this.anr.process(filtered.right);
-        // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
-        const resampled = this.resampleStereoTo48k(filtered.left, filtered.right);
+        // Resample to 48kHz first so the adaptive filters always run at the
+        // rate their presets are tuned for (SSB/CW arrive at 24/12 kHz).
+        const resampled = this.resampleStereoTo48k(stereoResult.left, stereoResult.right);
+        // LMS adaptive NR
+        this.anr.process(resampled.left);
+        this.anr.process(resampled.right);
         // Apply audio filters (rumble + auto-notch + hi-blend)
         this.rumbleFilter.processStereo(resampled.left, resampled.right);
         this.autoNotch.processStereo(resampled.left, resampled.right);
@@ -929,12 +1088,10 @@ export class SdrEngine {
           store.setStereoDetected(true);
         }
       } else {
-        // Apply noise reduction to mono audio
-        const filtered = this.nr.processMono(stereoResult.left);
-        // Apply LMS adaptive NR
-        this.anr.process(filtered);
-        // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
-        const resampled = this.resampleTo48k(filtered);
+        // Resample to 48kHz first so the adaptive filters run at their design rate.
+        const resampled = this.resampleTo48k(stereoResult.left);
+        // LMS adaptive NR
+        this.anr.process(resampled);
         // Apply audio filters
         this.rumbleFilter.process(resampled);
         this.autoNotch.process(resampled);
@@ -954,12 +1111,10 @@ export class SdrEngine {
     } else {
       const audioSamples = this.demodulator.process(iqData);
       this.iqInCount += iqData.length / 2;
-      // Apply noise reduction to mono audio
-      const filtered = this.nr.processMono(audioSamples);
-      // Apply LMS adaptive NR
-      this.anr.process(filtered);
-      // Resample to 48kHz if demod output is at a lower rate (SSB/CW)
-      const resampled = this.resampleTo48k(filtered);
+      // Resample to 48kHz first so the adaptive filters run at their design rate.
+      const resampled = this.resampleTo48k(audioSamples);
+      // LMS adaptive NR
+      this.anr.process(resampled);
       // Apply audio filters
       this.rumbleFilter.process(resampled);
       this.autoNotch.process(resampled);
@@ -1084,7 +1239,7 @@ export class SdrEngine {
           if (modeInfo) {
             store.setBandwidth(modeInfo.defaultBandwidth);
           }
-          this.demodulator = getDemodulator(m);
+          this.demodulator = this.newDemodulator(m as DemodMode);
           this.demodulator.reset();
           this.demodulator.setBandwidth(store.bandwidth());
           this.attachRdsCallback();
@@ -1106,6 +1261,9 @@ export class SdrEngine {
            this.send({ cmd: 'stereo_enabled', enabled: store.stereoEnabled() });
          }
          this.send({ cmd: 'codec', fftCodec: store.fftCodec(), iqCodec: store.iqCodec() });
+         // De-emphasis is per-client server-side state; a fresh pipeline
+         // defaults to 75 µs, so restore the user's choice.
+         this.send({ cmd: 'deemphasis', deemphasis: store.deemphasisUs() });
 
          // Restore client tuning state from before the reconnect.
          // On a reconnect the server always resets to profile defaults, so we must
@@ -1115,7 +1273,7 @@ export class SdrEngine {
          if (isReconnect && prevMode) {
            store.setMode(prevMode as DemodMode);
            const modeInfo = DEMOD_MODES[prevMode as DemodMode];
-           this.demodulator = getDemodulator(prevMode as DemodMode);
+           this.demodulator = this.newDemodulator(prevMode as DemodMode);
            this.demodulator.reset();
            const bw = prevBandwidth || modeInfo?.defaultBandwidth || store.bandwidth();
            store.setBandwidth(bw);
@@ -1150,7 +1308,7 @@ export class SdrEngine {
         // Re-send noise blanker state (persisted in localStorage but not part of subscribe reset)
         if (store.nbEnabled()) {
           this.send({ cmd: 'set_pre_filter_nb', enabled: true });
-          this.send({ cmd: 'set_pre_filter_nb_threshold', threshold: store.nbLevel() });
+          this.send({ cmd: 'set_pre_filter_nb_threshold', threshold: nbThresholdForLevel(store.nbLevel()) });
         }
         this.reconnecting = false;
         break;
@@ -1176,7 +1334,7 @@ export class SdrEngine {
           if (modeInfo) {
             store.setBandwidth(modeInfo.defaultBandwidth);
           }
-          this.demodulator = getDemodulator(m);
+          this.demodulator = this.newDemodulator(m as DemodMode);
           this.demodulator.reset();
           this.demodulator.setBandwidth(store.bandwidth());
           this.attachRdsCallback();
@@ -1551,7 +1709,7 @@ export class SdrEngine {
       store.setBandwidth(modeInfo.defaultBandwidth);
     }
     // Switch to the appropriate demodulator
-    this.demodulator = getDemodulator(m);
+    this.demodulator = this.newDemodulator(m as DemodMode);
     this.demodulator.reset();
     this.demodulator.setBandwidth(store.bandwidth());
     this.attachRdsCallback();
@@ -1577,7 +1735,6 @@ export class SdrEngine {
     // Reset soft-mute gain — avoid inheriting a suppressed gain value across modes
     this.softMuteGain = 1.0;
     // Reset noise reduction state for new mode
-    this.nr.reset();
     this.anr.reset();
     this.anr.setPreset(this.getAnrPresetForMode(m));
     // Update AGC preset for new mode
@@ -1589,6 +1746,8 @@ export class SdrEngine {
     this.squelchBypassUntil = performance.now() + 500;
     // Send mode + bandwidth together so server can set RF filter correctly
     this.send({ cmd: 'mode', mode, bandwidth: store.bandwidth() });
+    // set_mode rebuilds the server demodulator, so re-apply the de-emphasis.
+    this.send({ cmd: 'deemphasis', deemphasis: store.deemphasisUs() });
     this.updateMediaSession();
   }
 
@@ -1608,6 +1767,14 @@ export class SdrEngine {
     store.setBandwidth(hz);
     this.demodulator.setBandwidth(hz);
     this.send({ cmd: 'bandwidth', hz });
+  }
+
+  /** FM de-emphasis time constant: 75 µs (Americas) or 50 µs (Europe/Asia).
+   *  Applies locally for the IQ path and tells the server for the Opus path. */
+  setDeemphasis(us: number): void {
+    store.setDeemphasisUs(us);
+    this.demodulator.setDeemphasis?.(us);
+    this.send({ cmd: 'deemphasis', deemphasis: us });
   }
 
   setSquelch(db: number | null): void {
@@ -1701,15 +1868,7 @@ export class SdrEngine {
 
   setNrStrength(strength: number): void {
     store.setNrStrength(strength);
-    // Map 0-1 strength to ANR gain.
-    // At 0: gain = 0 (true passthrough, no adaptation)
-    // At 1: gain = 1e-4 (moderate adaptation — safe for all signal types)
-    if (strength <= 0) {
-      this.anr.setOptions({ gain: 0 });
-    } else {
-      const gain = strength * 1e-4;
-      this.anr.setOptions({ gain });
-    }
+    this.anr.setOptions({ gain: anrGainForStrength(strength) });
   }
 
   setNbEnabled(enabled: boolean): void {
@@ -1720,11 +1879,7 @@ export class SdrEngine {
 
   setNbLevel(level: number): void {
     store.setNbLevel(level);
-    // Map 0-1 to threshold 20-2 (inverted: higher level = lower threshold = more aggressive)
-    // 2 = very aggressive (audible on any signal — blanks anything 2× above average)
-    // 20 = gentle (only blanks strong impulses 20× above average)
-    const threshold = Math.round(20 - level * 18);
-    this.send({ cmd: 'set_pre_filter_nb_threshold', threshold });
+    this.send({ cmd: 'set_pre_filter_nb_threshold', threshold: nbThresholdForLevel(level) });
   }
 
   // ---- AGC ----
@@ -1794,6 +1949,35 @@ export class SdrEngine {
   setHiBlendCutoff(hz: number): void {
     store.setHiBlendCutoff(hz);
     this.hiBlend.setCutoff(hz);
+  }
+
+  /** Auto hi-blend: stereo width follows the signal level. */
+  setHiBlendAuto(enabled: boolean): void {
+    store.setHiBlendAuto(enabled);
+    if (enabled) {
+      this.updateAutoHiBlend(store.signalLevel());
+    } else {
+      this.hiBlend.setCutoff(store.hiBlendCutoff());
+    }
+  }
+
+  /**
+   * Maps the channel level to a hi-blend cutoff: strong stations keep full
+   * stereo separation, weak ones fade the treble to mono.
+   */
+  private updateAutoHiBlend(levelDb: number): void {
+    if (!store.hiBlendEnabled() || !store.hiBlendAuto()) return;
+    if (!Number.isFinite(levelDb)) return;
+    // -80 dB → 1.2 kHz, -30 dB → 8 kHz, linear in dB.
+    const target = 1200 + (levelDb + 80) * 136;
+    const cutoff = Math.round(Math.max(800, Math.min(8000, target)));
+    // Avoid redesigning the biquad on every level tick. The auto value is a
+    // volatile signal: persisting it would hit localStorage several times a
+    // second.
+    if (Math.abs(cutoff - store.hiBlendAutoCutoff()) >= 100) {
+      store.setHiBlendAutoCutoff(cutoff);
+      this.hiBlend.setCutoff(cutoff);
+    }
   }
 
   setSoftMuteEnabled(enabled: boolean): void {
@@ -2182,17 +2366,10 @@ export class SdrEngine {
     this.audio.setEqHighMid(store.eqHighMid());
     this.audio.setEqHigh(store.eqHigh());
     this.audio.setLoudness(store.loudness());
-    this.nr.setNrEnabled(false);  // Legacy spectral NR disabled — replaced by LMS ANR
-    this.nr.setNrStrength(0);
-    this.nr.setNbEnabled(false);  // Legacy client NB disabled — replaced by server pre-filter NB
-    this.nr.setNbLevel(0);
     // Restore LMS ANR state
     this.anr.setPreset(this.getAnrPresetForMode(store.mode()));
     this.anr.setEnabled(store.nrEnabled());
-    if (store.nrStrength()) {
-      const gain = 5e-5 + store.nrStrength() * 4.5e-4;
-      this.anr.setOptions({ gain });
-    }
+    this.anr.setOptions({ gain: anrGainForStrength(store.nrStrength()) });
     // Restore AGC settings from store
     this.agc.setPreset(this.getAgcPresetForMode(store.mode()));
     if (store.agcDecayMs()) {

@@ -1,7 +1,7 @@
 // ============================================================
-// node-sdr — Audio Filters (Rumble HPF + Auto-Notch)
+// node-sdr — Audio Filters (Rumble HPF + Auto-Notch + Hi-Blend)
 // ============================================================
-// Two filters for FM stereo broadcast listening:
+// Three post-demod filters, all applied at 48 kHz on the client:
 //
 // 1. Rumble Filter: 4th-order Butterworth high-pass (configurable cutoff).
 //    Removes hum fundamentals (50/60Hz) and wind/blowing noise.
@@ -11,7 +11,12 @@
 //    harmonics, heterodynes, carriers). Outputs the ERROR signal from an
 //    LMS predictor — everything EXCEPT predictable narrowband tones.
 //    Music passes through; only pure tones are cancelled (~20-30dB each).
+//
+// 3. Hi-Blend: low-passes the L-R difference so treble fades to mono on
+//    weak FM stereo (same trick every car radio uses).
 // ============================================================
+
+import { MAX_LEAK_RATIO, WDSP_DEN_MULT } from './lms-anr.js';
 
 // ---- Biquad HPF (2nd-order section) ----
 
@@ -29,24 +34,6 @@ function biquadProcess(x: number, c: BiquadCoeffs, s: BiquadState): number {
   s.z1 = c.b1 * x - c.a1 * y + s.z2;
   s.z2 = c.b2 * x - c.a2 * y;
   return y;
-}
-
-/**
- * Design a 2nd-order Butterworth high-pass section.
- */
-function designHpf2(cutoffHz: number, sampleRate: number): BiquadCoeffs {
-  const wc = Math.tan(Math.PI * cutoffHz / sampleRate);
-  const wc2 = wc * wc;
-  const sqrt2 = Math.SQRT2;
-  const norm = 1 + sqrt2 * wc + wc2;
-
-  const b0 = 1 / norm;
-  const b1 = -2 / norm;
-  const b2 = 1 / norm;
-  const a1 = 2 * (wc2 - 1) / norm;
-  const a2 = (1 - sqrt2 * wc + wc2) / norm;
-
-  return { b0, b1, b2, a1, a2 };
 }
 
 // ============================================================
@@ -107,7 +94,7 @@ export class RumbleFilter {
   }
 
   setCutoff(hz: number): void {
-    this.cutoffHz = Math.max(20, Math.min(200, hz));
+    this.cutoffHz = Math.max(20, Math.min(400, hz));
     this.designFilter();
   }
 
@@ -157,41 +144,47 @@ export class RumbleFilter {
 // The predictor learns tones (predictable); the error is everything else (music + noise).
 // Result: tones are removed, music passes through.
 
+/** Per-channel adaptive state for the auto-notch. */
+interface NotchChannel {
+  dline: Float32Array;
+  inIdx: number;
+  weights: Float32Array;
+  lidx: number;
+  ngamma: number;
+}
+
 export class AutoNotch {
   private enabled = false;
-  private taps: number;
-  private delay: number;
-  private twoMu: number;
-  private gamma: number;
-
-  // Delay line
-  private dline: Float32Array;
+  // WDSP ANF defaults (RXA.cpp): 64 taps, 16-sample delay, leakage 0..200.
+  private taps = 64;
+  private delay = 16;
+  private twoMu = 1e-4;
+  private gamma = 0.1;
   private dlineSize = 1024;
   private dlineMask = 1023;
-  private inIdx = 0;
+  private left: NotchChannel;
+  private right: NotchChannel;
 
-  // Adaptive weights
-  private weights: Float32Array;
+  constructor(_sampleRate = 48000) {
+    // A tone is predictable over a short delay; broadband audio is not. The
+    // delay has to be a small fraction of a period at the lowest tone to be
+    // cancelled (16 samples = 0.33 ms at 48 kHz): with the old 128-sample
+    // delay and 16 taps a 60 Hz hum was mathematically unlearnable (a 57.6°
+    // phase jump cannot be synthesised from a 7°-wide tap span).
+    this.twoMu = 1e-4;
+    this.gamma = 0.1;
+    this.left = this.makeChannel();
+    this.right = this.makeChannel();
+  }
 
-  // Leakage state
-  private lidx = 0;
-  private ngamma = 0;
-  private denMult: number;
-
-  constructor(sampleRate = 48000) {
-    // Auto-notch parameters:
-    // - Few taps: only models narrowband tones, can't capture complex music
-    // - Large delay (128 samples = 2.7ms at 48kHz): decorrelates broadband audio
-    //   (bass, music) while hum tones stay perfectly correlated at ANY delay
-    //   (because they're periodic: 50Hz period = 960 samples, 100Hz = 480, etc.)
-    // - Slow adaptation: only locks onto stationary tones, ignores transient music
-    this.taps = 16;
-    this.delay = 128; // 2.7ms — bass/music is decorrelated, hum harmonics are not
-    this.twoMu = 4e-4; // Moderate — locks onto hum in ~200ms
-    this.gamma = 0.01; // Low leakage — holds lock tightly
-    this.dline = new Float32Array(this.dlineSize);
-    this.weights = new Float32Array(this.taps);
-    this.denMult = 1.0 / (this.taps * this.taps * 500.0);
+  private makeChannel(): NotchChannel {
+    return {
+      dline: new Float32Array(this.dlineSize),
+      inIdx: 0,
+      weights: new Float32Array(this.taps),
+      lidx: 0,
+      ngamma: 0,
+    };
   }
 
   setEnabled(enabled: boolean): void {
@@ -205,21 +198,30 @@ export class AutoNotch {
   /** Process mono audio in-place. Removes tones, keeps everything else. */
   process(samples: Float32Array): void {
     if (!this.enabled) return;
+    this.processChannel(samples, this.left);
+  }
 
+  /** Process stereo audio in-place — independent state per channel. */
+  processStereo(left: Float32Array, right: Float32Array): void {
+    if (!this.enabled) return;
+    this.processChannel(left, this.left);
+    this.processChannel(right, this.right);
+  }
+
+  private processChannel(samples: Float32Array, ch: NotchChannel): void {
     const n = this.taps;
     const dly = this.delay;
-    const dline = this.dline;
     const mask = this.dlineMask;
-    const w = this.weights;
+    const dline = ch.dline;
+    const w = ch.weights;
     const twoMu = this.twoMu;
     const gamma = this.gamma;
-    let idx = this.inIdx;
-    let lidx = this.lidx;
-    let ngamma = this.ngamma;
-    const denMult = this.denMult;
+    const maxNg = MAX_LEAK_RATIO / twoMu;
+    const denMult = WDSP_DEN_MULT;
     const eps = 1e-30;
-    const lincr = 2;
-    const ldecr = 1;
+    let idx = ch.inIdx;
+    let lidx = ch.lidx;
+    let ngamma = ch.ngamma;
 
     for (let i = 0; i < samples.length; i++) {
       const input = samples[i];
@@ -229,122 +231,47 @@ export class AutoNotch {
       let y = 0;
       let sigma = 0;
       for (let j = 0; j < n; j++) {
-        const dIdx = (idx - dly - j) & mask;
-        const d = dline[dIdx];
+        const d = dline[(idx - dly - j) & mask];
         y += w[j] * d;
         sigma += d * d;
       }
 
       // Error = input minus predicted tones = music + noise (tones removed)
       const error = input - y;
-      samples[i] = error; // ← KEY DIFFERENCE from ANR: output ERROR, not prediction
+      samples[i] = error;
 
       // Leakage adaptation
       const nel = Math.abs(error * (1.0 - twoMu * sigma / (sigma + eps)));
       const nev = Math.abs(input - (1.0 - twoMu * ngamma) * y - twoMu * error * sigma / (sigma + eps));
-      if (nev < nel) lidx += lincr; else lidx -= ldecr;
+      if (nev < nel) lidx += 1; else lidx -= 3;
       if (lidx < 0) lidx = 0;
-      if (lidx > 1000) lidx = 1000;
+      if (lidx > 200) lidx = 200;
       const lidx2 = lidx * lidx;
-      ngamma = gamma * lidx2 * lidx2 * denMult;
+      ngamma = Math.min(gamma * lidx2 * lidx2 * denMult, maxNg);
 
       // Weight update
       const normFactor = twoMu / (sigma + eps);
       const leakFactor = 1.0 - twoMu * ngamma;
       for (let j = 0; j < n; j++) {
-        const dIdx = (idx - dly - j) & mask;
-        w[j] = leakFactor * w[j] + normFactor * error * dline[dIdx];
+        w[j] = leakFactor * w[j] + normFactor * error * dline[(idx - dly - j) & mask];
       }
 
       idx = (idx + 1) & mask;
     }
 
-    this.inIdx = idx;
-    this.lidx = lidx;
-    this.ngamma = ngamma;
-  }
-
-  /** Process stereo — apply same notch to both channels (shared weights) */
-  processStereo(left: Float32Array, right: Float32Array): void {
-    if (!this.enabled) return;
-    // Process left channel (updates weights)
-    this.process(left);
-    // For right channel, use separate state but same concept
-    // (Simple approach: process independently — hum is usually in both channels equally)
-    this.processRight(right);
-  }
-
-  // Separate state for right channel
-  private dlineR = new Float32Array(1024);
-  private inIdxR = 0;
-  private weightsR = new Float32Array(16);
-  private lidxR = 0;
-  private ngammaR = 0;
-
-  private processRight(samples: Float32Array): void {
-    const n = this.taps;
-    const dly = this.delay;
-    const dline = this.dlineR;
-    const mask = this.dlineMask;
-    const w = this.weightsR;
-    const twoMu = this.twoMu;
-    const gamma = this.gamma;
-    let idx = this.inIdxR;
-    let lidx = this.lidxR;
-    let ngamma = this.ngammaR;
-    const denMult = this.denMult;
-    const eps = 1e-30;
-
-    for (let i = 0; i < samples.length; i++) {
-      const input = samples[i];
-      dline[idx & mask] = input;
-
-      let y = 0;
-      let sigma = 0;
-      for (let j = 0; j < n; j++) {
-        const dIdx = (idx - dly - j) & mask;
-        const d = dline[dIdx];
-        y += w[j] * d;
-        sigma += d * d;
-      }
-
-      const error = input - y;
-      samples[i] = error;
-
-      const nel = Math.abs(error * (1.0 - twoMu * sigma / (sigma + eps)));
-      const nev = Math.abs(input - (1.0 - twoMu * ngamma) * y - twoMu * error * sigma / (sigma + eps));
-      if (nev < nel) lidx += 2; else lidx -= 1;
-      if (lidx < 0) lidx = 0;
-      if (lidx > 1000) lidx = 1000;
-      const lidx2 = lidx * lidx;
-      ngamma = gamma * lidx2 * lidx2 * denMult;
-
-      const normFactor = twoMu / (sigma + eps);
-      const leakFactor = 1.0 - twoMu * ngamma;
-      for (let j = 0; j < n; j++) {
-        const dIdx = (idx - dly - j) & mask;
-        w[j] = leakFactor * w[j] + normFactor * error * dline[dIdx];
-      }
-
-      idx = (idx + 1) & mask;
-    }
-
-    this.inIdxR = idx;
-    this.lidxR = lidx;
-    this.ngammaR = ngamma;
+    ch.inIdx = idx;
+    ch.lidx = lidx;
+    ch.ngamma = ngamma;
   }
 
   reset(): void {
-    this.dline.fill(0);
-    this.dlineR.fill(0);
-    this.weights.fill(0);
-    this.weightsR.fill(0);
-    this.inIdx = 0;
-    this.inIdxR = 0;
-    this.lidx = 0;
-    this.lidxR = 0;
-    this.ngamma = 0;
-    this.ngammaR = 0;
+    for (const ch of [this.left, this.right]) {
+      ch.dline.fill(0);
+      ch.weights.fill(0);
+      ch.inIdx = 0;
+      ch.lidx = 0;
+      ch.ngamma = 0;
+    }
   }
 }
 

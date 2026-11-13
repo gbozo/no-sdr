@@ -896,28 +896,42 @@ Standard IMA-ADPCM codec providing 4:1 lossy compression (Int16 → 4-bit nibble
 
 ### 8.6 Noise Reduction
 
-**File:** `client/src/engine/noise-reduction.ts`
+Noise reduction is split between the server (wideband impulse blanker + IF
+filters) and the client (adaptive audio filters at 48 kHz).
 
-Client-side audio noise reduction applied after demodulation, before AudioWorklet.
+**Server — pre-filter noise blanker** (`serverrs/src/dsp/noise_blanker.rs`):
+- Per-client impulse blanker on the raw IQ, before the NCO/decimation.
+- Running-power EMA scaled to the dongle rate (τ = 2 ms) and a blanking guard
+  scaled to the sample rate (100 µs, 8–2000 samples).
+- Two-threshold detector: `threshold` × mean power blanks immediately, 0.4 ×
+  threshold with excess > 0.5 extends the blank.
+- Limitation: the statistic is computed over the whole dongle bandwidth, so a
+  strong carrier anywhere in band raises the mean and masks weaker impulses.
 
-**SpectralNoiseReducer:**
-- 512-point FFT with Hann window, 75% overlap (hop = N/4), COLA normalization
-- Minimum-statistics noise floor estimation (alpha=0.015, 150-frame window ≈1.5s, 1.5× bias correction, 40-frame priming)
-- Wiener gain: `G(k) = max(spectralFloor, 1 - overSubtraction * N(k)/|X(k)|²)`
-- Strength 0–1 maps: overSubtraction 0.3–2.0, spectralFloor 0.20–0.06
-- Per-bin gain smoothing: `prev*0.3 + gain*0.7`
-- Stereo: left channel computes gain mask, right channel reuses shared mask
-- **Known limitation:** produces robotic artifacts on music/tonal signals. Noise blanker recommended instead for WFM.
+**Server — IF chain** (`iq_extractor.rs`): DC blocker (1 Hz) → blanker → NCO →
+windowed-sinc decimation → 8th-order Butterworth LPF. Bandwidth is the full
+channel width for DSB modes and the one-sided passband for USB/LSB.
 
-**NoiseBlanker:**
-- EMA amplitude tracking (alpha=0.001 ≈ 2ms at 48kHz)
-- Threshold: maps strength 0–1 to multiplier 6–2× average amplitude
-- 7-sample hang timer after spike detection
-- 8-sample delay line for look-ahead
-- Smooth gain transitions (0.25 attack, 0.1 recovery)
-- Effective for impulse noise (AM/HF), power line interference
+**Client — LMS adaptive NR** (`client/src/engine/lms-anr.ts`):
+- WDSP `ANR` port: NLMS predictor with leakage control, output = prediction.
+- Presets: SSB 128 taps/24 delay, CW 64/8, AM 64/48; gain 0–1e-4 from the
+  strength slider.
+- Leakage uses the WDSP constants (`den_mult = 6.25e-10`, `lidx` 120–200,
+  incr 1 / decr 3); the earlier `1/(taps²·500)` made `twoMu·ngamma` exceed 1,
+  inverting the leak every sample.
+- No spectral/Wiener NR: the old `noise-reduction.ts` engine produced musical
+  noise and was removed.
 
-**NoiseReductionEngine:** Unified controller with dual L/R instances for stereo. Methods: `setNrEnabled()`, `setNrStrength()`, `setNbEnabled()`, `setNbLevel()`, `processMono()`, `processStereo()`, `reset()`.
+**Client — audio filters** (`client/src/engine/audio-filters.ts`, 48 kHz):
+- Rumble HPF: 4th-order Butterworth, 20–400 Hz.
+- Auto-notch: WDSP `ANF` port (64 taps, 16-sample delay, leakage 0–200);
+  outputs the LMS error so stationary tones/heterodynes are cancelled.
+- Hi-blend: 2nd-order LPF on the L−R side channel (500 Hz–8 kHz, optional
+  auto mode driven by signal level).
+
+**Client — AGC / de-emphasis:** hang-timer AGC (2/250/300 ms SSB) and a
+selectable 50/75 µs FM de-emphasis applied both locally (IQ path) and on the
+server (Opus path, `{cmd:'deemphasis', deemphasis:50|75}`).
 
 ### 8.7 Delta+Deflate FFT Compression
 

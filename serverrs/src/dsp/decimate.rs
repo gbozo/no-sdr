@@ -1,6 +1,12 @@
 //! Polyphase decimator with windowed-sinc anti-alias FIR.
 //!
 //! Ported from the original Go backend.
+//!
+//! Cost is `taps` complex MACs per *output* sample (the dot product is only
+//! evaluated at the kept positions), with the tap count derived from the
+//! requested passband edge. Narrow modes at large decimation factors can still
+//! need several hundred taps, so the per-client cost scales with the number of
+//! listeners.
 
 use std::f64::consts::PI;
 
@@ -25,6 +31,8 @@ pub struct DecimateBlock {
     prototype_len: usize,
     input_rate: f64,
     bandwidth_hz: i32,
+    /// Whether `bandwidth_hz` is the passband edge (true) or full width (false).
+    cutoff_is_passband: bool,
 }
 
 /// Complex dot product with independent accumulators. A single accumulator is
@@ -201,6 +209,7 @@ impl DecimateBlock {
             prototype_len: 0,
             input_rate: 0.0,
             bandwidth_hz: 0,
+            cutoff_is_passband: false,
         }
     }
 
@@ -208,13 +217,31 @@ impl DecimateBlock {
         self.factor
     }
 
+    /// `hz` is the full channel width; the filter passband edge is `hz / 2`.
     pub fn set_bandwidth(&mut self, hz: i32) {
         self.bandwidth_hz = hz;
+        self.cutoff_is_passband = false;
+        self.rebuild();
+    }
+
+    /// `hz` is the passband edge (one-sided). Used for SSB, whose audio band is
+    /// not centred on the tuning point, so `hz / 2` would discard half of it.
+    pub fn set_cutoff(&mut self, hz: i32) {
+        self.bandwidth_hz = hz;
+        self.cutoff_is_passband = true;
+        self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
         if self.factor <= 1 || self.prototype_len == 0 || self.input_rate <= 0.0 {
             return;
         }
-        let taps = self.estimate_tap_count(hz);
-        self.init_from_prototype(taps, hz);
+        let taps = if self.cutoff_is_passband {
+            self.estimate_tap_count_from_cutoff(self.bandwidth_hz)
+        } else {
+            self.estimate_tap_count(self.bandwidth_hz)
+        };
+        self.init_from_prototype(taps, self.bandwidth_hz, self.cutoff_is_passband);
     }
 
     /// Original prototype filter taps (used by tests).
@@ -222,9 +249,13 @@ impl DecimateBlock {
         self.taps.clone()
     }
 
-    fn init_from_prototype(&mut self, orig_taps: usize, bandwidth_hz: i32) {
+    fn init_from_prototype(&mut self, orig_taps: usize, hz: i32, cutoff_is_passband: bool) {
         self.prototype_len = orig_taps;
-        self.taps = self.design_anti_alias_fir(orig_taps, bandwidth_hz);
+        self.taps = if cutoff_is_passband {
+            self.design_anti_alias_fir_for_cutoff(orig_taps, hz)
+        } else {
+            self.design_anti_alias_fir(orig_taps, hz)
+        };
         self.taps_packed.clear();
         self.taps_packed.reserve(self.taps.len() * 2);
         for &t in &self.taps {
@@ -235,13 +266,21 @@ impl DecimateBlock {
     }
 
     fn estimate_tap_count(&self, bandwidth_hz: i32) -> usize {
+        let passband_hz = bandwidth_hz as f64 / 2.0;
+        self.estimate_tap_count_for_passband(passband_hz)
+    }
+
+    fn estimate_tap_count_from_cutoff(&self, cutoff_hz: i32) -> usize {
+        self.estimate_tap_count_for_passband(cutoff_hz as f64)
+    }
+
+    fn estimate_tap_count_for_passband(&self, passband_hz: f64) -> usize {
         let mut n = self.factor * 5 + 1;
         if n < 31 {
             n = 31;
         }
-        if bandwidth_hz > 0 && self.input_rate > 0.0 {
+        if passband_hz > 0.0 && self.input_rate > 0.0 {
             let output_nyquist = self.input_rate / self.factor as f64 / 2.0;
-            let passband_hz = bandwidth_hz as f64 / 2.0;
             if passband_hz < output_nyquist {
                 let transition_hz = output_nyquist - passband_hz;
                 if transition_hz > 0.0 {
@@ -263,13 +302,30 @@ impl DecimateBlock {
     }
 
     fn design_anti_alias_fir(&self, num_taps: usize, bandwidth_hz: i32) -> Vec<f32> {
-        let mut cutoff = 0.5 / self.factor as f64;
+        // 0.45 instead of 0.5 leaves room for the transition band below the
+        // decimated Nyquist, so the top of the passband does not alias.
+        let mut cutoff = 0.45 / self.factor as f64;
         if bandwidth_hz > 0 && self.input_rate > 0.0 {
             let c = bandwidth_hz as f64 / 2.0 / self.input_rate;
             if c > 0.0 && c < cutoff {
                 cutoff = c;
             }
         }
+        self.design_lowpass(num_taps, cutoff)
+    }
+
+    fn design_anti_alias_fir_for_cutoff(&self, num_taps: usize, cutoff_hz: i32) -> Vec<f32> {
+        let mut cutoff = 0.45 / self.factor as f64;
+        if cutoff_hz > 0 && self.input_rate > 0.0 {
+            let c = cutoff_hz as f64 / self.input_rate;
+            if c > 0.0 && c < cutoff {
+                cutoff = c;
+            }
+        }
+        self.design_lowpass(num_taps, cutoff)
+    }
+
+    fn design_lowpass(&self, num_taps: usize, cutoff: f64) -> Vec<f32> {
         let mut taps = vec![0.0f32; num_taps];
         let m = (num_taps - 1) as f64 / 2.0;
         let mut sum = 0.0f64;
@@ -310,8 +366,12 @@ impl ProcessorBlock for DecimateBlock {
             return Ok(());
         }
         self.input_rate = sample_rate;
-        let taps = self.estimate_tap_count(self.bandwidth_hz);
-        self.init_from_prototype(taps, self.bandwidth_hz);
+        let taps = if self.cutoff_is_passband {
+            self.estimate_tap_count_from_cutoff(self.bandwidth_hz)
+        } else {
+            self.estimate_tap_count(self.bandwidth_hz)
+        };
+        self.init_from_prototype(taps, self.bandwidth_hz, self.cutoff_is_passband);
         Ok(())
     }
 

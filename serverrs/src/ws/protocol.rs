@@ -112,6 +112,9 @@ pub struct ClientCommand {
     pub threshold: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub muted: Option<bool>,
+    /// FM de-emphasis in microseconds (50 or 75).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deemphasis: Option<f64>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -438,6 +441,10 @@ mod tests {
         .unwrap();
         assert_eq!(cmd.level, 8.0);
         assert_eq!(cmd.threshold, None);
+
+        let cmd = parse_client_command(br#"{"cmd":"deemphasis","deemphasis":50}"#).unwrap();
+        assert_eq!(cmd.cmd, "deemphasis");
+        assert_eq!(cmd.deemphasis, Some(50.0));
 
         assert!(parse_client_command(b"not json").is_err());
         assert!(parse_client_command(br#"{"dongleId":"x"}"#).is_err());

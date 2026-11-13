@@ -1,6 +1,15 @@
 //! Impulse noise blanker (pre-filter).
 //!
-//! Ported from the original Go backend.
+//! Runs per client on the raw dongle IQ, before the NCO and decimation, so an
+//! impulse is removed before the anti-alias FIR smears it across the channel.
+//!
+//! The running-power statistic covers the whole dongle bandwidth, not the
+//! tuned channel: a strong carrier anywhere in band raises the mean and can
+//! mask impulses in a weak channel. The threshold is relative to that mean, so
+//! the blanker is most effective when the dongle band is otherwise quiet.
+//!
+//! Ported from the original Go backend; the averaging time and blanking guard
+//! are now derived from the sample rate instead of a fixed 100-sample alpha.
 
 use num_complex::Complex32;
 
@@ -17,13 +26,21 @@ pub struct NoiseBlanker {
     guard_size: i32,
 }
 
+/// Target time constant for the running-power estimate. Long enough that a
+/// modulation peak is not mistaken for an impulse, short enough to follow
+/// propagation changes.
+const AVERAGE_SECS: f64 = 0.002;
+/// How long to blank after a trigger (covers the pulse tail and the dongle's
+/// filter ringing).
+const GUARD_SECS: f64 = 100e-6;
+
 impl NoiseBlanker {
-    pub fn new(threshold: f32) -> Self {
+    pub fn new(threshold: f32, sample_rate: f64) -> Self {
         let mut low = threshold * 0.4;
         if low < 3.0 {
             low = 3.0;
         }
-        Self {
+        let mut nb = Self {
             enabled: false,
             threshold,
             threshold_low: low,
@@ -33,7 +50,22 @@ impl NoiseBlanker {
             alpha: 0.01,
             blank_count: 0,
             guard_size: 8,
+        };
+        nb.set_sample_rate(sample_rate);
+        nb
+    }
+
+    /// Scales the power average and the blanking guard to the sample rate.
+    /// A fixed alpha of 0.01 averages 100 samples, i.e. 42 µs at 2.4 MSPS but
+    /// 2 ms at 48 kHz — the same slider behaved completely differently per
+    /// dongle.
+    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+        if !(sample_rate.is_finite() && sample_rate > 0.0) {
+            return;
         }
+        let alpha = 1.0 - (-1.0 / (sample_rate * AVERAGE_SECS)).exp();
+        self.alpha = alpha.clamp(1e-6, 1.0) as f32;
+        self.guard_size = ((sample_rate * GUARD_SECS).round() as i32).clamp(8, 2000);
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -126,7 +158,7 @@ mod tests {
 
     #[test]
     fn disabled_passes_through() {
-        let mut nb = NoiseBlanker::new(10.0);
+        let mut nb = NoiseBlanker::new(10.0, 2_400_000.0);
         let mut data = vec![Complex32::new(5.0, 5.0); 10];
         let before = data.clone();
         assert_eq!(nb.process(&mut data), 0);
@@ -134,11 +166,34 @@ mod tests {
     }
 
     #[test]
+    fn parameters_scale_with_sample_rate() {
+        let slow = NoiseBlanker::new(10.0, 48_000.0);
+        let fast = NoiseBlanker::new(10.0, 2_400_000.0);
+        assert!(
+            fast.alpha < slow.alpha,
+            "fast-rate average must be slower per sample ({} vs {})",
+            fast.alpha,
+            slow.alpha
+        );
+        assert!(
+            fast.guard_size > slow.guard_size,
+            "fast-rate guard must be longer in samples ({} vs {})",
+            fast.guard_size,
+            slow.guard_size
+        );
+        // ~2 ms average and ~100 µs guard at both rates.
+        assert!((1.0 / slow.alpha as f64 - 96.0).abs() < 5.0);
+        assert!((1.0 / fast.alpha as f64 - 4800.0).abs() < 50.0);
+        assert_eq!(fast.guard_size, 240);
+        assert_eq!(slow.guard_size, 8);
+    }
+
+    #[test]
     fn blanks_impulse() {
-        let mut nb = NoiseBlanker::new(10.0);
+        let mut nb = NoiseBlanker::new(10.0, 2_400_000.0);
         nb.set_enabled(true);
         let mut data = vec![Complex32::new(0.01, 0.01); 100];
-        // Let the EMA settle.
+        // Let the power average settle.
         for _ in 0..10 {
             nb.process(&mut data);
         }

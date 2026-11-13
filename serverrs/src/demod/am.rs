@@ -37,6 +37,7 @@ pub struct AmDemod {
     // Audio LPF (post-AGC, bandwidth-limiting).
     audio_lpf: Option<SimpleFir>,
     audio_lpf_enabled: bool,
+    audio_lpf_buf: Vec<f32>,
     /// Cutoff hint applied when `init` runs (Go stores it in the pre-init path
     /// only indirectly; kept for parity with the Node version).
     pending_cutoff: Option<f64>,
@@ -74,6 +75,7 @@ impl AmDemod {
             if_q_out: Vec::new(),
             audio_lpf: None,
             audio_lpf_enabled: false,
+            audio_lpf_buf: Vec::new(),
             pending_cutoff: None,
         }
     }
@@ -168,10 +170,12 @@ impl Demodulator for AmDemod {
 
         if self.audio_lpf_enabled {
             if let Some(lpf) = self.audio_lpf.as_mut() {
-                for sample in out.iter_mut() {
-                    let v = *sample;
-                    *sample = lpf.process(v);
-                }
+                let mut filtered = std::mem::take(&mut self.audio_lpf_buf);
+                filtered.clear();
+                filtered.resize(out.len(), 0.0);
+                lpf.process_batch(&out, &mut filtered);
+                std::mem::swap(&mut out, &mut filtered);
+                self.audio_lpf_buf = filtered;
             }
         }
 

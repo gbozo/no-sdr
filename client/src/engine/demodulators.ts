@@ -46,6 +46,8 @@ export interface Demodulator {
   setInputSampleRate(rate: number): void;
   /** Set the filter bandwidth in Hz */
   setBandwidth(hz: number): void;
+  /** FM only: de-emphasis time constant in microseconds (50 or 75) */
+  setDeemphasis?(us: number): void;
   /** Register RDS data callback (WFM only) */
   setRdsCallback?(cb: (data: RdsData) => void): void;
   /** Get current RDS data snapshot (WFM only) */
@@ -524,6 +526,8 @@ class FmDemodulator implements Demodulator {
   private outputSampleRate = 48000;
   private bandwidth: number;
   private wideband: boolean;
+  /** FM de-emphasis time constant (s). 75 µs default (Americas). */
+  private deemphTau = 75e-6;
 
   // Stereo FM components (WFM only)
   private pilotPll: PilotPll | null = null;
@@ -562,10 +566,10 @@ class FmDemodulator implements Demodulator {
     const audioCutoff = wideband ? 15_000 : 4_000;
     this.lpFilter = new FirFilter(51, audioCutoff / this.inputSampleRate);
 
-    // De-emphasis: 75µs (US/Japan) or 50µs (EU) — using 75µs as default
+    // De-emphasis: 75µs (US/Japan) or 50µs (EU) — selectable at runtime
     const deemphRate = wideband ? this.inputSampleRate : this.outputSampleRate;
-    this.deemphL = new DeemphasisFilter(75e-6, deemphRate);
-    this.deemphR = new DeemphasisFilter(75e-6, deemphRate);
+    this.deemphL = new DeemphasisFilter(this.deemphTau, deemphRate);
+    this.deemphR = new DeemphasisFilter(this.deemphTau, deemphRate);
 
     this.dcBlocker = new DcBlocker();
     this.dcBlockerR = new DcBlocker();
@@ -857,8 +861,8 @@ class FmDemodulator implements Demodulator {
       const factor = Math.max(1, Math.floor(this.inputSampleRate / this.outputSampleRate));
       this.decimator = new Decimator(factor);
       this.decimatorR = new Decimator(factor);
-      this.deemphL.setParams(75e-6, this.inputSampleRate);
-      this.deemphR.setParams(75e-6, this.inputSampleRate);
+      this.deemphL.setParams(this.deemphTau, this.inputSampleRate);
+      this.deemphR.setParams(this.deemphTau, this.inputSampleRate);
 
       // Re-init stereo components for new sample rate
       this.initStereo();
@@ -873,9 +877,15 @@ class FmDemodulator implements Demodulator {
       // NFM: input rate should be ~48kHz, no decimation
       this.decimator = null;
       this.decimatorR = null;
-      this.deemphL.setParams(75e-6, this.inputSampleRate);
-      this.deemphR.setParams(75e-6, this.inputSampleRate);
+      this.deemphL.setParams(this.deemphTau, this.inputSampleRate);
+      this.deemphR.setParams(this.deemphTau, this.inputSampleRate);
     }
+  }
+
+  setDeemphasis(us: number): void {
+    this.deemphTau = Math.max(10e-6, Math.min(200e-6, us * 1e-6));
+    this.deemphL.setParams(this.deemphTau, this.inputSampleRate);
+    this.deemphR.setParams(this.deemphTau, this.inputSampleRate);
   }
 
   setBandwidth(hz: number): void {

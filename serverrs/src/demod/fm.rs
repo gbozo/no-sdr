@@ -232,6 +232,119 @@ impl SimpleFir {
     }
 }
 
+// ---------- decimating FIR ----------
+
+/// Windowed-sinc lowpass evaluated only at the kept samples, so an N:1
+/// decimation costs `taps` MACs per output rather than per input.
+///
+/// Used by the WFM stereo path: the previous pipeline low-passed at 240 kHz
+/// and then dropped 4 of every 5 samples, which left the 24–34 kHz region
+/// (upper L-R sidebands, RDS) essentially unfiltered and folding into the
+/// audio band.
+pub struct DecimatingFir {
+    taps: Vec<f32>,
+    taps_rev: Vec<f32>,
+    buf: Vec<f32>,
+    pos: usize,
+    buf_mask: usize,
+    factor: usize,
+    /// Inputs already counted toward the next output (0..factor).
+    phase: usize,
+    batch: Vec<f32>,
+}
+
+impl DecimatingFir {
+    pub fn new(num_taps: usize, cutoff: f64, factor: usize) -> Self {
+        let mut buf_size = 1usize;
+        while buf_size < num_taps {
+            buf_size <<= 1;
+        }
+        let factor = factor.max(1);
+        let mut f = Self {
+            taps: vec![0.0; num_taps],
+            taps_rev: vec![0.0; num_taps],
+            buf: vec![0.0; buf_size],
+            pos: 0,
+            buf_mask: buf_size - 1,
+            factor,
+            phase: 0,
+            batch: Vec::new(),
+        };
+        f.design(cutoff);
+        f
+    }
+
+    pub fn design(&mut self, cutoff: f64) {
+        let n = self.taps.len();
+        let m = (n - 1) as f64 / 2.0;
+        let mut sum = 0.0f64;
+        for i in 0..n {
+            let x = i as f64 - m;
+            let sinc = if x.abs() < 1e-12 {
+                2.0 * PI * cutoff
+            } else {
+                (2.0 * PI * cutoff * x).sin() / x
+            };
+            let fi = i as f64;
+            let fn_ = (n - 1) as f64;
+            let w = 0.35875 - 0.48829 * (2.0 * PI * fi / fn_).cos()
+                + 0.14128 * (4.0 * PI * fi / fn_).cos()
+                - 0.01168 * (6.0 * PI * fi / fn_).cos();
+            self.taps[i] = (sinc * w) as f32;
+            sum += self.taps[i] as f64;
+        }
+        for tap in &mut self.taps {
+            *tap = (*tap as f64 / sum) as f32;
+        }
+        self.taps_rev = self.taps.iter().rev().copied().collect();
+    }
+
+    /// Appends the decimated output for `input` to `out`.
+    pub fn process_batch(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        out.clear();
+        if input.is_empty() || self.taps.is_empty() {
+            return;
+        }
+        let n = self.taps.len();
+        let hist = n - 1;
+        let mask = self.buf_mask;
+        let factor = self.factor;
+
+        self.batch.clear();
+        self.batch.reserve(hist + input.len());
+        let start = (self.pos + self.buf.len() - hist) & mask;
+        for k in 0..hist {
+            self.batch.push(self.buf[(start + k) & mask]);
+        }
+        self.batch.extend_from_slice(input);
+
+        // Keep the decimation phase across blocks of any length, matching the
+        // old per-sample counter: an output every `factor` inputs.
+        let first = (factor - 1 - self.phase) % factor;
+        if self.batch.len() >= n + first {
+            let mut i = first;
+            while i + n <= self.batch.len() {
+                out.push(real_dot(&self.batch[i..i + n], &self.taps_rev));
+                i += factor;
+            }
+        }
+        self.phase = (self.phase + input.len()) % factor;
+
+        let mut pos = self.pos;
+        for &x in input {
+            self.buf[pos] = x;
+            pos = (pos + 1) & mask;
+        }
+        self.pos = pos;
+    }
+
+    pub fn reset(&mut self) {
+        self.buf.fill(0.0);
+        self.pos = 0;
+        self.phase = 0;
+    }
+}
+
 // ---------- FM mono ----------
 
 pub struct FmMonoDemod {
@@ -247,6 +360,7 @@ pub struct FmMonoDemod {
     audio_lpf: Option<SimpleFir>,
     audio_lpf_enabled: bool,
     audio_lpf_cutoff: f64,
+    audio_lpf_buf: Vec<f32>,
 }
 
 impl FmMonoDemod {
@@ -263,6 +377,7 @@ impl FmMonoDemod {
             audio_lpf: None,
             audio_lpf_enabled: false,
             audio_lpf_cutoff: 0.0,
+            audio_lpf_buf: Vec::new(),
         }
     }
 
@@ -318,9 +433,14 @@ impl FmMonoDemod {
 
         if self.audio_lpf_enabled {
             if let Some(fir) = &mut self.audio_lpf {
-                for sample in out.iter_mut() {
-                    *sample = fir.process(*sample);
-                }
+                // Block form: one contiguous dot product per output instead of
+                // the per-sample circular-buffer path.
+                let mut filtered = std::mem::take(&mut self.audio_lpf_buf);
+                filtered.clear();
+                filtered.resize(out.len(), 0.0);
+                fir.process_batch(out, &mut filtered);
+                std::mem::swap(out, &mut filtered);
+                self.audio_lpf_buf = filtered;
             }
         }
     }
@@ -347,8 +467,8 @@ impl Demodulator for FmMonoDemod {
         self.deemph_state = 0.0;
 
         if self.audio_lpf_enabled && self.audio_lpf_cutoff > 0.0 {
-            let norm = self.audio_lpf_cutoff;
-            if norm < 0.5 {
+            let norm = self.audio_lpf_cutoff / self.sample_rate;
+            if norm > 0.0 && norm < 0.5 {
                 match &mut self.audio_lpf {
                     Some(fir) => {
                         fir.design(norm);
@@ -387,9 +507,12 @@ impl Demodulator for FmMonoDemod {
         if cutoff_hz > 4000.0 {
             cutoff_hz = 4000.0;
         }
+        // Store Hz, not a normalised ratio: init() and a later rate change both
+        // need the absolute cutoff, and mixing the two put a 4 kHz filter at
+        // 20 kHz if the demod was ever initialised at a non-48 kHz rate.
+        self.audio_lpf_cutoff = cutoff_hz;
+        self.audio_lpf_enabled = true;
         if self.sample_rate <= 0.0 {
-            self.audio_lpf_cutoff = cutoff_hz / 48000.0;
-            self.audio_lpf_enabled = true;
             return;
         }
         let norm = cutoff_hz / self.sample_rate;
@@ -397,7 +520,6 @@ impl Demodulator for FmMonoDemod {
             self.audio_lpf_enabled = false;
             return;
         }
-        self.audio_lpf_cutoff = norm;
         match &mut self.audio_lpf {
             Some(fir) => {
                 fir.design(norm);
@@ -405,7 +527,14 @@ impl Demodulator for FmMonoDemod {
             }
             None => self.audio_lpf = Some(SimpleFir::new(31, norm)),
         }
-        self.audio_lpf_enabled = true;
+    }
+
+    fn set_deemphasis(&mut self, us: f64) {
+        self.deemph_tau = (us * 1e-6).clamp(10e-6, 200e-6);
+        if self.sample_rate > 0.0 {
+            self.deemph_alpha =
+                (1.0 - (-1.0 / (self.sample_rate * self.deemph_tau)).exp()) as f32;
+        }
     }
 }
 
@@ -428,7 +557,6 @@ pub struct FmStereoDemod {
     mono: FmMonoDemod,
     sample_rate: f64,
     decim_factor: usize,
-    decim_counter: usize,
 
     pll_sin: f64,
     pll_cos: f64,
@@ -450,9 +578,10 @@ pub struct FmStereoDemod {
     deemph_state_l: f32,
     deemph_state_r: f32,
     deemph_alpha: f32,
+    deemph_tau: f64,
 
-    lpr_fir: Option<SimpleFir>,
-    lr_fir: Option<SimpleFir>,
+    lpr_dec: DecimatingFir,
+    lr_dec: DecimatingFir,
 
     dc_prev_l: f32,
     dc_out_prev_l: f32,
@@ -465,18 +594,19 @@ pub struct FmStereoDemod {
     right_out: Vec<f32>,
     lpr_in: Vec<f32>,
     lr_in: Vec<f32>,
-    lpr_out: Vec<f32>,
-    lr_out: Vec<f32>,
     blends: Vec<f32>,
+    left_full: Vec<f32>,
+    right_full: Vec<f32>,
+    left_dec: Vec<f32>,
+    right_dec: Vec<f32>,
 }
 
 impl FmStereoDemod {
-    pub fn new(_deemph_tau: f64) -> Self {
+    pub fn new(deemph_tau: f64) -> Self {
         Self {
             mono: FmMonoDemod::with_deviation(1.0, 75000.0),
             sample_rate: 0.0,
             decim_factor: 1,
-            decim_counter: 0,
             pll_sin: 0.0,
             pll_cos: 1.0,
             pll_freq: 0.0,
@@ -494,8 +624,9 @@ impl FmStereoDemod {
             deemph_state_l: 0.0,
             deemph_state_r: 0.0,
             deemph_alpha: 0.0,
-            lpr_fir: None,
-            lr_fir: None,
+            deemph_tau: if deemph_tau > 0.0 { deemph_tau } else { 75e-6 },
+            lpr_dec: DecimatingFir::new(129, 15_500.0 / 240_000.0, 1),
+            lr_dec: DecimatingFir::new(129, 15_500.0 / 240_000.0, 1),
             dc_prev_l: 0.0,
             dc_out_prev_l: 0.0,
             dc_prev_r: 0.0,
@@ -506,9 +637,11 @@ impl FmStereoDemod {
             right_out: Vec::new(),
             lpr_in: Vec::new(),
             lr_in: Vec::new(),
-            lpr_out: Vec::new(),
-            lr_out: Vec::new(),
             blends: Vec::new(),
+            left_full: Vec::new(),
+            right_full: Vec::new(),
+            left_dec: Vec::new(),
+            right_dec: Vec::new(),
         }
     }
 
@@ -556,7 +689,6 @@ impl Demodulator for FmStereoDemod {
         if self.decim_factor < 1 {
             self.decim_factor = 1;
         }
-        self.decim_counter = 0;
 
         let bw = 50.0;
         let damp = 0.707;
@@ -577,12 +709,11 @@ impl Demodulator for FmStereoDemod {
         self.hold_counter = 0;
         self.blend_factor = 0.0;
 
-        let cutoff = 15000.0 / self.sample_rate;
-        self.lpr_fir = Some(SimpleFir::new(51, cutoff));
-        self.lr_fir = Some(SimpleFir::new(51, cutoff));
+        let cutoff = 15_500.0 / self.sample_rate;
+        self.lpr_dec = DecimatingFir::new(129, cutoff, self.decim_factor);
+        self.lr_dec = DecimatingFir::new(129, cutoff, self.decim_factor);
 
-        const WFM_DEEMPH_TAU: f64 = 75e-6;
-        self.deemph_alpha = (1.0 - (-1.0 / (self.sample_rate * WFM_DEEMPH_TAU)).exp()) as f32;
+        self.deemph_alpha = (1.0 - (-1.0 / (self.sample_rate * self.deemph_tau)).exp()) as f32;
         self.deemph_state_l = 0.0;
         self.deemph_state_r = 0.0;
 
@@ -612,18 +743,12 @@ impl Demodulator for FmStereoDemod {
 
         let mut lpr_in = std::mem::take(&mut self.lpr_in);
         let mut lr_in = std::mem::take(&mut self.lr_in);
-        let mut lpr_out = std::mem::take(&mut self.lpr_out);
-        let mut lr_out = std::mem::take(&mut self.lr_out);
         let mut blends = std::mem::take(&mut self.blends);
         lpr_in.clear();
         lr_in.clear();
-        lpr_out.clear();
-        lr_out.clear();
         blends.clear();
         lpr_in.resize(n, 0.0);
         lr_in.resize(n, 0.0);
-        lpr_out.resize(n, 0.0);
-        lr_out.resize(n, 0.0);
         blends.resize(n, 0.0);
         let mut pilot_phases = std::mem::take(&mut self.pilot_phases);
         pilot_phases.clear();
@@ -720,24 +845,27 @@ impl Demodulator for FmStereoDemod {
         self.pilot_detected = pilot_detected;
         self.hold_counter = hold_counter;
 
-        // ---- Batch FIR ----
-        if let Some(fir) = &mut self.lpr_fir {
-            fir.process_batch(&lpr_in, &mut lpr_out);
-        }
-        if let Some(fir) = &mut self.lr_fir {
-            fir.process_batch(&lr_in, &mut lr_out);
-        }
-
-        // ---- Pass 2: stereo matrix, de-emphasis, decimate ----
+        // ---- Pass 2: stereo matrix, de-emphasis, anti-alias decimation ----
+        //
+        // The 15 kHz low-pass + "keep every 5th sample" pair is replaced by a
+        // decimating FIR: the composite is matrixed and de-emphasised at
+        // 240 kHz, then the LPF runs only on the samples that survive. That
+        // costs `taps` MACs per output instead of per input *and* actually
+        // rejects the 24–34 kHz region the old chain folded into the audio.
         let alpha = self.deemph_alpha;
         let mut state_l = self.deemph_state_l;
         let mut state_r = self.deemph_state_r;
-        let mut decim_counter = self.decim_counter;
-        let mut out = Vec::with_capacity(max_out * 2);
+
+        let mut left_full = std::mem::take(&mut self.left_full);
+        let mut right_full = std::mem::take(&mut self.right_full);
+        left_full.clear();
+        right_full.clear();
+        left_full.resize(n, 0.0);
+        right_full.resize(n, 0.0);
 
         for i in 0..n {
-            let l_plus_r = lpr_out[i];
-            let l_minus_r = lr_out[i];
+            let l_plus_r = lpr_in[i];
+            let l_minus_r = lr_in[i];
             let blend = blends[i];
 
             let (left, right) = if blend > 0.001 {
@@ -748,35 +876,42 @@ impl Demodulator for FmStereoDemod {
 
             state_l = alpha * left + (1.0 - alpha) * state_l;
             state_r = alpha * right + (1.0 - alpha) * state_r;
-
-            decim_counter += 1;
-            if decim_counter >= self.decim_factor {
-                decim_counter = 0;
-                let dc_out_l = state_l - self.dc_prev_l + 0.995 * self.dc_out_prev_l;
-                self.dc_prev_l = state_l;
-                self.dc_out_prev_l = dc_out_l;
-
-                let dc_out_r = state_r - self.dc_prev_r + 0.995 * self.dc_out_prev_r;
-                self.dc_prev_r = state_r;
-                self.dc_out_prev_r = dc_out_r;
-
-                self.left_out.push(dc_out_l);
-                self.right_out.push(dc_out_r);
-                out.push(dc_out_l);
-                out.push(dc_out_r);
-            }
+            left_full[i] = state_l;
+            right_full[i] = state_r;
         }
 
-        self.decim_counter = decim_counter;
+        let mut left_dec = std::mem::take(&mut self.left_dec);
+        let mut right_dec = std::mem::take(&mut self.right_dec);
+        self.lpr_dec.process_batch(&left_full, &mut left_dec);
+        self.lr_dec.process_batch(&right_full, &mut right_dec);
+
+        let mut out = Vec::with_capacity(left_dec.len() * 2);
+        for (&l, &r) in left_dec.iter().zip(right_dec.iter()) {
+            let dc_out_l = l - self.dc_prev_l + 0.995 * self.dc_out_prev_l;
+            self.dc_prev_l = l;
+            self.dc_out_prev_l = dc_out_l;
+
+            let dc_out_r = r - self.dc_prev_r + 0.995 * self.dc_out_prev_r;
+            self.dc_prev_r = r;
+            self.dc_out_prev_r = dc_out_r;
+
+            self.left_out.push(dc_out_l);
+            self.right_out.push(dc_out_r);
+            out.push(dc_out_l);
+            out.push(dc_out_r);
+        }
+
         self.deemph_state_l = state_l;
         self.deemph_state_r = state_r;
         self.composite = composite;
         self.pilot_phases = pilot_phases;
         self.lpr_in = lpr_in;
         self.lr_in = lr_in;
-        self.lpr_out = lpr_out;
-        self.lr_out = lr_out;
         self.blends = blends;
+        self.left_full = left_full;
+        self.right_full = right_full;
+        self.left_dec = left_dec;
+        self.right_dec = right_dec;
         out
     }
 
@@ -792,15 +927,10 @@ impl Demodulator for FmStereoDemod {
         self.blend_factor = 0.0;
         self.pilot_detected = false;
         self.hold_counter = 0;
-        self.decim_counter = 0;
         self.deemph_state_l = 0.0;
         self.deemph_state_r = 0.0;
-        if let Some(fir) = &mut self.lpr_fir {
-            fir.reset();
-        }
-        if let Some(fir) = &mut self.lr_fir {
-            fir.reset();
-        }
+        self.lpr_dec.reset();
+        self.lr_dec.reset();
         self.dc_prev_l = 0.0;
         self.dc_out_prev_l = 0.0;
         self.dc_prev_r = 0.0;
@@ -817,6 +947,14 @@ impl Demodulator for FmStereoDemod {
 
     fn pilot_detected(&self) -> bool {
         self.pilot_detected
+    }
+
+    fn set_deemphasis(&mut self, us: f64) {
+        self.deemph_tau = (us * 1e-6).clamp(10e-6, 200e-6);
+        if self.sample_rate > 0.0 {
+            self.deemph_alpha =
+                (1.0 - (-1.0 / (self.sample_rate * self.deemph_tau)).exp()) as f32;
+        }
     }
 }
 
@@ -910,5 +1048,73 @@ mod tests {
         // port matches those figures to f32 precision.
         assert!(l1.abs() > 3.0 * r1.abs(), "L/R leakage at 1k: {l1} {r1}");
         assert!(r3.abs() > 3.0 * l3.abs(), "R/L leakage at 3k: {r3} {l3}");
+    }
+
+    fn tone_rms(v: &[f32], skip: usize) -> f64 {
+        let tail = &v[skip..];
+        (tail.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>() / tail.len() as f64).sqrt()
+    }
+
+    fn tone(rate: f64, freq: f64, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * PI * freq * i as f64 / rate).sin() as f32)
+            .collect()
+    }
+
+    #[test]
+    fn decimating_fir_passes_audio_and_rejects_above_nyquist() {
+        let rate = 240_000.0;
+        let n = 24_000;
+        let mut d = DecimatingFir::new(129, 15_500.0 / rate, 5);
+        let mut out = Vec::new();
+
+        d.process_batch(&tone(rate, 1000.0, n), &mut out);
+        assert!(
+            (out.len() as i64 - (n / 5) as i64).abs() <= 2,
+            "expected ~{} outputs, got {}",
+            n / 5,
+            out.len()
+        );
+        assert!(
+            (tone_rms(&out, 200) - 0.707).abs() < 0.03,
+            "passband gain {}",
+            tone_rms(&out, 200)
+        );
+
+        // 30 kHz folds to 18 kHz after 5:1 decimation; it must be gone.
+        d.reset();
+        d.process_batch(&tone(rate, 30_000.0, n), &mut out);
+        assert!(
+            tone_rms(&out, 200) < 0.005,
+            "30 kHz leak {}",
+            tone_rms(&out, 200)
+        );
+
+        // The decimation phase must survive ragged block sizes.
+        d.reset();
+        let src = tone(rate, 1000.0, n);
+        let mut ragged = Vec::new();
+        let mut part = Vec::new();
+        for chunk in src.chunks(7) {
+            d.process_batch(chunk, &mut part);
+            ragged.extend_from_slice(&part);
+        }
+        assert!(
+            (ragged.len() as i64 - (n / 5) as i64).abs() <= 3,
+            "ragged block count {}",
+            ragged.len()
+        );
+        assert!((tone_rms(&ragged, 200) - 0.707).abs() < 0.05);
+    }
+
+    #[test]
+    fn stereo_deemphasis_is_selectable() {
+        let mut d = FmStereoDemod::new(75e-6);
+        d.init(240_000.0).unwrap();
+        d.set_deemphasis(50.0);
+        let alpha_50 = d.deemph_alpha;
+        d.set_deemphasis(75.0);
+        assert!(d.deemph_alpha < alpha_50, "75 µs must roll off earlier");
+        assert!((d.deemph_tau - 75e-6).abs() < 1e-12);
     }
 }

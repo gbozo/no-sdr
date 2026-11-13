@@ -31,6 +31,33 @@ export const ANR_PRESETS: Record<string, AnrOptions> = {
   am:  { taps: 64,  delay: 48, gain: 5e-5, leakage: 0.05 },
 };
 
+/** Map a 0-1 UI strength to an NLMS adaptation gain. Single source of truth so
+ *  a restored session and a live slider move behave identically. */
+export function anrGainForStrength(strength: number): number {
+  const s = Math.max(0, Math.min(1, strength));
+  return s * 1e-4;
+}
+
+/**
+ * Maximum allowed `twoMu * ngamma`. With the WDSP constants this stays around
+ * 1e-5; the cap only exists so a future parameter change can never invert the
+ * leak factor (which flips the weight sign every sample).
+ */
+export const MAX_LEAK_RATIO = 0.1;
+
+/**
+ * Leakage scale from WDSP's `RXA.cpp` (`den_mult = 6.25e-10`). It is a fixed
+ * constant, NOT derived from the tap count: the old `1 / (taps² * 500)` was
+ * 195× too large at 128 taps and made the quartic ramp saturate the leak.
+ */
+export const WDSP_DEN_MULT = 6.25e-10;
+
+/** Leakage index limits / ramp steps from WDSP's RXA.cpp. */
+const LIDX_MIN = 120;
+const LIDX_MAX = 200;
+const LIDX_INCR = 1;
+const LIDX_DECR = 3;
+
 export class LmsAnr {
   private taps: number;
   private delay: number;
@@ -48,10 +75,7 @@ export class LmsAnr {
   private weights: Float32Array;
 
   // Leakage adaptation state
-  private lidx = 0;
-  private lincr = 2;
-  private ldecr = 1;
-  private denMult: number;
+  private lidx = LIDX_MIN;
   private ngamma = 0;
 
   constructor(options: AnrOptions = ANR_PRESETS.ssb) {
@@ -67,10 +91,6 @@ export class LmsAnr {
 
     // Adaptive filter weights
     this.weights = new Float32Array(this.taps);
-
-    // Leakage denominator multiplier
-    // denMult scales the leakage index (lidx) to a useful ngamma range
-    this.denMult = 1.0 / (this.taps * this.taps * 500.0);
   }
 
   /** Enable/disable the ANR */
@@ -94,8 +114,7 @@ export class LmsAnr {
     if (options.taps !== undefined && options.taps !== this.taps) {
       this.taps = options.taps;
       this.weights = new Float32Array(this.taps);
-      this.denMult = 1.0 / (this.taps * this.taps * 500.0);
-      this.lidx = 0;
+      this.lidx = LIDX_MIN;
       this.ngamma = 0;
     }
   }
@@ -111,7 +130,7 @@ export class LmsAnr {
     this.dline.fill(0);
     this.weights.fill(0);
     this.inIdx = 0;
-    this.lidx = 0;
+    this.lidx = LIDX_MIN;
     this.ngamma = 0;
   }
 
@@ -134,9 +153,9 @@ export class LmsAnr {
     let idx = this.inIdx;
     let lidx = this.lidx;
     let ngamma = this.ngamma;
-    const lincr = this.lincr;
-    const ldecr = this.ldecr;
-    const denMult = this.denMult;
+    const lincr = LIDX_INCR;
+    const ldecr = LIDX_DECR;
+    const denMult = WDSP_DEN_MULT;
     const eps = 1e-6; // Meaningful epsilon — prevents weight explosion on silence
 
     for (let i = 0; i < samples.length; i++) {
@@ -173,13 +192,19 @@ export class LmsAnr {
       } else {
         lidx -= ldecr;
       }
-      // Clamp lidx to valid range
-      if (lidx < 0) lidx = 0;
-      if (lidx > 1000) lidx = 1000;
+      // Clamp lidx to the WDSP ANR range (120..200): the leakage is a gentle
+      // trim, never a dominant term.
+      if (lidx < LIDX_MIN) lidx = LIDX_MIN;
+      if (lidx > LIDX_MAX) lidx = LIDX_MAX;
 
-      // Compute effective ngamma from lidx (quartic ramp)
+      // Compute effective ngamma from lidx (quartic ramp), capped so that the
+      // leakage term `twoMu * ngamma` stays below 1. Without the cap the
+      // quartic ramp can reach >2 for the preset gamma/denMult values, which
+      // makes leakFactor negative: weights flip sign every sample, pin to the
+      // clamps below and the filter *amplifies* instead of predicting.
       const lidx2 = lidx * lidx;
-      ngamma = gamma * lidx2 * lidx2 * denMult;
+      const maxNg = MAX_LEAK_RATIO / twoMu;
+      ngamma = Math.min(gamma * lidx2 * lidx2 * denMult, maxNg);
 
       // ---- Weight update (NLMS with leakage) ----
       const leakFactor = 1.0 - twoMu * ngamma;

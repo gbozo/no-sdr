@@ -1177,8 +1177,8 @@ const NoiseReduction: Component = () => {
                 type="range"
                 aria-label="Rumble filter cutoff frequency"
                 min={30}
-                max={150}
-                step={5}
+                max={400}
+                step={10}
                 value={store.rumbleFilterCutoff()}
                 onInput={(e) => engine.setRumbleFilterCutoff(parseInt(e.currentTarget.value))}
                 class="sdr-range"
@@ -1232,9 +1232,18 @@ const NoiseReduction: Component = () => {
                   <label class="text-[9px] font-mono text-text-dim">
                     Cutoff
                   </label>
-                  <span class="text-[9px] font-mono text-text-dim">
-                    {(store.hiBlendCutoff() / 1000).toFixed(1)} kHz
-                  </span>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[9px] font-mono text-text-dim">
+                      {((store.hiBlendAuto() ? store.hiBlendAutoCutoff() : store.hiBlendCutoff()) / 1000).toFixed(1)} kHz
+                    </span>
+                    <button
+                      class={`mil-btn ${store.hiBlendAuto() ? 'active' : ''}`}
+                      onClick={() => engine.setHiBlendAuto(!store.hiBlendAuto())}
+                      title="Follow the signal level: strong stations keep stereo, weak ones fade to mono"
+                    >
+                      Auto
+                    </button>
+                  </div>
                 </div>
                 <input
                   type="range"
@@ -1242,15 +1251,45 @@ const NoiseReduction: Component = () => {
                   min={500}
                   max={8000}
                   step={100}
+                  disabled={store.hiBlendAuto()}
                   value={store.hiBlendCutoff()}
                   onInput={(e) => engine.setHiBlendCutoff(parseInt(e.currentTarget.value))}
-                  class="sdr-range"
+                  class="sdr-range disabled:opacity-40"
                 />
                 <div class="text-[7px] font-mono text-text-muted mt-0.5">
                   Below cutoff: full stereo. Above: fades to mono. Reduces FM hiss.
                 </div>
               </div>
             </Show>
+          </div>
+        </Show>
+
+        {/* FM de-emphasis */}
+        <Show when={store.mode() === 'wfm' || store.mode() === 'nfm'}>
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                De-emphasis
+              </label>
+              <div class="flex gap-1">
+                <For each={[75, 50]}>
+                  {(us) => (
+                    <button
+                      class={`mil-btn ${store.deemphasisUs() === us ? 'active' : ''}`}
+                      onClick={() => engine.setDeemphasis(us)}
+                      title={us === 75
+                        ? '75 µs — Americas, Japan, Korea'
+                        : '50 µs — Europe, Australia, most of Asia'}
+                    >
+                      {us} µs
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+            <div class="text-[7px] font-mono text-text-muted mt-0.5">
+              FM high-frequency roll-off — match your region's broadcast standard
+            </div>
           </div>
         </Show>
 

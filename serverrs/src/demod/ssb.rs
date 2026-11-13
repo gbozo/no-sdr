@@ -40,6 +40,7 @@ pub struct SsbDemod {
 
     audio_lpf: Option<SimpleFir>,
     audio_lpf_enabled: bool,
+    audio_lpf_buf: Vec<f32>,
     pending_cutoff: Option<f64>,
 }
 
@@ -57,6 +58,7 @@ impl SsbDemod {
             agc_max: 200.0,
             audio_lpf: None,
             audio_lpf_enabled: false,
+            audio_lpf_buf: Vec::new(),
             pending_cutoff: None,
         }
     }
@@ -130,10 +132,12 @@ impl Demodulator for SsbDemod {
 
         if self.audio_lpf_enabled {
             if let Some(lpf) = self.audio_lpf.as_mut() {
-                for sample in out.iter_mut() {
-                    let v = *sample;
-                    *sample = lpf.process(v);
-                }
+                let mut filtered = std::mem::take(&mut self.audio_lpf_buf);
+                filtered.clear();
+                filtered.resize(out.len(), 0.0);
+                lpf.process_batch(&out, &mut filtered);
+                std::mem::swap(&mut out, &mut filtered);
+                self.audio_lpf_buf = filtered;
             }
         }
 
