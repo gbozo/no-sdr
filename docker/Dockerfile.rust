@@ -24,9 +24,11 @@ RUN npm run build --workspace=client
 FROM rust:1.99-alpine AS rust-builder
 
 # cmake is needed by audiopus-sys, which builds the bundled Opus library.
-# RADE's vendored patched Opus uses autogen.sh, so the autotools are needed too.
-RUN apk add --no-cache build-base cmake perl pkgconf git ca-certificates \
-    autoconf automake libtool patch
+RUN apk add --no-cache build-base cmake perl pkgconf git ca-certificates
+
+# RADE is omitted from the image: its vendored patched Opus needs a full
+# autotools toolchain and does not configure cleanly on Alpine/musl. The
+# standalone Linux/macOS release binaries include RADE.
 
 # The vendored Opus CMakeLists uses an old minimum; CMake 4 rejects it unless
 # this policy override is set.
@@ -52,14 +54,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARG
         for level in v1 v2 v3 v4; do \
             if [ "$level" = "v1" ]; then target_cpu="x86-64"; else target_cpu="x86-64-$level"; fi; \
             RUSTFLAGS="-C target-cpu=$target_cpu" \
-                cargo build --release --target x86_64-unknown-linux-musl --all-features --bin serverrs; \
+                cargo build --release --target x86_64-unknown-linux-musl \
+                    --no-default-features \
+                    --features "opus,rtlsdr,bias-t,hackrf,airspy,airspyhf,hydrasdr,elad,rx888,pluto,sdrplay,lime,fobos,decoders,adsb,ais,vdl2,hfdl,aprs,navtex,ism,packet,wefax,sstv,hell,text,meteor,wspr,pi4,js8,time" \
+                    --bin serverrs; \
             cp target/x86_64-unknown-linux-musl/release/serverrs "/serverrs-$level"; \
         done; \
     elif [ "$TARGETARCH" = "arm64" ]; then \
         rustup target add aarch64-unknown-linux-musl; \
         for cpu in cortex-a53 cortex-a72 cortex-a76; do \
             RUSTFLAGS="-C target-cpu=$cpu" \
-                cargo build --release --target aarch64-unknown-linux-musl --all-features --bin serverrs; \
+                cargo build --release --target aarch64-unknown-linux-musl \
+                    --no-default-features \
+                    --features "opus,rtlsdr,bias-t,hackrf,airspy,airspyhf,hydrasdr,elad,rx888,pluto,sdrplay,lime,fobos,decoders,adsb,ais,vdl2,hfdl,aprs,navtex,ism,packet,wefax,sstv,hell,text,meteor,wspr,pi4,js8,time" \
+                    --bin serverrs; \
             cp target/aarch64-unknown-linux-musl/release/serverrs "/serverrs-$cpu"; \
         done; \
     else \
