@@ -5,19 +5,45 @@
 // line by line while the transmission is being received. A completed image
 // stays on screen until the next start tone begins a new one.
 
-import { Component, Show, createEffect, createMemo } from 'solid-js';
+import { Component, For, Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { store } from '../store/index.js';
+import type { WefaxImage } from '~/shared';
 
 const WefaxDisplay: Component = () => {
   let canvasRef: HTMLCanvasElement | undefined;
 
   const image = createMemo(() => store.wefaxImage());
   const status = createMemo(() => store.wefaxStatus());
+  const [history, setHistory] = createSignal<WefaxImage[]>([]);
+  const [picked, setPicked] = createSignal<number | null>(null);
+  let lastImageId = 0;
+
+  const displayImage = () => {
+    const selected = picked();
+    if (selected === null) return image();
+    return history().find((item) => item.imageId === selected) ?? image();
+  };
+
+  // Keep completed charts so the operator can look back at earlier images
+  // while a new transmission is being received.
+  createEffect(() => {
+    const current = image();
+    const id = current?.imageId ?? 0;
+    if (id !== lastImageId) {
+      lastImageId = id;
+      setPicked(null);
+    }
+    if (!current?.complete || current.rows.length === 0) return;
+    setHistory((previous) => {
+      if (previous.some((item) => item.imageId === current.imageId)) return previous;
+      return [current, ...previous].slice(0, 6);
+    });
+  });
 
   const draw = () => {
     const canvas = canvasRef;
     if (!canvas) return;
-    const current = image();
+    const current = displayImage();
     if (!current || current.width === 0 || current.height === 0) {
       const ctx = canvas.getContext('2d');
       if (ctx) {
@@ -62,23 +88,29 @@ const WefaxDisplay: Component = () => {
 
   createEffect(() => {
     // Reading the signals here keeps the effect subscribed to line updates.
-    image();
+    displayImage();
     status();
     draw();
   });
 
+  const subcarrierValid = () => {
+    const hz = status().subcarrierHz;
+    return hz >= 1400 && hz <= 2400;
+  };
+
   const stateLabel = () => {
-    if (!image()) return 'WAITING FOR START TONE';
-    if (image()?.complete) return 'COMPLETE';
+    if (status().receiving && !subcarrierValid()) return 'NO WEFAX SUBCARRIER';
+    if (!displayImage()) return 'WAITING FOR START TONE';
+    if (displayImage()?.complete) return 'COMPLETE';
     if (status().phasing) return 'PHASING';
     return 'RECEIVING';
   };
 
   return (
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
-      <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40 bg-black">
+      <div class="flex-1 min-w-0 min-h-[180px] overflow-auto border-b md:border-b-0 md:border-r border-border/40 bg-black">
         <Show
-          when={image()}
+          when={displayImage()}
           fallback={
             <div class="h-full min-h-[180px] flex flex-col items-center justify-center gap-2 px-6 text-center">
               <span class="text-[9px] font-mono uppercase tracking-[0.18em] text-cyan/70">
@@ -111,22 +143,33 @@ const WefaxDisplay: Component = () => {
         </Show>
       </div>
 
-      <aside class="md:w-[300px] shrink-0 overflow-auto bg-sdr-surface/20">
+      <aside class="md:w-[300px] shrink-0 overflow-auto max-h-[45vh] md:max-h-none bg-sdr-surface/20">
         <div class="p-3 space-y-3">
           <div class="flex items-center justify-between">
             <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">
               WEFAX
             </span>
             <span class={`text-[8px] font-mono uppercase tracking-wider ${
-              image()?.complete ? 'text-green-400' : 'text-amber'
+              status().receiving && !subcarrierValid()
+                ? 'text-red-400'
+                : displayImage()?.complete ? 'text-green-400' : 'text-amber'
             }`}>
               {stateLabel()}
             </span>
           </div>
 
+          <Show when={status().receiving && !subcarrierValid()}>
+            <div class="text-[8px] font-mono text-red-400 border border-red-400/30 bg-red-400/5 rounded-sm px-2 py-1.5 leading-relaxed">
+              Subcarrier {status().subcarrierHz.toFixed(0)} Hz is outside the
+              WEFAX 1500–2300 Hz band. This is probably not a WEFAX signal —
+              check the tuning and the published chart frequency.
+            </div>
+          </Show>
+
           <div class="grid grid-cols-2 gap-x-3 gap-y-2 text-[9px] font-mono">
-            <Metric label="Image" value={image() ? String(image()!.imageId) : '—'} />
-            <Metric label="Lines" value={String(image()?.height ?? 0)} />
+            <Metric label="Image" value={displayImage() ? String(displayImage()!.imageId) : '—'} />
+            <Metric label="Lines" value={String(displayImage()?.height ?? 0)} />
+            <Metric label="Rows" value={String(displayImage()?.rows.length ?? 0)} />
             <Metric label="IOC" value={status().ioc} />
             <Metric label="Rate" value={`${status().lpm} LPM`} />
             <Metric
@@ -151,7 +194,42 @@ const WefaxDisplay: Component = () => {
             </p>
           </div>
 
-          <Show when={image()?.complete}>
+          <Show when={history().length > 0}>
+            <div class="border-t border-border/30 pt-2">
+              <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">
+                Recent charts
+              </div>
+              <div class="flex flex-wrap gap-1">
+                <button
+                  onClick={() => setPicked(null)}
+                  class={`px-1.5 py-0.5 rounded-sm border text-[8px] font-mono ${
+                    picked() === null
+                      ? 'border-cyan/60 text-cyan'
+                      : 'border-border/40 text-text-dim hover:text-text-secondary'
+                  }`}
+                >
+                  Live
+                </button>
+                <For each={history()}>
+                  {(item) => (
+                    <button
+                      onClick={() => setPicked(item.imageId)}
+                      class={`px-1.5 py-0.5 rounded-sm border text-[8px] font-mono tabular-nums ${
+                        picked() === item.imageId
+                          ? 'border-cyan/60 text-cyan'
+                          : 'border-border/40 text-text-dim hover:text-text-secondary'
+                      }`}
+                      title={`${item.height} lines, ${item.ioc}`}
+                    >
+                      #{item.imageId}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
+
+          <Show when={displayImage()?.complete}>
             <p class="text-[9px] font-mono text-green-400/80">
               Chart complete — waiting for the next start tone.
             </p>

@@ -251,3 +251,54 @@ fn unix_secs() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel() -> WefaxChannel {
+        let cfg = DecoderConfig {
+            id: "wefax-test".into(),
+            enabled: true,
+            dongle_id: "d".into(),
+            mode: "wefax".into(),
+            frequency_hz: 0,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        WefaxChannel::build(&cfg, 0.0, 48_000).expect("wefax channel")
+    }
+
+    #[test]
+    fn line_events_carry_width_and_base64_rows() {
+        let mut channel = channel();
+        channel.handle_event(WefaxEvent::Start {
+            ioc: Ioc::I576,
+            lpm: Lpm::L120,
+            auto: true,
+        });
+        channel.handle_event(WefaxEvent::Line {
+            y: 3,
+            gray: vec![0, 1, 127, 255],
+        });
+        channel.handle_event(WefaxEvent::Complete {
+            lines: 4,
+            by_tone: true,
+        });
+
+        let events = channel.take_results();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0]["kind"], "start");
+        assert_eq!(events[0]["width"], Ioc::I576.width());
+        assert_eq!(events[1]["kind"], "line");
+        assert_eq!(events[1]["y"], 3);
+        assert_eq!(events[1]["width"], Ioc::I576.width());
+        let encoded = events[1]["gray"].as_str().expect("base64 row");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("valid base64");
+        assert_eq!(decoded, vec![0, 1, 127, 255]);
+        assert_eq!(events[2]["kind"], "complete");
+        assert_eq!(events[2]["height"], 4);
+    }
+}
