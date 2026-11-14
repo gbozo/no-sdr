@@ -1328,6 +1328,15 @@ const SignalAnalysis: Component = () => {
             <button onClick={resetAnalysis} class="mil-btn text-[8px] px-1.5 py-0.5" title="Clear history and held traces (R)">
               Reset
             </button>
+            <Show when={store.pushServerConfig()?.identifyEnabled !== false}>
+              <button
+                onClick={() => store.setIdentifierOpen(true)}
+                class="mil-btn text-[8px] px-1.5 py-0.5"
+                title="Identify the tuned signal and suggest a decoder"
+              >
+                Identify
+              </button>
+            </Show>
             <button onClick={copyReport} class="mil-btn text-[8px] px-1.5 py-0.5" title="Copy a plain-text measurement report (C)">
               {copied() ? 'Copied' : 'Copy'}
             </button>

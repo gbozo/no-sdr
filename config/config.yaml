@@ -6,6 +6,7 @@ server:
   description: ''
   location: ''
   demoMode: false
+  identifyEnabled: true
   logLevel: info
   fftHistoryFftSize: 4096
   fftHistoryCompression: deflate

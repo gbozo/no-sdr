@@ -605,6 +605,8 @@ const ModeSelector: Component = () => {
     store.setAnalysisPanelOpen(!store.analysisPanelOpen());
   };
 
+  const identifyEnabled = () => store.pushServerConfig()?.identifyEnabled !== false;
+
   return (
     <div class="sdr-panel">
       <div
@@ -708,6 +710,16 @@ const ModeSelector: Component = () => {
               {store.analysisPanelOpen() ? 'ON' : 'OFF'}
             </span>
           </button>
+          <Show when={identifyEnabled()}>
+            <button
+              class="mil-btn flex-row w-full items-center justify-between"
+              onClick={() => store.setIdentifierOpen(true)}
+              title="Capture raw IQ and identify the tuned signal"
+            >
+              <span>Identify Signal</span>
+              <span class="text-[8px] tracking-wider text-text-dim">RF</span>
+            </button>
+          </Show>
         </div>
       </div>
       </Show>

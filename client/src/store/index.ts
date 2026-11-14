@@ -336,6 +336,7 @@ function createStore() {
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [decoderPanelOpen, setDecoderPanelOpen] = createSignal(false);
   const [analysisPanelOpen, setAnalysisPanelOpen] = createSignal(false);
+  const [identifierOpen, setIdentifierOpen] = createSignal(false);
   const [isAdmin, setIsAdmin] = createSignal(false);
   const [adminSection, setAdminSection] = createSignal<'dongles' | 'profiles' | 'server'>('dongles');
   const [meterStyle, setMeterStyle] = persist<'bar' | 'needle'>('meterStyle', 'needle');
@@ -1307,6 +1308,7 @@ function createStore() {
     sidebarOpen, setSidebarOpen,
     decoderPanelOpen, setDecoderPanelOpen,
     analysisPanelOpen, setAnalysisPanelOpen,
+    identifierOpen, setIdentifierOpen,
     isAdmin, setIsAdmin,
     adminSection, setAdminSection,
     meterStyle, setMeterStyle,

@@ -141,6 +141,7 @@ pub struct ServerConfigInfo {
     pub description: String,
     pub location: String,
     pub demo_mode: bool,
+    pub identify_enabled: bool,
 }
 
 /// Generic config-change notification sent as a META message.
@@ -1774,7 +1775,12 @@ impl Manager {
                 m
             }
         };
-        let output_rate = output_rate_for_mode(&mode);
+        let requested_bw = if client.bandwidth() > 0 {
+            client.bandwidth() as i32
+        } else {
+            default_bandwidth_for_mode(&mode)
+        };
+        let output_rate = output_rate_for_mode_bandwidth(&mode, requested_bw);
         let iq_codec = {
             let c = client.iq_codec();
             if c.is_empty() {
@@ -2136,6 +2142,11 @@ impl Manager {
             }
         };
 
+        let meta_bw = if client.bandwidth() > 0 {
+            client.bandwidth() as i32
+        } else {
+            default_bandwidth_for_mode(&mode)
+        };
         let meta = ServerMeta {
             msg_type: "subscribed".to_string(),
             dongle_id: Some(dongle_id),
@@ -2143,7 +2154,7 @@ impl Manager {
             center_freq: Some(profile.center_frequency as f64),
             sample_rate: Some(sample_rate as i64),
             fft_size: Some(profile.fft_size as i64),
-            iq_sample_rate: Some(output_rate_for_mode(&mode) as i64),
+            iq_sample_rate: Some(output_rate_for_mode_bandwidth(&mode, meta_bw) as i64),
             mode: Some(mode),
             tuning_step: Some(profile.tuning_step as i64),
             tune_offset: Some(profile.tune_offset as i64),
@@ -2206,9 +2217,16 @@ impl Manager {
     fn handle_bandwidth(&self, client_id: &str, cmd: &ClientCommand) {
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
-            cp.set_bandwidth(cmd.hz as i32);
+            let bandwidth = cmd.hz as i32;
+            cp.set_bandwidth(bandwidth);
+            if cp.mode == "raw" {
+                let rate = output_rate_for_mode_bandwidth("raw", bandwidth);
+                cp.extractor.set_output_sample_rate(rate);
+                let out_rate = cp.extractor.output_sample_rate();
+                Self::update_chunk_size(&mut cp, out_rate);
+            }
             if let Some(opus) = cp.opus_pipeline.as_mut() {
-                opus.set_bandwidth(cmd.hz as i32);
+                opus.set_bandwidth(bandwidth);
             }
         }
     }
@@ -2220,14 +2238,14 @@ impl Manager {
         };
         let mut cp = cp.lock();
 
-        let rate = output_rate_for_mode(&cmd.mode);
-        cp.extractor.set_output_sample_rate(rate);
-        cp.mode = cmd.mode.clone();
         let bandwidth = if cmd.bandwidth > 0 {
             cmd.bandwidth as i32
         } else {
             default_bandwidth_for_mode(&cmd.mode)
         };
+        let rate = output_rate_for_mode_bandwidth(&cmd.mode, bandwidth);
+        cp.extractor.set_output_sample_rate(rate);
+        cp.mode = cmd.mode.clone();
         cp.set_bandwidth(bandwidth);
         let out_rate = cp.extractor.output_sample_rate();
         Self::update_chunk_size(&mut cp, out_rate);
@@ -2831,7 +2849,7 @@ impl Manager {
                 center_freq: Some(profile.center_frequency as f64),
                 sample_rate: Some(sample_rate as i64),
                 fft_size: Some(profile.fft_size as i64),
-                iq_sample_rate: Some(output_rate_for_mode(&mode) as i64),
+                iq_sample_rate: Some(output_rate_for_mode_bandwidth(&mode, default_bw as i32) as i64),
                 mode: Some(mode.clone()),
                 tuning_step: Some(profile.tuning_step as i64),
                 ..Default::default()
@@ -2850,7 +2868,7 @@ impl Manager {
         };
         for (_, cp) in pipelines {
             let mut cp = cp.lock();
-            let rate = output_rate_for_mode(&mode);
+            let rate = output_rate_for_mode_bandwidth(&mode, default_bw as i32);
             cp.extractor.set_output_sample_rate(rate);
             cp.mode = mode.clone();
             cp.set_bandwidth(default_bandwidth_for_mode(&mode));
@@ -2975,6 +2993,7 @@ impl Manager {
             description: cfg.server.description.clone(),
             location: cfg.server.location.clone(),
             demo_mode: cfg.server.demo_mode,
+            identify_enabled: cfg.server.identify_enabled,
         }
     }
 
@@ -3267,6 +3286,17 @@ pub fn output_rate_for_mode(mode: &str) -> i32 {
     }
 }
 
+/// Output IQ rate for a client mode. Raw is special: its bandwidth slider is
+/// meaningful up to 300 kHz and should widen the IQ sub-band itself, not just
+/// the anti-alias filter.
+pub fn output_rate_for_mode_bandwidth(mode: &str, bandwidth: i32) -> i32 {
+    if mode == "raw" {
+        bandwidth.clamp(1_000, 300_000)
+    } else {
+        output_rate_for_mode(mode)
+    }
+}
+
 /// Default demodulation bandwidth for a mode.
 pub fn default_bandwidth_for_mode(mode: &str) -> i32 {
     match mode {
@@ -3338,6 +3368,11 @@ mod tests {
         assert_eq!(output_rate_for_mode("usb"), 24_000);
         assert_eq!(output_rate_for_mode("cw"), 12_000);
         assert_eq!(output_rate_for_mode("unknown"), 48_000);
+
+        assert_eq!(output_rate_for_mode_bandwidth("raw", 300_000), 300_000);
+        assert_eq!(output_rate_for_mode_bandwidth("raw", 1_000), 1_000);
+        assert_eq!(output_rate_for_mode_bandwidth("raw", 900_000), 300_000);
+        assert_eq!(output_rate_for_mode_bandwidth("nfm", 300_000), 48_000);
 
         assert_eq!(default_bandwidth_for_mode("wfm"), 200_000);
         assert_eq!(default_bandwidth_for_mode("nfm"), 12_500);

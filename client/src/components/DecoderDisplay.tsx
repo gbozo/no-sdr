@@ -263,8 +263,17 @@ const DecoderDisplay: Component = () => {
             )}
           </For>
         </div>
-        <Show when={store.decoderMode()}>
-          <div class="flex items-center gap-1 shrink-0">
+        <div class="ml-auto flex items-center gap-1 shrink-0">
+          <Show when={store.pushServerConfig()?.identifyEnabled !== false}>
+            <button
+              onClick={() => store.setIdentifierOpen(true)}
+              class="mil-btn text-[8px] px-1.5 py-0.5"
+              title="Capture raw IQ and identify the tuned signal"
+            >
+              Identify
+            </button>
+          </Show>
+          <Show when={store.decoderMode()}>
             <button
               onClick={() => setShowInfo((v) => !v)}
               class={`mil-btn text-[8px] px-1.5 py-0.5 ${showInfo() ? 'active border-cyan text-cyan' : ''}`}
@@ -278,8 +287,8 @@ const DecoderDisplay: Component = () => {
             >
               Off
             </button>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </div>
 
       <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2() && !isHfdl() && !isAprs() && !isNavtex() && !isPacket() && !isIsm() && !isWefax() && !isSstv() && !isHell() && !isText() && !isJs8()}>

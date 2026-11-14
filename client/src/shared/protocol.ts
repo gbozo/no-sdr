@@ -156,6 +156,7 @@ export interface PushServerConfig {
   description: string;
   location: string;
   demoMode: boolean;
+  identifyEnabled: boolean;
 }
 
 export type ServerMeta =

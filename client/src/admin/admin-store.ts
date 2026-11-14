@@ -114,6 +114,7 @@ export interface ServerConfig {
   description: string;
   location: string;
   demoMode: boolean;
+  identifyEnabled: boolean;
   fftHistoryFftSize: number;
   fftHistoryCompression: string;
   allowedFftCodecs: string[];
@@ -135,6 +136,7 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   description: '',
   location: '',
   demoMode: false,
+  identifyEnabled: true,
   fftHistoryFftSize: 1024,
   fftHistoryCompression: 'deflate',
   allowedFftCodecs: ['none', 'adpcm', 'deflate', 'deflate-floor'],
@@ -263,6 +265,7 @@ function createAdminStore() {
           description: data.description ?? '',
           location: data.location ?? '',
           demoMode: data.demoMode ?? false,
+          identifyEnabled: data.identifyEnabled ?? true,
           fftHistoryFftSize: data.fftHistoryFftSize ?? DEFAULT_SERVER_CONFIG.fftHistoryFftSize,
           fftHistoryCompression: data.fftHistoryCompression ?? DEFAULT_SERVER_CONFIG.fftHistoryCompression,
           allowedFftCodecs: data.allowedFftCodecs ?? DEFAULT_SERVER_CONFIG.allowedFftCodecs,

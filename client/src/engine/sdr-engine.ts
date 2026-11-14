@@ -275,6 +275,11 @@ export class SdrEngine {
   private bwLastUpdate = performance.now();
   private bwHistoryMax = 30; // keep 30 seconds of history
 
+  // Short raw-IQ capture for the client-side signal identifier.
+  private iqCaptureChunks: Int16Array[] = [];
+  private iqCaptureActive = false;
+  private iqCaptureUntil = 0;
+
   // Callbacks for decoder data and meta messages
   onDecoderData?: (type: string, data: unknown) => void;
   onMetaMessage?: (meta: ServerMeta) => void;
@@ -1042,6 +1047,14 @@ export class SdrEngine {
    */
   private processIqData(iqData: Int16Array): void {
     this.bwIqSamples += iqData.length / 2;
+
+    if (this.iqCaptureActive) {
+      if (performance.now() >= this.iqCaptureUntil) {
+        this.iqCaptureActive = false;
+      } else if (this.iqCaptureChunks.length < 300) {
+        this.iqCaptureChunks.push(iqData.slice());
+      }
+    }
 
     // Squelch gate: if squelch is set and signal is below threshold, mute audio.
     // During grace period after tune/mode change, bypass squelch so the
@@ -2252,6 +2265,26 @@ export class SdrEngine {
   getLatestFftFrame(): Float32Array | null {
     const frames = this.fftBuffer.getFrames();
     return frames.length ? frames[frames.length - 1] : null;
+  }
+
+  /** Begin a short raw-IQ capture for client-side signal identification. */
+  startIqCapture(durationMs: number): void {
+    this.iqCaptureChunks = [];
+    this.iqCaptureActive = true;
+    this.iqCaptureUntil = performance.now() + Math.max(500, durationMs);
+  }
+
+  /** Drain the IQ captured since startIqCapture (or the last drain). */
+  takeIqCapture(): Int16Array[] {
+    const chunks = this.iqCaptureChunks;
+    this.iqCaptureChunks = [];
+    this.iqCaptureActive = false;
+    return chunks;
+  }
+
+  /** Stop capturing without draining. */
+  stopIqCapture(): void {
+    this.iqCaptureActive = false;
   }
 
   /** Whether audio has been initialised (user has clicked to enable). */

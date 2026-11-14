@@ -9,6 +9,7 @@ import { engine } from './engine/sdr-engine.js';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
 import DecoderDisplay from './components/DecoderDisplay.js';
 import SignalAnalysis from './components/SignalAnalysis.js';
+import SignalIdentifier from './components/SignalIdentifier.js';
 import FrequencyDisplay from './components/FrequencyDisplay.js';
 import ControlPanel from './components/ControlPanel.js';
 import ConnectionOverlay from './components/ConnectionOverlay.js';
@@ -24,6 +25,11 @@ const App: Component = () => {
   const stationLocation = () => station()?.location?.trim() ?? '';
   const stationDescription = () => station()?.description?.trim() ?? '';
   const hasStationInfo = () => !!(stationCallsign() || stationLocation() || stationDescription());
+  const identifyEnabled = () => station()?.identifyEnabled !== false;
+
+  createEffect(() => {
+    if (!identifyEnabled()) store.setIdentifierOpen(false);
+  });
 
   createEffect(() => {
     const label = stationCallsign() || stationLocation();
@@ -251,6 +257,9 @@ const App: Component = () => {
     <div class="min-h-screen md:h-screen md:overflow-hidden flex flex-col bg-sdr-base text-text-primary select-none">
       {/* Toast notifications — fixed overlay, doesn't affect layout */}
       <ToastStack />
+      <Show when={store.identifierOpen() && identifyEnabled()}>
+        <SignalIdentifier onClose={() => store.setIdentifierOpen(false)} />
+      </Show>
 
       {/* Top Bar */}
       <header class="bg-sdr-surface border-b border-border flex items-center px-3 md:px-4 relative shrink-0 min-h-[44px] flex-wrap gap-y-1 py-1 md:py-0 md:h-11">

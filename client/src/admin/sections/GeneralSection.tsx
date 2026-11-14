@@ -139,6 +139,15 @@ const GeneralSection: Component = () => {
                 onChange={(v) => adminStore.updateServerConfigField('demoMode', v)}
               />
             </FieldRow>
+            <FieldRow
+              label="Signal Identifier"
+              help="Allow clients to capture raw IQ and identify the tuned signal. Disabled hides the Identify controls."
+            >
+              <ToggleInput
+                value={cfg().identifyEnabled}
+                onChange={(v) => adminStore.updateServerConfigField('identifyEnabled', v)}
+              />
+            </FieldRow>
           </SettingsGroup>
 
           {/* Allowed Codecs */}

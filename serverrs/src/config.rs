@@ -150,6 +150,10 @@ pub struct ServerConfig {
     pub location: String,
     #[serde(default)]
     pub demo_mode: bool,
+    /// Allow clients to run the client-side signal identifier. Disabled hides
+    /// the Identify controls and closes any open identifier panel.
+    #[serde(default = "default_true")]
+    pub identify_enabled: bool,
     /// Tracing/log level: trace, debug, info, warn, error (or off).
     /// `LOG_LEVEL` in the environment overrides this.
     #[serde(default)]
@@ -189,6 +193,7 @@ impl Default for ServerConfig {
             description: String::new(),
             location: String::new(),
             demo_mode: false,
+            identify_enabled: true,
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
@@ -520,6 +525,10 @@ pub fn is_power_of_two(n: i32) -> bool {
     n > 0 && (n & (n - 1)) == 0
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Default bookmarks directory: `<dir of config>/../bookmarks`.
 pub fn bookmarks_dir(cfg_path: &Path) -> PathBuf {
     let dir = cfg_path.parent().unwrap_or_else(|| Path::new("."));
@@ -606,6 +615,7 @@ mod tests {
         );
         assert_eq!(cfg.server.port, 1234);
         assert_eq!(cfg.server.host, "0.0.0.0");
+        assert!(cfg.server.identify_enabled);
         assert_eq!(cfg.server.allowed_fft_codecs, DEFAULT_FFT_CODECS);
         let p = &cfg.dongles[0].profiles[0];
         assert_eq!(p.fft_size, 4096);
