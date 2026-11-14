@@ -53,14 +53,25 @@ pub struct RtlSdrSource {
 }
 
 impl RtlSdrSource {
-    /// Opens the dongle selected by serial (preferred) or USB index.
+    /// Opens the dongle selected by serial (preferred) or USB index at the
+    /// configured sample rate.
     ///
     /// The device is opened here, on the manager's blocking task, and then
     /// moved into the stream thread by [`Source::run`]. No register access
     /// happens concurrently with the stream, so the one-thread invariant holds.
-    pub fn open(device_index: i32, serial: &str) -> Result<Self> {
+    ///
+    /// The rate must be the manager's resolved dongle rate rather than the
+    /// driver default: opening at 2.4 MSPS and retuning only once the command
+    /// loop starts both misreports the stream rate in logs and makes a dongle
+    /// that cannot sustain 2.4 MSPS fail before the user's rate is applied.
+    pub fn open(device_index: i32, serial: &str, sample_rate_hz: i32) -> Result<Self> {
         let mut cfg = RtlSdrConfig {
             device_index: device_index.max(0) as usize,
+            sample_rate_hz: if sample_rate_hz > 0 {
+                sample_rate_hz as f64
+            } else {
+                RtlSdrConfig::default().sample_rate_hz
+            },
             ..RtlSdrConfig::default()
         };
         let serial = serial.trim();
@@ -122,6 +133,12 @@ impl Source for RtlSdrSource {
 
     fn command_handle(&self) -> Option<CommandHandle> {
         Some(self.cmd_handle.clone())
+    }
+
+    fn sample_rate_hz(&self) -> Option<u32> {
+        self.device
+            .as_ref()
+            .map(|dev| dev.sample_rate().round() as u32)
     }
 
     fn description(&self) -> String {
@@ -311,8 +328,15 @@ fn apply_command(
 ) -> Result<()> {
     match cmd {
         0x01 => dev.set_center(value as f64)?,
+        // Re-programming the rate also moves the tuner filter, the IF and the
+        // LO, so leave the hardware alone when the command matches what it is
+        // already producing (the manager sends the initial rate again after
+        // opening the device at that same rate).
         0x02 => {
-            dev.set_sample_rate(value as f64)?;
+            let requested = value as f64;
+            if (dev.sample_rate() - requested).abs() >= 1.0 {
+                dev.set_sample_rate(requested)?;
+            }
         }
         // rtl_tcp gain mode: 0 = automatic tuner gain, 1 = manual.
         0x03 => {

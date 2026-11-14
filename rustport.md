@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.15.0)
+## Current status (2.16.0)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -40,7 +40,14 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.15.0`. It completes the requested decoder
+- Latest published release: `v2.16.0`. Client: Signal Analysis workspace
+  (zoom, markers, channel power, AM/AMS carrier analysis, drift, exports),
+  per-decoder reference cards with typical frequencies and waterfall previews,
+  station identity in the header, responsive decoder picker, and progressive
+  Adaptive NR. Server: dongle-rate capping, full decoder bookmark-mode mapping
+  (including `fax`/`sitorb`/`rtty450` aliases), and bookmark implementation
+  coverage for every decoder.
+- Previous release: `v2.15.0`. It completes the requested decoder
   suite with HFDL, APRS, NAVTEX, ISM, AX.25 packet, WEFAX, SSTV,
   Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, MSK144/FSK441, FST4/Q65,
   JT65/JT9, WSPR/PI4, JS8, DCF77 and ALS162 — all with
@@ -121,6 +128,7 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 - 2026-11-13: FST4 and Q65 weak-signal decoders added. mfsk-core registry sub-modes (FST4-15…1800, Q65-15A…300A) map through the shared 12 kHz slot worker; the table reports text, RF/audio frequency, DT, SNR and slot period, with the same foreground/background and SQLite path as the other slotted modes.
 - 2026-11-13: WSPR (120 s mfsk-core slots) and PI4 (one-minute 4-FSK beacon search, local adaptation of `sdroxide-digi`) added to the weak-signal workspace. WSPR rows show text/frequency/DT/SNR; PI4 rows add variant, fit and hard-error count.
 - 2026-11-13: MSK144 and FSK441 meteor-scatter decoders added. MSK144 uses mfsk-core's 15 s sliding-window receiver at 12 kHz; FSK441 adapts `sdroxide-dsp`'s 11 025 Hz ping search with 15/30 s periods. Burst table shows time, text, RF, DT, SNR, duration and confidence; foreground/background operation.
+- 2026-11-14: Version 2.16.0. Added the Signal Analysis workspace (zoomed spectrum/waterfall, draggable A/B markers, measurement bandwidth, channel power/C/N, occupied bandwidth, AM/AMS carrier/sideband/sync-lock metrics, peak drift, activity/event log, trace averaging/min/max hold, history scrub, dBm calibration, CSV/PNG export), decoder reference cards with typical frequencies and illustrative waterfall previews, station identity header/meta, responsive decoder selection, progressive Adaptive NR strength, dongle-rate capping, and complete decoder bookmark-mode mapping.
 - 2026-11-13: PSK31 and RTTY added to the text-mode decoder family. Local `sdroxide-dsp` PSK/RTTY receivers adapted; USB audio channel at 8 kHz, BPSK31 Varicode, RTTY Baudot with configurable baud/shift/AFC/reverse, streaming text and status (baud, shift, AFC, tone sense) in the shared text workspace.
 - 2026-11-13: Hellschreiber decoder added. `sdroxide-dsp` HellRx/hell font adapted locally; USB audio channel at 12 kHz, Feld/Slow/X5/X9/FSK245/FSK105/Hell80 variants, print-sync/slant-aware dot raster, base64 column transport and a scrolling canvas panel; foreground/background operation.
 - 2026-11-13: Olivia/THOR/FSQ text decoders added. `sdroxide-dsp` MFSK/Olivia/THOR/FSQ receivers and Varicode tables adapted locally; USB audio channel resampled to 8 kHz, configurable Olivia tones/bandwidth and THOR/FSQ baud, streamed text chunks and status; shared text workspace with running log and chunk table.

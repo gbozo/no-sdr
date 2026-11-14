@@ -1445,6 +1445,11 @@ class SamDemodulator implements Demodulator {
     return this.locked;
   }
 
+  /** Smoothed PLL lock confidence (0 = unlocked, 1 = locked). */
+  getLockLevel(): number {
+    return this.lockLevel;
+  }
+
   process(iq: Int16Array): Float32Array {
     const n = iq.length >> 1;
     if (n > this.outputBuffer.length) {

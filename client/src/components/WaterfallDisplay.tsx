@@ -6,6 +6,7 @@ import { Component, onMount, onCleanup, Show, createSignal, For, createEffect, c
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 import { bands, tagColor, TAG_BORDER_COLORS } from '../store/bandplan.js';
+import { isDecoderMode, normalizeBookmarkMode } from '~/shared';
 
 const WaterfallDisplay: Component = () => {
   let waterfallRef!: HTMLCanvasElement;
@@ -1230,12 +1231,12 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
                       if (!engine.isAudioInitialized) await engine.initAudio();
                       const ab = store.adminBookmarks().find(b => b.frequency === p.hz && b.name === p.label);
                       if (ab?.mode) {
-                        const decoderMode = ['adsb', 'acars', 'ais', 'vdl2', 'ft8', 'ft4', 'ft2'].includes(ab.mode);
-                        if (decoderMode) {
-                          engine.setDecoder(ab.mode);
+                        const mode = normalizeBookmarkMode(ab.mode);
+                        if (isDecoderMode(mode)) {
+                          engine.setDecoder(mode);
                         } else {
                           engine.setDecoder('');
-                          engine.setMode(ab.mode as import('../shared/index.js').DemodMode);
+                          engine.setMode(mode as import('../shared/index.js').DemodMode);
                         }
                       }
                       if (ab?.bandwidth) engine.setBandwidth(ab.bandwidth);

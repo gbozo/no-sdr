@@ -41,7 +41,7 @@ import { AudioEngine } from './audio.js';
 import { FftFrameBuffer } from './fft-frame-buffer.js';
 import { getDemodulator, resetDemodulator, type Demodulator, type StereoAudio } from './demodulators.js';
 import type { RdsData } from './demodulators.js';
-import { LmsAnr, anrGainForStrength } from './lms-anr.js';
+import { LmsAnr } from './lms-anr.js';
 import { HangAgc, AGC_PRESETS } from './agc.js';
 import { RumbleFilter, AutoNotch, HiBlendFilter } from './audio-filters.js';
 import { store } from '../store/index.js';
@@ -1736,6 +1736,7 @@ export class SdrEngine {
     // Reset noise reduction state for new mode
     this.anr.reset();
     this.anr.setPreset(this.getAnrPresetForMode(m));
+    this.anr.setStrength(store.nrStrength());
     // Update AGC preset for new mode
     this.agc.setPreset(this.getAgcPresetForMode(m));
     this.agc.reset();
@@ -1753,6 +1754,10 @@ export class SdrEngine {
   /** Select a foreground digital decoder (empty string disables it). */
   setDecoder(mode: string): void {
     const next = mode.trim().toLowerCase();
+    // Selecting a decoder from a bookmark or the workspace toolbar should
+    // reveal the decoder workspace; the sidebar toggle is what hides it again.
+    // Keep Signal Analysis open so both workspaces can be shown together.
+    if (next) store.setDecoderPanelOpen(true);
     store.setDecoderMode(next);
     store.clearDecoderMessages();
     store.clearAdsb();
@@ -1879,7 +1884,7 @@ export class SdrEngine {
 
   setNrStrength(strength: number): void {
     store.setNrStrength(strength);
-    this.anr.setOptions({ gain: anrGainForStrength(strength) });
+    this.anr.setStrength(strength);
   }
 
   setNbEnabled(enabled: boolean): void {
@@ -2273,6 +2278,13 @@ export class SdrEngine {
     return -1;
   }
 
+  /** Carrier/PLL lock confidence for synchronous demodulators (SAM). */
+  getSyncLock(): number {
+    const d = this.demodulator as any;
+    if (typeof d?.getLockLevel === 'function') return d.getLockLevel() as number;
+    return -1;
+  }
+
   /**
    * Seek the waterfall to `offset` frames back from live (0 = live).
    * Redraws the waterfall from the client buffer window.
@@ -2380,7 +2392,7 @@ export class SdrEngine {
     // Restore LMS ANR state
     this.anr.setPreset(this.getAnrPresetForMode(store.mode()));
     this.anr.setEnabled(store.nrEnabled());
-    this.anr.setOptions({ gain: anrGainForStrength(store.nrStrength()) });
+    this.anr.setStrength(store.nrStrength());
     // Restore AGC settings from store
     this.agc.setPreset(this.getAgcPresetForMode(store.mode()));
     if (store.agcDecayMs()) {

@@ -4,22 +4,27 @@
 
 import { Component, createSignal, For, Show } from 'solid-js';
 import { adminStore, Bookmark } from '../admin-store';
-import { DEMOD_MODES } from '../../shared/modes';
+import { DEMOD_MODES, DECODER_MODE_IDS, DIGITAL_MODES } from '../../shared/modes';
 import { formatFrequency } from '../../shared/modes';
 
 type DemodMode = keyof typeof DEMOD_MODES;
 
+/** Wideband modes need a wider bookmark filter than their decoder bandwidth. */
+const DECODER_BOOKMARK_BW: Partial<Record<(typeof DECODER_MODE_IDS)[number], number>> = {
+  adsb: 2_400_000,
+  ism: 2_400_000,
+};
+
 /// Decoder modes a bookmark can restore. These are stored in the same `mode`
 /// string as demod modes; the public bookmark API reports them implemented.
-const DECODER_BOOKMARK_MODES = [
-  { id: 'adsb', label: 'ADS-B — 1090 MHz', defaultBandwidth: 2400000 },
-  { id: 'acars', label: 'ACARS — VHF datalink', defaultBandwidth: 6000 },
-  { id: 'ais', label: 'AIS — Marine VHF 162 MHz', defaultBandwidth: 25000 },
-  { id: 'vdl2', label: 'VDL2 — VHF datalink 136.8 MHz', defaultBandwidth: 25000 },
-  { id: 'ft8', label: 'FT8', defaultBandwidth: 3000 },
-  { id: 'ft4', label: 'FT4', defaultBandwidth: 3000 },
-  { id: 'ft2', label: 'FT2', defaultBandwidth: 3000 },
-] as const;
+const DECODER_BOOKMARK_MODES = DECODER_MODE_IDS.map((id) => {
+  const info = DIGITAL_MODES[id];
+  return {
+    id,
+    label: `${info.name} — ${formatFrequency(info.typicalFrequency)}`,
+    defaultBandwidth: DECODER_BOOKMARK_BW[id] ?? info.bandwidth,
+  };
+});
 
 // ---- Helpers ----
 function generateId(): string {

@@ -587,6 +587,9 @@ const DongleEditor: Component<{
                       </For>
                     </select>
                   </Show>
+                  <span class="text-[8px] font-mono text-text-dim mt-0.5 block">
+                    Device initialisation rate; profiles are capped at this.
+                  </span>
                 </FieldGroup>
                 <Show when={!isAirspyFamily(sourceType()) && !isAirspyHf(sourceType()) && !isElad(sourceType()) && !isRx888(sourceType()) && !isPluto(sourceType()) && !isVendorLibrarySource(sourceType())}>
                   <FieldGroup label="PPM Correction">
@@ -1256,6 +1259,7 @@ const ProfileEditor: Component<{
   const [confirmDelete, setConfirmDelete] = createSignal(false);
   const dongleType = () => adminStore.getSelectedDongle()?.source?.type;
   const dongleSettings = () => adminStore.getSelectedDongle()?.source?.settings;
+  const dongleRate = () => adminStore.getSelectedDongle()?.sampleRate || 0;
 
   function update<K extends keyof DongleProfile>(key: K, value: DongleProfile[K]) {
     setLocal(prev => ({ ...prev, [key]: value }));
@@ -1335,6 +1339,13 @@ const ProfileEditor: Component<{
                 {(rate) => <option value={String(rate)}>{formatSampleRate(rate)}</option>}
               </For>
             </select>
+            <span class="text-[8px] font-mono text-text-dim mt-0.5 block">
+              {dongleRate() <= 0
+                ? 'No dongle limit configured; the profile rate is used.'
+                : (local().sampleRate || 0) > dongleRate()
+                  ? `Capped at the dongle rate (${formatSampleRate(dongleRate())})`
+                  : `Dongle limit: ${formatSampleRate(dongleRate())}`}
+            </span>
           </FieldGroup>
           <FieldGroup label="FFT Size">
             <select value={String(local().fftSize || 2048)}

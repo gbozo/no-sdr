@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    let source = tokio::task::spawn_blocking(|| RtlSdrSource::open(0, ""))
+    let source = tokio::task::spawn_blocking(|| RtlSdrSource::open(0, "", 2_400_000))
         .await
         .context("open task")??;
     println!("opened: {}", Source::description(&source));

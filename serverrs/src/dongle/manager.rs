@@ -65,10 +65,30 @@ pub const STATUS_ERROR: &str = "error";
 
 const MAX_RETRIES: i32 = 5;
 const MAX_ADMIN_AUTH_FAILURES: u32 = 5;
+/// Conservative rate used only when neither the dongle nor a profile has one.
+const DEFAULT_SAMPLE_RATE: i32 = 1_000_000;
 
 fn retry_backoff(attempt: i32) -> Duration {
     let secs = 1u64 << attempt.clamp(0, 4);
     Duration::from_secs(secs.min(16))
+}
+
+/// Sample rate a dongle/profile pair actually streams at.
+///
+/// The dongle-level rate is the hardware ceiling: it is what the device is
+/// initialised with, and a profile may ask for a narrower span but never a
+/// wider one. A missing dongle rate falls back to the profile rate, then to a
+/// conservative 1 MSPS. This keeps a profile from preventing the dongle from
+/// starting on hardware that cannot sustain the profile's rate.
+fn effective_sample_rate(dongle_rate: i32, profile_rate: i32) -> i32 {
+    let ceiling = (dongle_rate > 0).then_some(dongle_rate);
+    let requested = (profile_rate > 0).then_some(profile_rate);
+    match (ceiling, requested) {
+        (Some(dongle), Some(profile)) => profile.min(dongle),
+        (Some(dongle), None) => dongle,
+        (None, Some(profile)) => profile,
+        (None, None) => DEFAULT_SAMPLE_RATE,
+    }
 }
 
 /// Lifecycle state of a dongle.
@@ -538,13 +558,15 @@ impl Manager {
             .cloned()
             .ok_or_else(|| anyhow!("dongle {id} has no profiles"))?;
 
-        let sample_rate = if profile.sample_rate > 0 {
-            profile.sample_rate
-        } else if dcfg.sample_rate > 0 {
-            dcfg.sample_rate
-        } else {
-            2_400_000
-        };
+        let sample_rate = effective_sample_rate(dcfg.sample_rate, profile.sample_rate);
+        if dcfg.sample_rate > 0 && profile.sample_rate > dcfg.sample_rate {
+            info!(
+                id = %id,
+                profile_rate = profile.sample_rate,
+                dongle_rate = dcfg.sample_rate,
+                "profile sample rate capped to the dongle rate"
+            );
+        }
 
         let fft_size = if profile.fft_size > 0 {
             profile.fft_size as usize
@@ -669,13 +691,7 @@ impl Manager {
             "creating dongle source"
         );
 
-        let sample_rate = if profile.sample_rate > 0 {
-            profile.sample_rate
-        } else if dcfg.sample_rate > 0 {
-            dcfg.sample_rate
-        } else {
-            2_400_000
-        };
+        let sample_rate = effective_sample_rate(dcfg.sample_rate, profile.sample_rate);
 
         match source_type.as_str() {
             "demo" => {
@@ -767,7 +783,7 @@ impl Manager {
                         "opening local USB rtlsdr"
                     );
                     let source = tokio::task::spawn_blocking(move || {
-                        RtlSdrSource::open(device_index, &serial)
+                        RtlSdrSource::open(device_index, &serial, sample_rate)
                     })
                     .await
                     .map_err(|e| anyhow!("local rtlsdr open task failed: {e}"))??;
@@ -1131,9 +1147,8 @@ impl Manager {
     ) {
         let _ =
             cmd.set_frequency((profile.center_frequency + profile.oscillator_offset as i64) as u32);
-        if profile.sample_rate > 0 {
-            let _ = cmd.set_sample_rate(profile.sample_rate as u32);
-        }
+        let sample_rate = effective_sample_rate(dcfg.sample_rate, profile.sample_rate);
+        let _ = cmd.set_sample_rate(sample_rate as u32);
         if dcfg.ppm != 0 {
             let _ = cmd.set_frequency_correction(dcfg.ppm as u32);
         }
@@ -1772,11 +1787,7 @@ impl Manager {
         if tune_offset == 0 {
             tune_offset = profile.tune_offset;
         }
-        let input_rate = if profile.sample_rate > 0 {
-            profile.sample_rate
-        } else {
-            2_400_000
-        };
+        let input_rate = ad.sample_rate.load(Ordering::Relaxed).max(1);
         #[cfg(feature = "decoders")]
         let center_hz = profile.center_frequency + profile.oscillator_offset as i64;
         #[cfg(feature = "decoders")]
@@ -2109,8 +2120,11 @@ impl Manager {
             cp.lock().dongle_id = dongle_id.clone();
         }
 
-        let profile = match self.dongles.read().get(&dongle_id) {
-            Some(d) => d.profile.read().clone(),
+        let (profile, sample_rate) = match self.dongles.read().get(&dongle_id) {
+            Some(d) => (
+                d.profile.read().clone(),
+                d.sample_rate.load(Ordering::Relaxed).max(1),
+            ),
             None => return,
         };
         let mode = {
@@ -2127,7 +2141,7 @@ impl Manager {
             dongle_id: Some(dongle_id),
             profile_id: Some(profile.id.clone()),
             center_freq: Some(profile.center_frequency as f64),
-            sample_rate: Some(profile.sample_rate as i64),
+            sample_rate: Some(sample_rate as i64),
             fft_size: Some(profile.fft_size as i64),
             iq_sample_rate: Some(output_rate_for_mode(&mode) as i64),
             mode: Some(mode),
@@ -2727,20 +2741,25 @@ impl Manager {
             .find(|p| p.id == profile_id)
             .cloned()
             .ok_or_else(|| anyhow!("profile {profile_id} not found in dongle {dongle_id}"))?;
+        let sample_rate = effective_sample_rate(dcfg.sample_rate, profile.sample_rate);
+        if dcfg.sample_rate > 0 && profile.sample_rate > dcfg.sample_rate {
+            info!(
+                dongle = %dongle_id,
+                profile_rate = profile.sample_rate,
+                dongle_rate = dcfg.sample_rate,
+                "profile sample rate capped to the dongle rate"
+            );
+        }
 
         if let Some(cmd) = &ad.command {
             let freq = (profile.center_frequency + profile.oscillator_offset as i64) as u32;
             let _ = cmd.set_frequency(freq);
-            if profile.sample_rate > 0
-                && profile.sample_rate != ad.sample_rate.load(Ordering::Relaxed)
-            {
-                match cmd.set_sample_rate(profile.sample_rate as u32) {
-                    Ok(()) => ad
-                        .sample_rate
-                        .store(profile.sample_rate, Ordering::Relaxed),
+            if sample_rate != ad.sample_rate.load(Ordering::Relaxed) {
+                match cmd.set_sample_rate(sample_rate as u32) {
+                    Ok(()) => ad.sample_rate.store(sample_rate, Ordering::Relaxed),
                     Err(e) => warn!(
                         dongle = %dongle_id,
-                        rate = profile.sample_rate,
+                        rate = sample_rate,
                         error = %e,
                         "profile sample rate could not be applied"
                     ),
@@ -2769,13 +2788,6 @@ impl Manager {
         }
 
         if profile.fft_size > 0 {
-            let sample_rate = if profile.sample_rate > 0 {
-                profile.sample_rate
-            } else if dcfg.sample_rate > 0 {
-                dcfg.sample_rate
-            } else {
-                2_400_000
-            };
             let fft_fps = if profile.fft_fps > 0 {
                 profile.fft_fps
             } else {
@@ -2798,14 +2810,7 @@ impl Manager {
 
         *ad.profile.write() = profile.clone();
         if dcfg.iq_correction {
-            let rate = if profile.sample_rate > 0 {
-                profile.sample_rate
-            } else if dcfg.sample_rate > 0 {
-                dcfg.sample_rate
-            } else {
-                2_400_000
-            };
-            *ad.iq_correct.lock() = Some(IqCorrect::new(rate as f64, 10.0, true));
+            *ad.iq_correct.lock() = Some(IqCorrect::new(sample_rate as f64, 10.0, true));
         } else {
             *ad.iq_correct.lock() = None;
         }
@@ -2824,7 +2829,7 @@ impl Manager {
                 dongle_id: Some(dongle_id.to_string()),
                 profile_id: Some(profile.id.clone()),
                 center_freq: Some(profile.center_frequency as f64),
-                sample_rate: Some(profile.sample_rate as i64),
+                sample_rate: Some(sample_rate as i64),
                 fft_size: Some(profile.fft_size as i64),
                 iq_sample_rate: Some(output_rate_for_mode(&mode) as i64),
                 mode: Some(mode.clone()),
@@ -3147,11 +3152,7 @@ impl Manager {
             .cloned()
             .ok_or_else(|| anyhow!("dongle {dongle_id} is not running"))?;
         let profile = ad.profile.read().clone();
-        let sample_rate = if profile.sample_rate > 0 {
-            profile.sample_rate
-        } else {
-            2_400_000
-        };
+        let sample_rate = ad.sample_rate.load(Ordering::Relaxed).max(1);
         self.recorder
             .start(dongle_id, profile.center_frequency, sample_rate)
     }
@@ -3342,6 +3343,19 @@ mod tests {
         assert_eq!(default_bandwidth_for_mode("nfm"), 12_500);
         assert_eq!(default_bandwidth_for_mode("am-stereo"), 10_000);
         assert_eq!(default_bandwidth_for_mode("cw"), 1_500);
+    }
+
+    #[test]
+    fn dongle_rate_caps_profile_rate() {
+        // The dongle rate is the hardware ceiling.
+        assert_eq!(effective_sample_rate(1_024_000, 2_400_000), 1_024_000);
+        // A profile may use a narrower span than the dongle supports.
+        assert_eq!(effective_sample_rate(2_400_000, 1_024_000), 1_024_000);
+        // Missing values fall back in order: profile, dongle, driver default.
+        assert_eq!(effective_sample_rate(2_400_000, 0), 2_400_000);
+        assert_eq!(effective_sample_rate(0, 1_024_000), 1_024_000);
+        assert_eq!(effective_sample_rate(0, 0), 1_000_000);
+        assert_eq!(effective_sample_rate(240, 480), 240);
     }
 
     #[test]

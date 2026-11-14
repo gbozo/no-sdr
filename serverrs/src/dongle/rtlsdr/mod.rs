@@ -82,7 +82,7 @@ pub struct RtlSdrSource;
 
 #[cfg(not(feature = "rtlsdr"))]
 impl RtlSdrSource {
-    pub fn open(_device_index: i32, _serial: &str) -> anyhow::Result<Self> {
+    pub fn open(_device_index: i32, _serial: &str, _sample_rate_hz: i32) -> anyhow::Result<Self> {
         anyhow::bail!("local rtlsdr support is not compiled in (build with --features rtlsdr)")
     }
 }

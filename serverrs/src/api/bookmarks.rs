@@ -27,9 +27,36 @@ fn is_zero_i32(v: &i32) -> bool {
     *v == 0
 }
 
+/// Canonical mode id for a config/bookmark value.
+///
+/// Admin bookmark files are refreshed from an external source, so they use a
+/// mixture of protocol names (`fax`, `sitorb`, `rtty450`) and canonical ids.
+/// Normalise them here once, then use the same rules for implementation
+/// detection and for the public API.
+fn canonical_mode(mode: &str) -> String {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "fm" | "wfm" => "wfm",
+        "nfm" => "nfm",
+        "am" => "am",
+        "am-stereo" | "ams" => "am-stereo",
+        "sam" => "sam",
+        "usb" => "usb",
+        "lsb" => "lsb",
+        "cw" => "cw",
+        "raw" => "raw",
+        "fax" | "wefax" => "wefax",
+        "sitorb" | "sitor-b" | "sitor" | "navtex" => "navtex",
+        "rtty450" | "rtty-450" | "rtty" => "rtty",
+        "mode-s" | "modes" | "adsb" => "adsb",
+        "ais-sotdma" | "ais" => "ais",
+        other => other,
+    }
+    .to_string()
+}
+
 fn implemented_mode(mode: &str) -> bool {
     matches!(
-        mode,
+        canonical_mode(mode).as_str(),
         "wfm"
             | "nfm"
             | "am"
@@ -41,26 +68,40 @@ fn implemented_mode(mode: &str) -> bool {
             | "raw"
             | "adsb"
             | "acars"
-            | "ais"
             | "vdl2"
+            | "hfdl"
+            | "ais"
+            | "aprs"
+            | "navtex"
+            | "ism"
+            | "packet"
             | "ft8"
             | "ft4"
             | "ft2"
+            | "fst4"
+            | "q65"
+            | "jt65"
+            | "jt9"
+            | "wefax"
+            | "sstv"
+            | "hell"
+            | "olivia"
+            | "thor"
+            | "fsq"
+            | "psk31"
+            | "rtty"
+            | "msk144"
+            | "fsk441"
+            | "wspr"
+            | "pi4"
+            | "js8"
+            | "dcf77"
+            | "als162"
     )
 }
 
 fn modulation_to_mode(modulation: &str) -> String {
-    match modulation {
-        "fm" | "wfm" => "wfm",
-        "nfm" => "nfm",
-        "am" => "am",
-        "usb" => "usb",
-        "lsb" => "lsb",
-        "cw" => "cw",
-        "sam" => "sam",
-        other => other,
-    }
-    .to_string()
+    canonical_mode(modulation)
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +134,7 @@ pub fn from_config(bookmarks: &[Bookmark]) -> Vec<PublicBookmark> {
             id: b.id.clone(),
             name: b.name.clone(),
             frequency: b.frequency,
-            mode: b.mode.clone(),
+            mode: canonical_mode(&b.mode),
             bandwidth: b.bandwidth,
             description: b.description.clone(),
             source: "config".to_string(),
@@ -204,7 +245,13 @@ mod tests {
 
     #[test]
     fn decoder_bookmarks_are_implemented() {
-        for mode in ["adsb", "acars", "ais", "vdl2", "ft8", "ft4", "ft2"] {
+        // Every decoder surfaced by the client, plus common upstream aliases.
+        for mode in [
+            "adsb", "acars", "vdl2", "hfdl", "ais", "aprs", "navtex", "ism", "packet", "ft8",
+            "ft4", "ft2", "fst4", "q65", "jt65", "jt9", "wefax", "sstv", "hell", "olivia",
+            "thor", "fsq", "psk31", "rtty", "msk144", "fsk441", "wspr", "pi4", "js8", "dcf77",
+            "als162", "fax", "sitorb", "rtty450", "mode-s",
+        ] {
             let b = Bookmark {
                 id: "x".into(),
                 name: "n".into(),
@@ -215,5 +262,14 @@ mod tests {
             let out = from_config(&[b]);
             assert!(out[0].implemented, "{mode} should be marked implemented");
         }
+    }
+
+    #[test]
+    fn bookmark_mode_aliases_are_canonicalised() {
+        assert_eq!(canonical_mode("fax"), "wefax");
+        assert_eq!(canonical_mode("sitorb"), "navtex");
+        assert_eq!(canonical_mode("rtty450"), "rtty");
+        assert_eq!(canonical_mode("mode-s"), "adsb");
+        assert_eq!(canonical_mode("FM"), "wfm");
     }
 }

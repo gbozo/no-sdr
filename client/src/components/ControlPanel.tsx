@@ -26,40 +26,6 @@ const ControlPanel: Component = () => {
       {/* Mode Selector */}
       <ModeSelector />
 
-      {/* Foreground digital decoder selector — the decode table opens below the waterfall */}
-      <div class="border border-border/40 rounded-md bg-sdr-surface/30 p-3">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Digital Decoder</span>
-          <Show when={store.decoderMode()}>
-            <button
-              onClick={() => engine.setDecoder('')}
-              class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-amber"
-            >
-              Off
-            </button>
-          </Show>
-        </div>
-        <div class="flex flex-wrap gap-1.5">
-          <For each={[{ id: 'ft8', label: 'FT8' }, { id: 'ft4', label: 'FT4' }, { id: 'ft2', label: 'FT2' }, { id: 'fst4', label: 'FST4' }, { id: 'q65', label: 'Q65' }, { id: 'jt65', label: 'JT65' }, { id: 'jt9', label: 'JT9' }, { id: 'wspr', label: 'WSPR' }, { id: 'pi4', label: 'PI4' }, { id: 'adsb', label: 'ADS-B' }, { id: 'acars', label: 'ACARS' }, { id: 'ais', label: 'AIS' }, { id: 'vdl2', label: 'VDL2' }, { id: 'hfdl', label: 'HFDL' }, { id: 'aprs', label: 'APRS' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'packet', label: 'PACKET' }, { id: 'ism', label: 'ISM' }, { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' }, { id: 'hell', label: 'HELL' }, { id: 'msk144', label: 'MSK144' }, { id: 'fsk441', label: 'FSK441' }, { id: 'olivia', label: 'OLIVIA' }, { id: 'thor', label: 'THOR' }, { id: 'fsq', label: 'FSQ' }, { id: 'psk31', label: 'PSK31' }, { id: 'rtty', label: 'RTTY' }, { id: 'js8', label: 'JS8' }, { id: 'dcf77', label: 'DCF77' }, { id: 'als162', label: 'ALS162' }]}>
-            {(decoder) => (
-              <button
-                onClick={() => engine.setDecoder(store.decoderMode() === decoder.id ? '' : decoder.id)}
-                class={`mil-btn text-[9px] px-2 py-1 ${
-                  store.decoderMode() === decoder.id ? 'active border-cyan text-cyan' : ''
-                }`}
-              >
-                {decoder.label}
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-
-      {/* Music Identification — only meaningful for broadcast/music modes */}
-      <Show when={(['wfm', 'nfm', 'am', 'am-stereo', 'sam'] as DemodMode[]).includes(store.mode())}>
-        <IdentifyPanel />
-      </Show>
-
       {/* Audio Controls */}
       <AudioControls />
 
@@ -626,6 +592,19 @@ const ModeSelector: Component = () => {
   const modes: DemodMode[] = ['wfm', 'nfm', 'am', 'sam', 'am-stereo', 'usb', 'lsb', 'cw', 'raw'];
   const [open, setOpen] = createSignal(true);
 
+  const toggleDecoderPanel = () => {
+    if (store.decoderPanelOpen()) {
+      engine.setDecoder('');
+      store.setDecoderPanelOpen(false);
+    } else {
+      store.setDecoderPanelOpen(true);
+    }
+  };
+
+  const toggleAnalysisPanel = () => {
+    store.setAnalysisPanelOpen(!store.analysisPanelOpen());
+  };
+
   return (
     <div class="sdr-panel">
       <div
@@ -705,6 +684,30 @@ const ModeSelector: Component = () => {
               class="sdr-range w-full"
             />
           </div>
+        </div>
+
+        {/* Workspace toggles: decode table or expert signal analysis */}
+        <div class="mt-3 pt-2 border-t border-border/40 flex flex-col gap-1.5">
+          <button
+            class={`mil-btn flex-row w-full items-center justify-between ${store.decoderPanelOpen() ? 'active' : ''}`}
+            onClick={toggleDecoderPanel}
+            title="Show or hide the digital decoding workspace below the waterfall"
+          >
+            <span>Digital Decoders</span>
+            <span class={`text-[8px] tracking-wider ${store.decoderPanelOpen() ? 'text-cyan' : 'text-text-dim'}`}>
+              {store.decoderPanelOpen() ? 'ON' : 'OFF'}
+            </span>
+          </button>
+          <button
+            class={`mil-btn flex-row w-full items-center justify-between ${store.analysisPanelOpen() ? 'active' : ''}`}
+            onClick={toggleAnalysisPanel}
+            title="Show or hide the signal analysis workspace below the waterfall"
+          >
+            <span>Signal Analysis</span>
+            <span class={`text-[8px] tracking-wider ${store.analysisPanelOpen() ? 'text-cyan' : 'text-text-dim'}`}>
+              {store.analysisPanelOpen() ? 'ON' : 'OFF'}
+            </span>
+          </button>
         </div>
       </div>
       </Show>
@@ -1007,6 +1010,11 @@ const AudioControls: Component = () => {
             />
           </div>
         </div>
+
+        {/* Music Identification — only meaningful for broadcast/music modes */}
+        <Show when={(['wfm', 'nfm', 'am', 'am-stereo', 'sam'] as DemodMode[]).includes(store.mode())}>
+          <IdentifyControls />
+        </Show>
 
       </div>
       </Show>
@@ -2861,7 +2869,7 @@ export default ControlPanel;
 
 // ---- Music Identification Panel ----
 
-const IdentifyPanel: Component = () => {
+const IdentifyControls: Component = () => {
   const state = () => store.identifyState();
   const result = () => store.identifyResult();
 
@@ -2901,85 +2909,86 @@ const IdentifyPanel: Component = () => {
   };
 
   return (
-    <div class="sdr-panel">
-      <div class="sdr-panel-header">
-        <span>Identify</span>
+    <div class="border-t border-border/40 pt-3 space-y-2">
+      <div class="flex items-center justify-between gap-2">
+        <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+          Identify Song
+        </label>
         <Show when={state() === 'done' && result()?.match}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal truncate max-w-[160px]">
+          <span class="text-[8px] font-mono text-[var(--sdr-accent)] normal-case truncate max-w-[160px]">
             {result()?.artist} — {result()?.title}
           </span>
         </Show>
       </div>
-      <div class="p-3 space-y-2">
-        {/* Identify button */}
-        <button
-          class="mil-btn w-full"
-          disabled={disabled()}
-          onClick={() => engine.identify()}
-        >
-          {/* Waveform icon — pulses while capturing/querying, steady glow when ready, dim while warming */}
-          <svg
-            class={`w-3 h-3 mr-1.5 inline-block rounded-sm ${busy() ? 'identify-capturing' : 'transition-all duration-500'}`}
-            style={!busy() && ready() ? {
-              color: 'var(--sdr-accent)',
-              filter: 'drop-shadow(0 0 4px var(--sdr-accent))',
-            } : {}}
-            viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-          >
-            <path d="M1 8h2M4 5v6M7 3v10M10 5v6M13 8h2" />
-          </svg>
-          {label()}
-        </button>
 
-        {/* Result display */}
-        <Show when={state() === 'done' || state() === 'error'}>
-          <Show when={result()?.match}
-            fallback={
-              <div class="text-[9px] font-mono text-text-dim text-center py-1">
-                {state() === 'error'
-                  ? (result()?.error ?? 'Recognition failed')
-                  : 'No match found'}
-              </div>
-            }
-          >
-            <div class="border border-border rounded-sm bg-sdr-elevated p-2 space-y-1">
-              <div class="text-[11px] font-mono text-text-primary font-semibold leading-tight">
-                {result()?.title}
-              </div>
-              <div class="text-[9px] font-mono text-text-secondary">
-                {result()?.artist}
-                <Show when={result()?.album}>
-                  <span class="text-text-dim"> · {result()?.album}</span>
-                </Show>
-              </div>
-              {/* Links */}
-              <div class="flex gap-2 pt-1">
-                <Show when={result()?.spotify}>
-                  <a href={result()!.spotify} target="_blank" rel="noopener"
-                     class="text-[8px] font-mono uppercase tracking-wider text-[#1DB954] hover:brightness-125 transition-all">
-                    Spotify
-                  </a>
-                </Show>
-                <Show when={result()?.youtube}>
-                  <a href={result()!.youtube} target="_blank" rel="noopener"
-                     class="text-[8px] font-mono uppercase tracking-wider text-[#FF0000] hover:brightness-125 transition-all">
-                    YouTube
-                  </a>
-                </Show>
-                <Show when={result()?.apple}>
-                  <a href={result()!.apple} target="_blank" rel="noopener"
-                     class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-text-secondary transition-all">
-                    Apple
-                  </a>
-                </Show>
-                <span class="ml-auto text-[7px] font-mono text-text-muted">
-                  via {result()?.service ?? '—'}
-                </span>
-              </div>
+      {/* Identify button */}
+      <button
+        class="mil-btn w-full"
+        disabled={disabled()}
+        onClick={() => engine.identify()}
+      >
+        {/* Waveform icon — pulses while capturing/querying, steady glow when ready, dim while warming */}
+        <svg
+          class={`w-3 h-3 mr-1.5 inline-block rounded-sm ${busy() ? 'identify-capturing' : 'transition-all duration-500'}`}
+          style={!busy() && ready() ? {
+            color: 'var(--sdr-accent)',
+            filter: 'drop-shadow(0 0 4px var(--sdr-accent))',
+          } : {}}
+          viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+        >
+          <path d="M1 8h2M4 5v6M7 3v10M10 5v6M13 8h2" />
+        </svg>
+        {label()}
+      </button>
+
+      {/* Result display */}
+      <Show when={state() === 'done' || state() === 'error'}>
+        <Show when={result()?.match}
+          fallback={
+            <div class="text-[9px] font-mono text-text-dim text-center py-1">
+              {state() === 'error'
+                ? (result()?.error ?? 'Recognition failed')
+                : 'No match found'}
             </div>
-          </Show>
+          }
+        >
+          <div class="border border-border rounded-sm bg-sdr-elevated p-2 space-y-1">
+            <div class="text-[11px] font-mono text-text-primary font-semibold leading-tight">
+              {result()?.title}
+            </div>
+            <div class="text-[9px] font-mono text-text-secondary">
+              {result()?.artist}
+              <Show when={result()?.album}>
+                <span class="text-text-dim"> · {result()?.album}</span>
+              </Show>
+            </div>
+            {/* Links */}
+            <div class="flex gap-2 pt-1">
+              <Show when={result()?.spotify}>
+                <a href={result()!.spotify} target="_blank" rel="noopener"
+                   class="text-[8px] font-mono uppercase tracking-wider text-[#1DB954] hover:brightness-125 transition-all">
+                  Spotify
+                </a>
+              </Show>
+              <Show when={result()?.youtube}>
+                <a href={result()!.youtube} target="_blank" rel="noopener"
+                   class="text-[8px] font-mono uppercase tracking-wider text-[#FF0000] hover:brightness-125 transition-all">
+                  YouTube
+                </a>
+              </Show>
+              <Show when={result()?.apple}>
+                <a href={result()!.apple} target="_blank" rel="noopener"
+                   class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-text-secondary transition-all">
+                  Apple
+                </a>
+              </Show>
+              <span class="ml-auto text-[7px] font-mono text-text-muted">
+                via {result()?.service ?? '—'}
+              </span>
+            </div>
+          </div>
         </Show>
-      </div>
+      </Show>
     </div>
   );
 };

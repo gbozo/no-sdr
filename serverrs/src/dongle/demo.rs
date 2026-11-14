@@ -60,10 +60,10 @@ pub struct DemoSource {
 
 impl DemoSource {
     /// Creates a demo generator. Uses the default signal set when
-    /// `cfg.signals` is empty and 2.4 MSPS when the sample rate is unset.
+    /// `cfg.signals` is empty and 1 MSPS when the sample rate is unset.
     pub fn new(cfg: DemoConfig) -> Self {
         let sample_rate = if cfg.sample_rate <= 0 {
-            2_400_000
+            1_000_000
         } else {
             cfg.sample_rate
         };
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn default_sample_rate_and_signals() {
         let mut src = DemoSource::new(DemoConfig::default());
-        assert_eq!(src.sample_rate(), 2_400_000);
+        assert_eq!(src.sample_rate(), 1_000_000);
         let chunk = src.generate_chunk(16);
         assert_eq!(chunk.len(), 32);
     }

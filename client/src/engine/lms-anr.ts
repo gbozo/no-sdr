@@ -22,6 +22,8 @@ export interface AnrOptions {
   gain?: number;
   /** Leakage factor (0.01-1.0). Prevents weight divergence on non-stationary signals. */
   leakage?: number;
+  /** Wet/dry mix (0 = input, 1 = full prediction). */
+  mix?: number;
 }
 
 /** Presets for different signal types */
@@ -63,6 +65,7 @@ export class LmsAnr {
   private delay: number;
   private twoMu: number; // 2 × adaptation gain
   private gamma: number; // leakage base
+  private mix = 1; // wet/dry output mix
   private enabled = false;
 
   // Delay line (ring buffer)
@@ -105,11 +108,18 @@ export class LmsAnr {
     return this.enabled;
   }
 
+  /** Set the 0-1 UI strength as both adaptation rate and wet/dry mix. */
+  setStrength(strength: number): void {
+    this.mix = Math.max(0, Math.min(1, strength));
+    this.twoMu = 2 * anrGainForStrength(strength);
+  }
+
   /** Change adaptation parameters */
   setOptions(options: Partial<AnrOptions>): void {
     if (options.gain !== undefined) this.twoMu = 2 * options.gain;
     if (options.leakage !== undefined) this.gamma = options.leakage;
     if (options.delay !== undefined) this.delay = options.delay;
+    if (options.mix !== undefined) this.mix = Math.max(0, Math.min(1, options.mix));
     // Tap count change requires weight resize
     if (options.taps !== undefined && options.taps !== this.taps) {
       this.taps = options.taps;
@@ -141,7 +151,7 @@ export class LmsAnr {
    */
   process(samples: Float32Array): void {
     if (!this.enabled) return;
-    if (this.twoMu <= 0) return; // gain = 0 → passthrough
+    if (this.twoMu <= 0 || this.mix <= 0) return; // strength = 0 → passthrough
 
     const n = this.taps;
     const dly = this.delay;
@@ -150,6 +160,7 @@ export class LmsAnr {
     const w = this.weights;
     const twoMu = this.twoMu;
     const gamma = this.gamma;
+    const mix = this.mix;
     let idx = this.inIdx;
     let lidx = this.lidx;
     let ngamma = this.ngamma;
@@ -177,9 +188,12 @@ export class LmsAnr {
       // Error signal
       const error = input - y;
 
-      // Output = prediction (contains the correlated/predictable part = signal)
+      // Wet/dry mix: strength 0 is passthrough, strength 1 is full prediction.
+      // Scaling only the adaptation gain made every non-zero setting converge
+      // to the same steady-state filter, so the UI was effectively on/off.
+      const out = input + mix * (y - input);
       // Clamp to prevent downstream Web Audio biquad instability
-      samples[i] = y > 1.0 ? 1.0 : y < -1.0 ? -1.0 : y;
+      samples[i] = out > 1.0 ? 1.0 : out < -1.0 ? -1.0 : out;
 
       // ---- Adaptive leakage control ----
       // Prevents weight divergence on non-stationary signals

@@ -23,9 +23,9 @@ export default defineConfig({
       },
       // Web app manifest
       manifest: {
-        name: 'NO(DE)-SDR — WebSDR',
-        short_name: 'NO(DE)-SDR',
-        description: 'Multi-user WebSDR receiver for RTL-SDR dongles',
+        name: 'NO-SDR — WebSDR',
+        short_name: 'NO-SDR',
+        description: 'Multi-user WebSDR with live spectrum and waterfall, analog and digital demodulation, and deep signal analysis.',
         start_url: '/',
         display: 'standalone',
         display_override: ['standalone', 'minimal-ui'],

@@ -567,6 +567,39 @@ export const DIGITAL_MODES: Record<DigitalMode, DigitalModeInfo> = {
   },
 };
 
+/**
+ * Decoder modes implemented by the server and exposed in the UI.
+ * POCSAG is defined for compatibility but has no server-side decoder.
+ */
+export const DECODER_MODE_IDS: DigitalMode[] = (Object.keys(DIGITAL_MODES) as DigitalMode[])
+  .filter((id) => id !== 'pocsag');
+
+/** Bookmark files use a mixture of protocol names and historical aliases. */
+const BOOKMARK_MODE_ALIASES: Record<string, string> = {
+  fax: 'wefax',
+  wefax: 'wefax',
+  sitorb: 'navtex',
+  'sitor-b': 'navtex',
+  sitor: 'navtex',
+  navtex: 'navtex',
+  rtty450: 'rtty',
+  'rtty-450': 'rtty',
+  'mode-s': 'adsb',
+  modes: 'adsb',
+  'ais-sotdma': 'ais',
+};
+
+/** Map a raw bookmark modulation/mode string to a canonical mode id. */
+export function normalizeBookmarkMode(mode: string): string {
+  const m = mode.trim().toLowerCase();
+  return BOOKMARK_MODE_ALIASES[m] ?? m;
+}
+
+/** Whether a bookmark mode is a foreground digital decoder. */
+export function isDecoderMode(mode: string): boolean {
+  return DECODER_MODE_IDS.includes(normalizeBookmarkMode(mode) as DigitalMode);
+}
+
 // ---- Frequency Band Definitions ----
 
 export interface FrequencyBand {

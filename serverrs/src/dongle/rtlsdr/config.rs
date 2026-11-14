@@ -105,7 +105,7 @@ impl Default for RtlSdrConfig {
         RtlSdrConfig {
             serial: None,
             device_index: 0,
-            sample_rate_hz: 2_400_000.0,
+            sample_rate_hz: 1_000_000.0,
             ppm: 0,
             tuner_gain_db: 30.0,
             agc: RtlSdrAgc::Tuner,

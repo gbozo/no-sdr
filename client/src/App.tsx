@@ -8,6 +8,7 @@ import { store } from './store/index.js';
 import { engine } from './engine/sdr-engine.js';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
 import DecoderDisplay from './components/DecoderDisplay.js';
+import SignalAnalysis from './components/SignalAnalysis.js';
 import FrequencyDisplay from './components/FrequencyDisplay.js';
 import ControlPanel from './components/ControlPanel.js';
 import ConnectionOverlay from './components/ConnectionOverlay.js';
@@ -17,6 +18,33 @@ const App: Component = () => {
   const [installPrompt, setInstallPrompt] = createSignal<any>(null);
   const [installed, setInstalled] = createSignal(false);
   const [reconnectedFlash, setReconnectedFlash] = createSignal(false);
+  const bothWorkspaces = () => store.decoderPanelOpen() && store.analysisPanelOpen();
+  const station = () => store.pushServerConfig();
+  const stationCallsign = () => station()?.callsign?.trim() ?? '';
+  const stationLocation = () => station()?.location?.trim() ?? '';
+  const stationDescription = () => station()?.description?.trim() ?? '';
+  const hasStationInfo = () => !!(stationCallsign() || stationLocation() || stationDescription());
+
+  createEffect(() => {
+    const label = stationCallsign() || stationLocation();
+    document.title = !label || label.toUpperCase() === 'NO-SDR'
+      ? 'NO-SDR — WebSDR'
+      : `${label} — NO-SDR`;
+
+    // Keep the crawler-facing meta tags in step with the configured station.
+    const baseDescription = 'NO-SDR is a multi-user WebSDR for RTL-SDR and other SDR hardware, with live spectrum and waterfall, FM/AM/SSB/CW demodulation, digital-mode decoding and signal analysis.';
+    const stationMeta = [stationCallsign(), stationLocation(), stationDescription()]
+      .filter(Boolean)
+      .join(' — ');
+    document.querySelector('meta[name="description"]')?.setAttribute(
+      'content',
+      stationMeta ? `${stationMeta}. ${baseDescription}` : baseDescription,
+    );
+    const keywords = ['NO-SDR', stationCallsign(), stationLocation(), 'WebSDR', 'SDR', 'software defined radio', 'RTL-SDR', 'spectrum', 'waterfall', 'FM', 'AM', 'SSB', 'CW', 'digital modes', 'FT8', 'ADS-B', 'AIS', 'APRS', 'signal analysis']
+      .filter(Boolean)
+      .join(', ');
+    document.querySelector('meta[name="keywords"]')?.setAttribute('content', keywords);
+  });
 
   // Flash "Reconnected" briefly when coming back online after a disconnect
   let wasDisconnected = false;
@@ -232,7 +260,7 @@ const App: Component = () => {
 
         <div class="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
           <h1 class="font-mono text-xs font-bold tracking-[0.15em] text-text-primary uppercase">
-            <span class="text-cyan">NO</span><span class="text-text-dim">(DE)</span><span class="text-cyan">-SDR</span>
+            <span class="text-cyan">NO</span><span class="text-text-primary">-SDR</span>
           </h1>
 
           {/* PWA Install Icon */}
@@ -285,6 +313,30 @@ const App: Component = () => {
               </span>
             </Show>
           </div>
+
+          {/* Station identity from server config */}
+          <Show when={hasStationInfo()}>
+            <div class="hidden sm:flex items-center gap-2 pl-2 ml-1 border-l border-border/50 min-w-0">
+              <Show when={stationCallsign()}>
+                <span class="text-[10px] font-mono font-bold tracking-[0.12em] text-cyan uppercase whitespace-nowrap">
+                  {stationCallsign()}
+                </span>
+              </Show>
+              <Show when={stationLocation()}>
+                <span class="text-[9px] font-mono text-text-secondary truncate">
+                  {stationLocation()}
+                </span>
+              </Show>
+              <Show when={stationDescription()}>
+                <span
+                  class="hidden lg:inline text-[8px] font-mono text-text-dim truncate max-w-[280px]"
+                  title={stationDescription()}
+                >
+                  {stationDescription()}
+                </span>
+              </Show>
+            </div>
+          </Show>
         </div>
 
         {/* Audio button — "Enable Audio" for new users, "Resume Audio" for returning users */}
@@ -385,16 +437,25 @@ const App: Component = () => {
             <FrequencyDisplay />
           </div>
 
-          {/* Main waterfall, split with the decoder workspace when active */}
+          {/* Main waterfall, split with the active workspace(s) */}
           <div class="md:flex-1 md:min-h-0 p-2 flex flex-col gap-2" style="min-height: 50vh">
-            <div class={`flex-1 min-h-0 rounded-md overflow-hidden border border-border bg-black flex flex-col ${
-              store.decoderMode() ? 'min-h-[240px]' : ''
-            }`}>
-              <WaterfallDisplay />
-            </div>
-            <Show when={store.decoderMode()}>
+            {/* One workspace (or none): keep the waterfall + spectrum on top. */}
+            <Show when={!bothWorkspaces()}>
+              <div class={`flex-1 min-h-0 rounded-md overflow-hidden border border-border bg-black flex flex-col ${
+                store.decoderPanelOpen() || store.analysisPanelOpen() ? 'min-h-[240px]' : ''
+              }`}>
+                <WaterfallDisplay />
+              </div>
+            </Show>
+            {/* Both workspaces: decoders take the top pane, analysis the bottom. */}
+            <Show when={store.decoderPanelOpen()}>
               <div class="flex-1 min-h-[240px] md:min-h-0 rounded-md overflow-hidden border border-border bg-black">
                 <DecoderDisplay />
+              </div>
+            </Show>
+            <Show when={store.analysisPanelOpen()}>
+              <div class="flex-1 min-h-[240px] md:min-h-0 rounded-md overflow-hidden border border-border bg-black">
+                <SignalAnalysis />
               </div>
             </Show>
           </div>

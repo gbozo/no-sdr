@@ -168,9 +168,12 @@ Needed:
 
 ### 6. Profiles and presets assume 2.4 MSPS
 
-`DongleConfig.sampleRate` and `DongleProfile.sampleRate` both feed the source
-rate, and presets are written around RTL rates. Adding radios with only
-2/4/8/10/20 MSPS means:
+`DongleConfig.sampleRate` is the hardware ceiling: `DongleProfile.sampleRate`
+may ask for a narrower span but is clamped to the dongle rate, and the device
+is opened at the resolved rate (profile rate when lower, dongle rate
+otherwise) instead of the driver's built-in default. A missing dongle rate
+falls back to the profile rate, then 1 MSPS. Presets are written around RTL
+rates, so adding radios with only 2/4/8/10/20 MSPS means:
 
 - source-specific rate lists;
 - profile creation should snap to a supported rate;

@@ -24,6 +24,7 @@ import TextModeDisplay from './TextModeDisplay.js';
 import MeteorDisplay from './MeteorDisplay.js';
 import Js8Display from './Js8Display.js';
 import TimeSignalDisplay from './TimeSignalDisplay.js';
+import DecoderInfoPanel from './DecoderInfoPanel.js';
 
 const DECODERS = [
   { id: 'ft8', label: 'FT8' },
@@ -76,6 +77,7 @@ const DecoderDisplay: Component = () => {
   let lastRate = 0;
   const [hasSignal, setHasSignal] = createSignal(false);
   const [frameCount, setFrameCount] = createSignal(0);
+  const [showInfo, setShowInfo] = createSignal(false);
 
   const isAdsb = () => store.decoderMode() === 'adsb';
   const isAcars = () => store.decoderMode() === 'acars';
@@ -200,7 +202,24 @@ const DecoderDisplay: Component = () => {
       setFrameCount((n) => n + 1);
       if (canvasRef) draw();
     }, 100);
-    onCleanup(() => clearInterval(poll));
+
+    const onKey = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      if (event.key === 'Escape') {
+        setShowInfo(false);
+        return;
+      }
+      if (event.key.toLowerCase() === 'i' && store.decoderMode()) {
+        setShowInfo((v) => !v);
+        event.preventDefault();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      clearInterval(poll);
+      document.removeEventListener('keydown', onKey);
+    });
   });
 
   const select = (id: string) => {
@@ -208,29 +227,58 @@ const DecoderDisplay: Component = () => {
     engine.setDecoder(store.decoderMode() === id ? '' : id);
   };
 
+  const choose = (id: string) => {
+    if (!id) return;
+    clearZoom();
+    engine.setDecoder(id);
+  };
+
   return (
-    <div class="flex flex-col h-full min-h-0 bg-sdr-surface/30">
-      <div class="flex items-center gap-2 px-2 py-1 border-b border-border/40 shrink-0">
-        <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">Digital Decoder</span>
-        <For each={DECODERS}>
-          {(decoder) => (
-            <button
-              onClick={() => select(decoder.id)}
-              class={`mil-btn text-[9px] px-2 py-0.5 ${
-                store.decoderMode() === decoder.id ? 'active border-cyan text-cyan' : ''
-              }`}
-            >
-              {decoder.label}
-            </button>
-          )}
-        </For>
+    <div class="relative flex flex-col h-full min-h-0 bg-sdr-surface/30">
+      <div class="flex items-center gap-2 px-2 py-1 border-b border-border/40 shrink-0 min-w-0">
+        <span class="hidden sm:inline text-[8px] font-mono uppercase tracking-wider text-text-dim shrink-0">Digital Decoder</span>
+        {/* Small screens: one compact picker instead of a full chip row. */}
+        <select
+          class="lg:hidden flex-1 min-w-0 bg-sdr-base border border-border/50 rounded-sm text-[9px] font-mono text-text-secondary px-1 py-0.5"
+          value={store.decoderMode()}
+          onChange={(e) => choose(e.currentTarget.value)}
+          title="Select digital decoder"
+        >
+          <option value="">Decoder…</option>
+          <For each={DECODERS}>
+            {(decoder) => <option value={decoder.id}>{decoder.label}</option>}
+          </For>
+        </select>
+        <div class="hidden lg:flex flex-1 min-w-0 items-center gap-1 overflow-x-auto">
+          <For each={DECODERS}>
+            {(decoder) => (
+              <button
+                onClick={() => select(decoder.id)}
+                class={`mil-btn text-[9px] px-2 py-0.5 shrink-0 ${
+                  store.decoderMode() === decoder.id ? 'active border-cyan text-cyan' : ''
+                }`}
+              >
+                {decoder.label}
+              </button>
+            )}
+          </For>
+        </div>
         <Show when={store.decoderMode()}>
-          <button
-            onClick={() => { clearZoom(); engine.setDecoder(''); }}
-            class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-amber ml-auto"
-          >
-            Off
-          </button>
+          <div class="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => setShowInfo((v) => !v)}
+              class={`mil-btn text-[8px] px-1.5 py-0.5 ${showInfo() ? 'active border-cyan text-cyan' : ''}`}
+              title="Decoder information and typical frequencies (I)"
+            >
+              ⓘ Info
+            </button>
+            <button
+              onClick={() => { clearZoom(); engine.setDecoder(''); }}
+              class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-amber px-1"
+            >
+              Off
+            </button>
+          </div>
         </Show>
       </div>
 
@@ -341,6 +389,9 @@ const DecoderDisplay: Component = () => {
       </Show>
       <Show when={isTimeSignal()}>
         <TimeSignalDisplay />
+      </Show>
+      <Show when={showInfo() && store.decoderMode()}>
+        <DecoderInfoPanel mode={store.decoderMode()} onClose={() => setShowInfo(false)} />
       </Show>
     </div>
   );
