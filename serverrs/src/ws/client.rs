@@ -173,6 +173,10 @@ pub struct ClientState {
     pub mode: String,
     /// Foreground digital decoder (ft8/ft4/ft2); empty means audio only.
     pub decoder: String,
+    /// Whether this client wants the zoomed decoder spectrum stream.
+    pub decoder_scope: bool,
+    /// Requested decoder scope frame rate, clamped to 2–20 fps.
+    pub decoder_scope_fps: u32,
     pub tune_offset: i64,
     pub bandwidth: i64,
     /// True after a successful `admin_auth` on this connection.
@@ -185,6 +189,7 @@ impl ClientState {
     fn new() -> Self {
         Self {
             stereo_enabled: true,
+            decoder_scope_fps: 10,
             ..Default::default()
         }
     }
@@ -346,6 +351,20 @@ impl Client {
         self.state.lock().decoder.clone()
     }
 
+    pub fn decoder_scope(&self) -> bool {
+        self.state.lock().decoder_scope
+    }
+
+    pub fn decoder_scope_fps(&self) -> u32 {
+        self.state.lock().decoder_scope_fps
+    }
+
+    pub fn set_decoder_scope(&self, enabled: bool, fps: u32) {
+        let mut st = self.state.lock();
+        st.decoder_scope = enabled;
+        st.decoder_scope_fps = fps.clamp(2, 20);
+    }
+
     pub fn tune_offset(&self) -> i64 {
         self.state.lock().tune_offset
     }
@@ -407,6 +426,7 @@ impl Client {
                     st.stereo_enabled = false;
                     st.mode.clear();
                     st.decoder.clear();
+                    st.decoder_scope = false;
                     st.tune_offset = 0;
                     st.bandwidth = 0;
                 }
@@ -427,6 +447,16 @@ impl Client {
             }
             "decoder" => {
                 st.decoder = cmd.mode.clone();
+                // A new decoder invalidates any previous zoom geometry; the
+                // client asks again once its pane is ready.
+                st.decoder_scope = false;
+                None
+            }
+            "decoder_scope" => {
+                st.decoder_scope = cmd.enabled.unwrap_or(false);
+                if let Some(fps) = cmd.fps {
+                    st.decoder_scope_fps = fps.clamp(2, 20);
+                }
                 None
             }
             "bandwidth" => {

@@ -118,6 +118,10 @@ impl AcarsChannel {
                     "snrDb": 0.0,
                     "dtSec": 0.0,
                     "period": 0,
+                    "signalBwHz": 2_400.0,
+                    "stats": {
+                        "crcOk": frame.crc_ok,
+                    },
                     "acars": {
                         "mode": frame.mode,
                         "address": frame.address,

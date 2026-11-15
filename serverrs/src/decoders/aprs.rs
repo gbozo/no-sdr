@@ -204,6 +204,10 @@ impl AprsChannel {
                     "snrDb": 0.0,
                     "dtSec": 0.0,
                     "period": 0,
+                    "signalBwHz": 3_000.0,
+                    "stats": {
+                        "crcOk": true,
+                    },
                     "aprs": aprs,
                 }));
             }
@@ -219,6 +223,10 @@ impl AprsChannel {
                     "snrDb": 0.0,
                     "dtSec": 0.0,
                     "period": 0,
+                    "signalBwHz": 3_000.0,
+                    "stats": {
+                        "crcOk": true,
+                    },
                     "aprs": {
                         "at": at,
                         "from": from,

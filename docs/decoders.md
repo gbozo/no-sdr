@@ -263,15 +263,66 @@ Leaflet OpenStreetMap view.
     "dtSec": 0.2,
     "period": 123456,
     "utcNs": 1760000000000000000,
-    "dialHz": 14074000
+    "dialHz": 14074000,
+    "signalBwHz": 50.0,
+    "stats": {
+      "crcOk": true,
+      "fecCorrected": 0,
+      "hardErrors": 0,
+      "syncScore": 2.41,
+      "syncCv": 0.08,
+      "confidence": 1.0,
+      "pass": 3,
+      "hashResolved": true
+    }
   }
 }
 ```
 
-The client already dispatches `MSG_DECODER` to
-`SdrEngine.onDecoderData(type, data)`. A later UI pass can bind that callback
-to per-mode panels: a decode table for FT8, a map/table for ADS-B, an image
-view for SSTV/weather fax, and so on.
+The client dispatches `MSG_DECODER` to `SdrEngine.onDecoderData(type, data)`.
+Per-mode panels render the decode table, map, image or message list.
+
+## Foreground window and scope
+
+A foreground decoder does not guess its RF window from the client's demod
+bandwidth. `decoders::window_spec` is the single source of truth and the
+server sends it as a `kind: "window"` event when the channel is built or
+retuned:
+
+```json
+{
+  "kind": "window",
+  "id": "client-…",
+  "mode": "ft8",
+  "dialHz": 14074000,
+  "window": { "startHz": 14074000, "centerHz": 14075500, "endHz": 14077000, "bandwidthHz": 3000 },
+  "handled": [{ "startHz": 14074000, "endHz": 14077000, "label": "3.0 kHz USB" }],
+  "display": { "startHz": 14072500, "endHz": 14078500 },
+  "windowKind": "usb",
+  "tunable": true,
+  "scope": true,
+  "expectedAudioHz": 1500,
+  "period": 15,
+  "suggestTuneHz": null
+}
+```
+
+USB modes listen **above** the dial (`dial … dial+bw`); AM/FM modes are
+centred on it; AIS/VDL2 are fixed channel rasters; ADS-B/ISM are the receiver
+window. `handled` may contain more than one range.
+
+Live per-decoder status arrives as `kind: "status"` (level, noise, slot
+countdown, decode count) and each pass ends with `kind: "slot"` (decodes,
+elapsed time and, for mfsk-core, the candidate/skip budget). The mfsk decoder
+emits these for every mode, including FT8/FT4/FT2.
+
+The decoder workspace's mini waterfall is driven by `MSG_DECODER_SCOPE`
+(`0x0E`), opt-in with `{"cmd":"decoder_scope","enabled":true,"fps":10}`. It is
+only sent while the pane is visible, and is disabled for modes that already
+have a dedicated display (ADS-B, AIS, ACARS, images, text, JS8, time signals).
+The scope is tapped from the mfsk channel's already-extracted IQ, so it adds
+one 1024-point FFT per frame rather than a second NCO/filter/decimator. Raw and
+fixed-plan modes fall back to the existing full-span FFT slice.
 
 ## ADS-B / Mode S
 

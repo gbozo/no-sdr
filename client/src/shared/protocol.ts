@@ -64,6 +64,14 @@ export const MSG_RDS = 0x0A;
  */
 export const MSG_FFT_HISTORY = 0x0D;
 
+/**
+ * Foreground decoder zoom spectrum — 512 bins around the decoder window.
+ * Wire: [0x0E][u8 version][u8 flags][u16 reserved][f64 startHz]
+ *        [u32 binCount][f32 hzPerBin][i16 minDb][i16 maxDb][u8 bins...]
+ * Bins are linear dB between minDb and maxDb, ascending in frequency.
+ */
+export const MSG_DECODER_SCOPE = 0x0E;
+
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT data */
@@ -83,6 +91,7 @@ export type ClientCommand =
   | { cmd: 'tune'; offset: number } // frequency offset from center in Hz
   | { cmd: 'mode'; mode: string; bandwidth?: number }
   | { cmd: 'decoder'; mode: string }
+  | { cmd: 'decoder_scope'; enabled: boolean; fps?: number }
   | { cmd: 'bandwidth'; hz: number }
   | { cmd: 'squelch'; db: number | null }
   | { cmd: 'volume'; level: number }
@@ -209,6 +218,40 @@ export function unpackBinaryMessage(data: ArrayBuffer): [number, ArrayBuffer] {
   const type = new Uint8Array(data)[0];
   const payload = data.slice(1);
   return [type, payload];
+}
+
+/** One zoomed decoder spectrum frame. */
+export interface DecoderScopeFrame {
+  startHz: number;
+  hzPerBin: number;
+  minDb: number;
+  maxDb: number;
+  bins: Uint8Array;
+  at: number;
+}
+
+/**
+ * Unpack a `MSG_DECODER_SCOPE` payload (the type byte has already been
+ * stripped by `unpackBinaryMessage`).
+ */
+export function unpackDecoderScope(payload: ArrayBuffer): DecoderScopeFrame | null {
+  if (payload.byteLength < 24) return null;
+  const view = new DataView(payload);
+  if (view.getUint8(0) !== 1) return null;
+  const startHz = view.getFloat64(4, true);
+  const binCount = view.getUint32(12, true);
+  const hzPerBin = view.getFloat32(16, true);
+  const minDb = view.getInt16(20, true);
+  const maxDb = view.getInt16(22, true);
+  if (binCount === 0 || 24 + binCount > payload.byteLength) return null;
+  return {
+    startHz,
+    hzPerBin,
+    minDb,
+    maxDb,
+    bins: new Uint8Array(payload, 24, binCount),
+    at: Date.now(),
+  };
 }
 
 /**

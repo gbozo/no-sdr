@@ -17,7 +17,8 @@ use sdroxide_types::Js8Speed;
 
 use super::js8::assembler::Js8Assembler;
 use super::js8::decode::{decode_slot_for, Js8Depth};
-use super::{is_js8, LinearResampler, AUDIO_RATE};
+use super::scope::TapScope;
+use super::{is_js8, LinearResampler, RangeSpec, AUDIO_RATE};
 use crate::config::DecoderConfig;
 use crate::demod::{Demodulator, SsbDemod, SsbMode};
 use crate::dsp::{IqExtractor, IqExtractorConfig};
@@ -43,6 +44,8 @@ pub(crate) struct Js8Channel {
     last_slot: i64,
     last_status: i64,
     level: f32,
+    scope: Option<TapScope>,
+    scope_frame: Option<Vec<u8>>,
     speed: Js8Speed,
     depth: Js8Depth,
     decode_tx: Sender<Js8Job>,
@@ -96,6 +99,31 @@ impl Js8Channel {
         std::mem::take(&mut *self.results.lock())
     }
 
+    pub(crate) fn set_scope(&mut self, display: &RangeSpec, fps: u32) -> bool {
+        let input_rate = self.extractor.output_sample_rate() as f64;
+        match TapScope::new(input_rate, self.cfg.frequency_hz as f64, display, fps) {
+            Ok(tap) => {
+                self.scope = Some(tap);
+                self.scope_frame = None;
+                true
+            }
+            Err(e) => {
+                tracing::warn!(decoder = %self.cfg.id, error = %e, "JS8 tap scope unavailable");
+                self.scope = None;
+                false
+            }
+        }
+    }
+
+    pub(crate) fn take_scope(&mut self) -> Option<Vec<u8>> {
+        self.scope_frame.take()
+    }
+
+    pub(crate) fn clear_scope(&mut self) {
+        self.scope = None;
+        self.scope_frame = None;
+    }
+
     pub(crate) fn process_chunk(&mut self, chunk: &[u8], now: i64) {
         let mut pcm = std::mem::take(&mut self.pcm);
         self.extractor.process_into(chunk, &mut pcm);
@@ -111,6 +139,9 @@ impl Js8Channel {
                 pair[0] as f32 / 32768.0,
                 pair[1] as f32 / 32768.0,
             ));
+        }
+        if let Some(scope) = self.scope.as_mut() {
+            self.scope_frame = scope.push(&self.complex);
         }
         let audio = self.demod.process(&self.complex);
         let mut resampled = std::mem::take(&mut self.resampled);
@@ -145,10 +176,20 @@ impl Js8Channel {
         if self.last_slot == 0 {
             self.last_slot = slot;
         } else if slot != self.last_slot {
-            if self.audio.len() >= self.decode_len {
-                let start = self.audio.len() - self.decode_len;
+            // Same startup-latency allowance as the mfsk channel: the first
+            // boundary can be a few samples short of a full decode window.
+            let tolerance = AUDIO_RATE as usize / 10;
+            if self.audio.len() + tolerance >= self.decode_len {
+                let audio = if self.audio.len() >= self.decode_len {
+                    let start = self.audio.len() - self.decode_len;
+                    self.audio[start..].to_vec()
+                } else {
+                    let mut padded = vec![0i16; self.decode_len - self.audio.len()];
+                    padded.extend_from_slice(&self.audio);
+                    padded
+                };
                 let _ = self.decode_tx.send(Js8Job {
-                    audio: self.audio[start..].to_vec(),
+                    audio,
                     slot_utc: self.last_slot * self.speed.slot_s() as i64,
                     speed: self.speed,
                     depth: self.depth,
@@ -181,7 +222,9 @@ fn decode_worker(
     assembler.set_my_groups(parse_groups(&cfg));
 
     while let Ok(job) = rx.recv() {
+        let started = std::time::Instant::now();
         let found = decode_slot_for(job.speed, &job.audio, job.depth);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
         for decode in &found {
             if let Some(message) = assembler.push(decode, job.slot_utc) {
                 decodes.fetch_add(1, Ordering::Relaxed);
@@ -194,6 +237,11 @@ fn decode_worker(
                     "audioHz": message.audio_hz,
                     "snrDb": message.snr_db,
                     "period": message.first_slot_utc,
+                    "signalBwHz": super::signal_bw_hz(&cfg.mode),
+                    "stats": {
+                        "crcOk": true,
+                        "frames": message.frames,
+                    },
                     "js8": {
                         "from": message.from,
                         "to": message.to,
@@ -228,6 +276,14 @@ fn decode_worker(
                 "listening": true,
             }));
         }
+        results.lock().push(json!({
+            "kind": "slot",
+            "id": cfg.id,
+            "mode": cfg.mode,
+            "slot": job.slot_utc,
+            "decodes": found.len(),
+            "elapsedMs": elapsed_ms,
+        }));
     }
 }
 
@@ -291,6 +347,8 @@ pub(crate) fn build_channel(
         last_slot: 0,
         last_status: 0,
         level: -120.0,
+        scope: None,
+        scope_frame: None,
         speed,
         depth,
         decode_tx,

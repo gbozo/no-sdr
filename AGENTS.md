@@ -117,6 +117,7 @@ live under `serverrs/src/gpu/` behind a `gpu_vulkan` feature.
 | `0x08` | FFT_ADPCM | ADPCM on Int16(dB×100) |
 | `0x0B` | FFT_DEFLATE | Int16(minDb) + Int16(maxDb) + Uint32(binCount) + deflate bytes (DEFAULT) |
 | `0x0D` | FFT_HISTORY | Waterfall history burst |
+| `0x0E` | DECODER_SCOPE | Opt-in zoom FFT for a foreground decoder: `Uint8(version) + Uint8(flags) + Uint16(reserved) + Float64(startHz) + Uint32(binCount) + Float32(hzPerBin) + Int16(minDb) + Int16(maxDb) + Uint8[N]` |
 | `0x02` | IQ | Uint32(sampleRate) + Uint8(channels=2) + Uint8(reserved) + Int16 interleaved I/Q |
 | `0x09` | IQ_ADPCM | Uint32(sampleCount) + Uint32(sampleRate) + Uint8(channels=2) + Uint8(reserved) + ADPCM bytes (DEFAULT) |
 | `0x0C` | AUDIO_OPUS | Uint16(sampleCount) + Uint8(channels) + Opus packet |

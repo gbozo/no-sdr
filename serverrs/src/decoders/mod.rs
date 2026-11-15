@@ -21,8 +21,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use mfsk_core::prelude::{AnyDecoder, DecodeParams, Mode as MfskMode};
 use num_complex::Complex32;
 use parking_lot::Mutex;
-use serde_json::json;
-use tracing::{info, warn};
+use serde_json::{json, Value};
+use tracing::{debug, info, warn};
 
 use crate::config::DecoderConfig;
 use crate::demod::{Demodulator, SsbDemod, SsbMode};
@@ -84,6 +84,7 @@ mod sstv;
 mod sstv_rx;
 #[cfg(feature = "sstv")]
 mod sstv_slant;
+pub(crate) mod scope;
 pub mod store;
 #[cfg(feature = "text")]
 mod text;
@@ -102,6 +103,419 @@ mod wefax_rx;
 
 /// Decoder channel audio rate. Every slotted mfsk-core mode uses 12 kHz.
 pub(crate) const AUDIO_RATE: u32 = 12_000;
+
+/// One half-open RF range, in absolute Hz.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RangeSpec {
+    pub start_hz: f64,
+    pub end_hz: f64,
+}
+
+impl RangeSpec {
+    fn new(start_hz: f64, end_hz: f64) -> Self {
+        let (start_hz, end_hz) = if start_hz <= end_hz {
+            (start_hz, end_hz)
+        } else {
+            (end_hz, start_hz)
+        };
+        Self { start_hz, end_hz }
+    }
+
+    pub(crate) fn center_hz(&self) -> f64 {
+        (self.start_hz + self.end_hz) * 0.5
+    }
+
+    pub(crate) fn bandwidth_hz(&self) -> f64 {
+        self.end_hz - self.start_hz
+    }
+
+    fn expanded(&self, hz: f64) -> Self {
+        Self::new(self.start_hz - hz, self.end_hz + hz)
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "startHz": self.start_hz,
+            "centerHz": self.center_hz(),
+            "endHz": self.end_hz,
+            "bandwidthHz": self.bandwidth_hz(),
+        })
+    }
+}
+
+/// Where a foreground decoder actually listens, and what the client should
+/// draw around it. This is the single source of truth behind the decoder
+/// scope: the client must not guess from the demod bandwidth.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WindowSpec {
+    pub dial_hz: f64,
+    /// The range the decoder actually consumes, in absolute RF Hz.
+    pub window: RangeSpec,
+    /// One or more handled ranges. Multi-channel decoders (AIS/VDL2) and raw
+    /// decoders get more than one.
+    pub handled: Vec<(RangeSpec, String)>,
+    /// Suggested wider span for the mini waterfall.
+    pub display: RangeSpec,
+    /// A narrower band the decoder searches inside `window` (WSPR).
+    pub decode_band: Option<RangeSpec>,
+    /// `usb`, `am`, `fm`, `lane`, `fixed` or `raw`.
+    pub window_kind: &'static str,
+    pub tunable: bool,
+    pub scope: bool,
+    pub expected_audio_hz: f64,
+    pub period_s: f64,
+}
+
+impl WindowSpec {
+    pub(crate) fn to_json(
+        &self,
+        id: &str,
+        mode: &str,
+        suggest_tune_hz: Option<f64>,
+    ) -> Value {
+        let handled: Vec<Value> = self
+            .handled
+            .iter()
+            .map(|(range, label)| {
+                let mut value = range.to_json();
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("label".into(), Value::String(label.clone()));
+                }
+                value
+            })
+            .collect();
+        let mut value = json!({
+            "kind": "window",
+            "id": id,
+            "mode": mode,
+            "dialHz": self.dial_hz,
+            "window": self.window.to_json(),
+            "handled": handled,
+            "display": self.display.to_json(),
+            "windowKind": self.window_kind,
+            "tunable": self.tunable,
+            "scope": self.scope,
+            "expectedAudioHz": self.expected_audio_hz,
+            "period": self.period_s,
+            "suggestTuneHz": suggest_tune_hz,
+        });
+        if let Some(band) = &self.decode_band {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("decodeBand".into(), band.to_json());
+            }
+        }
+        value
+    }
+}
+
+fn usb_window(dial_hz: f64, bandwidth_hz: f64, expected_audio_hz: f64, period_s: f64) -> WindowSpec {
+    let window = RangeSpec::new(dial_hz, dial_hz + bandwidth_hz);
+    WindowSpec {
+        dial_hz,
+        handled: vec![(
+            window.clone(),
+            format!("{:.1} kHz USB", bandwidth_hz / 1000.0),
+        )],
+        display: window.expanded((bandwidth_hz * 0.5).max(1_000.0)),
+        window,
+        decode_band: None,
+        window_kind: "usb",
+        tunable: true,
+        scope: true,
+        expected_audio_hz,
+        period_s,
+    }
+}
+
+fn centered_window(
+    dial_hz: f64,
+    bandwidth_hz: f64,
+    kind: &'static str,
+    expected_audio_hz: f64,
+    period_s: f64,
+) -> WindowSpec {
+    let half = bandwidth_hz * 0.5;
+    let window = RangeSpec::new(dial_hz - half, dial_hz + half);
+    WindowSpec {
+        dial_hz,
+        handled: vec![(
+            window.clone(),
+            format!("{:.1} kHz {}", bandwidth_hz / 1000.0, kind.to_ascii_uppercase()),
+        )],
+        display: window.expanded((bandwidth_hz * 0.35).max(1_000.0)),
+        window,
+        decode_band: None,
+        window_kind: kind,
+        tunable: true,
+        scope: true,
+        expected_audio_hz,
+        period_s,
+    }
+}
+
+#[allow(dead_code)]
+fn fixed_window(
+    center_hz: f64,
+    rate_hz: f64,
+    channels: &[(f64, String)],
+    channel_bw_hz: f64,
+    label: &str,
+    period_s: f64,
+) -> WindowSpec {
+    let mut handled = Vec::new();
+    for (center, name) in channels {
+        if (center - center_hz).abs() <= rate_hz * 0.5 {
+            handled.push((
+                RangeSpec::new(center - channel_bw_hz * 0.5, center + channel_bw_hz * 0.5),
+                format!("{label} {name}"),
+            ));
+        }
+    }
+    let plan_start = channels
+        .iter()
+        .map(|(center, _)| center - channel_bw_hz * 0.5)
+        .fold(f64::INFINITY, f64::min);
+    let plan_end = channels
+        .iter()
+        .map(|(center, _)| center + channel_bw_hz * 0.5)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let plan = RangeSpec::new(plan_start, plan_end);
+    let window = if handled.is_empty() {
+        plan.clone()
+    } else {
+        RangeSpec::new(
+            handled.iter().map(|(r, _)| r.start_hz).fold(f64::INFINITY, f64::min),
+            handled.iter().map(|(r, _)| r.end_hz).fold(f64::NEG_INFINITY, f64::max),
+        )
+    };
+    WindowSpec {
+        dial_hz: window.center_hz(),
+        handled,
+        display: plan.expanded(25_000.0),
+        window,
+        decode_band: None,
+        window_kind: "fixed",
+        tunable: false,
+        scope: false,
+        expected_audio_hz: 0.0,
+        period_s,
+    }
+}
+
+#[allow(dead_code)]
+fn raw_window(center_hz: f64, rate_hz: f64, label: &str, period_s: f64) -> WindowSpec {
+    let window = RangeSpec::new(center_hz - rate_hz * 0.5, center_hz + rate_hz * 0.5);
+    WindowSpec {
+        dial_hz: window.center_hz(),
+        handled: vec![(window.clone(), label.to_string())],
+        display: window.clone(),
+        window,
+        decode_band: None,
+        window_kind: "raw",
+        tunable: false,
+        scope: false,
+        expected_audio_hz: 0.0,
+        period_s,
+    }
+}
+
+fn window_period_s(mode: &str) -> f64 {
+    if is_ft2(mode) {
+        return 3.75;
+    }
+    #[cfg(feature = "pi4")]
+    if is_pi4(mode) {
+        return 60.0;
+    }
+    if let Some(mode) = mfsk_mode(mode) {
+        return mode.meta().slot_samples_12k as f64 / AUDIO_RATE as f64;
+    }
+    #[cfg(feature = "js8")]
+    if is_js8(mode) {
+        return 15.0;
+    }
+    #[cfg(feature = "meteor")]
+    if is_meteor_mode(mode) {
+        return 15.0;
+    }
+    0.0
+}
+
+#[allow(dead_code)]
+fn expected_audio_hz(mode: &str) -> f64 {
+    let mode = mode.trim().to_ascii_lowercase();
+    match mode.as_str() {
+        "acars" => 1_800.0,
+        "aprs" | "packet" | "navtex" => 1_700.0,
+        "wefax" | "sstv" => 1_900.0,
+        "dcf77" | "als162" => 0.0,
+        "fst4" | "q65" | "jt65" | "jt9" | "wspr" => 1_500.0,
+        _ => 1_500.0,
+    }
+}
+
+/// The RF window a decoder actually consumes, plus what the UI should draw.
+///
+/// The values mirror the channel constructors: USB modes listen above the
+/// dial, AM/FM modes are centred on it, and raw/fixed-plan decoders cover the
+/// receiver window or a fixed channel raster.
+#[allow(unused_variables)]
+pub(crate) fn window_spec(
+    mode: &str,
+    dial_hz: f64,
+    center_hz: f64,
+    sample_rate: u32,
+) -> WindowSpec {
+    let rate_hz = sample_rate.max(1) as f64;
+    let period_s = window_period_s(mode);
+
+    #[cfg(feature = "adsb")]
+    if is_adsb(mode) {
+        return raw_window(
+            center_hz,
+            rate_hz,
+            "receiver window (ADS-B @ 1090 MHz)",
+            period_s,
+        );
+    }
+    #[cfg(feature = "ais")]
+    if is_ais(mode) {
+        let channels: Vec<(f64, String)> = sdroxide_ais::plan::CHANNELS
+            .iter()
+            .map(|c| (c.center_hz, c.label.to_string()))
+            .collect();
+        return fixed_window(center_hz, rate_hz, &channels, 25_000.0, "AIS", period_s);
+    }
+    #[cfg(feature = "vdl2")]
+    if is_vdl2(mode) {
+        let channels: Vec<(f64, String)> = sdroxide_vdl2::plan::CHANNELS
+            .iter()
+            .map(|c| (c.center_hz, c.label.to_string()))
+            .collect();
+        return fixed_window(center_hz, rate_hz, &channels, 25_000.0, "VDL2", period_s);
+    }
+    #[cfg(feature = "ism")]
+    if is_ism(mode) {
+        return raw_window(center_hz, rate_hz, "receiver window (ISM)", period_s);
+    }
+    #[cfg(feature = "hfdl")]
+    if is_hfdl(mode) {
+        let mut spec = centered_window(dial_hz, 24_000.0, "lane", 0.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    if is_acars(mode) {
+        let mut spec = centered_window(dial_hz, 6_000.0, "am", 1_800.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "aprs")]
+    if is_aprs(mode) {
+        let mut spec = centered_window(dial_hz, 12_500.0, "fm", 1_700.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "packet")]
+    if is_packet(mode) {
+        let mut spec = centered_window(dial_hz, 12_500.0, "fm", 1_700.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "time")]
+    if is_dcf77(mode) || is_als162(mode) {
+        let mut spec = centered_window(dial_hz, 200.0, "am", 0.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "meteor")]
+    if is_meteor_mode(mode) {
+        // MSK144/FSK441 already have a dedicated meteor display; a second
+        // decimator for a mini waterfall is not worth the CPU.
+        let mut spec = usb_window(dial_hz, 2_500.0, 1_500.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "js8")]
+    if is_js8(mode) {
+        // JS8 is FT8-family: same 3 kHz USB window and 15 s slots, so the
+        // FT8-style scope and slot UI apply.
+        return usb_window(dial_hz, 3_000.0, 1_500.0, period_s);
+    }
+    #[cfg(feature = "navtex")]
+    if is_navtex(mode) {
+        let mut spec = usb_window(dial_hz, 3_000.0, 1_700.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "wefax")]
+    if is_wefax(mode) {
+        let mut spec = usb_window(dial_hz, 3_000.0, 1_900.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "sstv")]
+    if is_sstv(mode) {
+        let mut spec = usb_window(dial_hz, 3_000.0, 1_900.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "hell")]
+    if is_hell(mode) {
+        let mut spec = usb_window(dial_hz, 3_000.0, 1_500.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    #[cfg(feature = "text")]
+    if is_text(mode) {
+        let mut spec = usb_window(dial_hz, 3_000.0, expected_audio_hz(mode), period_s);
+        spec.scope = false;
+        return spec;
+    }
+
+    // Every remaining mode is a WSJT/FT2/PI4 slotted USB channel.
+    let mut spec = usb_window(dial_hz, 3_000.0, 1_500.0, period_s);
+    if mode.trim().eq_ignore_ascii_case("wspr") {
+        spec.decode_band = Some(RangeSpec::new(dial_hz + 1_400.0, dial_hz + 1_600.0));
+        spec.expected_audio_hz = 1_500.0;
+    }
+    spec
+}
+
+pub(crate) fn pack_window_message(
+    id: &str,
+    mode: &str,
+    window: &WindowSpec,
+    suggest_tune_hz: Option<f64>,
+) -> Vec<u8> {
+    crate::ws::pack_decoder_message(mode, window.to_json(id, mode, suggest_tune_hz))
+}
+
+/// Approximate on-air width of one decoded signal, used to size the marker in
+/// the decoder scope. These are display widths, not decoder bandwidths.
+pub(crate) fn signal_bw_hz(mode: &str) -> f64 {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "ft8" => 50.0,
+        "ft4" => 83.0,
+        "ft2" => 167.0,
+        "wspr" => 6.0,
+        "jt65" => 180.0,
+        "jt9" => 16.0,
+        "fst4" => 6.0,
+        "q65" => 30.0,
+        "msk144" | "fsk441" => 1_500.0,
+        "js8" => 50.0,
+        "acars" => 2_400.0,
+        "aprs" | "packet" => 3_000.0,
+        "navtex" => 1_700.0,
+        "wefax" | "sstv" => 1_900.0,
+        "hell" => 1_000.0,
+        "olivia" | "thor" | "fsq" => 500.0,
+        "psk31" => 31.0,
+        "rtty" => 170.0,
+        "dcf77" | "als162" => 100.0,
+        _ => 0.0,
+    }
+}
 
 struct DecoderInput {
     center_hz: f64,
@@ -229,7 +643,11 @@ enum DecoderKind {
 
 struct DecodeJob {
     audio: Vec<i16>,
-    period: i64,
+    /// UTC slot index, for result metadata.
+    slot: i64,
+    /// Mode period in seconds. This is what mfsk-core's `period` argument
+    /// expects; the slot index is not a period.
+    period_s: i64,
 }
 
 pub(crate) struct MfskChannel {
@@ -248,6 +666,11 @@ pub(crate) struct MfskChannel {
     slot_len: usize,
     last_slot: i64,
     last_status: i64,
+    /// Smoothed audio level (dBFS) for the status line.
+    level: f32,
+    /// Opt-in zoom spectrum, fed from the channel's own extracted IQ.
+    scope: Option<scope::TapScope>,
+    scope_frame: Option<Vec<u8>>,
     decodes: Arc<AtomicU64>,
 }
 
@@ -458,7 +881,7 @@ fn supported_mode(mode: &str) -> bool {
     is_acars(mode) || is_ft2(mode) || mfsk_mode(mode).is_some()
 }
 
-fn now_ns() -> i64 {
+pub(crate) fn now_ns() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
@@ -468,6 +891,34 @@ fn now_ns() -> i64 {
 impl MfskChannel {
     pub(crate) fn take_results(&self) -> Vec<serde_json::Value> {
         std::mem::take(&mut *self.results.lock())
+    }
+
+    /// Enable the zoom spectrum on this channel's already-extracted IQ.
+    /// Returns false when the span cannot be covered by the channel rate.
+    pub(crate) fn set_scope(&mut self, display: &RangeSpec, fps: u32) -> bool {
+        let input_rate = self.extractor.output_sample_rate() as f64;
+        match scope::TapScope::new(input_rate, self.cfg.frequency_hz as f64, display, fps) {
+            Ok(tap) => {
+                self.scope = Some(tap);
+                self.scope_frame = None;
+                tracing::debug!(decoder = %self.cfg.id, "decoder tap scope enabled");
+                true
+            }
+            Err(e) => {
+                warn!(decoder = %self.cfg.id, error = %e, "decoder tap scope unavailable");
+                self.scope = None;
+                false
+            }
+        }
+    }
+
+    pub(crate) fn take_scope(&mut self) -> Option<Vec<u8>> {
+        self.scope_frame.take()
+    }
+
+    pub(crate) fn clear_scope(&mut self) {
+        self.scope = None;
+        self.scope_frame = None;
     }
 
     pub(crate) fn process_chunk(&mut self, chunk: &[u8], now: i64) {
@@ -486,32 +937,43 @@ impl MfskChannel {
                 pair[1] as f32 / 32768.0,
             ));
         }
+        if let Some(scope) = self.scope.as_mut() {
+            self.scope_frame = scope.push(&self.complex);
+        }
         let audio = self.demod.process(&self.complex);
         let mut resampled = std::mem::take(&mut self.resampled);
         resampled.clear();
         self.resampler.process(&audio, &mut resampled);
+        if !resampled.is_empty() {
+            let power: f32 = resampled.iter().map(|s| s * s).sum::<f32>()
+                / resampled.len() as f32;
+            let level = 10.0 * (power + 1e-12).log10();
+            self.level = if self.level <= -119.0 {
+                level
+            } else {
+                self.level + 0.25 * (level - self.level)
+            };
+        }
         append_audio(self, &resampled, now);
         self.resampled = resampled;
         self.pcm = pcm;
 
-        let weak_mode = {
-            let mode = self.cfg.mode.to_ascii_lowercase();
-            mode.starts_with("fst4")
-                || mode.starts_with("q65")
-                || mode == "jt65"
-                || mode == "jt9"
-                || mode == "wspr"
-                || mode == "pi4"
-        };
-        if weak_mode && now.saturating_sub(self.last_status) >= 500_000_000 {
+        if now.saturating_sub(self.last_status) >= 500_000_000 {
             self.last_status = now;
+            let slot_ns = (self.slot_len as i64 * 1_000_000_000) / AUDIO_RATE as i64;
+            let slot_ns = slot_ns.max(1);
+            let slot = now / slot_ns;
+            let next_slot_ms = (slot_ns - (now % slot_ns)) / 1_000_000;
             let status = json!({
                 "kind": "status",
                 "id": self.cfg.id,
                 "mode": self.cfg.mode,
-                "level": 0.0,
+                "level": self.level,
                 "audioHz": 1500.0,
-                "period": (self.slot_len / AUDIO_RATE as usize) as i64,
+                "dialHz": self.cfg.frequency_hz,
+                "period": slot_ns as f64 / 1_000_000_000.0,
+                "slot": slot,
+                "nextSlotMs": next_slot_ms,
                 "decodes": self.decodes.load(Ordering::Relaxed),
                 "listening": true,
             });
@@ -563,6 +1025,36 @@ pub(crate) enum Channel {
 }
 
 impl Channel {
+    /// Enable the zoom spectrum when this channel can provide it from data it
+    /// already extracts. Returns false for channels that need a separate
+    /// [`scope::ScopeProcessor`] (or do not support the scope at all).
+    pub(crate) fn set_scope(&mut self, display: &RangeSpec, fps: u32) -> bool {
+        match self {
+            Channel::Mfsk(channel) => channel.set_scope(display, fps),
+            #[cfg(feature = "js8")]
+            Channel::Js8(channel) => channel.set_scope(display, fps),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn take_scope(&mut self) -> Option<Vec<u8>> {
+        match self {
+            Channel::Mfsk(channel) => channel.take_scope(),
+            #[cfg(feature = "js8")]
+            Channel::Js8(channel) => channel.take_scope(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn clear_scope(&mut self) {
+        match self {
+            Channel::Mfsk(channel) => channel.clear_scope(),
+            #[cfg(feature = "js8")]
+            Channel::Js8(channel) => channel.clear_scope(),
+            _ => {}
+        }
+    }
+
     pub(crate) fn config(&self) -> &DecoderConfig {
         match self {
             Channel::Mfsk(channel) => &channel.cfg,
@@ -641,45 +1133,53 @@ impl Channel {
         }
     }
 
-    pub(crate) fn process_chunk(&mut self, chunk: &[u8], now: i64) {
+    /// Feed one raw chunk.
+    ///
+    /// The public contract is **nanoseconds**, because slots and status
+    /// intervals are sub-second. The channel implementations predate that
+    /// convention and are split between ns and ms; convert at this boundary
+    /// so a foreground and a background worker cannot disagree.
+    pub(crate) fn process_chunk(&mut self, chunk: &[u8], now_ns: i64) {
+        let now_ms = now_ns / 1_000_000;
         match self {
-            Channel::Mfsk(channel) => channel.process_chunk(chunk, now),
-            Channel::Acars(channel) => channel.process_chunk(chunk, now),
+            Channel::Mfsk(channel) => channel.process_chunk(chunk, now_ns),
+            Channel::Acars(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "adsb")]
-            Channel::Adsb(channel) => channel.process_chunk(chunk, now),
+            Channel::Adsb(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "aprs")]
-            Channel::Aprs(channel) => channel.process_chunk(chunk, now),
+            Channel::Aprs(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "ais")]
-            Channel::Ais(channel) => channel.process_chunk(chunk, now),
+            Channel::Ais(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "vdl2")]
-            Channel::Vdl2(channel) => channel.process_chunk(chunk, now),
+            Channel::Vdl2(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "hfdl")]
-            Channel::Hfdl(channel) => channel.process_chunk(chunk, now),
+            Channel::Hfdl(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "navtex")]
-            Channel::Navtex(channel) => channel.process_chunk(chunk, now),
+            Channel::Navtex(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "ism")]
-            Channel::Ism(channel) => channel.process_chunk(chunk, now),
+            Channel::Ism(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "packet")]
-            Channel::Packet(channel) => channel.process_chunk(chunk, now),
+            Channel::Packet(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "wefax")]
-            Channel::Wefax(channel) => channel.process_chunk(chunk, now),
+            Channel::Wefax(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "sstv")]
-            Channel::Sstv(channel) => channel.process_chunk(chunk, now),
+            Channel::Sstv(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "hell")]
-            Channel::Hell(channel) => channel.process_chunk(chunk, now),
+            Channel::Hell(channel) => channel.process_chunk(chunk, now_ms),
+            // Text uses ns for its `at` seconds and Instant for status.
             #[cfg(feature = "text")]
-            Channel::Text(channel) => channel.process_chunk(chunk, now),
+            Channel::Text(channel) => channel.process_chunk(chunk, now_ns),
             #[cfg(feature = "meteor")]
             Channel::Meteor(channel) => {
-                let results = channel.process(chunk, now);
+                let results = channel.process(chunk, now_ns);
                 channel.pending.extend(results);
             }
             #[cfg(feature = "js8")]
-            Channel::Js8(channel) => channel.process_chunk(chunk, now),
+            Channel::Js8(channel) => channel.process_chunk(chunk, now_ns),
             #[cfg(feature = "time")]
-            Channel::Dcf77(channel) => channel.process_chunk(chunk, now),
+            Channel::Dcf77(channel) => channel.process_chunk(chunk, now_ns),
             #[cfg(feature = "time")]
-            Channel::Als162(channel) => channel.process_chunk(chunk, now),
+            Channel::Als162(channel) => channel.process_chunk(chunk, now_ns),
         }
     }
 }
@@ -872,6 +1372,9 @@ fn build_mfsk_channel(
         slot_len,
         last_slot: 0,
         last_status: 0,
+        level: -120.0,
+        scope: None,
+        scope_frame: None,
         decodes,
     })
 }
@@ -897,12 +1400,36 @@ fn decode_worker(
     rx: Receiver<DecodeJob>,
 ) {
     while let Ok(job) = rx.recv() {
+        debug!(
+            decoder = %cfg.id,
+            samples = job.audio.len(),
+            slot = job.slot,
+            period_s = job.period_s,
+            "decoder slot worker started"
+        );
+        let started = std::time::Instant::now();
         let mut out = Vec::new();
+        let mut budget: Option<Value> = None;
         match &mut decoder {
             DecoderKind::Mfsk(decoder) => {
-                let result = decoder.decode_i16(&job.audio, Some(job.period));
+                let result = decoder.decode_i16(&job.audio, Some(job.slot));
+                budget = Some(json!({
+                    "exhausted": result.budget.exhausted,
+                    "candidatesSkipped": result.budget.candidates_skipped,
+                    "stagesRun": result.budget.stages_run,
+                    "cutAtSync": result.budget.cut_at_sync,
+                    "cutAtScore": result.budget.cut_at_score,
+                    "rowsSubtracted": result.budget.rows_subtracted,
+                }));
                 for row in result.rows {
                     let decoded = &row.decoded;
+                    let detail = &row.detail;
+                    let hard = detail.hard_errors.unwrap_or(0);
+                    let confidence = if hard == 0 {
+                        1.0
+                    } else {
+                        (1.0 - hard as f32 / 40.0).clamp(0.0, 0.99)
+                    };
                     out.push(json!({
                         "kind": "decode",
                         "id": cfg.id,
@@ -912,8 +1439,19 @@ fn decode_worker(
                         "rfHz": cfg.frequency_hz as f64 + decoded.freq_hz as f64,
                         "snrDb": decoded.snr_db,
                         "dtSec": decoded.dt_sec,
-                        "period": job.period,
+                        "period": job.slot,
                         "dialHz": cfg.frequency_hz,
+                        "signalBwHz": signal_bw_hz(&cfg.mode),
+                        "stats": {
+                            "crcOk": true,
+                            "fecCorrected": detail.hard_errors,
+                            "hardErrors": detail.hard_errors,
+                            "syncScore": detail.sync_score,
+                            "syncCv": detail.sync_cv,
+                            "confidence": confidence,
+                            "pass": detail.pass,
+                            "hashResolved": detail.hash_resolved,
+                        },
                     }));
                 }
             }
@@ -921,6 +1459,12 @@ fn decode_worker(
                 for result in ft2::decode::decode_slot(&job.audio, 100.0, 3000.0, 1.0, 200) {
                     let Some(text) = mfsk_core::msg::wsjt77::unpack77(result.message77()) else {
                         continue;
+                    };
+                    let hard = result.hard_errors;
+                    let confidence = if hard == 0 {
+                        1.0
+                    } else {
+                        (1.0 - hard as f32 / 40.0).clamp(0.0, 0.99)
                     };
                     out.push(json!({
                         "kind": "decode",
@@ -931,8 +1475,18 @@ fn decode_worker(
                         "rfHz": cfg.frequency_hz as f64 + result.freq_hz as f64,
                         "snrDb": result.snr_db,
                         "dtSec": result.dt_sec,
-                        "period": job.period,
+                        "period": job.slot,
                         "dialHz": cfg.frequency_hz,
+                        "signalBwHz": signal_bw_hz(&cfg.mode),
+                        "stats": {
+                            "crcOk": true,
+                            "fecCorrected": hard,
+                            "hardErrors": hard,
+                            "syncScore": result.sync_score,
+                            "syncCv": result.sync_cv,
+                            "confidence": confidence,
+                            "pass": result.pass,
+                        },
                     }));
                 }
             }
@@ -953,19 +1507,35 @@ fn decode_worker(
                         "rfHz": cfg.frequency_hz as f64 + result.tone0_hz as f64,
                         "snrDb": result.snr_db,
                         "dtSec": result.dt_sec,
-                        "period": job.period,
+                        "period": job.slot,
                         "dialHz": cfg.frequency_hz,
+                        "signalBwHz": signal_bw_hz(&cfg.mode),
                         "variant": result.variant.label(),
                         "fit": result.fit,
                         "hardErrors": result.hard_errors,
+                        "stats": {
+                            "crcOk": true,
+                            "fecCorrected": result.hard_errors,
+                            "hardErrors": result.hard_errors,
+                            "confidence": result.fit.clamp(0.0, 1.0),
+                        },
                     }));
                 }
             }
         }
-        if !out.is_empty() {
-            decodes.fetch_add(out.len() as u64, Ordering::Relaxed);
-            results.lock().extend(out);
-        }
+        let decoded = out.len();
+        out.push(json!({
+            "kind": "slot",
+            "id": cfg.id,
+            "mode": cfg.mode,
+            "slot": job.slot,
+            "periodSec": job.period_s,
+            "decodes": decoded,
+            "elapsedMs": started.elapsed().as_millis() as u64,
+            "budget": budget,
+        }));
+        decodes.fetch_add(decoded as u64, Ordering::Relaxed);
+        results.lock().extend(out);
     }
 }
 
@@ -975,20 +1545,40 @@ fn append_audio(channel: &mut MfskChannel, audio: &[f32], now: i64) {
     if channel.last_slot == 0 {
         channel.last_slot = slot;
     } else if slot != channel.last_slot {
-        if channel.audio.len() >= channel.slot_len {
-            let start = channel.audio.len() - channel.slot_len;
-            let slot_audio = channel.audio[start..].to_vec();
+        // The extractor/resampler has a small startup latency, so the first
+        // boundary can arrive a few samples short of a full slot. Pad the
+        // front rather than losing the whole slot; a genuinely mid-slot start
+        // is still far outside this tolerance.
+        let tolerance = AUDIO_RATE as usize / 10;
+        if channel.audio.len() + tolerance >= channel.slot_len {
+            let slot_audio = if channel.audio.len() >= channel.slot_len {
+                let start = channel.audio.len() - channel.slot_len;
+                channel.audio[start..].to_vec()
+            } else {
+                let mut padded = vec![0i16; channel.slot_len - channel.audio.len()];
+                padded.extend_from_slice(&channel.audio);
+                padded
+            };
             // Decoding happens on the slot worker, never on the dongle read
             // loop. A deep FT8 pass must not stall FFT/audio for every client.
-            if channel
+            let samples = slot_audio.len();
+            let send_result = channel
                 .decode_tx
                 .send(DecodeJob {
                     audio: slot_audio,
-                    period: channel.last_slot,
-                })
-                .is_err()
+                    slot: channel.last_slot,
+                    period_s: ((channel.slot_len as f64 / AUDIO_RATE as f64).round() as i64).max(1),
+                });
+            if send_result.is_err()
             {
                 warn!(decoder = %channel.cfg.id, "decoder slot worker stopped");
+            } else {
+                debug!(
+                    decoder = %channel.cfg.id,
+                    samples,
+                    slot_len = channel.slot_len,
+                    "decoder slot queued"
+                );
             }
         }
         channel.audio.clear();
@@ -1120,6 +1710,127 @@ fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_spec_reports_usb_am_and_fixed_ranges() {
+        let ft8 = window_spec("ft8", 14_074_000.0, 14_075_000.0, 2_400_000);
+        assert_eq!(ft8.window_kind, "usb");
+        assert_eq!(ft8.window.start_hz, 14_074_000.0);
+        assert_eq!(ft8.window.end_hz, 14_077_000.0);
+        assert!(ft8.scope && ft8.tunable);
+
+        let acars = window_spec("acars", 131_550_000.0, 131_550_000.0, 2_400_000);
+        assert_eq!(acars.window_kind, "am");
+        assert_eq!(acars.window.center_hz(), 131_550_000.0);
+        assert_eq!(acars.window.bandwidth_hz(), 6_000.0);
+
+        let hfdl = window_spec("hfdl", 21_931_000.0, 21_931_000.0, 2_400_000);
+        assert_eq!(hfdl.window.bandwidth_hz(), 24_000.0);
+
+        #[cfg(feature = "ais")]
+        {
+            let ais = window_spec("ais", 162_000_000.0, 162_000_000.0, 2_400_000);
+            assert_eq!(ais.window_kind, "fixed");
+            assert_eq!(ais.handled.len(), 2);
+            assert!(!ais.tunable && !ais.scope);
+        }
+    }
+
+    #[test]
+    fn wspr_window_has_a_narrow_decode_band() {
+        let wspr = window_spec("wspr", 14_095_600.0, 14_095_600.0, 2_400_000);
+        let band = wspr.decode_band.expect("WSPR decode band");
+        assert_eq!(band.start_hz, 14_095_600.0 + 1_400.0);
+        assert_eq!(band.end_hz, 14_095_600.0 + 1_600.0);
+    }
+
+    #[test]
+    fn full_mfsk_channel_decodes_a_synthetic_ft8_slot() {
+        use mfsk_core::prelude::{encode, TxAudio};
+        use std::time::{Duration, Instant};
+
+        // 48 kHz keeps the test quick while still exercising the extractor,
+        // USB demodulator, resampler, slot buffer and slot worker.
+        let input_rate = 48_000u32;
+        let cfg = DecoderConfig {
+            id: "ft8-path-test".into(),
+            enabled: true,
+            dongle_id: "d".into(),
+            mode: "ft8".into(),
+            frequency_hz: 0,
+            bandwidth_hz: 3_000,
+            settings: Default::default(),
+        };
+        let mut channel = build_channel(&cfg, 0.0, input_rate).expect("build FT8 channel");
+
+        let tx = encode(MfskMode::Ft8, "CQ N0CALL").expect("encode FT8");
+        let frame = tx.synthesize(&TxAudio::new(12_000, 1_500.0));
+        // Place the frame 0.5 s into a 15 s slot, then upsample 12 k -> 48 k.
+        let slot_12k = 180_000usize;
+        // Two slots so the first boundary has a full slot plus the startup
+        // latency allowance. The frame is in the first slot.
+        let mut audio_12k = vec![0.0f32; slot_12k * 2 + 12_000];
+        // Real receivers never produce digital silence; zero-filled audio sends
+        // mfsk-core's OSD down a pathological path. Use deterministic noise.
+        let mut lcg = 0x1234_5678u32;
+        for sample in &mut audio_12k {
+            lcg = lcg.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *sample = ((lcg >> 8) as f32 / 16_777_216.0 - 0.5) * 0.02;
+        }
+        let frame_at = 6_000;
+        audio_12k[frame_at..frame_at + frame.len()].copy_from_slice(&frame);
+        let mut iq = Vec::with_capacity(audio_12k.len() * 4 * 2);
+        let mut previous = 0.0f32;
+        for &sample in &audio_12k {
+            for i in 0..4 {
+                let value = previous + (sample - previous) * (i as f32 / 4.0);
+                let v = value.clamp(-1.0, 1.0);
+                iq.push(((v * 127.5 + 127.5) as u8).min(255));
+                iq.push(127); // Q = 0: the extractor/USB demod recovers the real audio.
+            }
+            previous = sample;
+        }
+
+        // Confirm the synthetic frame is decodable before it goes through the
+        // channel, so a failure points at the DSP path rather than the fixture.
+        let mut direct = AnyDecoder::new(MfskMode::Ft8, DecodeParams::for_band((100.0, 3000.0)));
+        let direct_result = direct.decode(&mfsk_core::prelude::SlotInput::f32(
+            &audio_12k[..slot_12k],
+        ));
+        assert!(!direct_result.rows.is_empty(), "synthetic fixture is invalid");
+
+        // Start exactly on a slot boundary and feed one full slot plus a little.
+        let slot_ns = 15_000_000_000i64;
+        let chunk_samples = 4_800usize; // 0.1 s at 48 kHz
+        let mut now = slot_ns * 10;
+        let mut offset = 0usize;
+        while offset < iq.len() {
+            let end = (offset + chunk_samples * 2).min(iq.len());
+            channel.process_chunk(&iq[offset..end], now);
+            offset = end;
+            now += (chunk_samples as i64 * 1_000_000_000) / input_rate as i64;
+        }
+
+        // Give the detached slot worker time to finish.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut found = String::new();
+        while Instant::now() < deadline && found.is_empty() {
+            for value in channel.take_results() {
+                if value.get("kind").and_then(|k| k.as_str()) == Some("decode") {
+                    found = value
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            found.contains("N0CALL"),
+            "full FT8 channel path did not decode: {found:?}"
+        );
+    }
 
     #[test]
     fn mode_names_map_to_mfsk_modes() {

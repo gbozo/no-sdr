@@ -152,9 +152,20 @@ impl MeteorChannel {
         if self.last_slot == 0 {
             self.last_slot = slot;
         } else if slot != self.last_slot {
-            if self.audio.len() >= self.slot_len {
-                let start = self.audio.len() - self.slot_len;
-                self.decode_slot(&self.audio[start..].to_vec(), self.last_slot, &mut out);
+            // Allow for the extractor/resampler's startup latency, same as the
+            // mfsk and JS8 channels: the first boundary can be a few samples
+            // short without meaning the slot is partial.
+            let tolerance = self.kind.rate() as usize / 10;
+            if self.audio.len() + tolerance >= self.slot_len {
+                let audio = if self.audio.len() >= self.slot_len {
+                    let start = self.audio.len() - self.slot_len;
+                    self.audio[start..].to_vec()
+                } else {
+                    let mut padded = vec![0.0f32; self.slot_len - self.audio.len()];
+                    padded.extend_from_slice(&self.audio);
+                    padded
+                };
+                self.decode_slot(&audio, self.last_slot, &mut out);
             }
             self.audio.clear();
             self.last_slot = slot;
@@ -207,6 +218,10 @@ impl MeteorChannel {
                         "dtSec": decode.tsec,
                         "period": period,
                         "dialHz": self.cfg.frequency_hz,
+                        "signalBwHz": super::signal_bw_hz(self.kind.mode()),
+                        "stats": {
+                            "crcOk": true,
+                        },
                     }));
                 }
             }
@@ -226,6 +241,11 @@ impl MeteorChannel {
                         "confidence": ping.confidence,
                         "period": period,
                         "dialHz": self.cfg.frequency_hz,
+                        "signalBwHz": super::signal_bw_hz(self.kind.mode()),
+                        "stats": {
+                            "crcOk": true,
+                            "confidence": ping.confidence,
+                        },
                     }));
                 }
             }

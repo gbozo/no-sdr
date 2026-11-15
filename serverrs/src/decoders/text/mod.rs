@@ -63,6 +63,13 @@ impl TextRx {
         }
     }
 
+    fn confidence(&self) -> Option<f32> {
+        match self {
+            TextRx::Rtty(rx) => Some(rx.confidence()),
+            _ => None,
+        }
+    }
+
     fn status_extra(&self) -> Value {
         match self {
             TextRx::Psk(rx) => json!({ "baud": rx.baud() }),
@@ -263,7 +270,7 @@ impl TextChannel {
         self.resampled = resampled;
 
         if !text.is_empty() {
-            self.pending.push(json!({
+            let mut value = json!({
                 "kind": "text",
                 "id": self.cfg.id,
                 "mode": self.cfg.mode,
@@ -271,8 +278,18 @@ impl TextChannel {
                 "rfHz": self.cfg.frequency_hz,
                 "audioHz": self.audio_hz,
                 "level": self.level,
+                "signalBwHz": super::signal_bw_hz(&self.cfg.mode),
                 "at": now / 1_000_000_000,
-            }));
+            });
+            if let Some(confidence) = self.rx.confidence() {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert(
+                        "stats".into(),
+                        json!({ "confidence": confidence }),
+                    );
+                }
+            }
+            self.pending.push(value);
         }
 
         if self.last_status.elapsed() >= STATUS_INTERVAL {

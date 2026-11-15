@@ -18,8 +18,11 @@ import {
   MSG_AUDIO_OPUS,
   MSG_META,
   MSG_DECODER,
+  MSG_DECODER_SCOPE,
   MSG_SIGNAL_LEVEL,
   MSG_RDS,
+  unpackDecoderScope,
+  type DecoderScopeFrame,
   DEMOD_MODES,
   ImaAdpcmDecoder,
   decodeFftAdpcm,
@@ -191,6 +194,10 @@ export class SdrEngine {
   // Client-side FFT frame buffer — keeps last 1024 decoded Float32 frames.
   // Used for waterfall prefill on zoom/reset and future seek-back feature.
   private fftBuffer = new FftFrameBuffer(1024, 0);
+
+  // Zoomed spectra for the foreground decoder pane. Each frame is ~537 B,
+  // so 240 frames is ~130 KB; the pane only ever draws the newest ~160.
+  private decoderScopeFrames: DecoderScopeFrame[] = [];
 
   // Pending waterfall prefill: rAF handle for deferred zoom/pan redraws.
   // Multiple zoom wheel events within one frame collapse into a single redraw.
@@ -960,6 +967,15 @@ export class SdrEngine {
         break;
       }
 
+      case MSG_DECODER_SCOPE: {
+        const frame = unpackDecoderScope(payload);
+        if (!frame) break;
+        this.decoderScopeFrames.push(frame);
+        if (this.decoderScopeFrames.length > 240) this.decoderScopeFrames.shift();
+        store.setDecoderScopeSeq(store.decoderScopeSeq() + 1);
+        break;
+      }
+
       case MSG_SIGNAL_LEVEL: {
         const level = new Float32Array(payload)[0];
         store.setSignalLevel(level);
@@ -1678,6 +1694,11 @@ export class SdrEngine {
     this.send({ cmd: 'subscribe', dongleId, profileId });
     if (store.decoderMode()) {
       this.send({ cmd: 'decoder', mode: store.decoderMode() });
+      this.send({
+        cmd: 'decoder_scope',
+        enabled: store.decoderPanelOpen(),
+        fps: 10,
+      });
     }
   }
 
@@ -1772,7 +1793,9 @@ export class SdrEngine {
     // Keep Signal Analysis open so both workspaces can be shown together.
     if (next) store.setDecoderPanelOpen(true);
     store.setDecoderMode(next);
+    this.clearDecoderScope();
     store.clearDecoderMessages();
+    store.clearDecoderState();
     store.clearAdsb();
     store.clearAcars();
     store.clearAis();
@@ -1790,6 +1813,15 @@ export class SdrEngine {
     store.clearJs8();
     store.clearTimeSignal();
     this.send({ cmd: 'decoder', mode: next });
+    // The scope is opt-in: it costs one extra decimator + FFT per client, so
+    // only ask for it while the decoder workspace is actually visible.
+    this.send({ cmd: 'decoder_scope', enabled: !!next, fps: 10 });
+  }
+
+  /** Turn the zoomed decoder spectrum on or off without changing the decoder. */
+  setDecoderScopeEnabled(enabled: boolean): void {
+    this.send({ cmd: 'decoder_scope', enabled: enabled && !!store.decoderMode(), fps: 10 });
+    if (!enabled) this.clearDecoderScope();
   }
 
   setBandwidth(hz: number): void {
@@ -2265,6 +2297,16 @@ export class SdrEngine {
   getLatestFftFrame(): Float32Array | null {
     const frames = this.fftBuffer.getFrames();
     return frames.length ? frames[frames.length - 1] : null;
+  }
+
+  /** Zoomed foreground-decoder spectra, oldest first. */
+  getDecoderScopeFrames(): DecoderScopeFrame[] {
+    return this.decoderScopeFrames;
+  }
+
+  clearDecoderScope(): void {
+    this.decoderScopeFrames = [];
+    store.setDecoderScopeSeq(0);
   }
 
   /** Begin a short raw-IQ capture for client-side signal identification. */

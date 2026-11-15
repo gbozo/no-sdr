@@ -137,6 +137,88 @@ export interface DecoderConfig {
   options: Record<string, unknown>;
 }
 
+// ---- Decoder scope / status ----
+
+export interface DecoderRange {
+  startHz: number;
+  centerHz?: number;
+  endHz: number;
+  bandwidthHz?: number;
+}
+
+export interface DecoderHandledRange extends DecoderRange {
+  label?: string;
+}
+
+/** `kind: "window"` — the exact RF window a foreground decoder consumes. */
+export interface DecoderWindowInfo {
+  kind: 'window';
+  id: string;
+  mode: string;
+  dialHz: number;
+  window: DecoderRange;
+  handled: DecoderHandledRange[];
+  display: DecoderRange;
+  decodeBand?: DecoderRange;
+  windowKind: 'usb' | 'am' | 'fm' | 'lane' | 'fixed' | 'raw';
+  tunable: boolean;
+  scope: boolean;
+  expectedAudioHz: number;
+  period: number;
+  suggestTuneHz: number | null;
+}
+
+export interface DecoderStats {
+  crcOk?: boolean | null;
+  fecCorrected?: number | null;
+  hardErrors?: number | null;
+  syncScore?: number | null;
+  syncCv?: number | null;
+  confidence?: number | null;
+  pass?: number | null;
+  hashResolved?: boolean | null;
+  frames?: number | null;
+}
+
+export interface DecoderBudget {
+  exhausted?: boolean;
+  candidatesSkipped?: number;
+  stagesRun?: number;
+  cutAtSync?: number | null;
+  cutAtScore?: number | null;
+  rowsSubtracted?: number;
+}
+
+/** `kind: "status"` — live level/slot information for the decoder pane. */
+export interface DecoderStatus {
+  kind: 'status';
+  id?: string;
+  mode?: string;
+  dialHz?: number;
+  level?: number;
+  noiseDb?: number;
+  snrDb?: number;
+  audioHz?: number;
+  period?: number;
+  slot?: number;
+  nextSlotMs?: number;
+  decodes?: number;
+  listening?: boolean;
+  peaks?: Array<{ audioHz: number; snrDb: number }>;
+  budget?: DecoderBudget;
+}
+
+/** `kind: "slot"` — one decode pass summary. */
+export interface DecoderSlot {
+  kind: 'slot';
+  id?: string;
+  mode?: string;
+  slot?: number;
+  decodes: number;
+  elapsedMs: number;
+  budget?: DecoderBudget | null;
+}
+
 // ---- Demodulation ----
 
 export type DemodMode = 'wfm' | 'nfm' | 'am' | 'am-stereo' | 'sam' | 'usb' | 'lsb' | 'cw' | 'raw';

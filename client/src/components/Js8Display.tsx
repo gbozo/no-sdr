@@ -5,6 +5,7 @@
 import { Component, For, Show, createMemo, createSignal } from 'solid-js';
 import { store } from '../store/index.js';
 import type { Js8Message } from '~/shared';
+import DecoderScope from './DecoderScope.js';
 
 function formatTime(at: number): string {
   if (!Number.isFinite(at) || at <= 0) return '--:--:--';
@@ -76,7 +77,9 @@ const Js8Display: Component = () => {
         </table>
       </div>
 
-      <div class="w-full md:w-[320px] shrink-0 min-h-0 overflow-auto p-3 space-y-3">
+      <div class="w-full md:w-[360px] shrink-0 min-h-0 overflow-auto flex flex-col">
+        <DecoderScope fullWidth />
+        <div class="p-3 space-y-3">
         <div>
           <h4 class="text-[10px] font-mono uppercase tracking-wider text-text-dim mb-1">Heard stations</h4>
           <div class="flex flex-wrap gap-1">
@@ -117,6 +120,7 @@ const Js8Display: Component = () => {
           JS8 speeds: NORMAL 15 s, FAST 10 s, TURBO 6 s, SLOW 30 s. This receiver decodes the
           configured speed; default is NORMAL.
         </p>
+        </div>
       </div>
     </div>
   );

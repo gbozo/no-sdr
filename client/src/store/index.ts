@@ -13,6 +13,9 @@ import type {
   DemodMode,
   WaterfallColorTheme,
   UITheme,
+  DecoderWindowInfo,
+  DecoderStatus,
+  DecoderSlot,
   DongleInfo,
   DongleProfile,
   PushDongleInfo,
@@ -138,6 +141,14 @@ function createStore() {
   const [decoderMessages, setDecoderMessages] = createSignal<
     { decoderType: string; data: Record<string, unknown>; receivedAt: number }[]
   >([]);
+  /** Exact RF window the foreground decoder consumes. */
+  const [decoderWindow, setDecoderWindow] = createSignal<DecoderWindowInfo | null>(null);
+  /** Live level/slot status for the foreground decoder. */
+  const [decoderStatus, setDecoderStatus] = createSignal<DecoderStatus | null>(null);
+  /** Most recent decode-pass summary. */
+  const [decoderSlot, setDecoderSlot] = createSignal<DecoderSlot | null>(null);
+  /** Bumped on each zoom-spectrum frame so the canvas can redraw. */
+  const [decoderScopeSeq, setDecoderScopeSeq] = createSignal(0);
   /** Latest ADS-B aircraft table (replaced whole on each snapshot). */
   const [adsbAircraft, setAdsbAircraft] = createSignal<AdsbAircraft[]>([]);
   /** ADS-B receiver diagnostics; null until the first snapshot. */
@@ -457,6 +468,16 @@ function createStore() {
     bandwidth, setBandwidth,
     decoderMode, setDecoderMode,
     decoderMessages,
+    decoderWindow, setDecoderWindow,
+    decoderStatus, setDecoderStatus,
+    decoderSlot, setDecoderSlot,
+    decoderScopeSeq, setDecoderScopeSeq,
+    clearDecoderState: () => {
+      setDecoderWindow(null);
+      setDecoderStatus(null);
+      setDecoderSlot(null);
+      setDecoderScopeSeq(0);
+    },
     addDecoderMessage: (decoderType: string, data: Record<string, unknown>) => {
       setDecoderMessages((prev) => [
         { decoderType, data, receivedAt: Date.now() },

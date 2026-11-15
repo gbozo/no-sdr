@@ -22,6 +22,9 @@ pub const MSG_RDS: u8 = 0x0A; // UTF-8 JSON (RDS data)
 pub const MSG_FFT_DEFLATE: u8 = 0x0B; // Int16(minDb) + Int16(maxDb) + Uint32(binCount) + deflate
 pub const MSG_AUDIO_OPUS: u8 = 0x0C; // Uint16(sampleCount) + Uint8(channels) + Opus packet
 pub const MSG_FFT_HISTORY: u8 = 0x0D; // Waterfall history burst
+/// A foreground decoder's zoomed spectrum. Sent only after the client asks
+/// for it with `{"cmd":"decoder_scope","enabled":true}`.
+pub const MSG_DECODER_SCOPE: u8 = 0x0E; // [version][flags][reserved][startHz][bins][hzPerBin][minDb][maxDb][u8 bins]
 
 /// Metadata sent to a connected client.
 ///
@@ -115,6 +118,10 @@ pub struct ClientCommand {
     /// FM de-emphasis in microseconds (50 or 75).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deemphasis: Option<f64>,
+    /// Foreground decoder scope frame rate (2–20 fps). Only meaningful for
+    /// `cmd: "decoder_scope"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -162,6 +169,35 @@ pub fn pack_decoder_message(decoder_type: &str, data: Value) -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 + json.len());
     buf.push(MSG_DECODER);
     buf.extend_from_slice(&json);
+    buf
+}
+
+/// Pack a foreground decoder's zoomed spectrum.
+///
+/// Wire (after the leading type byte):
+/// `[u8 version][u8 flags][u16 reserved][f64 startHz][u32 binCount]`
+/// `[f32 hzPerBin][i16 minDb][i16 maxDb][u8 bins...]`.
+///
+/// `startHz` is the absolute RF frequency of the first bin. The bins are
+/// linear in dB between `minDb` and `maxDb`.
+pub fn pack_decoder_scope(
+    start_hz: f64,
+    hz_per_bin: f32,
+    min_db: f32,
+    max_db: f32,
+    bins: &[u8],
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(24 + bins.len());
+    buf.push(MSG_DECODER_SCOPE);
+    buf.push(1); // version
+    buf.push(0); // flags
+    buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    buf.extend_from_slice(&start_hz.to_le_bytes());
+    buf.extend_from_slice(&(bins.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&hz_per_bin.to_le_bytes());
+    buf.extend_from_slice(&(min_db.round() as i16).to_le_bytes());
+    buf.extend_from_slice(&(max_db.round() as i16).to_le_bytes());
+    buf.extend_from_slice(bins);
     buf
 }
 
@@ -474,6 +510,18 @@ mod tests {
         let value: Value = serde_json::from_slice(&msg[1..]).unwrap();
         assert_eq!(value["decoderType"], "ft8");
         assert_eq!(value["data"]["text"], "CQ N0CALL");
+    }
+
+    #[test]
+    fn decoder_scope_frame_shape() {
+        let msg = pack_decoder_scope(14_074_000.0, 12.5, -130.0, 0.0, &[0, 128, 255]);
+        assert_eq!(msg[0], MSG_DECODER_SCOPE);
+        assert_eq!(msg[1], 1);
+        assert_eq!(u32::from_le_bytes(msg[13..17].try_into().unwrap()), 3);
+        assert_eq!(f32::from_le_bytes(msg[17..21].try_into().unwrap()), 12.5);
+        assert_eq!(i16::from_le_bytes(msg[21..23].try_into().unwrap()), -130);
+        assert_eq!(i16::from_le_bytes(msg[23..25].try_into().unwrap()), 0);
+        assert_eq!(&msg[25..], &[0, 128, 255]);
     }
 
     #[test]

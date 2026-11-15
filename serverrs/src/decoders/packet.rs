@@ -203,6 +203,10 @@ impl PacketChannel {
             "snrDb": 0.0,
             "dtSec": 0.0,
             "period": 0,
+            "signalBwHz": 3_000.0,
+            "stats": {
+                "crcOk": true,
+            },
             "packet": {
                 "at": now_ms / 1000,
                 "from": from,

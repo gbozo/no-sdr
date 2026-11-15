@@ -6,6 +6,7 @@ import { Component, onMount, onCleanup, Show, createSignal, For, createMemo, cre
 import { useNavigate } from '@solidjs/router';
 import { store } from './store/index.js';
 import { engine } from './engine/sdr-engine.js';
+import type { DecoderSlot, DecoderStatus, DecoderWindowInfo } from '~/shared';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
 import DecoderDisplay from './components/DecoderDisplay.js';
 import SignalAnalysis from './components/SignalAnalysis.js';
@@ -73,6 +74,25 @@ const App: Component = () => {
     // Foreground decoder results are pushed as MSG_DECODER and fed to the
     // reactive message store for the decoder panel.
     engine.onDecoderData = (type, data) => {
+      const payload = (data ?? {}) as Record<string, unknown>;
+      if (payload.kind === 'window') {
+        if (type === store.decoderMode() && (!payload.mode || payload.mode === store.decoderMode())) {
+          store.setDecoderWindow(payload as unknown as DecoderWindowInfo);
+        }
+        return;
+      }
+      if (payload.kind === 'status') {
+        // Background decoders broadcast their own statuses; only let the
+        // active foreground mode drive the scope header.
+        if (type === store.decoderMode() && (!payload.mode || payload.mode === store.decoderMode())) {
+          store.setDecoderStatus(payload as unknown as DecoderStatus);
+        }
+      }
+      if (payload.kind === 'slot') {
+        if (type === store.decoderMode() && (!payload.mode || payload.mode === store.decoderMode())) {
+          store.setDecoderSlot(payload as unknown as DecoderSlot);
+        }
+      }
       if (type === 'adsb') {
         store.applyAdsbSnapshot(data);
         return;
@@ -137,7 +157,10 @@ const App: Component = () => {
         store.applyTimeSignalEvent(data);
         return;
       }
-      store.addDecoderMessage(type, (data ?? {}) as Record<string, unknown>);
+      // Only decoded rows belong in the generic message table; status, slot
+      // and window events have their own store fields.
+      if (payload.kind && payload.kind !== 'decode' && payload.kind !== 'message') return;
+      store.addDecoderMessage(type, payload);
     };
 
     // Connect to WebSocket on first mount. On HMR the engine singleton is reused

@@ -232,6 +232,17 @@ struct ClientPipeline {
     /// Per-client foreground decoder, built from the client's tune offset.
     #[cfg(feature = "decoders")]
     foreground: Option<crate::decoders::Channel>,
+    /// The exact RF window the foreground decoder consumes. Sent to the
+    /// client so it never has to guess from the demod bandwidth.
+    #[cfg(feature = "decoders")]
+    foreground_window: Option<crate::decoders::WindowSpec>,
+    /// Opt-in zoomed spectrum for the decoder pane.
+    #[cfg(feature = "decoders")]
+    scope: Option<crate::decoders::scope::ScopeProcessor>,
+    #[cfg(feature = "decoders")]
+    scope_enabled: bool,
+    #[cfg(feature = "decoders")]
+    scope_fps: u32,
     #[cfg(feature = "decoders")]
     foreground_mode: String,
     #[cfg(feature = "decoders")]
@@ -1594,6 +1605,11 @@ impl Manager {
                 || cp.foreground_rate != sample_rate
                 || cp.foreground_center != center_hz as i64
             {
+                debug!(
+                    client = %client_id,
+                    mode = %cp.foreground_mode,
+                    "foreground decoder rebuilding"
+                );
                 let cfg = crate::config::DecoderConfig {
                     id: format!("client-{client_id}"),
                     enabled: true,
@@ -1617,10 +1633,64 @@ impl Manager {
                 };
                 cp.foreground_center = center_hz as i64;
                 cp.foreground_rate = sample_rate;
+
+                let window = crate::decoders::window_spec(
+                    &cp.foreground_mode,
+                    center_hz as f64 + cp.foreground_offset as f64,
+                    center_hz as f64,
+                    sample_rate,
+                );
+                if cp.foreground_window.as_ref() != Some(&window) {
+                    cp.foreground_window = Some(window.clone());
+                    let id = format!("client-{client_id}");
+                    self.ws.send_to(
+                        client_id,
+                        crate::decoders::pack_window_message(
+                            &id,
+                            &cp.foreground_mode,
+                            &window,
+                            None,
+                        ),
+                    );
+                    if cp.scope_enabled {
+                        let scope_fps = cp.scope_fps;
+                        let tapped = cp
+                            .foreground
+                            .as_mut()
+                            .map(|channel| channel.set_scope(&window.display, scope_fps))
+                            .unwrap_or(false);
+                        cp.scope = if tapped {
+                            None
+                        } else if window.scope {
+                            crate::decoders::scope::ScopeProcessor::new(
+                                center_hz as f64,
+                                sample_rate,
+                                &window.display,
+                                scope_fps,
+                            )
+                            .map_err(|e| {
+                                warn!(client = %client_id, error = %e, "decoder scope unavailable");
+                                e
+                            })
+                            .map(|processor| {
+                                debug!(client = %client_id, "decoder fallback scope enabled (rebuild)");
+                                processor
+                            })
+                            .ok()
+                        } else {
+                            None
+                        };
+                    } else {
+                        if let Some(channel) = cp.foreground.as_mut() {
+                            channel.clear_scope();
+                        }
+                        cp.scope = None;
+                    }
+                }
             }
 
             let results = if let Some(foreground) = cp.foreground.as_mut() {
-                foreground.process_chunk(chunk, crate::decoders::store::now_ms());
+                foreground.process_chunk(chunk, crate::decoders::now_ns());
                 foreground.take_results()
             } else {
                 Vec::new()
@@ -1678,6 +1748,15 @@ impl Manager {
                         client_id,
                         crate::ws::pack_decoder_message(&foreground_mode, data),
                     );
+                }
+            }
+
+            if let Some(frame) = cp.foreground.as_mut().and_then(|channel| channel.take_scope()) {
+                self.ws.send_to(client_id, frame);
+            }
+            if let Some(scope) = cp.scope.as_mut() {
+                if let Some(frame) = scope.process(chunk) {
+                    self.ws.send_to(client_id, frame);
                 }
             }
         }
@@ -1799,10 +1878,10 @@ impl Manager {
         #[cfg(feature = "decoders")]
         let decoder_mode = client.decoder();
         #[cfg(feature = "decoders")]
-        let foreground = if decoder_mode.is_empty() {
+        let foreground_cfg = if decoder_mode.is_empty() {
             None
         } else {
-            let cfg = crate::config::DecoderConfig {
+            Some(crate::config::DecoderConfig {
                 id: format!("client-{client_id}"),
                 enabled: true,
                 dongle_id: dongle_id.clone(),
@@ -1810,8 +1889,11 @@ impl Manager {
                 frequency_hz: center_hz + tune_offset as i64,
                 bandwidth_hz: 3000,
                 settings: Default::default(),
-            };
-            match crate::decoders::build_channel(&cfg, center_hz as f64, input_rate as u32) {
+            })
+        };
+        #[cfg(feature = "decoders")]
+        let mut foreground = foreground_cfg.as_ref().and_then(|cfg| {
+            match crate::decoders::build_channel(cfg, center_hz as f64, input_rate as u32) {
                 Ok(channel) => {
                     info!(client = %client_id, decoder = %decoder_mode, "foreground decoder ready");
                     Some(channel)
@@ -1826,7 +1908,48 @@ impl Manager {
                     None
                 }
             }
-        };
+        });
+        #[cfg(feature = "decoders")]
+        let foreground_window = foreground_cfg.as_ref().map(|cfg| {
+            crate::decoders::window_spec(
+                &cfg.mode,
+                cfg.frequency_hz as f64,
+                center_hz as f64,
+                input_rate as u32,
+            )
+        });
+        #[cfg(feature = "decoders")]
+        let scope_enabled = client.decoder_scope();
+        #[cfg(feature = "decoders")]
+        let scope_fps = client.decoder_scope_fps();
+        #[cfg(feature = "decoders")]
+        let mut scope = None;
+        #[cfg(feature = "decoders")]
+        if scope_enabled {
+            let tapped = foreground
+                .as_mut()
+                .zip(foreground_window.as_ref())
+                .map(|(channel, window)| channel.set_scope(&window.display, scope_fps))
+                .unwrap_or(false);
+            if !tapped {
+                if let Some(window) = foreground_window.as_ref().filter(|w| w.scope) {
+                    match crate::decoders::scope::ScopeProcessor::new(
+                        center_hz as f64,
+                        input_rate as u32,
+                        &window.display,
+                        scope_fps,
+                    ) {
+                        Ok(processor) => {
+                            debug!(client = %client_id, "decoder fallback scope enabled");
+                            scope = Some(processor)
+                        }
+                        Err(e) => {
+                            warn!(client = %client_id, error = %e, "decoder scope unavailable");
+                        }
+                    }
+                }
+            }
+        }
 
         let extractor = match IqExtractor::new(IqExtractorConfig {
             input_sample_rate: input_rate,
@@ -1866,6 +1989,14 @@ impl Manager {
             #[cfg(feature = "decoders")]
             foreground,
             #[cfg(feature = "decoders")]
+            foreground_window,
+            #[cfg(feature = "decoders")]
+            scope,
+            #[cfg(feature = "decoders")]
+            scope_enabled,
+            #[cfg(feature = "decoders")]
+            scope_fps,
+            #[cfg(feature = "decoders")]
             foreground_mode: decoder_mode,
             #[cfg(feature = "decoders")]
             foreground_offset: tune_offset,
@@ -1874,6 +2005,20 @@ impl Manager {
             #[cfg(feature = "decoders")]
             foreground_rate: input_rate as u32,
         };
+
+        #[cfg(feature = "decoders")]
+        if let Some(window) = cp.foreground_window.as_ref() {
+            let id = format!("client-{client_id}");
+            self.ws.send_to(
+                client_id,
+                crate::decoders::pack_window_message(
+                    &id,
+                    &cp.foreground_mode,
+                    window,
+                    None,
+                ),
+            );
+        }
 
         if profile.pre_filter_nb {
             cp.nb_enabled = true;
@@ -1977,6 +2122,7 @@ impl Manager {
             "unsubscribe" => self.handle_unsubscribe(client_id),
             "audio_enabled" => self.handle_audio_enabled(client_id, cmd),
             "decoder" => self.handle_decoder(client_id),
+            "decoder_scope" => self.handle_decoder_scope(client_id, cmd),
             "tune" => self.handle_tune(client_id, cmd),
             "bandwidth" => self.handle_bandwidth(client_id, cmd),
             "mode" => self.handle_mode(client_id, cmd),
@@ -2199,6 +2345,65 @@ impl Manager {
         self.create_client_pipeline(client_id);
     }
 
+    fn handle_decoder_scope(&self, client_id: &str, cmd: &ClientCommand) {
+        #[cfg(not(feature = "decoders"))]
+        let _ = (client_id, cmd);
+        #[cfg(feature = "decoders")]
+        {
+            let enabled = cmd.enabled.unwrap_or(false);
+            let fps = cmd.fps.unwrap_or(10).clamp(2, 20);
+            if let Some(client) = self.ws.get_client(client_id) {
+                client.set_decoder_scope(enabled, fps);
+            }
+            let Some(cp) = self.client_pipelines.lock().get(client_id).cloned() else {
+                return;
+            };
+            let mut cp = cp.lock();
+            cp.scope_enabled = enabled;
+            cp.scope_fps = fps;
+            if !enabled {
+                cp.scope = None;
+                if let Some(channel) = cp.foreground.as_mut() {
+                    channel.clear_scope();
+                }
+            } else if !cp.foreground_mode.is_empty() {
+                let window = crate::decoders::window_spec(
+                    &cp.foreground_mode,
+                    cp.foreground_center as f64 + cp.foreground_offset as f64,
+                    cp.foreground_center as f64,
+                    cp.foreground_rate,
+                );
+                cp.foreground_window = Some(window.clone());
+                let tapped = cp
+                    .foreground
+                    .as_mut()
+                    .map(|channel| channel.set_scope(&window.display, fps))
+                    .unwrap_or(false);
+                cp.scope = if tapped {
+                    None
+                } else if window.scope {
+                    crate::decoders::scope::ScopeProcessor::new(
+                        cp.foreground_center as f64,
+                        cp.foreground_rate,
+                        &window.display,
+                        fps,
+                    )
+                    .map_err(|e| {
+                        warn!(client = %client_id, error = %e, "decoder scope unavailable");
+                        e
+                    })
+                    .map(|processor| {
+                        debug!(client = %client_id, "decoder fallback scope enabled (command)");
+                        processor
+                    })
+                    .ok()
+                } else {
+                    None
+                };
+            }
+        }
+    }
+
     fn handle_tune(&self, client_id: &str, cmd: &ClientCommand) {
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
@@ -2208,8 +2413,11 @@ impl Manager {
             cp.adpcm_enc.reset();
             #[cfg(feature = "decoders")]
             {
+                debug!(client = %client_id, offset = cmd.offset, "foreground decoder retune");
                 cp.foreground_offset = cmd.offset as i32;
                 cp.foreground = None;
+                cp.foreground_window = None;
+                cp.scope = None;
             }
         }
     }
