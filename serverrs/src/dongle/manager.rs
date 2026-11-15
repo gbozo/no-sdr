@@ -140,6 +140,9 @@ pub struct ServerConfigInfo {
     pub callsign: String,
     pub description: String,
     pub location: String,
+    /// Receiver position for future map overlays (0,0 = unset).
+    pub receiver_latitude: f64,
+    pub receiver_longitude: f64,
     pub demo_mode: bool,
     pub identify_enabled: bool,
     pub users_ribbon: String,
@@ -246,6 +249,10 @@ struct ClientPipeline {
     scope_fps: u32,
     #[cfg(feature = "decoders")]
     foreground_mode: String,
+    /// Bounded remember-set for rolling snapshots (VDL2/HFDL/ISM), so a
+    /// foreground decoder does not insert the same table row every status tick.
+    #[cfg(feature = "decoders")]
+    snapshot_seen: crate::decoders::SnapshotSeen,
     #[cfg(feature = "decoders")]
     foreground_offset: i32,
     #[cfg(feature = "decoders")]
@@ -281,9 +288,10 @@ pub struct Manager {
     /// state of the operation that replaced it.
     start_generations: Mutex<HashMap<String, u64>>,
     client_pipelines: Mutex<HashMap<String, Arc<Mutex<ClientPipeline>>>>,
-    /// OpenWebRX-style background decoders, one worker per dongle.
+    /// OpenWebRX-style background decoders, one worker per dongle. Wrapped in
+    /// a lock so admin edits can rebuild the workers without a server restart.
     #[cfg(feature = "decoders")]
-    decoders: Arc<crate::decoders::DecoderManager>,
+    decoders: RwLock<Arc<crate::decoders::DecoderManager>>,
     /// Persisted decoder results, shared with the REST query layer.
     #[cfg(feature = "decoders")]
     decoder_store: Arc<crate::decoders::store::DecoderStore>,
@@ -321,15 +329,29 @@ impl Manager {
             } else {
                 std::path::PathBuf::from(cfg.database.decoder_path.trim())
             };
-            let decoder_store = crate::decoders::store::DecoderStore::open(
-                db_path,
-                cfg.database.retention_days,
-            );
+            let decoder_store = crate::decoders::store::DecoderStore::open(db_path);
+            let decoder_retention: Vec<(String, i64)> = cfg
+                .decoders
+                .iter()
+                .map(|decoder| (decoder.id.clone(), decoder.retention_days))
+                .collect();
+            // Apply retention once at startup even if the periodic interval is
+            // disabled, so lowering retention in the config takes effect
+            // immediately on the next boot.
+            if cfg.database.retention_days > 0
+                || cfg.database.max_messages > 0
+                || decoder_retention.iter().any(|(_, days)| *days > 0)
+            {
+                decoder_store.purge_with_decoders(
+                    cfg.database.retention_days,
+                    cfg.database.max_messages,
+                    &decoder_retention,
+                );
+            }
             let decoders = Arc::new(crate::decoders::DecoderManager::new(
                 &cfg.decoders,
                 ws.clone(),
                 decoder_store.clone(),
-                cfg.database.retention_days,
             ));
             (decoder_store, decoders)
         };
@@ -342,7 +364,7 @@ impl Manager {
             start_generations: Mutex::new(HashMap::new()),
             client_pipelines: Mutex::new(HashMap::new()),
             #[cfg(feature = "decoders")]
-            decoders,
+            decoders: RwLock::new(decoders),
             #[cfg(feature = "decoders")]
             decoder_store,
             last_client_counts: Mutex::new(HashMap::new()),
@@ -397,6 +419,47 @@ impl Manager {
         Arc::clone(&self.decoder_store)
     }
 
+    /// Rebuild every background decoder worker from the current config.
+    ///
+    /// Admin edits take effect immediately. The old workers are shut down
+    /// after the new set is published so pushing IQ chunks never blocks on a
+    /// join. Only the decoder list is re-read here; the SQLite path can only
+    /// change with a server restart.
+    #[cfg(feature = "decoders")]
+    pub fn reload_decoders(&self) {
+        let decoders = self.cfg.read().decoders.clone();
+        let new_manager = Arc::new(crate::decoders::DecoderManager::new(
+            &decoders,
+            self.ws.clone(),
+            Arc::clone(&self.decoder_store),
+        ));
+        let old = std::mem::replace(&mut *self.decoders.write(), new_manager);
+        old.shutdown();
+        info!(decoders = decoders.len(), "background decoders reloaded");
+    }
+
+    /// One purge pass for the decoder database, driven by the maintenance
+    /// loop. Exposed so the admin API can report the same accounting.
+    #[cfg(feature = "decoders")]
+    pub fn purge_decoder_history(&self) -> crate::decoders::store::PurgeResult {
+        let (retention, max_messages, decoder_retention) = {
+            let cfg = self.cfg.read();
+            (
+                cfg.database.retention_days,
+                cfg.database.max_messages,
+                cfg.decoders
+                    .iter()
+                    .map(|decoder| (decoder.id.clone(), decoder.retention_days))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        self.decoder_store.purge_with_decoders(
+            retention,
+            max_messages,
+            &decoder_retention,
+        )
+    }
+
     pub fn recorder(&self) -> &Recorder {
         &self.recorder
     }
@@ -421,6 +484,8 @@ impl Manager {
                 }
             }
             mgr.spawn_stats_loop();
+            #[cfg(feature = "decoders")]
+            mgr.spawn_decoder_maintenance();
         });
     }
 
@@ -443,7 +508,7 @@ impl Manager {
             }
         }
         #[cfg(feature = "decoders")]
-        self.decoders.shutdown();
+        self.decoders.write().shutdown();
     }
 
     // ------------------------------------------------------------------
@@ -1494,7 +1559,7 @@ impl Manager {
         }
 
         #[cfg(feature = "decoders")]
-        self.decoders.push_chunk(
+        self.decoders.read().push_chunk(
             &ad.id,
             center_hz,
             ad.sample_rate.load(Ordering::Relaxed).max(1) as u32,
@@ -1621,6 +1686,7 @@ impl Manager {
                     mode: cp.foreground_mode.clone(),
                     frequency_hz: center_hz as i64 + cp.foreground_offset as i64,
                     bandwidth_hz: 3000,
+                    retention_days: 0,
                     settings: Default::default(),
                 };
                 cp.foreground = match crate::decoders::build_channel(&cfg, center_hz, sample_rate) {
@@ -1704,50 +1770,14 @@ impl Manager {
                 let foreground_mode = cp.foreground_mode.clone();
                 let foreground_id = format!("client-{client_id}");
                 for data in results {
-                    if let Some(aircraft) = data.get("aircraft").and_then(|v| v.as_array()) {
-                        let retention = self.cfg.read().database.retention_days;
-                        self.decoder_store.upsert_aircraft(
-                            &foreground_id,
-                            &foreground_dongle_id,
-                            aircraft,
-                            retention,
-                        );
-                    } else if let Some(vessels) = data.get("vessels").and_then(|v| v.as_array()) {
-                        let retention = self.cfg.read().database.retention_days;
-                        self.decoder_store.upsert_vessels(
-                            &foreground_id,
-                            &foreground_dongle_id,
-                            vessels,
-                            retention,
-                        );
-                    } else {
-                        let text = data
-                            .get("text")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default();
-                        if !text.is_empty() {
-                            let record = crate::decoders::store::DecoderRecord {
-                                decoder_id: &foreground_id,
-                                dongle_id: &foreground_dongle_id,
-                                mode: &foreground_mode,
-                                text,
-                                frequency_hz: data
-                                    .get("rfHz")
-                                    .and_then(|v| v.as_f64())
-                                    .unwrap_or(0.0),
-                                audio_hz: data
-                                    .get("audioHz")
-                                    .and_then(|v| v.as_f64())
-                                    .unwrap_or(0.0),
-                                snr_db: data.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                dt_sec: data.get("dtSec").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                period: data.get("period").and_then(|v| v.as_i64()).unwrap_or(0),
-                                payload: &data.to_string(),
-                            };
-                            let retention = self.cfg.read().database.retention_days;
-                            self.decoder_store.insert(&record, retention);
-                        }
-                    }
+                    crate::decoders::persist_result(
+                        &self.decoder_store,
+                        &mut cp.snapshot_seen,
+                        &foreground_id,
+                        &foreground_dongle_id,
+                        &foreground_mode,
+                        &data,
+                    );
                     self.ws.send_to(
                         client_id,
                         crate::ws::pack_decoder_message(&foreground_mode, data),
@@ -1892,6 +1922,7 @@ impl Manager {
                 mode: decoder_mode.clone(),
                 frequency_hz: center_hz + tune_offset as i64,
                 bandwidth_hz: 3000,
+                retention_days: 0,
                 settings: Default::default(),
             })
         };
@@ -2002,6 +2033,8 @@ impl Manager {
             scope_fps,
             #[cfg(feature = "decoders")]
             foreground_mode: decoder_mode,
+            #[cfg(feature = "decoders")]
+            snapshot_seen: crate::decoders::SnapshotSeen::default(),
             #[cfg(feature = "decoders")]
             foreground_offset: tune_offset,
             #[cfg(feature = "decoders")]
@@ -3296,6 +3329,8 @@ impl Manager {
             callsign: cfg.server.callsign.clone(),
             description: cfg.server.description.clone(),
             location: cfg.server.location.clone(),
+            receiver_latitude: cfg.server.receiver_latitude,
+            receiver_longitude: cfg.server.receiver_longitude,
             demo_mode: cfg.server.demo_mode,
             identify_enabled: cfg.server.identify_enabled,
             users_ribbon: cfg.server.users_ribbon.clone(),
@@ -3487,6 +3522,55 @@ impl Manager {
 
     pub fn recording_status(&self) -> Vec<RecordingStatus> {
         self.recorder.status()
+    }
+
+    /// Periodic decoder-database retention. The interval is re-read from the
+    /// config on every tick, so an admin can change it without a restart.
+    #[cfg(feature = "decoders")]
+    fn spawn_decoder_maintenance(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut last_purge = Instant::now();
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let Some(mgr) = weak.upgrade() else { return };
+                let (interval_minutes, retention_days, max_messages, decoder_retention) = {
+                    let cfg = mgr.cfg.read();
+                    (
+                        cfg.database.purge_interval_minutes,
+                        cfg.database.retention_days,
+                        cfg.database.max_messages,
+                        cfg.decoders
+                            .iter()
+                            .map(|decoder| (decoder.id.clone(), decoder.retention_days))
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                let has_retention = retention_days > 0
+                    || max_messages > 0
+                    || decoder_retention.iter().any(|(_, days)| *days > 0);
+                if interval_minutes <= 0 || !has_retention {
+                    continue;
+                }
+                let interval = Duration::from_secs((interval_minutes as u64).saturating_mul(60));
+                if last_purge.elapsed() < interval {
+                    continue;
+                }
+                last_purge = Instant::now();
+                let result = mgr.decoder_store.purge_with_decoders(
+                    retention_days,
+                    max_messages,
+                    &decoder_retention,
+                );
+                if result.messages > 0 || result.entities > 0 {
+                    info!(
+                        messages = result.messages,
+                        entities = result.entities,
+                        "decoder database maintenance purge complete"
+                    );
+                }
+            }
+        });
     }
 
     fn spawn_stats_loop(self: &Arc<Self>) {

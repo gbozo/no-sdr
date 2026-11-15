@@ -165,6 +165,9 @@ export interface PushServerConfig {
   callsign: string;
   description: string;
   location: string;
+  /** Receiver map position for future overlays (0,0 = unset). */
+  receiverLatitude?: number;
+  receiverLongitude?: number;
   demoMode: boolean;
   identifyEnabled: boolean;
   usersRibbon: 'off' | 'users' | 'ip';

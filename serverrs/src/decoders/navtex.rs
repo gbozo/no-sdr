@@ -295,6 +295,7 @@ mod tests {
             mode: "navtex".into(),
             frequency_hz: 518_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: serde_json::Map::new(),
         }
     }

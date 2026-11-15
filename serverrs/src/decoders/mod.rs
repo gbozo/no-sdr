@@ -11,7 +11,7 @@
 //! continuous modes (ACARS, AIS, APRS, ...) will get their own channel kind
 //! rather than being forced into this slotted path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -533,10 +533,35 @@ pub struct DecoderManager {
     workers: Mutex<HashMap<String, Worker>>,
 }
 
-#[derive(Clone)]
 struct StoreHandle {
     store: Arc<store::DecoderStore>,
-    retention_days: i64,
+    seen: SnapshotSeen,
+}
+
+/// Bounded remember-set for snapshot decoders.
+///
+/// VDL2, HFDL and ISM re-send a rolling table in every status update. Writing
+/// the whole table on each tick would fill SQLite with duplicates, so only
+/// items whose identity key has not been seen before are persisted.
+#[derive(Default)]
+pub(crate) struct SnapshotSeen {
+    keys: HashMap<String, VecDeque<String>>,
+}
+
+const SNAPSHOT_SEEN_CAP: usize = 4096;
+
+impl SnapshotSeen {
+    pub(crate) fn first_seen(&mut self, decoder_id: &str, key: String) -> bool {
+        let ring = self.keys.entry(decoder_id.to_string()).or_default();
+        if ring.iter().any(|existing| existing == &key) {
+            return false;
+        }
+        ring.push_back(key);
+        if ring.len() > SNAPSHOT_SEEN_CAP {
+            ring.pop_front();
+        }
+        true
+    }
 }
 
 impl DecoderManager {
@@ -547,7 +572,6 @@ impl DecoderManager {
         decoders: &[DecoderConfig],
         ws: Arc<WsManager>,
         store: Arc<store::DecoderStore>,
-        retention_days: i64,
     ) -> Self {
         let mut by_dongle: HashMap<String, Vec<DecoderConfig>> = HashMap::new();
         for cfg in decoders.iter().filter(|d| d.enabled) {
@@ -575,7 +599,7 @@ impl DecoderManager {
             let worker_ws = Arc::clone(&ws);
             let worker_store = StoreHandle {
                 store: Arc::clone(&store),
-                retention_days,
+                seen: SnapshotSeen::default(),
             };
             let worker_key = dongle_id.clone();
             let thread_name = format!("decoder-{}", &dongle_id[..dongle_id.len().min(16)]);
@@ -813,7 +837,237 @@ fn is_als162(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("als162")
 }
 
-fn supported_mode(mode: &str) -> bool {
+/// A decoder mode that makes sense as a background worker.
+///
+/// Background decoding is only useful when the mode emits discrete,
+/// timestamped messages that can be stored and reviewed later. Continuous
+/// text modes (RTTY, PSK31, Olivia, THOR, FSQ) and image modes (WEFAX, SSTV,
+/// HELL) are still available as foreground decoders but are deliberately not
+/// listed here.
+pub struct BackgroundDecoderMode {
+    pub mode: &'static str,
+    pub label: &'static str,
+    pub category: &'static str,
+    pub description: &'static str,
+    pub default_frequency_hz: i64,
+    pub default_bandwidth_hz: i32,
+}
+
+const BACKGROUND_MODES: &[BackgroundDecoderMode] = &[
+    BackgroundDecoderMode {
+        mode: "ft8",
+        label: "FT8",
+        category: "Weak signal",
+        description: "15-second WSJT weak-signal mode; decodes callsigns, grids and reports.",
+        default_frequency_hz: 14_074_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "ft4",
+        label: "FT4",
+        category: "Weak signal",
+        description: "Fast 7.5-second WSJT mode for contest and scatter work.",
+        default_frequency_hz: 14_080_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "ft2",
+        label: "FT2",
+        category: "Weak signal",
+        description: "3.75-second FT8-family mode for rapid exchanges.",
+        default_frequency_hz: 14_080_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "fst4",
+        label: "FST4",
+        category: "Weak signal",
+        description: "Long-period FST4 (15–1800 s) for LF/MF and EME paths.",
+        default_frequency_hz: 7_078_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "q65",
+        label: "Q65",
+        category: "Weak signal",
+        description: "Q65 EME and scatter mode; sub-mode is selected in settings.",
+        default_frequency_hz: 50_275_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "jt65",
+        label: "JT65",
+        category: "Weak signal",
+        description: "Classic 60-second EME weak-signal mode.",
+        default_frequency_hz: 14_076_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "jt9",
+        label: "JT9",
+        category: "Weak signal",
+        description: "Narrow 60-second HF weak-signal mode.",
+        default_frequency_hz: 14_078_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "wspr",
+        label: "WSPR",
+        category: "Propagation",
+        description: "Two-minute propagation beacons in a 200 Hz window.",
+        default_frequency_hz: 14_095_600,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "pi4",
+        label: "PI4",
+        category: "Beacon",
+        description: "One-minute 4-FSK beacon frames (PI4).",
+        default_frequency_hz: 144_471_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "msk144",
+        label: "MSK144",
+        category: "Meteor",
+        description: "Short meteor-scatter bursts with callsign payloads.",
+        default_frequency_hz: 50_260_000,
+        default_bandwidth_hz: 2_500,
+    },
+    BackgroundDecoderMode {
+        mode: "fsk441",
+        label: "FSK441",
+        category: "Meteor",
+        description: "Legacy meteor-scatter mode; 15 or 30 second periods.",
+        default_frequency_hz: 50_260_000,
+        default_bandwidth_hz: 2_500,
+    },
+    BackgroundDecoderMode {
+        mode: "js8",
+        label: "JS8",
+        category: "Weak signal",
+        description: "FT8-family keyboard-to-keyboard messaging with directed frames.",
+        default_frequency_hz: 7_078_000,
+        default_bandwidth_hz: 3_000,
+    },
+    BackgroundDecoderMode {
+        mode: "adsb",
+        label: "ADS-B",
+        category: "Aircraft",
+        description: "1090 MHz Mode S/ADS-B aircraft identities and positions.",
+        default_frequency_hz: 1_090_000_000,
+        default_bandwidth_hz: 2_400_000,
+    },
+    BackgroundDecoderMode {
+        mode: "acars",
+        label: "ACARS",
+        category: "Aircraft",
+        description: "VHF ACARS aircraft datalink messages.",
+        default_frequency_hz: 131_550_000,
+        default_bandwidth_hz: 6_000,
+    },
+    BackgroundDecoderMode {
+        mode: "ais",
+        label: "AIS",
+        category: "Marine",
+        description: "Marine AIS vessel identities, positions and status.",
+        default_frequency_hz: 162_000_000,
+        default_bandwidth_hz: 25_000,
+    },
+    BackgroundDecoderMode {
+        mode: "vdl2",
+        label: "VDL2",
+        category: "Aircraft",
+        description: "VHF VDL Mode 2 aviation datalink messages.",
+        default_frequency_hz: 136_812_500,
+        default_bandwidth_hz: 25_000,
+    },
+    BackgroundDecoderMode {
+        mode: "hfdl",
+        label: "HFDL",
+        category: "Aircraft",
+        description: "HF datalink aircraft messages and ground-station logs.",
+        default_frequency_hz: 21_931_000,
+        default_bandwidth_hz: 24_000,
+    },
+    BackgroundDecoderMode {
+        mode: "aprs",
+        label: "APRS",
+        category: "Amateur",
+        description: "Amateur packet positions, weather and telemetry.",
+        default_frequency_hz: 144_390_000,
+        default_bandwidth_hz: 12_500,
+    },
+    BackgroundDecoderMode {
+        mode: "navtex",
+        label: "NAVTEX",
+        category: "Marine",
+        description: "Marine safety and weather broadcasts (SITOR-B).",
+        default_frequency_hz: 518_000,
+        default_bandwidth_hz: 1_700,
+    },
+    BackgroundDecoderMode {
+        mode: "packet",
+        label: "PACKET",
+        category: "Amateur",
+        description: "AX.25 packet radio frames.",
+        default_frequency_hz: 144_390_000,
+        default_bandwidth_hz: 12_500,
+    },
+    BackgroundDecoderMode {
+        mode: "ism",
+        label: "ISM",
+        category: "Utility",
+        description: "ISM-band device reports and bursts.",
+        default_frequency_hz: 433_920_000,
+        default_bandwidth_hz: 2_400_000,
+    },
+    BackgroundDecoderMode {
+        mode: "dcf77",
+        label: "DCF77",
+        category: "Time",
+        description: "77.5 kHz time-code broadcasts with decoded UTC.",
+        default_frequency_hz: 77_500,
+        default_bandwidth_hz: 100,
+    },
+    BackgroundDecoderMode {
+        mode: "als162",
+        label: "ALS162",
+        category: "Time",
+        description: "162 kHz French time-code broadcasts with decoded UTC.",
+        default_frequency_hz: 162_000,
+        default_bandwidth_hz: 100,
+    },
+];
+
+/// Catalog exposed to the admin UI. Feature-gated modes that are not built in
+/// are omitted, so the picker cannot create a decoder the binary cannot run.
+pub fn background_modes() -> Vec<Value> {
+    BACKGROUND_MODES
+        .iter()
+        .filter(|mode| supported_mode(mode.mode))
+        .map(|mode| {
+            json!({
+                "mode": mode.mode,
+                "label": mode.label,
+                "category": mode.category,
+                "description": mode.description,
+                "defaultFrequencyHz": mode.default_frequency_hz,
+                "defaultBandwidthHz": mode.default_bandwidth_hz,
+                "background": true,
+            })
+        })
+        .collect()
+}
+
+pub fn is_background_mode(mode: &str) -> bool {
+    let mode = mode.trim().to_ascii_lowercase();
+    BACKGROUND_MODES
+        .iter()
+        .any(|candidate| candidate.mode == mode && supported_mode(candidate.mode))
+}
+
+pub(crate) fn supported_mode(mode: &str) -> bool {
     #[cfg(feature = "adsb")]
     if is_adsb(mode) {
         return true;
@@ -1596,53 +1850,212 @@ fn append_audio(channel: &mut MfskChannel, audio: &[f32], now: i64) {
     }
 }
 
-fn persist_data(
-    store: &StoreHandle,
+/// Persist one decoder result. Shared by background workers and per-client
+/// foreground decoders so both produce identical history rows.
+pub(crate) fn persist_result(
+    store: &store::DecoderStore,
+    seen: &mut SnapshotSeen,
+    decoder_id: &str,
     dongle_id: &str,
-    cfg: &DecoderConfig,
+    mode: &str,
     data: &serde_json::Value,
 ) {
-    // ADS-B snapshots are aircraft tables, not messages: keep one upserted
-    // entity per ICAO instead of thousands of rows a day.
+    // ADS-B/AIS snapshots are entity tables, not messages: keep one upserted
+    // row per ICAO/MMSI instead of thousands of rows a day.
     if let Some(aircraft) = data.get("aircraft").and_then(|v| v.as_array()) {
-        store
-            .store
-            .upsert_aircraft(&cfg.id, dongle_id, aircraft, store.retention_days);
+        store.upsert_aircraft(decoder_id, dongle_id, aircraft);
         return;
     }
     if let Some(vessels) = data.get("vessels").and_then(|v| v.as_array()) {
-        store
-            .store
-            .upsert_vessels(&cfg.id, dongle_id, vessels, store.retention_days);
+        store.upsert_vessels(decoder_id, dongle_id, vessels);
         return;
     }
+
+    // VDL2 status updates carry a rolling message list.
+    if let Some(messages) = data.get("messages").and_then(|v| v.as_array()) {
+        for message in messages {
+            let at = message.get("at").and_then(|v| v.as_i64()).unwrap_or(0);
+            let raw = message
+                .get("rawHex")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if !seen.first_seen(decoder_id, format!("vdl2|{at}|{raw}")) {
+                continue;
+            }
+            let text = message
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            insert_message(
+                store,
+                decoder_id,
+                dongle_id,
+                mode,
+                text,
+                message
+                    .get("freq_hz")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                0.0,
+                message
+                    .get("snr_db")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                0.0,
+                at,
+                message,
+            );
+        }
+        return;
+    }
+
+    // HFDL status updates carry a rolling decode log.
+    if let Some(log) = data.get("log").and_then(|v| v.as_array()) {
+        for decode in log {
+            let unix = decode.get("unix").and_then(|v| v.as_i64()).unwrap_or(0);
+            let kind = decode
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let details = decode
+                .get("details")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if !seen.first_seen(decoder_id, format!("hfdl|{unix}|{kind}|{details}")) {
+                continue;
+            }
+            let text = if details.is_empty() {
+                kind.to_string()
+            } else {
+                format!("{kind} {details}")
+            };
+            insert_message(
+                store,
+                decoder_id,
+                dongle_id,
+                mode,
+                &text,
+                decode.get("freqKhz").and_then(|v| v.as_f64()).unwrap_or(0.0) * 1000.0,
+                0.0,
+                decode.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                0.0,
+                unix,
+                decode,
+            );
+        }
+        return;
+    }
+
+    // ISM reports are one row per device; persist only a changed report.
+    if let Some(devices) = data.get("devices").and_then(|v| v.as_array()) {
+        for device in devices {
+            let id = device.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let last_at = device
+                .get("lastAt")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let count = device.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            if !seen.first_seen(decoder_id, format!("ism|{id}|{last_at}|{count}")) {
+                continue;
+            }
+            let protocol = device
+                .get("protocol")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let device_id = device
+                .get("device")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let model = device
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let readings = device
+                .get("readingsText")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let text = [protocol, device_id, model, readings]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            insert_message(
+                store,
+                decoder_id,
+                dongle_id,
+                mode,
+                &text,
+                device
+                    .get("freqHz")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                0.0,
+                device.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                0.0,
+                last_at,
+                device,
+            );
+        }
+        return;
+    }
+
+    // Event-style decoders (FT8, APRS, NAVTEX, ACARS, ...) have one message.
     let text = data
         .get("text")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
+    insert_message(
+        store,
+        decoder_id,
+        dongle_id,
+        mode,
+        text,
+        data.get("rfHz").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        data.get("audioHz").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        data.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        data.get("dtSec").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        data.get("period").and_then(|v| v.as_i64()).unwrap_or(0),
+        data,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_message(
+    store: &store::DecoderStore,
+    decoder_id: &str,
+    dongle_id: &str,
+    mode: &str,
+    text: &str,
+    frequency_hz: f64,
+    audio_hz: f64,
+    snr_db: f64,
+    dt_sec: f64,
+    period: i64,
+    payload: &serde_json::Value,
+) {
     if text.is_empty() {
         return;
     }
     let record = store::DecoderRecord {
-        decoder_id: &cfg.id,
+        decoder_id,
         dongle_id,
-        mode: &cfg.mode,
+        mode,
         text,
-        frequency_hz: data.get("rfHz").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        audio_hz: data.get("audioHz").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        snr_db: data.get("snrDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        dt_sec: data.get("dtSec").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        period: data.get("period").and_then(|v| v.as_i64()).unwrap_or(0),
-        payload: &data.to_string(),
+        frequency_hz,
+        audio_hz,
+        snr_db,
+        dt_sec,
+        period,
+        payload: &payload.to_string(),
     };
-    store.store.insert(&record, store.retention_days);
+    store.insert(&record);
 }
 
 fn run_worker(
     dongle_id: String,
     configs: Vec<DecoderConfig>,
     ws: Arc<WsManager>,
-    store: StoreHandle,
+    mut store: StoreHandle,
     rx: Receiver<DecoderInput>,
 ) {
     let mut channels: Vec<Channel> = Vec::new();
@@ -1695,7 +2108,14 @@ fn run_worker(
         for channel in &mut channels {
             channel.process_chunk(&input.chunk, now);
             for data in channel.take_results() {
-                persist_data(&store, &dongle_id, channel.config(), &data);
+                persist_result(
+                    &store.store,
+                    &mut store.seen,
+                    &channel.config().id,
+                    &dongle_id,
+                    &channel.config().mode,
+                    &data,
+                );
                 ws.broadcast(
                     &dongle_id,
                     pack_decoder_message(&channel.config().mode, data),
@@ -1710,6 +2130,41 @@ fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rolling_snapshot_is_persisted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::DecoderStore::open(dir.path().join("decoders.sqlite"));
+        let mut seen = SnapshotSeen::default();
+        let snapshot = json!({
+            "messages": [
+                {
+                    "at": 100,
+                    "rawHex": "AA",
+                    "summary": "message one",
+                    "freq_hz": 136_975_000.0,
+                    "snr_db": 12.0,
+                },
+                {
+                    "at": 101,
+                    "rawHex": "BB",
+                    "summary": "message two",
+                    "freq_hz": 136_800_000.0,
+                    "snr_db": 8.0,
+                }
+            ]
+        });
+        persist_result(&store, &mut seen, "vdl2-136", "d1", "vdl2", &snapshot);
+        // A later status snapshot repeats the rolling table. Only new entries
+        // may become new rows.
+        persist_result(&store, &mut seen, "vdl2-136", "d1", "vdl2", &snapshot);
+
+        let rows = store.recent(Some("vdl2"), 0, 10);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["text"], "message two");
+        assert_eq!(rows[1]["text"], "message one");
+        assert_eq!(rows[0]["decoderId"], "vdl2-136");
+    }
 
     #[test]
     fn window_spec_reports_usb_am_and_fixed_ranges() {
@@ -1759,6 +2214,7 @@ mod tests {
             mode: "ft8".into(),
             frequency_hz: 0,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let mut channel = build_channel(&cfg, 0.0, input_rate).expect("build FT8 channel");
@@ -1890,6 +2346,7 @@ mod tests {
             mode: "wefax".to_string(),
             frequency_hz: 7_880_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&wefax, 7_880_000.0, 2_400_000).expect("wefax channel");
@@ -1909,6 +2366,7 @@ mod tests {
             mode: "sstv".to_string(),
             frequency_hz: 14_230_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&sstv, 14_230_000.0, 2_400_000).expect("sstv channel");
@@ -1928,6 +2386,7 @@ mod tests {
             mode: "hell".to_string(),
             frequency_hz: 7_040_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&hell, 7_040_000.0, 2_400_000).expect("hell channel");
@@ -1948,6 +2407,7 @@ mod tests {
                 mode: mode.to_string(),
                 frequency_hz: 7_040_000,
                 bandwidth_hz: 3_000,
+                retention_days: 0,
                 settings: Default::default(),
             };
             let channel = build_channel(&cfg, 7_040_000.0, 2_400_000)
@@ -1962,6 +2422,7 @@ mod tests {
             mode: "olivia".to_string(),
             frequency_hz: 7_040_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         assert!(build_channel(&cfg, 9_200_000.0, 2_400_000).is_err());
@@ -1978,6 +2439,7 @@ mod tests {
                 mode: mode.to_string(),
                 frequency_hz: hz,
                 bandwidth_hz: 3_000,
+                retention_days: 0,
                 settings: Default::default(),
             };
             let channel =
@@ -1991,6 +2453,7 @@ mod tests {
             mode: "msk144".to_string(),
             frequency_hz: 50_260_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         assert!(build_channel(&cfg, 9_200_000.0, 2_400_000).is_err());
@@ -2014,6 +2477,7 @@ mod tests {
                 mode: mode.to_string(),
                 frequency_hz: hz,
                 bandwidth_hz: 3_000,
+                retention_days: 0,
                 settings: Default::default(),
             };
             let channel =
@@ -2032,6 +2496,7 @@ mod tests {
             mode: "pi4".to_string(),
             frequency_hz: 144_471_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&cfg, 144_471_000.0, 2_400_000).expect("pi4 channel");
@@ -2052,6 +2517,7 @@ mod tests {
             mode: "dcf77".to_string(),
             frequency_hz: 77_500,
             bandwidth_hz: 200,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&dcf77, 100_000.0, 2_400_000).expect("DCF77 channel");
@@ -2077,6 +2543,7 @@ mod tests {
             mode: "packet".to_string(),
             frequency_hz: 145_010_000,
             bandwidth_hz: 12_500,
+            retention_days: 0,
             settings: serde_json::Map::new(),
         };
         let channel = build_channel(&packet, 145_000_000.0, 2_400_000).expect("packet channel");
@@ -2094,6 +2561,7 @@ mod tests {
             mode: "hfdl".to_string(),
             frequency_hz: 21_931_000,
             bandwidth_hz: 24_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&hfdl, 21_931_000.0, 2_400_000).expect("hfdl channel");
@@ -2111,6 +2579,7 @@ mod tests {
             mode: "vdl2".to_string(),
             frequency_hz: 136_812_500,
             bandwidth_hz: 25_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&vdl2, 136_812_500.0, 2_400_000).expect("vdl2 channel");
@@ -2127,6 +2596,7 @@ mod tests {
             mode: "ais".to_string(),
             frequency_hz: 162_000_000,
             bandwidth_hz: 25_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&ais, 162_000_000.0, 2_400_000).expect("ais channel");
@@ -2142,6 +2612,7 @@ mod tests {
             mode: "acars".to_string(),
             frequency_hz: 131_550_000,
             bandwidth_hz: 6_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&acars, 131_550_000.0, 2_400_000).expect("acars channel");
@@ -2158,6 +2629,7 @@ mod tests {
             mode: "adsb".to_string(),
             frequency_hz: 1_090_000_000,
             bandwidth_hz: 2_400_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         let channel = build_channel(&adsb, 1_090_000_000.0, 2_400_000).expect("adsb channel");

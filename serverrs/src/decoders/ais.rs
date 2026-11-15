@@ -246,6 +246,7 @@ mod tests {
             mode: "ais".to_string(),
             frequency_hz: AIS_PLAN_CENTER_HZ as i64,
             bandwidth_hz: 25_000,
+            retention_days: 0,
             settings: Default::default(),
         }
     }

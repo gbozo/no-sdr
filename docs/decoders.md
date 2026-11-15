@@ -38,6 +38,9 @@ decoders:
     mode: ft8
     frequencyHz: 14074000
     bandwidthHz: 3000
+    # 0 = inherit database.retentionDays; >0 = keep this decoder's rows longer
+    # or shorter than the global value. The API hides older rows immediately.
+    retentionDays: 0
 
   - id: ft4-20m
     enabled: false
@@ -161,8 +164,15 @@ ADS-B additionally requires the whole window to cover 1090 MHz and be at least
 rather than an empty aircraft table. Between 2.0 and 2.4 MSPS it runs with a
 `degraded` warning.
 
-The admin panel does not edit decoder definitions yet. The config is preserved
-verbatim by the server's YAML round-trip.
+The admin **Decoders** section can add, edit, enable/disable and delete
+background decoders. Changes are applied immediately (the worker set is
+rebuilt) and persisted by the normal **Save Config** action. The picker lists
+only message-producing modes that are meaningful for background decoding:
+FT8/FT4/FT2/FST4/Q65/JT65/JT9/WSPR/PI4, MSK144/FSK441, JS8, ADS-B, ACARS, AIS,
+VDL2, HFDL, APRS, NAVTEX, PACKET, ISM, DCF77 and ALS162. Continuous text
+modes (RTTY, PSK31, Olivia, THOR, FSQ) and image modes (WEFAX, SSTV, HELL)
+remain foreground-only because they produce a stream rather than discrete,
+reviewable messages.
 
 ## Pipeline
 
@@ -221,9 +231,18 @@ Both foreground and background results are written to SQLite:
 database:
   # Empty = decoders.sqlite beside config.yaml
   decoderPath: ''
-  # 0 = no automatic retention
+  # Remove rows older than this. 0 = keep forever.
   retentionDays: 7
+  # How often retention/capacity are applied. 0 = manual purges only.
+  purgeIntervalMinutes: 30
+  # Hard cap on stored messages. 0 = unlimited; oldest rows go at purge time.
+  maxMessages: 250000
 ```
+
+Retention is evaluated per decoder during purge. A decoder with
+`retentionDays: 30` keeps 30 days even when the global value is shorter;
+a decoder with `retentionDays: 0` uses `database.retentionDays`. The normal
+maintenance pass runs every 30 minutes by default (`purgeIntervalMinutes`).
 
 Schema:
 
@@ -234,19 +253,59 @@ Schema:
 - `decoder_entities` — keyed state for tables that re-send the same object.
   ADS-B uses `kind = 'aircraft'`, `entity_key = <ICAO hex>`, with the full
   aircraft row in `payload` and first/last seen timestamps. Snapshots upsert
-  here; they are never appended to `decoder_messages`.
+  here; they are never appended to `decoder_messages`. AIS uses the same table
+  with `kind = 'vessel'` and the MMSI as the key.
+- VDL2, HFDL and ISM status updates carry rolling tables rather than one-shot
+  events. New entries (keyed by decode time/raw frame, HFDL log key or ISM
+  device+report) are appended to `decoder_messages` once; repeats in later
+  status snapshots are suppressed.
 
 Read API:
 
 ```text
-GET /api/decoder/messages?mode=ft8&since=<unix_ms>&limit=200
+GET /api/decoder/messages?mode=ft8&since=<unix_ms>&limit=200   # legacy, array
+GET /api/decoder/history?mode=ft8&q=CQ&since=<ms>&until=<ms>&limit=200&offset=0
+GET /api/decoder/summary        # per-mode/per-decoder counts + DB stats
+GET /api/decoder/modes          # background-capable mode catalog/defaults
 GET /api/decoder/stats
 GET /api/decoder/aircraft?limit=500
+GET /api/decoder/vessels?limit=500
+```
+
+`GET /api/decoder/history` returns
+`{messages, total, limit, offset, filters, includeUnconfigured}`. Message
+objects use the same camelCase fields as the legacy endpoint (`decoderId`,
+`receivedMs`, `text`, `frequencyHz`, `snrDb`, `payload`, ...). By default the
+response is filtered by the current decoder configuration:
+
+- only decoders present in `decoders:` are returned (foreground `client-*`
+  decoders are always included),
+- each decoder is limited to its own `retentionDays` window (or the global
+  `database.retentionDays` when the decoder value is 0),
+- `aircraft` and `vessels` apply the same decoder/retention filter,
+- `summary` drops removed decoders and recomputes its per-mode totals.
+
+Pass `includeUnconfigured=1` for an admin/audit view of the raw table (the
+legacy `messages` endpoint accepts it too).
+
+Admin API (session or Bearer password):
+
+```text
+GET    /api/admin/decoders
+POST   /api/admin/decoders
+PUT    /api/admin/decoders/{id}
+DELETE /api/admin/decoders/{id}
+POST   /api/admin/decoders/reload
+POST   /api/admin/decoders/purge   {"all":true} | {"mode":"ft8"} |
+                                    {"olderThanDays":7} | {}
 ```
 
 The client decoder workspace switches on decoder type: FT8/FT4/FT2 keep the
 decode table plus zoomed waterfall, ADS-B shows an aircraft table plus a
-Leaflet OpenStreetMap view.
+Leaflet OpenStreetMap view. Every decoder workspace has a **History** button
+(`H`), and the FT8-family table merges the last 500 stored rows with the live
+stream so previous decodes are visible immediately after selecting a mode.
+ADS-B and AIS history uses the keyed entity tables.
 
 ## Decoder message shape
 

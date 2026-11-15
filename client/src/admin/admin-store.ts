@@ -8,6 +8,7 @@ export type AdminSection =
   | 'general'
   | 'devices'
   | 'bookmarks'
+  | 'decoders'
   | 'features'
   | 'monitor'
   | 'identify';
@@ -105,6 +106,61 @@ export interface Bookmark {
   description?: string;
 }
 
+// ---- Background Decoder Types ----
+
+export interface DecoderConfig {
+  id: string;
+  enabled: boolean;
+  dongleId: string;
+  mode: string;
+  frequencyHz: number;
+  bandwidthHz: number;
+  /** Per-decoder history retention. 0 inherits the global setting. */
+  retentionDays: number;
+  settings?: Record<string, unknown>;
+}
+
+export interface DecoderModeInfo {
+  mode: string;
+  label: string;
+  category: string;
+  description: string;
+  defaultFrequencyHz: number;
+  defaultBandwidthHz: number;
+  background: boolean;
+}
+
+export interface DecoderModeSummary {
+  mode: string;
+  count: number;
+  decoders: number;
+  oldestMs: number;
+  latestMs: number;
+}
+
+export interface DecoderSummary {
+  modes: DecoderModeSummary[];
+  decoders: {
+    mode: string;
+    decoderId: string;
+    dongleId: string;
+    count: number;
+    latestMs: number;
+    oldestMs: number;
+  }[];
+  entities: { kind: string; count: number; latestMs: number }[];
+  total: number;
+  stats?: {
+    enabled: boolean;
+    path?: string;
+    messages?: number;
+    entities?: number;
+    oldestMs?: number | null;
+    newestMs?: number | null;
+    dbBytes?: number;
+  };
+}
+
 // ---- Server Config Types ----
 export interface ServerConfig {
   port: number;
@@ -113,6 +169,9 @@ export interface ServerConfig {
   callsign: string;
   description: string;
   location: string;
+  /** Receiver map position (0,0 = unset). Separate from the display location. */
+  receiverLatitude: number;
+  receiverLongitude: number;
   demoMode: boolean;
   identifyEnabled: boolean;
   usersRibbon: 'off' | 'users' | 'ip';
@@ -127,6 +186,11 @@ export interface ServerConfig {
   acrcloudHost: string;
   acrcloudAccessKey: string;
   acrcloudAccessSecret: string;
+  // Decoder history database
+  decoderPath: string;
+  retentionDays: number;
+  purgeIntervalMinutes: number;
+  maxMessages: number;
 }
 
 const DEFAULT_SERVER_CONFIG: ServerConfig = {
@@ -136,6 +200,8 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   callsign: '',
   description: '',
   location: '',
+  receiverLatitude: 0,
+  receiverLongitude: 0,
   demoMode: false,
   identifyEnabled: true,
   usersRibbon: 'users',
@@ -149,6 +215,10 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   acrcloudHost: '',
   acrcloudAccessKey: '',
   acrcloudAccessSecret: '',
+  decoderPath: '',
+  retentionDays: 0,
+  purgeIntervalMinutes: 30,
+  maxMessages: 0,
 };
 
 function createAdminStore() {
@@ -185,6 +255,13 @@ function createAdminStore() {
   // ---- Bookmarks ----
   const [bookmarks, setBookmarks] = createSignal<Bookmark[]>([]);
   const [bookmarksLoading, setBookmarksLoading] = createSignal(false);
+
+  // ---- Background Decoders ----
+  const [decoders, setDecoders] = createSignal<DecoderConfig[]>([]);
+  const [decoderModes, setDecoderModes] = createSignal<DecoderModeInfo[]>([]);
+  const [decoderSummary, setDecoderSummary] = createSignal<DecoderSummary | null>(null);
+  const [decodersLoading, setDecodersLoading] = createSignal(false);
+  const [decodersError, setDecodersError] = createSignal('');
   // ---- Auth Helpers ----
   async function checkSession(): Promise<boolean> {
     setAuthChecking(true);
@@ -208,6 +285,7 @@ function createAdminStore() {
         loadServerConfig();
         loadDongles();
         loadBookmarks();
+        loadDecoders();
       }
       return ok;
     } catch {
@@ -233,6 +311,7 @@ function createAdminStore() {
         loadServerConfig();
         loadDongles();
         loadBookmarks();
+        loadDecoders();
         return true;
       }
       const data = await res.json().catch(() => ({ error: 'Login failed' }));
@@ -266,6 +345,8 @@ function createAdminStore() {
           callsign: data.callsign ?? '',
           description: data.description ?? '',
           location: data.location ?? '',
+          receiverLatitude: data.receiverLatitude ?? 0,
+          receiverLongitude: data.receiverLongitude ?? 0,
           demoMode: data.demoMode ?? false,
           identifyEnabled: data.identifyEnabled ?? true,
           usersRibbon: data.usersRibbon ?? 'users',
@@ -279,6 +360,10 @@ function createAdminStore() {
           acrcloudHost: data.acrcloudHost ?? '',
           acrcloudAccessKey: data.acrcloudAccessKey ?? '',
           acrcloudAccessSecret: data.acrcloudAccessSecret ?? '',
+          decoderPath: data.decoderPath ?? '',
+          retentionDays: data.retentionDays ?? 0,
+          purgeIntervalMinutes: data.purgeIntervalMinutes ?? 30,
+          maxMessages: data.maxMessages ?? 0,
         });
       }
     } catch {
@@ -605,6 +690,164 @@ function createAdminStore() {
     return false;
   }
 
+  // ---- Background Decoder CRUD ----
+  async function loadDecoders(): Promise<void> {
+    setDecodersLoading(true);
+    setDecodersError('');
+    try {
+      const res = await fetch('/api/admin/decoders', { credentials: 'same-origin' });
+      if (res.status === 404) {
+        // The server was built without the `decoders` feature.
+        setDecoders([]);
+        setDecoderModes([]);
+        setDecoderSummary(null);
+        setDecodersError('This server build does not include background decoders.');
+        return;
+      }
+      if (!res.ok) {
+        setDecodersError(`Failed to load decoders (HTTP ${res.status}).`);
+        return;
+      }
+      const data = await res.json();
+      setDecoders(Array.isArray(data.decoders) ? data.decoders : []);
+      setDecoderModes(Array.isArray(data.modes) ? data.modes : []);
+      setDecoderSummary(data.summary ?? null);
+      if (data.version) setConfigVersion(data.version);
+    } catch {
+      setDecodersError('Connection error while loading decoders.');
+    } finally {
+      setDecodersLoading(false);
+    }
+  }
+
+  async function createDecoder(decoder: Partial<DecoderConfig>): Promise<boolean> {
+    try {
+      const res = await fetch('/api/admin/decoders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(decoder),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDecodersError(data.error || `Failed to add decoder (HTTP ${res.status}).`);
+        return false;
+      }
+      const version = parseInt(res.headers.get('X-Config-Version') || '0');
+      if (version) setConfigVersion(version);
+      await loadDecoders();
+      markDirty();
+      return true;
+    } catch {
+      setDecodersError('Connection error while adding decoder.');
+      return false;
+    }
+  }
+
+  async function updateDecoder(id: string, updates: Partial<DecoderConfig>): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/admin/decoders/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDecodersError(data.error || `Failed to update decoder (HTTP ${res.status}).`);
+        return false;
+      }
+      const version = parseInt(res.headers.get('X-Config-Version') || '0');
+      if (version) setConfigVersion(version);
+      await loadDecoders();
+      markDirty();
+      return true;
+    } catch {
+      setDecodersError('Connection error while updating decoder.');
+      return false;
+    }
+  }
+
+  async function deleteDecoder(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/admin/decoders/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDecodersError(data.error || `Failed to delete decoder (HTTP ${res.status}).`);
+        return false;
+      }
+      const version = parseInt(res.headers.get('X-Config-Version') || '0');
+      if (version) setConfigVersion(version);
+      await loadDecoders();
+      markDirty();
+      return true;
+    } catch {
+      setDecodersError('Connection error while deleting decoder.');
+      return false;
+    }
+  }
+
+  async function reloadDecoders(): Promise<boolean> {
+    try {
+      const res = await fetch('/api/admin/decoders/reload', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!res.ok) return false;
+      await loadDecoders();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function purgeDecoderHistory(body: {
+    all?: boolean;
+    mode?: string;
+    olderThanDays?: number;
+  }): Promise<{ messages: number; entities: number } | null> {
+    try {
+      // "Apply retention now" uses the server's in-memory database settings.
+      // Push the edited admin fields first so the purge sees them without
+      // requiring a full Save Config round trip.
+      if (!body.all && !body.mode && body.olderThanDays === undefined) {
+        const cfgRes = await fetch('/api/admin/server/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(serverConfig()),
+        });
+        if (cfgRes.ok) {
+          const cfgData = await cfgRes.json();
+          if (cfgData.version) setConfigVersion(cfgData.version);
+        }
+      }
+      const res = await fetch('/api/admin/decoders/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDecodersError(data.error || `Purge failed (HTTP ${res.status}).`);
+        return null;
+      }
+      const data = await res.json();
+      await loadDecoders();
+      return {
+        messages: data.messages ?? 0,
+        entities: data.entities ?? 0,
+      };
+    } catch {
+      setDecodersError('Connection error while purging history.');
+      return null;
+    }
+  }
+
   // ---- Helpers ----
   function getSelectedDongle(): DongleConfig | undefined {
     const id = selectedDongleId();
@@ -724,6 +967,11 @@ function createAdminStore() {
     // Bookmarks
     bookmarks, bookmarksLoading,
     loadBookmarks, createBookmark, updateBookmark, deleteBookmark,
+
+    // Background decoders
+    decoders, decoderModes, decoderSummary, decodersLoading, decodersError,
+    loadDecoders, createDecoder, updateDecoder, deleteDecoder,
+    reloadDecoders, purgeDecoderHistory,
 
     // Dirty / Save
     dirty, setDirty, markDirty,

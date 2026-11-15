@@ -5,9 +5,10 @@
 // active: decode table on the left, receiver-span waterfall on the right.
 // Later decoder types can swap the right pane for a map/image view.
 
-import { Component, For, Show, createSignal, onMount, onCleanup } from 'solid-js';
+import { Component, For, Show, createEffect, createSignal, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
+import { fetchDecoderHistory, type DecoderHistoryMessage } from '../engine/decoder-history.js';
 import AdsbDisplay from './AdsbDisplay.js';
 import AcarsDisplay from './AcarsDisplay.js';
 import AisDisplay from './AisDisplay.js';
@@ -25,6 +26,7 @@ import MeteorDisplay from './MeteorDisplay.js';
 import Js8Display from './Js8Display.js';
 import TimeSignalDisplay from './TimeSignalDisplay.js';
 import DecoderInfoPanel from './DecoderInfoPanel.js';
+import DecoderHistoryPanel from './DecoderHistoryPanel.js';
 import DecoderScope from './DecoderScope.js';
 
 const DECODERS = [
@@ -79,8 +81,29 @@ function decodeConfidence(data: Record<string, unknown>): number | null {
   return null;
 }
 
+interface TableRow {
+  decoderType: string;
+  data: Record<string, unknown>;
+  receivedAt: number;
+  historical?: boolean;
+}
+
+/** Live rows and persisted rows describe the same decode when the mode,
+ *  slot/period, RF offset and text match. Used to keep the merged table free
+ *  of duplicates while a slot is being written and broadcast. */
+function decodeKey(decoderType: string, data: Record<string, unknown>): string {
+  return [
+    decoderType.toLowerCase(),
+    Math.round(Number(data.rfHz ?? data.frequencyHz ?? 0)),
+    String(data.period ?? ''),
+    String(data.text ?? ''),
+  ].join('|');
+}
+
 const DecoderDisplay: Component = () => {
   const [showInfo, setShowInfo] = createSignal(false);
+  const [showHistory, setShowHistory] = createSignal(false);
+  const [historyRows, setHistoryRows] = createSignal<DecoderHistoryMessage[]>([]);
 
   const isAdsb = () => store.decoderMode() === 'adsb';
   const isAcars = () => store.decoderMode() === 'acars';
@@ -112,6 +135,77 @@ const DecoderDisplay: Component = () => {
     store.decoderMode() === 'wspr' ||
     store.decoderMode() === 'pi4';
 
+  // Load previous decodes for the active mode. The history panel offers deep
+  // browsing (search/date range); this copy is merged into the live table so
+  // switching to FT8 immediately shows the stored log instead of an empty pane.
+  createEffect(() => {
+    const mode = store.decoderMode();
+    if (!mode) {
+      setHistoryRows([]);
+      return;
+    }
+    let active = true;
+    const until = Date.now();
+    fetchDecoderHistory({ mode, limit: 500, until })
+      .then((page) => {
+        if (active) setHistoryRows(page.messages);
+      })
+      .catch(() => {
+        if (active) setHistoryRows([]);
+      });
+    onCleanup(() => {
+      active = false;
+    });
+  });
+
+  const liveRows = (): TableRow[] => {
+    const mode = store.decoderMode();
+    return store.decoderMessages().filter((message) => {
+      const kindOk =
+        !message.data.kind ||
+        message.data.kind === 'decode' ||
+        message.data.kind === 'message';
+      const modeOk =
+        !mode || message.decoderType.toLowerCase() === mode.toLowerCase();
+      return kindOk && modeOk;
+    });
+  };
+
+  const historyTableRows = (): TableRow[] =>
+    historyRows()
+      .filter(
+        (message) =>
+          !store.decoderMode() ||
+          message.mode.toLowerCase() === store.decoderMode().toLowerCase(),
+      )
+      .map((message) => ({
+        decoderType: message.mode,
+        receivedAt: message.receivedMs,
+        historical: true,
+        data: {
+          ...(message.payload ?? {}),
+          text: message.text,
+          rfHz: message.frequencyHz,
+          audioHz: message.audioHz,
+          snrDb: message.snrDb,
+          dtSec: message.dtSec,
+          period: message.period,
+        },
+      }));
+
+  const mergedRows = (): TableRow[] => {
+    const live = liveRows();
+    const seen = new Set(
+      live.map((message) => decodeKey(message.decoderType, message.data)),
+    );
+    const older = historyTableRows().filter(
+      (message) => !seen.has(decodeKey(message.decoderType, message.data)),
+    );
+    return [...live, ...older]
+      .sort((a, b) => b.receivedAt - a.receivedAt)
+      .slice(0, MAX_ROWS);
+  };
+
   onMount(() => {
     // The decoder pane is mounted only while visible, so this is also the
     // natural place to opt in/out of the zoom-spectrum stream.
@@ -121,11 +215,21 @@ const DecoderDisplay: Component = () => {
       const tag = (event.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       if (event.key === 'Escape') {
+        if (showHistory()) {
+          setShowHistory(false);
+          return;
+        }
         setShowInfo(false);
         return;
       }
       if (event.key.toLowerCase() === 'i' && store.decoderMode()) {
+        setShowHistory(false);
         setShowInfo((v) => !v);
+        event.preventDefault();
+      }
+      if (event.key.toLowerCase() === 'h' && store.decoderMode()) {
+        setShowInfo(false);
+        setShowHistory((v) => !v);
         event.preventDefault();
       }
     };
@@ -134,6 +238,15 @@ const DecoderDisplay: Component = () => {
       engine.setDecoderScopeEnabled(false);
       document.removeEventListener('keydown', onKey);
     });
+  });
+
+  // Leaving the decoder workspace should not leave an overlay armed for the
+  // next mode the user selects.
+  createEffect(() => {
+    if (!store.decoderMode()) {
+      setShowHistory(false);
+      setShowInfo(false);
+    }
   });
 
   const select = (id: string) => {
@@ -187,7 +300,20 @@ const DecoderDisplay: Component = () => {
           </Show>
           <Show when={store.decoderMode()}>
             <button
-              onClick={() => setShowInfo((v) => !v)}
+              onClick={() => {
+                setShowInfo(false);
+                setShowHistory((v) => !v);
+              }}
+              class={`mil-btn text-[9px] px-1.5 py-0.5 ${showHistory() ? 'active border-cyan text-cyan' : ''}`}
+              title="Browse decodes stored by the background decoder (H)"
+            >
+              History
+            </button>
+            <button
+              onClick={() => {
+                setShowHistory(false);
+                setShowInfo((v) => !v);
+              }}
               class={`mil-btn text-[9px] px-1.5 py-0.5 ${showInfo() ? 'active border-cyan text-cyan' : ''}`}
               title="Decoder information and typical frequencies (I)"
             >
@@ -219,12 +345,7 @@ const DecoderDisplay: Component = () => {
               </tr>
             </thead>
             <tbody>
-              <For
-                each={store
-                  .decoderMessages()
-                  .filter((m) => !m.data.kind || m.data.kind === 'decode' || m.data.kind === 'message')
-                  .slice(0, MAX_ROWS)}
-              >
+              <For each={mergedRows()}>
                 {(message) => (
                   <tr class="border-t border-border/20">
                     <td class="px-2 py-1 text-text-dim whitespace-nowrap">
@@ -233,6 +354,9 @@ const DecoderDisplay: Component = () => {
                         minute: '2-digit',
                         second: '2-digit',
                       })}
+                      <Show when={message.historical}>
+                        <span class="text-cyan/50 ml-1" title="Restored from stored history">·</span>
+                      </Show>
                     </td>
                     <td class="px-2 py-1 text-text-primary break-all">
                       {String(message.data.text ?? '')}
@@ -270,7 +394,7 @@ const DecoderDisplay: Component = () => {
               </For>
             </tbody>
           </table>
-          <Show when={store.decoderMessages().length === 0}>
+          <Show when={mergedRows().length === 0}>
             <p class="text-[9px] font-mono text-text-dim px-2 py-3">Waiting for a slot…</p>
           </Show>
         </div>
@@ -328,6 +452,12 @@ const DecoderDisplay: Component = () => {
       </Show>
       <Show when={showInfo() && store.decoderMode()}>
         <DecoderInfoPanel mode={store.decoderMode()} onClose={() => setShowInfo(false)} />
+      </Show>
+      <Show when={showHistory() && store.decoderMode()}>
+        <DecoderHistoryPanel
+          mode={store.decoderMode()}
+          onClose={() => setShowHistory(false)}
+        />
       </Show>
     </div>
   );

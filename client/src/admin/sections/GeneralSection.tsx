@@ -4,6 +4,7 @@
 
 import { Component, Show, For, createMemo, createSignal } from 'solid-js';
 import { adminStore } from '../admin-store';
+import ReceiverLocationMap from './ReceiverLocationMap';
 
 // All available codecs for checkboxes
 const ALL_FFT_CODECS = ['none', 'adpcm', 'deflate', 'deflate-floor'];
@@ -42,6 +43,21 @@ const GeneralSection: Component = () => {
                 placeholder="e.g. Athens, Greece / KM17vx"
               />
             </FieldRow>
+          </SettingsGroup>
+
+          {/* Receiver map location */}
+          <SettingsGroup
+            title="Receiver Location (Map)"
+            description="Pin the receiver on OpenStreetMap. This is stored separately from the display-only Location field and is used by future map features."
+          >
+            <ReceiverLocationMap
+              latitude={cfg().receiverLatitude}
+              longitude={cfg().receiverLongitude}
+              onChange={(latitude, longitude) => {
+                adminStore.updateServerConfigField('receiverLatitude', latitude);
+                adminStore.updateServerConfigField('receiverLongitude', longitude);
+              }}
+            />
           </SettingsGroup>
 
           {/* Network */}

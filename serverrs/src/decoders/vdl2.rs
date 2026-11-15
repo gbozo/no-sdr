@@ -273,6 +273,7 @@ mod tests {
             mode: "vdl2".to_string(),
             frequency_hz: VDL2_PLAN_CENTER_HZ as i64,
             bandwidth_hz: 25_000,
+            retention_days: 0,
             settings: Default::default(),
         }
     }

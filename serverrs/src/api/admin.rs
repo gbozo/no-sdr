@@ -868,6 +868,8 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "callsign": cfg.server.callsign,
             "description": cfg.server.description,
             "location": cfg.server.location,
+            "receiverLatitude": cfg.server.receiver_latitude,
+            "receiverLongitude": cfg.server.receiver_longitude,
             "adminPassword": cfg.server.admin_password,
             "demoMode": cfg.server.demo_mode,
             "identifyEnabled": cfg.server.identify_enabled,
@@ -878,6 +880,10 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "allowedIqCodecs": cfg.server.allowed_iq_codecs,
             "opusComplexity": cfg.server.opus_complexity,
             "realIPHeader": cfg.server.real_ip_header,
+            "decoderPath": cfg.database.decoder_path,
+            "retentionDays": cfg.database.retention_days,
+            "purgeIntervalMinutes": cfg.database.purge_interval_minutes,
+            "maxMessages": cfg.database.max_messages,
             "auddApiKey": cfg.server.audd_api_key,
             "acrcloudHost": cfg.server.acrcloud_host,
             "acrcloudAccessKey": cfg.server.acrcloud_access_key,
@@ -939,6 +945,12 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         set_string!("callsign", callsign);
         set_string!("description", description);
         set_string!("location", location);
+        if let Some(v) = map.get("receiverLatitude").and_then(|v| v.as_f64()) {
+            s.receiver_latitude = v.clamp(-90.0, 90.0);
+        }
+        if let Some(v) = map.get("receiverLongitude").and_then(|v| v.as_f64()) {
+            s.receiver_longitude = v.clamp(-180.0, 180.0);
+        }
         set_string!("host", host);
         set_string!("adminPassword", admin_password);
         set_string!("fftHistoryCompression", fft_history_compression);
@@ -973,6 +985,23 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         if let Some(v) = map.get("realIPHeader").and_then(|v| v.as_str()) {
             s.real_ip_header = v.to_string();
             real_ip_changed = true;
+        }
+
+        // Decoder database maintenance settings. These live in the top-level
+        // `database` block rather than `server`, but the admin page saves them
+        // through the same endpoint so one Save Config persists everything.
+        let db = &mut cfg.database;
+        if let Some(v) = map.get("decoderPath").and_then(|v| v.as_str()) {
+            db.decoder_path = v.trim().to_string();
+        }
+        if let Some(v) = map.get("retentionDays").and_then(|v| v.as_i64()) {
+            db.retention_days = v.max(0);
+        }
+        if let Some(v) = map.get("purgeIntervalMinutes").and_then(|v| v.as_i64()) {
+            db.purge_interval_minutes = v.max(0);
+        }
+        if let Some(v) = map.get("maxMessages").and_then(|v| v.as_i64()) {
+            db.max_messages = v.max(0);
         }
     }
 
@@ -1061,7 +1090,7 @@ pub fn json_response(status: StatusCode, body: Value, version: Option<u64>) -> R
 
 /// Recursively merges `patch` into `base`. Objects are merged key-by-key;
 /// everything else (arrays, scalars, null) replaces the base value.
-fn merge_json(base: &mut Value, patch: &Value) {
+pub(crate) fn merge_json(base: &mut Value, patch: &Value) {
     let (Some(base_map), Some(patch_map)) = (base.as_object_mut(), patch.as_object()) else {
         *base = patch.clone();
         return;

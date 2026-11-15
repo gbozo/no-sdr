@@ -54,11 +54,23 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/dongles/{id}/record",
             post(admin::record_start).delete(admin::record_stop),
+        );
+    #[cfg(feature = "decoders")]
+    let protected = protected
+        .route(
+            "/decoders",
+            get(super::decoders::admin_list).post(super::decoders::admin_create),
         )
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            admin::require_auth,
-        ));
+        .route("/decoders/reload", post(super::decoders::admin_reload))
+        .route("/decoders/purge", post(super::decoders::admin_purge))
+        .route(
+            "/decoders/{id}",
+            put(super::decoders::admin_update).delete(super::decoders::admin_delete),
+        );
+    let protected = protected.route_layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        admin::require_auth,
+    ));
 
     let admin_router = Router::new()
         .route("/login", post(admin::login))
@@ -80,6 +92,9 @@ pub fn build_router(state: AppState) -> Router {
     #[cfg(feature = "decoders")]
     let api_router = api_router
         .route("/decoder/messages", get(super::decoders::messages))
+        .route("/decoder/history", get(super::decoders::history))
+        .route("/decoder/summary", get(super::decoders::summary))
+        .route("/decoder/modes", get(super::decoders::modes))
         .route("/decoder/stats", get(super::decoders::stats))
         .route("/decoder/aircraft", get(super::decoders::aircraft))
         .route("/decoder/vessels", get(super::decoders::vessels));

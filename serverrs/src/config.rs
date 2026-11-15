@@ -75,16 +75,39 @@ pub struct Config {
 }
 
 /// Decoder result database settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseConfig {
     /// SQLite path. Empty means `decoders.sqlite` beside the config file.
     #[serde(default)]
     pub decoder_path: String,
-    /// Delete decoder messages older than this after insert. 0 disables
-    /// automatic retention (the default).
+    /// Delete decoder messages/entities older than this many days. 0 keeps
+    /// everything (the default).
     #[serde(default)]
     pub retention_days: i64,
+    /// How often the maintenance task applies `retentionDays` and
+    /// `maxMessages`. 0 disables periodic purges, leaving only manual purges.
+    #[serde(default = "default_purge_interval_minutes")]
+    pub purge_interval_minutes: i64,
+    /// Hard cap on stored messages. 0 means unlimited. When exceeded, the
+    /// oldest rows are removed at the next purge.
+    #[serde(default)]
+    pub max_messages: i64,
+}
+
+fn default_purge_interval_minutes() -> i64 {
+    30
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            decoder_path: String::new(),
+            retention_days: 0,
+            purge_interval_minutes: default_purge_interval_minutes(),
+            max_messages: 0,
+        }
+    }
 }
 
 /// One background decoder task.
@@ -110,6 +133,11 @@ pub struct DecoderConfig {
     /// Requested audio passband, informational for the FT8/FT4 channelizer.
     #[serde(default)]
     pub bandwidth_hz: i32,
+    /// Per-decoder history retention in days. 0 inherits
+    /// `database.retentionDays`. The API hides older rows immediately; the
+    /// maintenance loop deletes them at the next purge.
+    #[serde(default)]
+    pub retention_days: i64,
     /// Decoder-specific options reserved for later modes.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub settings: serde_json::Map<String, serde_json::Value>,
@@ -148,6 +176,13 @@ pub struct ServerConfig {
     pub description: String,
     #[serde(default)]
     pub location: String,
+    /// Receiver latitude for map-based features (0,0 = unset). This is
+    /// deliberately separate from `location`, which is the public display text.
+    #[serde(default)]
+    pub receiver_latitude: f64,
+    /// Receiver longitude for map-based features (0,0 = unset).
+    #[serde(default)]
+    pub receiver_longitude: f64,
     #[serde(default)]
     pub demo_mode: bool,
     /// Allow clients to run the client-side signal identifier. Disabled hides
@@ -196,6 +231,8 @@ impl Default for ServerConfig {
             callsign: String::new(),
             description: String::new(),
             location: String::new(),
+            receiver_latitude: 0.0,
+            receiver_longitude: 0.0,
             demo_mode: false,
             identify_enabled: true,
             users_ribbon: default_users_ribbon(),
@@ -460,6 +497,12 @@ fn apply_dongle_presence_defaults(value: &mut serde_yaml::Value) {
 
 /// Applies per-profile defaults (mirrors Go `applyProfileDefaults`).
 pub fn apply_profile_defaults(cfg: &mut Config) {
+    // Mode ids are protocol names, not user labels. Normalising them keeps
+    // SQLite history queries, the admin picker and live decoderType values in
+    // agreement even when a hand-written config uses `FT8` or `FST4-60A`.
+    for decoder in &mut cfg.decoders {
+        decoder.mode = decoder.mode.trim().to_ascii_lowercase();
+    }
     for d in &mut cfg.dongles {
         for p in &mut d.profiles {
             if p.fft_fps == 0 {
@@ -493,6 +536,31 @@ pub fn validate(cfg: &Config) -> Result<()> {
             cfg.server.users_ribbon
         );
     }
+    if !cfg.server.receiver_latitude.is_finite()
+        || !(-90.0..=90.0).contains(&cfg.server.receiver_latitude)
+    {
+        bail!(
+            "config: server.receiverLatitude must be finite and between -90 and 90, got {}",
+            cfg.server.receiver_latitude
+        );
+    }
+    if !cfg.server.receiver_longitude.is_finite()
+        || !(-180.0..=180.0).contains(&cfg.server.receiver_longitude)
+    {
+        bail!(
+            "config: server.receiverLongitude must be finite and between -180 and 180, got {}",
+            cfg.server.receiver_longitude
+        );
+    }
+    if cfg.database.retention_days < 0 {
+        bail!("config: database.retentionDays must be >= 0");
+    }
+    if cfg.database.purge_interval_minutes < 0 {
+        bail!("config: database.purgeIntervalMinutes must be >= 0");
+    }
+    if cfg.database.max_messages < 0 {
+        bail!("config: database.maxMessages must be >= 0");
+    }
     for (i, d) in cfg.decoders.iter().enumerate() {
         if d.id.trim().is_empty() {
             bail!("config: decoders[{i}]: id is required");
@@ -505,6 +573,12 @@ pub fn validate(cfg: &Config) -> Result<()> {
                 "config: decoders[{i}] ({}): frequencyHz must be > 0, got {}",
                 d.id,
                 d.frequency_hz
+            );
+        }
+        if d.retention_days < 0 {
+            bail!(
+                "config: decoders[{i}] ({}): retentionDays must be >= 0",
+                d.id
             );
         }
     }
@@ -728,6 +802,53 @@ mod tests {
         assert_eq!(d.mode, "ft8");
         assert_eq!(d.frequency_hz, 14_074_000);
         assert_eq!(d.bandwidth_hz, 3000);
+    }
+
+    #[test]
+    fn decoder_database_settings_round_trip() {
+        let cfg = parse(
+            "dongles:\n  - id: d1\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: usb\ndecoders:\n  - id: ft8-20m\n    enabled: true\n    dongleId: d1\n    mode: ft8\n    frequencyHz: 14074000\n    bandwidthHz: 3000\n    retentionDays: 3\ndatabase:\n  retentionDays: 7\n  purgeIntervalMinutes: 15\n  maxMessages: 1000\n",
+        );
+        assert_eq!(cfg.database.retention_days, 7);
+        assert_eq!(cfg.database.purge_interval_minutes, 15);
+        assert_eq!(cfg.database.max_messages, 1000);
+        assert_eq!(cfg.decoders[0].retention_days, 3);
+
+        let yaml = to_yaml_string(&cfg).unwrap();
+        assert!(yaml.contains("purgeIntervalMinutes: 15"), "{yaml}");
+        assert!(yaml.contains("maxMessages: 1000"), "{yaml}");
+
+        // Missing fields fall back to hourly purges and unlimited storage.
+        let defaults = parse(
+            "dongles:\n  - id: d1\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: usb\n",
+        );
+        assert_eq!(defaults.database.retention_days, 0);
+        assert_eq!(defaults.database.purge_interval_minutes, 30);
+        assert_eq!(defaults.database.max_messages, 0);
+    }
+
+    #[test]
+    fn receiver_location_round_trip_and_validation() {
+        let cfg = parse(
+            "server:\n  receiverLatitude: 37.975565\n  receiverLongitude: 23.734832\ndongles:\n  - id: d1\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: usb\n",
+        );
+        assert_eq!(cfg.server.receiver_latitude, 37.975565);
+        assert_eq!(cfg.server.receiver_longitude, 23.734832);
+        // The display-only location text is a separate field.
+        assert_eq!(cfg.server.location, "");
+
+        let yaml = to_yaml_string(&cfg).unwrap();
+        assert!(yaml.contains("receiverLatitude: 37.975565"), "{yaml}");
+        assert!(yaml.contains("receiverLongitude: 23.734832"), "{yaml}");
+
+        let value: serde_yaml::Value = serde_yaml::from_str(
+            "server:\n  receiverLatitude: 100\ndongles:\n  - id: d1\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: usb\n",
+        )
+        .unwrap();
+        let mut bad: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+        apply_defaults(&mut bad);
+        apply_profile_defaults(&mut bad);
+        assert!(validate(&bad).is_err());
     }
 
     #[test]

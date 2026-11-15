@@ -225,6 +225,7 @@ mod tests {
             mode: "hell".into(),
             frequency_hz: 7_040_000,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: serde_json::Map::new(),
         };
         let channel = HellChannel::build(&cfg, 7_040_000.0, 2_400_000).expect("hell channel");

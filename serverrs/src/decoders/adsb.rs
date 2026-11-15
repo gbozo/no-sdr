@@ -463,6 +463,7 @@ mod tests {
             mode: "adsb".to_string(),
             frequency_hz: ADSB_FREQ_HZ as i64,
             bandwidth_hz: 2_400_000,
+            retention_days: 0,
             settings: settings.as_object().cloned().unwrap_or_default(),
         }
     }

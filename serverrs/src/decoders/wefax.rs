@@ -264,6 +264,7 @@ mod tests {
             mode: "wefax".into(),
             frequency_hz: 0,
             bandwidth_hz: 3_000,
+            retention_days: 0,
             settings: Default::default(),
         };
         WefaxChannel::build(&cfg, 0.0, 48_000).expect("wefax channel")

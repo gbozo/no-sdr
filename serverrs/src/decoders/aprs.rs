@@ -370,6 +370,7 @@ mod tests {
             mode: "aprs".into(),
             frequency_hz: 144_390_000,
             bandwidth_hz: 12_500,
+            retention_days: 0,
             settings: Default::default(),
         }
     }

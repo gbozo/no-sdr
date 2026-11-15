@@ -5,6 +5,8 @@ server:
   callsign: ''
   description: ''
   location: ''
+  receiverLatitude: 0.0
+  receiverLongitude: 0.0
   demoMode: false
   identifyEnabled: true
   usersRibbon: users
@@ -214,6 +216,8 @@ bookmarks:
 database:
   decoderPath: ''
   retentionDays: 0
+  purgeIntervalMinutes: 30
+  maxMessages: 0
 decoders:
   - id: acars-131
     enabled: false
