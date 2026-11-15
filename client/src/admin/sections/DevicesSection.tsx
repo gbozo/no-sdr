@@ -1601,7 +1601,13 @@ function hasDeviceScan(type?: string): boolean {
   return isNativeSource(type) || isPluto(type);
 }
 
-const RTL_SAMPLE_RATES = [960_000, 1_200_000, 1_440_000, 1_800_000, 2_400_000, 2_880_000, 3_200_000];
+// RTL2832U resampler windows: 225–300 kSPS and 900.001–3.2 MSPS. These are
+// the rates shared with OpenWebRX+ profiles, including the 2.096 MSPS rate.
+const RTL_SAMPLE_RATES = [
+  250_000, 288_000,
+  960_000, 1_024_000, 1_200_000, 1_440_000, 1_536_000, 1_800_000, 1_920_000, 2_048_000, 2_096_000,
+  2_400_000, 2_560_000, 2_880_000, 3_200_000,
+];
 const HACKRF_SAMPLE_RATES = [2_000_000, 4_000_000, 8_000_000, 10_000_000, 12_500_000, 16_000_000, 20_000_000];
 const AIRSPY_SAMPLE_RATES = [2_500_000, 3_000_000, 6_000_000, 10_000_000];
 const AIRSPY_HF_SAMPLE_RATES = [192_000, 228_000, 256_000, 384_000, 456_000, 650_000, 768_000, 912_000];
@@ -1644,8 +1650,11 @@ function sampleRatesFor(type?: string, settings?: SourceSettings): number[] {
 }
 
 function formatSampleRate(rate: number): string {
-  if (rate >= 1_000_000) return `${(rate / 1_000_000).toFixed(2)} MSPS`;
-  if (rate >= 1_000) return `${(rate / 1_000).toFixed(1)} kSPS`;
+  if (rate >= 1_000_000) {
+    // Keep non-power-of-two rates readable: 2.096 MSPS, not 2.10 MSPS.
+    return `${(rate / 1_000_000).toFixed(3).replace(/\.?0+$/, '')} MSPS`;
+  }
+  if (rate >= 1_000) return `${(rate / 1_000).toFixed(1).replace(/\.0$/, '')} kSPS`;
   return `${rate} SPS`;
 }
 

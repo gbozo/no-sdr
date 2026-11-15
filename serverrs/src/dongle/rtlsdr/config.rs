@@ -120,15 +120,21 @@ impl Default for RtlSdrConfig {
 impl RtlSdrConfig {
     /// Rates the resampler can produce. Kept in step with the settings UI and
     /// with [`crate::dongle::rtlsdr::regs::rate_supported`].
-    pub const SAMPLE_RATES: [f64; 9] = [
+    pub const SAMPLE_RATES: [f64; 15] = [
         250_000.0,
+        288_000.0,
         960_000.0,
         1_024_000.0,
         1_200_000.0,
+        1_440_000.0,
         1_536_000.0,
         1_800_000.0,
+        1_920_000.0,
         2_048_000.0,
+        2_096_000.0,
         2_400_000.0,
+        2_560_000.0,
+        2_880_000.0,
         3_200_000.0,
     ];
 }

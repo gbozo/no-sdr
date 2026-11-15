@@ -628,6 +628,15 @@ mod tests {
     }
 
     #[test]
+    fn accepts_2096k_rtl_sample_rate() {
+        let cfg = parse(
+            "dongles:\n  - id: d1\n    sampleRate: 2096000\n    profiles:\n      - id: p1\n        sampleRate: 2096000\n        defaultBandwidth: 200000\n        defaultMode: wfm\n",
+        );
+        assert_eq!(cfg.dongles[0].sample_rate, 2_096_000);
+        assert_eq!(cfg.dongles[0].profiles[0].sample_rate, 2_096_000);
+    }
+
+    #[test]
     fn explicit_disabled_is_preserved() {
         let cfg = parse(
             "dongles:\n  - id: d1\n    enabled: false\n    autoStart: false\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultMode: nfm\n",
