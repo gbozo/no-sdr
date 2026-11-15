@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.18.0)
+## Current status (2.19.0)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -40,17 +40,26 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.18.0`. Client: compact controls with a
-  single-line control box and a 9px minimum type floor across classes, canvas
-  labels and maps; admin header branded NO-SDR. Desktop: app/product renamed
-  NO-SDR with a one-time migration of the legacy NO(DE)-SDR user-data folder.
-- Previous release: `v2.17.0`. Client: client-side signal identifier
+- Latest published release: `v2.19.0`. Decoder workspace: foreground decoders
+  report their exact RF window, live status and slot summaries; the client
+  draws the handled band, dial, decode markers, slot countdown and micro
+  tuning; an opt-in `0x0E` zoom spectrum is tapped from the mfsk/JS8 channel
+  (no second decimator); JS8 gains the FT8-style scope; decode rows expose
+  FEC/CRC/confidence stats. The foreground channel time contract is now
+  nanoseconds for every decoder family, and startup slot boundaries are padded
+  so the first FT8/FT4/JS8/meteor slot is not lost. Adds a full-path FT8
+  channel regression test.
+- Previous release: `v2.18.0`. Client: compact controls with a single-line
+  control box and a 9px minimum type floor across classes, canvas labels and
+  maps; admin header branded NO-SDR. Desktop: app/product renamed NO-SDR with
+  a one-time migration of the legacy NO(DE)-SDR user-data folder.
+- Release before that: `v2.17.0`. Client: client-side signal identifier
   using full-span FFT plus a secondary 300 kHz raw-IQ WebSocket, ranked decoder
   candidates with confidence and direct Open actions; WEFAX invalid-subcarrier
   warnings, recent-chart history and row diagnostics. Admin: `identifyEnabled`
   switch hides/closes the identifier client-side. Server: RAW mode now honours
   1–300 kHz IQ bandwidth; WEFAX event regression coverage.
-- Release before that: `v2.16.0`. Client: Signal Analysis workspace
+- Earlier release: `v2.16.0`. Client: Signal Analysis workspace
   (zoom, markers, channel power, AM/AMS carrier analysis, drift, exports),
   per-decoder reference cards with typical frequencies and waterfall previews,
   station identity in the header, responsive decoder picker, and progressive
@@ -133,6 +142,7 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-15: Version 2.19.0. Foreground decoder scope and stats: exact window metadata, live status/slot events, opt-in `0x0E` zoom spectrum tapped from the mfsk/JS8 channel, FT8-style JS8 waterfall, decode markers, micro tuning, FEC/CRC/confidence columns and a full-path FT8 channel regression test. Fixes the foreground nanosecond/millisecond mismatch and pads startup slot boundaries for FT8/FT4/JS8/meteor.
 - 2026-11-15: Version 2.18.0. UI compaction and readability: controls use a 0.5 line-height, all `text-[Npx]` sizes are raised by 1px and 7/8px text is lifted to a 9px floor (including canvas fonts and APRS map labels); admin header branded NO-SDR. Desktop app/product renamed NO-SDR, with a one-time migration of the legacy NO(DE)-SDR user-data directory.
 - 2026-11-13: DCF77 (77.5 kHz amplitude pulse-width) and ALS162 (162 kHz phase-modulated) time-signal decoders added. Both share a 59-bit BCD/parity minute parser with CET/CEST, DST, leap-second, holiday and clock-change flags; raw-IQ envelope/phase receivers feed foreground/background workers and a dedicated time-signal panel.
 - 2026-11-13: JT65 and JT9 weak-signal decoders added through mfsk-core's 60-second slot decoders, with the shared foreground/background worker, SQLite persistence and weak-signal decode table.
