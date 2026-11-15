@@ -1879,14 +1879,14 @@ const SMeter: Component = () => {
       minorPcts.push((majorPcts[i] + majorPcts[i + 1]) / 2);
     }
     const outerR        = radius + 5;
-    const tickFont      = Math.max(9, w * 0.030);
-    const smallTickFont = Math.max(9, w * 0.024);
+    const tickFont      = Math.max(7, w * 0.030);
+    const smallTickFont = Math.max(6, w * 0.024);
     const s9Pct         = majorPcts[5];
     const midAngle      = pctToAngle(50);
 
     // ── "SIGNAL LEVEL" label ──
     const labelR = outerR + 10;
-    const labelFont = Math.max(9, w * 0.028);
+    const labelFont = Math.max(7, w * 0.028);
     ctx.font         = `900 ${labelFont}px "Arial", sans-serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
@@ -1991,7 +1991,7 @@ const SMeter: Component = () => {
 
     // ── Power scale ──
     const powerR    = outerR - 22;
-    const powerFont = Math.max(9, w * 0.021);
+    const powerFont = Math.max(5, w * 0.021);
 
     // Arc guide
     ctx.beginPath();
@@ -2195,12 +2195,12 @@ const SMeter: Component = () => {
     // ── dB + SNR readout ──
     const sigLvlInk = currentTheme === 'crt' ? 'rgba(0,50,10,0.65)'   : currentTheme === 'vfd' ? 'rgba(60,40,10,0.70)'  : 'rgba(20,45,100,0.65)';
     const snrInk    = currentTheme === 'crt' ? 'rgba(0,50,10,0.50)'   : currentTheme === 'vfd' ? 'rgba(60,40,10,0.55)'  : 'rgba(20,45,100,0.50)';
-    const readoutSize = Math.max(9, w * 0.032);
+    const readoutSize = Math.max(8, w * 0.032);
     ctx.font      = `${readoutSize}px "Arial", sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillStyle = sigLvlInk;
     ctx.fillText(`${store.signalLevel().toFixed(0)} dBm`, cx, cy - radius * 0.32);
-    const snrSize = Math.max(9, w * 0.026);
+    const snrSize = Math.max(6, w * 0.026);
     ctx.font      = `${snrSize}px "Arial", sans-serif`;
     ctx.fillStyle = snrInk;
     ctx.fillText(`SNR ${store.snr().toFixed(0)} dB`, cx, cy - radius * 0.32 + readoutSize * 1.3);

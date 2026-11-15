@@ -607,13 +607,13 @@
 
 /* ---- Global Styles ---- */
 @layer base {
-  /* Compact controls — tight line box keeps buttons/fields short while the
-     larger type stays readable */
+  /* Compact controls — line box down from the inherited 1.5 keeps buttons and
+     fields short while the larger type stays readable */
   button,
   input,
   select,
   textarea {
-    line-height: 0.5;
+    line-height: 1;
   }
 
   * {

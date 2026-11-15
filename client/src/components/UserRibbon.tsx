@@ -157,7 +157,7 @@ const UserRibbon: Component = () => {
           fallback={
             <button
               onClick={() => store.setUsersRibbonVisible(true)}
-              class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-cyan leading-4"
+              class="text-[9px] font-mono uppercase tracking-wider text-text-dim hover:text-cyan leading-4"
               title="Show the users tuning ribbon"
             >
               Users {users().length} ▸
@@ -168,7 +168,7 @@ const UserRibbon: Component = () => {
             {/* Compact toggle, overlaid so the frequency axis uses the full width. */}
             <button
               onClick={() => store.setUsersRibbonVisible(false)}
-              class="absolute left-0 top-0 z-30 h-3.5 px-1 bg-sdr-base/85 text-[7px] font-mono uppercase tracking-wider text-text-dim hover:text-cyan"
+              class="absolute left-0 top-0 z-30 h-3.5 px-1 bg-sdr-base/85 text-[9px] font-mono uppercase tracking-wider text-text-dim hover:text-cyan"
               title="Hide the users tuning ribbon"
             >
               Users {users().length} ▾
@@ -210,7 +210,7 @@ const UserRibbon: Component = () => {
               {(group) => (
                 <button
                   onClick={() => toggleGroup(group)}
-                  class={`absolute top-0 -translate-x-1/2 h-3.5 px-1 rounded-sm border text-[7px] font-mono leading-[14px] whitespace-nowrap tabular-nums z-10 ${
+                  class={`absolute top-0 -translate-x-1/2 h-3.5 px-1 rounded-sm border text-[9px] font-mono leading-[14px] whitespace-nowrap tabular-nums z-10 ${
                     group.users.some(isSelf)
                       ? 'border-cyan/70 bg-cyan/15 text-cyan'
                       : 'border-border/70 bg-sdr-surface/90 text-text-secondary hover:text-text-primary hover:border-cyan/50'
@@ -228,7 +228,7 @@ const UserRibbon: Component = () => {
             {(group) => (
               <div class="mt-1 border border-cyan/30 bg-sdr-surface/95 rounded-sm p-1.5 shadow-lg relative z-30">
                 <div class="flex items-center gap-2 mb-1">
-                  <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">
+                  <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
                     {group().users.length} users · {fmtMHz(group().minHz, 6)}
                     {group().minHz !== group().maxHz ? ` – ${fmtMHz(group().maxHz, 6)}` : ''}
                   </span>
@@ -248,7 +248,7 @@ const UserRibbon: Component = () => {
                         class="flex items-center gap-2 w-full text-left px-1 py-0.5 rounded-sm hover:bg-white/5"
                         title={userTitle(user)}
                       >
-                        <span class={`text-[8px] font-mono tabular-nums w-24 truncate ${
+                        <span class={`text-[9px] font-mono tabular-nums w-24 truncate ${
                           isSelf(user) ? 'text-cyan' : 'text-text-secondary'
                         }`}>
                           {isSelf(user)
@@ -257,13 +257,13 @@ const UserRibbon: Component = () => {
                               ? user.ip
                               : 'USER'}
                         </span>
-                        <span class="text-[8px] font-mono tabular-nums text-text-primary">
+                        <span class="text-[9px] font-mono tabular-nums text-text-primary">
                           {fmtMHz(user.frequencyHz, 6)}
                         </span>
-                        <span class="text-[8px] font-mono uppercase text-text-dim">
+                        <span class="text-[9px] font-mono uppercase text-text-dim">
                           {user.mode}
                         </span>
-                        <span class="ml-auto text-[7px] font-mono text-text-muted">Tune</span>
+                        <span class="ml-auto text-[9px] font-mono text-text-muted">Tune</span>
                       </button>
                     )}
                   </For>
