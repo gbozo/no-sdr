@@ -293,7 +293,7 @@ const App: Component = () => {
             {/* Tooltip — only when installable */}
             <Show when={!installed() && !!installPrompt()}>
               <div class="absolute left-1/2 -translate-x-1/2 top-6 z-50
-                          px-2 py-1 rounded text-[9px] font-mono whitespace-nowrap
+                          px-2 py-1 rounded text-[10px] font-mono whitespace-nowrap
                           bg-sdr-elevated border border-border text-text-secondary
                           opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
                 Install app
@@ -309,7 +309,7 @@ const App: Component = () => {
               store.connectionState() === 'unconfigured' ? 'bg-amber' :
               'bg-status-error'
             }`} />
-            <span class="text-[9px] font-mono text-text-dim">
+            <span class="text-[10px] font-mono text-text-dim">
               {reconnectedFlash() ? 'Reconnected' :
                store.connectionState() === 'connected' ? 'Online' :
                store.connectionState() === 'connecting' ? 'Connecting...' :
@@ -317,7 +317,7 @@ const App: Component = () => {
                'Offline'}
             </span>
             <Show when={store.serverVersion()}>
-              <span class="text-[8px] font-mono text-text-dim/50 border-l border-border/40 pl-1.5">
+              <span class="text-[9px] font-mono text-text-dim/50 border-l border-border/40 pl-1.5">
                 v{store.serverVersion()}
               </span>
             </Show>
@@ -327,18 +327,18 @@ const App: Component = () => {
           <Show when={hasStationInfo()}>
             <div class="hidden sm:flex items-center gap-2 pl-2 ml-1 border-l border-border/50 min-w-0">
               <Show when={stationCallsign()}>
-                <span class="text-[10px] font-mono font-bold tracking-[0.12em] text-cyan uppercase whitespace-nowrap">
+                <span class="text-[11px] font-mono font-bold tracking-[0.12em] text-cyan uppercase whitespace-nowrap">
                   {stationCallsign()}
                 </span>
               </Show>
               <Show when={stationLocation()}>
-                <span class="text-[9px] font-mono text-text-secondary truncate">
+                <span class="text-[10px] font-mono text-text-secondary truncate">
                   {stationLocation()}
                 </span>
               </Show>
               <Show when={stationDescription()}>
                 <span
-                  class="hidden lg:inline text-[8px] font-mono text-text-dim truncate max-w-[280px]"
+                  class="hidden lg:inline text-[9px] font-mono text-text-dim truncate max-w-[280px]"
                   title={stationDescription()}
                 >
                   {stationDescription()}
@@ -355,7 +355,7 @@ const App: Component = () => {
             fallback={
               /* New user — pulsing accent button */
               <button
-                class="ml-4 flex items-center gap-1.5 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
+                class="ml-4 flex items-center gap-1.5 px-3 py-1 text-[10px] font-mono uppercase tracking-wider
                        rounded-sm border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
                        hover:bg-[var(--sdr-accent)] hover:text-text-inverse
                        transition-colors animate-pulse-glow"
@@ -372,7 +372,7 @@ const App: Component = () => {
           >
             {/* Returning user — muted styling, play icon */}
             <button
-              class="ml-4 flex items-center gap-1.5 px-3 py-1 text-[9px] font-mono uppercase tracking-wider
+              class="ml-4 flex items-center gap-1.5 px-3 py-1 text-[10px] font-mono uppercase tracking-wider
                      rounded-sm border border-border text-text-dim
                      hover:border-[var(--sdr-accent)] hover:text-[var(--sdr-accent)]
                      transition-colors"
@@ -473,7 +473,7 @@ const App: Component = () => {
 
       {/* Bottom Status Bar */}
       <footer class="h-7 bg-sdr-surface border-t border-border flex items-center px-2 md:px-4 shrink-0">
-        <div class="flex items-center gap-2 md:gap-4 text-[8px] font-mono text-text-dim uppercase tracking-wider w-full overflow-hidden">
+        <div class="flex items-center gap-2 md:gap-4 text-[9px] font-mono text-text-dim uppercase tracking-wider w-full overflow-hidden">
           <span>
             Mode: <span class="text-text-secondary">{store.mode().toUpperCase()}</span>
           </span>
@@ -607,7 +607,7 @@ const BandwidthMeter: Component = () => {
         >
           {formatRate(rate())}
         </span>
-        <span class="text-text-muted text-[7px] normal-case">
+        <span class="text-text-muted text-[9px] normal-case">
           FFT {store.fftRate()}/s
         </span>
       </div>
@@ -660,7 +660,7 @@ const ServerStatsMeter: Component = () => {
           <span class={`${cpuColor()} normal-case font-mono`}>
             {cpu()}% CPU
           </span>
-          <span class="text-text-muted text-[7px] normal-case">
+          <span class="text-text-muted text-[9px] normal-case">
             {mem()} MB RSS
           </span>
         </div>
@@ -675,7 +675,7 @@ const ThemeButton: Component<{ theme: string; label: string }> = (props) => {
 
   return (
     <button
-      class={`px-2 py-0.5 text-[8px] font-mono uppercase tracking-wider rounded-sm transition-all
+      class={`px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider rounded-sm transition-all
               ${isActive()
                 ? 'text-text-inverse'
                 : 'text-text-dim hover:text-text-secondary'}`}
@@ -704,11 +704,11 @@ const ToastStack: Component = () => {
           <div
             class="pointer-events-auto flex items-start gap-3 px-3 py-2.5
                    bg-sdr-elevated border border-border rounded-sm shadow-lg
-                   font-mono text-[10px] text-text-secondary
+                   font-mono text-[11px] text-text-secondary
                    animate-[fadeInUp_0.15s_ease-out]"
           >
             {/* Icon — warning for rate-limit, info otherwise */}
-            <span class="shrink-0 text-amber text-[12px] leading-none mt-px">
+            <span class="shrink-0 text-amber text-[13px] leading-none mt-px">
               {toast.code === 'identify_rate_limit' ? '⚠' : 'ℹ'}
             </span>
             <span class="flex-1 leading-relaxed">{toast.message}</span>

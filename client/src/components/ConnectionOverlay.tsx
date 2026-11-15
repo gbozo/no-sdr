@@ -32,11 +32,11 @@ const ConnectionOverlay: Component = () => {
                     {attempt() > 0 ? 'Reconnecting' : 'Connecting'}
                   </h3>
                   <Show when={attempt() > 0}>
-                    <p class="text-[10px] font-mono text-text-dim">
+                    <p class="text-[11px] font-mono text-text-dim">
                       Attempt {attempt()} of 20
                     </p>
                   </Show>
-                  <p class="text-[10px] font-mono text-text-dim mt-1">
+                  <p class="text-[11px] font-mono text-text-dim mt-1">
                     Establishing connection to server...
                   </p>
                 </div>
@@ -57,17 +57,17 @@ const ConnectionOverlay: Component = () => {
                   <h3 class="text-xs font-mono font-bold uppercase tracking-wider text-status-error mb-1">
                     Disconnected
                   </h3>
-                  <p class="text-[10px] font-mono text-text-dim">
+                  <p class="text-[11px] font-mono text-text-dim">
                     Unable to reach the server.
                   </p>
                   <Show when={attempt() >= 20}>
-                    <p class="text-[10px] font-mono text-text-dim mt-1">
+                    <p class="text-[11px] font-mono text-text-dim mt-1">
                       Max reconnection attempts reached.
                     </p>
                   </Show>
                 </div>
                 <button
-                  class="mt-2 px-4 py-1.5 text-[10px] font-mono uppercase tracking-wider
+                  class="mt-2 px-4 py-1.5 text-[11px] font-mono uppercase tracking-wider
                          rounded-sm border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
                          hover:bg-[var(--sdr-accent)] hover:text-text-inverse transition-colors"
                   onClick={() => {
@@ -101,14 +101,14 @@ const ConnectionOverlay: Component = () => {
                   <h3 class="text-xs font-mono font-bold uppercase tracking-wider text-amber mb-1">
                     No Receivers Configured
                   </h3>
-                  <p class="text-[10px] font-mono text-text-dim leading-relaxed">
+                  <p class="text-[11px] font-mono text-text-dim leading-relaxed">
                     The server is running but no SDR devices have been set up.
                     <br />
                     Open the admin panel to add and configure receivers.
                   </p>
                 </div>
                 <button
-                  class="mt-2 px-4 py-1.5 text-[10px] font-mono uppercase tracking-wider
+                  class="mt-2 px-4 py-1.5 text-[11px] font-mono uppercase tracking-wider
                          rounded-sm border border-amber text-amber
                          hover:bg-amber hover:text-text-inverse transition-colors"
                   onClick={() => {

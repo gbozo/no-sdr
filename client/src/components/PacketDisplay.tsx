@@ -35,7 +35,7 @@ const PacketDisplay: Component = () => {
   return (
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       <div class="flex flex-col min-w-0 min-h-0 md:w-[58%] border-b md:border-b-0 md:border-r border-border/40">
-        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-text-dim">
             <span class="uppercase tracking-wider text-text-secondary">AX.25 PACKET</span>
             <span>{frames().length} FRAMES</span>
@@ -47,7 +47,7 @@ const PacketDisplay: Component = () => {
         </div>
 
         <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface">
               <tr>
                 <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -83,7 +83,7 @@ const PacketDisplay: Component = () => {
           </table>
 
           <Show when={frames().length === 0}>
-            <div class="px-2 py-3 text-[8px] font-mono text-text-dim">
+            <div class="px-2 py-3 text-[9px] font-mono text-text-dim">
               Waiting for AX.25 traffic. NBFM 12.5 kHz; 1200 baud Bell 202 by
               default, or set <code>settings.baud: 9600</code> on the decoder
               for G3RUH on a 9600 packet channel.
@@ -96,7 +96,7 @@ const PacketDisplay: Component = () => {
         <Show
           when={selected()}
           fallback={
-            <div class="h-full flex items-center justify-center px-4 text-center text-[9px] font-mono text-text-dim">
+            <div class="h-full flex items-center justify-center px-4 text-center text-[10px] font-mono text-text-dim">
               Select a frame to inspect its AX.25 header and raw bytes.
             </div>
           }
@@ -104,18 +104,18 @@ const PacketDisplay: Component = () => {
           {(frame) => (
             <div class="p-3 space-y-3">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/30 pb-2">
-                <span class="text-[10px] font-mono uppercase tracking-wider text-cyan">
+                <span class="text-[11px] font-mono uppercase tracking-wider text-cyan">
                   {frame().from} → {frame().to}
                 </span>
-                <span class="text-[8px] font-mono text-text-secondary">{frame().type}</span>
-                <span class="text-[8px] font-mono text-text-dim">
+                <span class="text-[9px] font-mono text-text-secondary">{frame().type}</span>
+                <span class="text-[9px] font-mono text-text-dim">
                   PID 0x{frame().pid.toString(16).toUpperCase().padStart(2, '0')}
                 </span>
-                <span class="text-[8px] font-mono text-text-dim">{frame().length} bytes</span>
-                <span class="ml-auto text-[8px] font-mono text-text-dim">{formatTime(frame().at)}</span>
+                <span class="text-[9px] font-mono text-text-dim">{frame().length} bytes</span>
+                <span class="ml-auto text-[9px] font-mono text-text-dim">{formatTime(frame().at)}</span>
               </div>
 
-              <div class="grid grid-cols-[5rem_1fr] gap-x-2 gap-y-1 text-[9px] font-mono">
+              <div class="grid grid-cols-[5rem_1fr] gap-x-2 gap-y-1 text-[10px] font-mono">
                 <span class="text-text-dim">FROM</span><span class="break-all">{frame().from}</span>
                 <span class="text-text-dim">TO</span><span class="break-all">{frame().to}</span>
                 <span class="text-text-dim">VIA</span><span class="break-all">{path(frame())}</span>
@@ -127,10 +127,10 @@ const PacketDisplay: Component = () => {
               </div>
 
               <div>
-                <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">
+                <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">
                   Raw frame
                 </div>
-                <pre class="whitespace-pre-wrap break-all text-[9px] leading-relaxed font-mono text-text-secondary bg-black/30 border border-border/30 rounded-sm p-2">
+                <pre class="whitespace-pre-wrap break-all text-[10px] leading-relaxed font-mono text-text-secondary bg-black/30 border border-border/30 rounded-sm p-2">
                   {frame().raw}
                 </pre>
               </div>

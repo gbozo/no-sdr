@@ -28,7 +28,7 @@ const AcarsDisplay: Component = () => {
 
   return (
     <div class="flex-1 min-h-0 flex flex-col bg-sdr-surface/30">
-      <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono">
+      <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono">
         <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-text-dim">
           <span class="uppercase tracking-wider text-text-secondary">ACARS</span>
           <span>{messages().length} MSG</span>
@@ -40,7 +40,7 @@ const AcarsDisplay: Component = () => {
       </div>
 
       <div class="flex-1 min-h-0 overflow-auto">
-        <table class="w-full text-[8px] font-mono">
+        <table class="w-full text-[9px] font-mono">
           <thead class="sticky top-0 z-10 bg-sdr-surface">
             <tr>
               <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -78,7 +78,7 @@ const AcarsDisplay: Component = () => {
         </table>
 
         <Show when={messages().length === 0}>
-          <div class="px-2 py-3 text-[8px] font-mono space-y-1">
+          <div class="px-2 py-3 text-[9px] font-mono space-y-1">
             <p class="text-text-dim">Listening for ACARS…</p>
             <p class="text-text-dim/70">
               Tune to 131.550 / 131.725 MHz in AM mode with a VHF airband antenna. Messages

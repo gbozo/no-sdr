@@ -236,10 +236,10 @@ const DecoderDisplay: Component = () => {
   return (
     <div class="relative flex flex-col h-full min-h-0 bg-sdr-surface/30">
       <div class="flex items-center gap-2 px-2 py-1 border-b border-border/40 shrink-0 min-w-0">
-        <span class="hidden sm:inline text-[8px] font-mono uppercase tracking-wider text-text-dim shrink-0">Digital Decoder</span>
+        <span class="hidden sm:inline text-[9px] font-mono uppercase tracking-wider text-text-dim shrink-0">Digital Decoder</span>
         {/* Small screens: one compact picker instead of a full chip row. */}
         <select
-          class="lg:hidden flex-1 min-w-0 bg-sdr-base border border-border/50 rounded-sm text-[9px] font-mono text-text-secondary px-1 py-0.5"
+          class="lg:hidden flex-1 min-w-0 bg-sdr-base border border-border/50 rounded-sm text-[10px] font-mono text-text-secondary px-1 py-0.5"
           value={store.decoderMode()}
           onChange={(e) => choose(e.currentTarget.value)}
           title="Select digital decoder"
@@ -254,7 +254,7 @@ const DecoderDisplay: Component = () => {
             {(decoder) => (
               <button
                 onClick={() => select(decoder.id)}
-                class={`mil-btn text-[9px] px-2 py-0.5 shrink-0 ${
+                class={`mil-btn text-[10px] px-2 py-0.5 shrink-0 ${
                   store.decoderMode() === decoder.id ? 'active border-cyan text-cyan' : ''
                 }`}
               >
@@ -267,7 +267,7 @@ const DecoderDisplay: Component = () => {
           <Show when={store.pushServerConfig()?.identifyEnabled !== false}>
             <button
               onClick={() => store.setIdentifierOpen(true)}
-              class="mil-btn text-[8px] px-1.5 py-0.5"
+              class="mil-btn text-[9px] px-1.5 py-0.5"
               title="Capture raw IQ and identify the tuned signal"
             >
               Identify
@@ -276,14 +276,14 @@ const DecoderDisplay: Component = () => {
           <Show when={store.decoderMode()}>
             <button
               onClick={() => setShowInfo((v) => !v)}
-              class={`mil-btn text-[8px] px-1.5 py-0.5 ${showInfo() ? 'active border-cyan text-cyan' : ''}`}
+              class={`mil-btn text-[9px] px-1.5 py-0.5 ${showInfo() ? 'active border-cyan text-cyan' : ''}`}
               title="Decoder information and typical frequencies (I)"
             >
               ⓘ Info
             </button>
             <button
               onClick={() => { clearZoom(); engine.setDecoder(''); }}
-              class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-amber px-1"
+              class="text-[9px] font-mono uppercase tracking-wider text-text-dim hover:text-amber px-1"
             >
               Off
             </button>
@@ -295,7 +295,7 @@ const DecoderDisplay: Component = () => {
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Decode table */}
         <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface text-text-dim">
               <tr>
                 <th class="text-left px-2 py-1">TIME</th>
@@ -332,19 +332,19 @@ const DecoderDisplay: Component = () => {
             </tbody>
           </table>
           <Show when={store.decoderMessages().length === 0}>
-            <p class="text-[8px] font-mono text-text-dim px-2 py-3">Waiting for a slot…</p>
+            <p class="text-[9px] font-mono text-text-dim px-2 py-3">Waiting for a slot…</p>
           </Show>
         </div>
 
         {/* Receiver-span waterfall around the decoder frequency */}
         <div class="md:w-[42%] min-h-[160px] md:min-h-0 relative bg-black">
           <canvas ref={(el) => { canvasRef = el; }} class="absolute inset-0 w-full h-full" />
-          <div class="absolute top-1 left-1.5 pointer-events-none text-[8px] font-mono text-cyan/80">
+          <div class="absolute top-1 left-1.5 pointer-events-none text-[9px] font-mono text-cyan/80">
             {store.decoderMode().toUpperCase()} · {(store.tunedFrequency() / 1e6).toFixed(6)} MHz
             <span class="text-text-dim/70"> · {frameCount()}f</span>
           </div>
           <Show when={!hasSignal()}>
-            <span class="absolute inset-0 flex items-center justify-center text-[8px] font-mono text-text-dim">
+            <span class="absolute inset-0 flex items-center justify-center text-[9px] font-mono text-text-dim">
               waiting for spectrum…
             </span>
           </Show>

@@ -47,7 +47,7 @@ const FrequencyInput: Component<{
 
   return (
     <div class="flex flex-col gap-1">
-      <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">{props.label}</label>
+      <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim">{props.label}</label>
       <div class="flex items-center gap-1">
         <input
           type="text"
@@ -62,7 +62,7 @@ const FrequencyInput: Component<{
           }}
           placeholder="145.500000"
         />
-        <span class="text-[9px] font-mono text-text-dim">MHz</span>
+        <span class="text-[10px] font-mono text-text-dim">MHz</span>
       </div>
     </div>
   );
@@ -84,15 +84,15 @@ const BookmarkRow: Component<{
 
       {/* Name */}
       <div class="flex-1 min-w-0">
-        <span class="text-[11px] font-mono text-text-primary truncate block">{props.bookmark.name}</span>
+        <span class="text-[12px] font-mono text-text-primary truncate block">{props.bookmark.name}</span>
         <Show when={props.bookmark.description}>
-          <span class="text-[9px] font-mono text-text-dim truncate block">{props.bookmark.description}</span>
+          <span class="text-[10px] font-mono text-text-dim truncate block">{props.bookmark.description}</span>
         </Show>
       </div>
 
       {/* Mode badge */}
       <div class="w-12 shrink-0">
-        <span class="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/20">
+        <span class="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/20">
           {modeInfo()?.shortName || props.bookmark.mode}
         </span>
       </div>
@@ -100,7 +100,7 @@ const BookmarkRow: Component<{
       {/* Bandwidth */}
       <div class="w-16 shrink-0 text-right">
         <Show when={props.bookmark.bandwidth && props.bookmark.bandwidth > 0}>
-          <span class="text-[9px] font-mono text-text-dim">
+          <span class="text-[10px] font-mono text-text-dim">
             {(props.bookmark.bandwidth! / 1000).toFixed(1)}k
           </span>
         </Show>
@@ -109,13 +109,13 @@ const BookmarkRow: Component<{
       {/* Actions */}
       <div class="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
-          class="px-2 py-0.5 text-[9px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors"
+          class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors"
           onClick={props.onEdit}
         >
           Edit
         </button>
         <button
-          class="px-2 py-0.5 text-[9px] font-mono uppercase rounded border border-border/50 text-red-400/60 hover:text-red-400 hover:border-red-400/50 transition-colors"
+          class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-red-400/60 hover:text-red-400 hover:border-red-400/50 transition-colors"
           onClick={props.onDelete}
         >
           Del
@@ -148,7 +148,7 @@ const BookmarkForm: Component<{
   return (
     <div class="p-3 border border-accent/30 rounded-md bg-sdr-surface/80 space-y-3">
       <div class="flex items-center gap-2 mb-2">
-        <span class="text-[9px] font-mono uppercase tracking-wider text-accent">
+        <span class="text-[10px] font-mono uppercase tracking-wider text-accent">
           {props.isNew ? 'Add Bookmark' : 'Edit Bookmark'}
         </span>
       </div>
@@ -156,7 +156,7 @@ const BookmarkForm: Component<{
       {/* Row 1: Name + Frequency */}
       <div class="grid grid-cols-2 gap-3">
         <div class="flex flex-col gap-1">
-          <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Name</label>
+          <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim">Name</label>
           <input
             type="text"
             class="admin-input"
@@ -175,7 +175,7 @@ const BookmarkForm: Component<{
       {/* Row 2: Mode + Bandwidth */}
       <div class="grid grid-cols-2 gap-3">
         <div class="flex flex-col gap-1">
-          <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Mode</label>
+          <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim">Mode</label>
           <select
             class="admin-input"
             value={form().mode}
@@ -206,7 +206,7 @@ const BookmarkForm: Component<{
           </select>
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Bandwidth (Hz)</label>
+          <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim">Bandwidth (Hz)</label>
           <input
             type="number"
             class="admin-input"
@@ -219,7 +219,7 @@ const BookmarkForm: Component<{
 
       {/* Row 3: Description */}
       <div class="flex flex-col gap-1">
-        <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Description</label>
+        <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim">Description</label>
         <input
           type="text"
           class="admin-input"
@@ -232,14 +232,14 @@ const BookmarkForm: Component<{
       {/* Actions */}
       <div class="flex gap-2 pt-1">
         <button
-          class="mil-btn text-[9px] px-3 py-1"
+          class="mil-btn text-[10px] px-3 py-1"
           onClick={handleSave}
           disabled={!form().name.trim() || form().frequency <= 0}
         >
           {props.isNew ? 'Add' : 'Save'}
         </button>
         <button
-          class="px-3 py-1 text-[9px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary transition-colors"
+          class="px-3 py-1 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary transition-colors"
           onClick={props.onCancel}
         >
           Cancel
@@ -273,13 +273,13 @@ const BookmarksSection: Component = () => {
       <div class="flex items-center justify-between mb-4">
         <div>
           <h2 class="text-sm font-mono uppercase tracking-wider text-text-primary mb-0.5">Bookmarks</h2>
-          <p class="text-[9px] font-mono text-text-dim">
+          <p class="text-[10px] font-mono text-text-dim">
             Frequency bookmarks — quick access to saved stations
           </p>
         </div>
         <Show when={!adding()}>
           <button
-            class="mil-btn text-[9px] px-3 py-1"
+            class="mil-btn text-[10px] px-3 py-1"
             onClick={() => setAdding(true)}
           >
             + Add Bookmark
@@ -302,7 +302,7 @@ const BookmarksSection: Component = () => {
       {/* Loading state */}
       <Show when={adminStore.bookmarksLoading()}>
         <div class="flex items-center justify-center h-24">
-          <span class="text-[9px] font-mono text-text-dim uppercase animate-pulse">Loading bookmarks...</span>
+          <span class="text-[10px] font-mono text-text-dim uppercase animate-pulse">Loading bookmarks...</span>
         </div>
       </Show>
 
@@ -312,8 +312,8 @@ const BookmarksSection: Component = () => {
           <svg class="w-6 h-6 text-text-dim/30 mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
-          <span class="text-[9px] font-mono text-text-dim uppercase">No bookmarks configured</span>
-          <span class="text-[9px] font-mono text-text-dim/60 mt-0.5">Click "Add Bookmark" to save a frequency</span>
+          <span class="text-[10px] font-mono text-text-dim uppercase">No bookmarks configured</span>
+          <span class="text-[10px] font-mono text-text-dim/60 mt-0.5">Click "Add Bookmark" to save a frequency</span>
         </div>
       </Show>
 
@@ -321,7 +321,7 @@ const BookmarksSection: Component = () => {
       <Show when={!adminStore.bookmarksLoading() && adminStore.bookmarks().length > 0}>
         <div class="space-y-1.5">
           {/* Header row */}
-          <div class="flex items-center gap-3 px-2.5 py-1 text-[8px] font-mono uppercase tracking-wider text-text-dim/60">
+          <div class="flex items-center gap-3 px-2.5 py-1 text-[9px] font-mono uppercase tracking-wider text-text-dim/60">
             <div class="w-32 shrink-0">Frequency</div>
             <div class="flex-1">Name</div>
             <div class="w-12 shrink-0">Mode</div>
@@ -355,7 +355,7 @@ const BookmarksSection: Component = () => {
 
       {/* Count */}
       <Show when={adminStore.bookmarks().length > 0}>
-        <div class="mt-3 text-[8px] font-mono text-text-dim/50 uppercase text-right">
+        <div class="mt-3 text-[9px] font-mono text-text-dim/50 uppercase text-right">
           {adminStore.bookmarks().length} bookmark{adminStore.bookmarks().length !== 1 ? 's' : ''}
         </div>
       </Show>

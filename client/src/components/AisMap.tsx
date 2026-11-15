@@ -306,7 +306,7 @@ const AisMap: Component<AisMapProps> = (props) => {
       <div ref={(el) => { container = el; }} class="absolute inset-0" />
       <button
         onClick={fitVessels}
-        class="absolute top-2 right-2 z-[500] mil-btn text-[8px] font-mono uppercase tracking-wider px-2 py-1"
+        class="absolute top-2 right-2 z-[500] mil-btn text-[9px] font-mono uppercase tracking-wider px-2 py-1"
         title="Fit all vessels with a position"
       >
         Fit

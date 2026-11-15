@@ -41,7 +41,7 @@ const IsmDisplay: Component = () => {
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       {/* Device table */}
       <div class="flex flex-col min-w-0 min-h-0 md:w-[54%] border-b md:border-b-0 md:border-r border-border/40">
-        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-text-dim">
             <span class="uppercase tracking-wider text-text-secondary">ISM</span>
             <span>{devices().length} DEVICES</span>
@@ -65,7 +65,7 @@ const IsmDisplay: Component = () => {
         </div>
 
         <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface">
               <tr>
                 <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -117,7 +117,7 @@ const IsmDisplay: Component = () => {
           </table>
 
           <Show when={devices().length === 0}>
-            <div class="px-2 py-3 text-[8px] font-mono text-text-dim">
+            <div class="px-2 py-3 text-[9px] font-mono text-text-dim">
               Waiting for an ISM device. Tune the receiver near 868.95 MHz with
               a window wide enough to cover the 868 MHz sensor and meter
               channels. Weather sensors, wireless M-Bus meters, Z-Wave and
@@ -132,10 +132,10 @@ const IsmDisplay: Component = () => {
         <Show
           when={selected()}
           fallback={
-            <div class="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-[9px] font-mono text-text-dim">
+            <div class="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-[10px] font-mono text-text-dim">
               <span>Select a device to inspect its readings and raw frame.</span>
               <Show when={status()?.channels?.length}>
-                <div class="text-[8px] text-text-dim/80">
+                <div class="text-[9px] text-text-dim/80">
                   <For each={status()!.channels}>
                     {(channel) => (
                       <div>
@@ -152,23 +152,23 @@ const IsmDisplay: Component = () => {
           {(device) => (
             <div class="p-3 space-y-3">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/30 pb-2">
-                <span class="text-[10px] font-mono uppercase tracking-wider text-cyan">
+                <span class="text-[11px] font-mono uppercase tracking-wider text-cyan">
                   {device().kind}
                 </span>
-                <span class="text-[8px] font-mono text-text-secondary">
+                <span class="text-[9px] font-mono text-text-secondary">
                   {device().device}
                 </span>
-                <span class="text-[8px] font-mono text-text-dim">
+                <span class="text-[9px] font-mono text-text-dim">
                   {formatHz(device().freqHz)} · {device().snrDb} dB · heard{' '}
                   {device().count}×
                 </span>
-                <span class="ml-auto text-[8px] font-mono text-text-dim">
+                <span class="ml-auto text-[9px] font-mono text-text-dim">
                   first {formatTime(device().firstAt)} · last {formatTime(device().lastAt)}
                 </span>
               </div>
 
               <Show when={device().encrypted}>
-                <div class="text-[8px] font-mono text-amber/90">
+                <div class="text-[9px] font-mono text-amber/90">
                   Encrypted payload — identity and raw frame only.
                 </div>
               </Show>
@@ -178,10 +178,10 @@ const IsmDisplay: Component = () => {
                   <For each={device().readings}>
                     {(reading) => (
                       <div class="border border-border/30 rounded-sm px-2 py-1">
-                        <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim">
+                        <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
                           {reading.quantity}
                         </div>
-                        <div class="text-[11px] font-mono text-text-primary">
+                        <div class="text-[12px] font-mono text-text-primary">
                           {reading.value.toFixed(reading.decimals)}
                           {reading.unit ? ` ${reading.unit}` : ''}
                         </div>
@@ -193,12 +193,12 @@ const IsmDisplay: Component = () => {
 
               <Show when={device().extra.length > 0}>
                 <div class="space-y-1">
-                  <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim">
+                  <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
                     Extra
                   </div>
                   <For each={device().extra}>
                     {([name, value]) => (
-                      <div class="flex gap-2 text-[9px] font-mono">
+                      <div class="flex gap-2 text-[10px] font-mono">
                         <span class="text-text-dim">{name}</span>
                         <span class="text-text-primary">{value}</span>
                       </div>
@@ -208,10 +208,10 @@ const IsmDisplay: Component = () => {
               </Show>
 
               <div class="space-y-1">
-                <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim">
+                <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
                   Raw frame
                 </div>
-                <pre class="whitespace-pre-wrap break-all text-[9px] leading-relaxed font-mono text-text-secondary">
+                <pre class="whitespace-pre-wrap break-all text-[10px] leading-relaxed font-mono text-text-secondary">
                   {device().rawHex || '—'}
                 </pre>
               </div>

@@ -46,7 +46,7 @@ function markerIcon(packet: AprsPacket, selected: boolean): L.DivIcon {
       <svg width="14" height="14" viewBox="0 0 14 14">
         <circle cx="7" cy="7" r="5" fill="${colour}" stroke="#061018" stroke-width="1"/>
       </svg>
-      <span style="font:8px monospace;color:${colour};background:rgba(5,7,11,.75);padding:0 2px;white-space:nowrap;">${label}</span>
+      <span style="font:9px monospace;color:${colour};background:rgba(5,7,11,.75);padding:0 2px;white-space:nowrap;">${label}</span>
     </div>`;
   return L.divIcon({
     className: 'aprs-marker-container',

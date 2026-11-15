@@ -26,14 +26,14 @@ const Js8Display: Component = () => {
   return (
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
-        <div class="sticky top-0 z-10 bg-sdr-surface px-2 py-1 flex items-center gap-3 text-[8px] font-mono uppercase tracking-wider text-text-dim border-b border-border/30">
+        <div class="sticky top-0 z-10 bg-sdr-surface px-2 py-1 flex items-center gap-3 text-[9px] font-mono uppercase tracking-wider text-text-dim border-b border-border/30">
           <span class="text-cyan">JS8</span>
           <span>{status().speed.toUpperCase()}</span>
           <span>{status().period}s</span>
           <span>{status().decodes} decodes</span>
           <span class="ml-auto">{status().listening ? `LEVEL ${status().level.toFixed(0)} dB` : 'LISTENING'}</span>
         </div>
-        <table class="w-full text-[8px] font-mono">
+        <table class="w-full text-[9px] font-mono">
           <thead class="sticky top-[22px] z-10 bg-sdr-surface text-text-dim">
             <tr>
               <th class="text-left px-2 py-1">TIME</th>
@@ -78,17 +78,17 @@ const Js8Display: Component = () => {
 
       <div class="w-full md:w-[320px] shrink-0 min-h-0 overflow-auto p-3 space-y-3">
         <div>
-          <h4 class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">Heard stations</h4>
+          <h4 class="text-[10px] font-mono uppercase tracking-wider text-text-dim mb-1">Heard stations</h4>
           <div class="flex flex-wrap gap-1">
             <For each={status().heard.slice(0, 60)}>
               {(heard) => (
-                <span class="px-1.5 py-0.5 text-[8px] font-mono border border-border/40 rounded-sm text-text-primary">
+                <span class="px-1.5 py-0.5 text-[9px] font-mono border border-border/40 rounded-sm text-text-primary">
                   {heard.call}
                 </span>
               )}
             </For>
             <Show when={status().heard.length === 0}>
-              <span class="text-[9px] font-mono text-text-dim">No stations decoded in this session.</span>
+              <span class="text-[10px] font-mono text-text-dim">No stations decoded in this session.</span>
             </Show>
           </div>
         </div>
@@ -96,8 +96,8 @@ const Js8Display: Component = () => {
         <Show when={selectedMessage()}>
           {(message) => (
             <div class="border-t border-border/30 pt-3 space-y-1">
-              <h4 class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Message</h4>
-              <div class="grid grid-cols-[70px_1fr] gap-x-2 gap-y-1 text-[9px] font-mono">
+              <h4 class="text-[10px] font-mono uppercase tracking-wider text-text-dim">Message</h4>
+              <div class="grid grid-cols-[70px_1fr] gap-x-2 gap-y-1 text-[10px] font-mono">
                 <span class="text-text-dim">From</span><span class="text-cyan">{message().from || '—'}</span>
                 <span class="text-text-dim">To</span><span class="text-amber">{message().to || '—'}</span>
                 <span class="text-text-dim">Command</span><span>{message().cmd || '—'}</span>
@@ -108,12 +108,12 @@ const Js8Display: Component = () => {
                 <span class="text-text-dim">SNR</span><span>{message().snrDb.toFixed(1)} dB</span>
                 <span class="text-text-dim">Directed</span><span>{message().toMe ? 'to this station' : 'group / undirected'}</span>
               </div>
-              <pre class="mt-2 p-2 bg-black/30 border border-border/30 rounded-sm text-[9px] font-mono text-text-primary whitespace-pre-wrap break-words">{message().text}</pre>
+              <pre class="mt-2 p-2 bg-black/30 border border-border/30 rounded-sm text-[10px] font-mono text-text-primary whitespace-pre-wrap break-words">{message().text}</pre>
             </div>
           )}
         </Show>
 
-        <p class="text-[8px] font-mono text-text-dim leading-relaxed border-t border-border/20 pt-3">
+        <p class="text-[9px] font-mono text-text-dim leading-relaxed border-t border-border/20 pt-3">
           JS8 speeds: NORMAL 15 s, FAST 10 s, TURBO 6 s, SLOW 30 s. This receiver decodes the
           configured speed; default is NORMAL.
         </p>

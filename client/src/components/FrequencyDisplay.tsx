@@ -188,7 +188,7 @@ const FrequencyDisplay: Component = () => {
           <Show when={label()}>
             <div class="absolute bottom-2 right-3 z-10 pointer-events-none select-none max-w-[55%]">
               <span
-                class="font-mono text-[10px] tracking-[0.15em] uppercase truncate block"
+                class="font-mono text-[11px] tracking-[0.15em] uppercase truncate block"
                 style={{
                   color: 'var(--sdr-accent)',
                   opacity: '0.85',
@@ -204,21 +204,21 @@ const FrequencyDisplay: Component = () => {
 
       <div class="p-2">
         <div class="flex items-center gap-2 mb-1 flex-wrap">
-          <div class="text-[8px] font-mono uppercase tracking-[0.15em] text-text-dim shrink-0">
+          <div class="text-[9px] font-mono uppercase tracking-[0.15em] text-text-dim shrink-0">
             VFO Frequency
           </div>
-          <span class="text-border text-[8px]">|</span>
-          <span class="text-[8px] font-mono text-text-dim shrink-0">
+          <span class="text-border text-[9px]">|</span>
+          <span class="text-[9px] font-mono text-text-dim shrink-0">
             {formatFrequencyDotted(store.centerFrequency())} Hz
           </span>
-          <span class="text-border text-[8px]">|</span>
-          <span class="text-[8px] font-mono text-text-dim shrink-0">
+          <span class="text-border text-[9px]">|</span>
+          <span class="text-[9px] font-mono text-text-dim shrink-0">
             {store.tuneOffset() >= 0 ? '+' : ''}{(store.tuneOffset() / 1000).toFixed(1)} kHz
           </span>
-          <span class="text-border text-[8px]">|</span>
+          <span class="text-border text-[9px]">|</span>
           <select
             class="bg-transparent border-none text-text-dim hover:text-text-secondary focus:text-cyan
-                   focus:outline-none cursor-pointer text-[8px] font-mono uppercase tracking-[0.1em]
+                   focus:outline-none cursor-pointer text-[9px] font-mono uppercase tracking-[0.1em]
                    px-0.5 py-0 shrink-0"
             value={store.tuningStep()}
             onChange={(e) => {
@@ -277,7 +277,7 @@ const FrequencyDisplay: Component = () => {
               Hz
               <Show when={store.stereoDetected() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
                 <span
-                  class="absolute bottom-full left-0 mb-0.5 text-[6px] font-mono font-bold tracking-wider
+                  class="absolute bottom-full left-0 mb-0.5 text-[9px] font-mono font-bold tracking-wider
                          px-1 py-px rounded whitespace-nowrap
                          text-green border border-green/40 bg-green-dim shadow-[0_0_4px_rgba(56,193,128,0.3)]"
                 >

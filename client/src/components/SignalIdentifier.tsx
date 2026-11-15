@@ -107,16 +107,16 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
       >
         <div class="flex items-center gap-3 px-3 py-2 border-b border-border/50 shrink-0">
           <div>
-            <div class="text-[10px] font-mono font-bold uppercase tracking-wider text-text-primary">
+            <div class="text-[11px] font-mono font-bold uppercase tracking-wider text-text-primary">
               Signal Identification
             </div>
-            <div class="text-[8px] font-mono text-text-dim">
+            <div class="text-[9px] font-mono text-text-dim">
               Client-side · full-span FFT + raw IQ · no server decoder probing
             </div>
           </div>
           <button
             onClick={props.onClose}
-            class="ml-auto text-[10px] font-mono text-text-dim hover:text-amber px-1"
+            class="ml-auto text-[11px] font-mono text-text-dim hover:text-amber px-1"
             title="Close"
           >
             ✕
@@ -126,7 +126,7 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
         <div class="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
           <Show when={phase() === 'capturing'}>
             <div class="space-y-2">
-              <div class="text-[9px] font-mono text-text-secondary">
+              <div class="text-[10px] font-mono text-text-secondary">
                 Capturing spectrum and raw 300 kHz IQ around {fmtFreq(store.tunedFrequency())} …
               </div>
               <div class="h-1.5 rounded-full bg-sdr-base border border-border/40 overflow-hidden">
@@ -135,7 +135,7 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
                   style={{ width: `${Math.round(progress() * 100)}%` }}
                 />
               </div>
-              <div class="text-[8px] font-mono text-text-muted">
+              <div class="text-[9px] font-mono text-text-muted">
                 {frames.length} FFT frames · {pct(progress())} · separate raw-IQ WebSocket at 300 kHz;
                 your current mode, bandwidth and audio are untouched.
               </div>
@@ -154,7 +154,7 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
                   <Stat label="Frames" value={String(r().features.frames)} />
                 </div>
 
-                <div class="text-[8px] font-mono text-text-dim">
+                <div class="text-[9px] font-mono text-text-dim">
                   Analyzed ±{fmtSpan(r().features.analyzerSpanHz / 2)} · peak {fmtFreq(r().features.peakHz)} ·
                   IQ duty {pct(r().features.iqDuty)}
                 </div>
@@ -162,7 +162,7 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
                 <Show
                   when={r().candidates.length > 0}
                   fallback={
-                    <div class="text-[9px] font-mono text-text-dim border border-border/30 rounded-sm p-3">
+                    <div class="text-[10px] font-mono text-text-dim border border-border/30 rounded-sm p-3">
                       No decoder matched confidently. Check the tuning, filter bandwidth, or let the
                       signal run longer.
                     </div>
@@ -173,18 +173,18 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
                       {(candidate) => (
                         <div class="border border-border/40 rounded-sm bg-sdr-base/40 p-2 space-y-1">
                           <div class="flex items-center gap-2">
-                            <span class="text-[10px] font-mono text-text-primary">{candidate.name}</span>
-                            <span class="text-[8px] font-mono uppercase text-cyan border border-cyan/30 rounded px-1">
+                            <span class="text-[11px] font-mono text-text-primary">{candidate.name}</span>
+                            <span class="text-[9px] font-mono uppercase text-cyan border border-cyan/30 rounded px-1">
                               {candidate.shortName}
                             </span>
-                            <span class={`ml-auto text-[10px] font-mono tabular-nums ${
+                            <span class={`ml-auto text-[11px] font-mono tabular-nums ${
                               candidate.score >= 0.5 ? 'text-green-400' : candidate.score >= 0.25 ? 'text-amber' : 'text-text-dim'
                             }`}>
                               {pct(candidate.score)}
                             </span>
                             <button
                               onClick={() => open(candidate)}
-                              class="mil-btn text-[8px] px-1.5 py-0.5"
+                              class="mil-btn text-[9px] px-1.5 py-0.5"
                               title={`Open the ${candidate.name} decoder`}
                             >
                               Open
@@ -196,7 +196,7 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
                               style={{ width: `${Math.min(100, Math.round(candidate.score * 100))}%` }}
                             />
                           </div>
-                          <div class="text-[8px] font-mono text-text-dim">
+                          <div class="text-[9px] font-mono text-text-dim">
                             {candidate.reasons.join(' · ')}
                           </div>
                         </div>
@@ -205,17 +205,17 @@ const SignalIdentifier: Component<{ onClose: () => void }> = (props) => {
                   </div>
                 </Show>
 
-                <p class="text-[8px] font-mono text-text-muted border-t border-border/30 pt-2">
+                <p class="text-[9px] font-mono text-text-muted border-t border-border/30 pt-2">
                   Heuristic confidence, not a calibrated probability. ADS-B, VDL2 and AIS are
                   excluded; packet is scored as a bursty narrowband candidate. Open a candidate
                   decoder to confirm.
                 </p>
 
                 <div class="flex justify-end gap-1">
-                  <button onClick={run} class="mil-btn text-[8px] px-2 py-0.5">
+                  <button onClick={run} class="mil-btn text-[9px] px-2 py-0.5">
                     Scan again
                   </button>
-                  <button onClick={props.onClose} class="mil-btn text-[8px] px-2 py-0.5">
+                  <button onClick={props.onClose} class="mil-btn text-[9px] px-2 py-0.5">
                     Close
                   </button>
                 </div>
@@ -243,8 +243,8 @@ function fmtSpan(hz: number): string {
 
 const Stat: Component<{ label: string; value: string; tone?: string }> = (props) => (
   <div class="bg-sdr-surface/70 px-1.5 py-0.5 min-w-0">
-    <div class="text-[7px] uppercase tracking-wider text-text-dim truncate">{props.label}</div>
-    <div class={`text-[9px] leading-tight whitespace-nowrap ${props.tone ?? 'text-text-primary'}`}>
+    <div class="text-[9px] uppercase tracking-wider text-text-dim truncate">{props.label}</div>
+    <div class={`text-[10px] leading-tight whitespace-nowrap ${props.tone ?? 'text-text-primary'}`}>
       {props.value}
     </div>
   </div>

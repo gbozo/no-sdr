@@ -108,7 +108,7 @@ const AisDisplay: Component = () => {
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       {/* ── Vessel table ── */}
       <div class="flex flex-col min-w-0 min-h-0 md:w-[46%] border-b md:border-b-0 md:border-r border-border/40">
-        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
           <Show when={status()?.unavailable}>
             {(message) => (
               <div class="text-amber">
@@ -158,7 +158,7 @@ const AisDisplay: Component = () => {
         </div>
 
         <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface">
               <tr>
                 <th class="text-left px-1.5 py-1 text-text-dim">MMSI</th>
@@ -210,7 +210,7 @@ const AisDisplay: Component = () => {
           </table>
 
           <Show when={vessels().length === 0}>
-            <div class="px-2 py-3 text-[8px] font-mono space-y-1">
+            <div class="px-2 py-3 text-[9px] font-mono space-y-1">
               <Show
                 when={status()?.unavailable}
                 fallback={<p class="text-text-dim">No vessels heard</p>}
@@ -232,7 +232,7 @@ const AisDisplay: Component = () => {
 
         <Show when={selected()}>
           {(vessel) => (
-            <div class="shrink-0 border-t border-border/40 px-2 py-1.5 text-[8px] font-mono">
+            <div class="shrink-0 border-t border-border/40 px-2 py-1.5 text-[9px] font-mono">
               <div class="flex items-center gap-2 mb-1">
                 <span class="text-cyan uppercase tracking-wider">{label(vessel())}</span>
                 <span class="text-text-dim">{vessel().mmsi}</span>
@@ -280,10 +280,10 @@ const AisDisplay: Component = () => {
       {/* ── Map ── */}
       <div class="flex-1 min-h-[220px] md:min-h-0 flex flex-col">
         <div class="shrink-0 flex items-center gap-2 px-2 py-1 border-b border-border/30">
-          <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">OpenStreetMap</span>
+          <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">OpenStreetMap</span>
           <button
             onClick={() => setFollowSelected((v) => !v)}
-            class={`mil-btn text-[8px] px-2 py-0.5 ml-auto ${
+            class={`mil-btn text-[9px] px-2 py-0.5 ml-auto ${
               followSelected() ? 'active border-cyan text-cyan' : ''
             }`}
             title="Keep the map centred on the selected vessel"

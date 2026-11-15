@@ -15,7 +15,7 @@ const GeneralSection: Component = () => {
   return (
     <div class="max-w-2xl">
       <h2 class="text-sm font-mono uppercase tracking-wider text-text-primary mb-1">General Settings</h2>
-      <p class="text-[10px] font-mono text-text-dim mb-6">Station info, network, security, and codec configuration</p>
+      <p class="text-[11px] font-mono text-text-dim mb-6">Station info, network, security, and codec configuration</p>
 
       <Show when={!adminStore.serverConfigLoading()} fallback={<LoadingIndicator />}>
         <div class="space-y-8">
@@ -68,7 +68,7 @@ const GeneralSection: Component = () => {
               />
             </FieldRow>
             <div class="mt-2 px-3 py-2 bg-amber/5 border border-amber/20 rounded-sm">
-              <p class="text-[9px] font-mono text-amber uppercase tracking-wider">
+              <p class="text-[10px] font-mono text-amber uppercase tracking-wider">
                 Network changes require a server restart to take effect
               </p>
             </div>
@@ -130,7 +130,7 @@ const GeneralSection: Component = () => {
                     { value: '10', label: '10 — Best' },
                   ]}
                 />
-                <span class="text-[9px] font-mono text-text-dim">Takes effect on next client connect</span>
+                <span class="text-[10px] font-mono text-text-dim">Takes effect on next client connect</span>
               </div>
             </FieldRow>
             <FieldRow label="Demo Mode" help="Use simulated signals (no hardware required)">
@@ -154,7 +154,7 @@ const GeneralSection: Component = () => {
           <SettingsGroup title="Allowed Codecs" description="Select which codecs clients may negotiate">
             <div class="space-y-4">
               <div>
-                <label class="text-[10px] font-mono uppercase tracking-wider text-text-secondary mb-2 block">
+                <label class="text-[11px] font-mono uppercase tracking-wider text-text-secondary mb-2 block">
                   FFT Codecs
                 </label>
                 <CodecCheckboxes
@@ -164,7 +164,7 @@ const GeneralSection: Component = () => {
                 />
               </div>
               <div>
-                <label class="text-[10px] font-mono uppercase tracking-wider text-text-secondary mb-2 block">
+                <label class="text-[11px] font-mono uppercase tracking-wider text-text-secondary mb-2 block">
                   IQ Codecs
                 </label>
                 <CodecCheckboxes
@@ -185,8 +185,8 @@ const GeneralSection: Component = () => {
 
 const SettingsGroup: Component<{ title: string; description: string; children: any }> = (props) => (
   <div class="pb-6 border-b border-border/40 last:border-b-0">
-    <h3 class="text-[11px] font-mono uppercase tracking-wider text-text-secondary mb-0.5">{props.title}</h3>
-    <p class="text-[9px] font-mono text-text-dim mb-4">{props.description}</p>
+    <h3 class="text-[12px] font-mono uppercase tracking-wider text-text-secondary mb-0.5">{props.title}</h3>
+    <p class="text-[10px] font-mono text-text-dim mb-4">{props.description}</p>
     <div class="space-y-3">{props.children}</div>
   </div>
 );
@@ -194,9 +194,9 @@ const SettingsGroup: Component<{ title: string; description: string; children: a
 const FieldRow: Component<{ label: string; help?: string; children: any }> = (props) => (
   <div class="flex items-start gap-4">
     <div class="w-36 shrink-0 pt-2">
-      <label class="text-[10px] font-mono text-text-primary">{props.label}</label>
+      <label class="text-[11px] font-mono text-text-primary">{props.label}</label>
       <Show when={props.help}>
-        <p class="text-[8px] font-mono text-text-dim mt-0.5">{props.help}</p>
+        <p class="text-[9px] font-mono text-text-dim mt-0.5">{props.help}</p>
       </Show>
     </div>
     <div class="flex-1">{props.children}</div>
@@ -295,7 +295,7 @@ const CodecCheckboxes: Component<{ all: string[]; selected: string[]; onChange: 
             <button
               type="button"
               onClick={() => toggle(codec)}
-              class={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider rounded-sm border transition-colors ${
+              class={`px-3 py-1 text-[11px] font-mono uppercase tracking-wider rounded-sm border transition-colors ${
                 checked()
                   ? 'border-cyan text-cyan bg-cyan/10'
                   : 'border-border text-text-dim hover:text-text-secondary hover:border-border'
@@ -372,7 +372,7 @@ const ProxyIPHeaderInput: Component<{ value: string; onChange: (v: string) => vo
         />
       </Show>
       <Show when={props.value !== ''}>
-        <p class="text-[8px] font-mono text-text-dim">
+        <p class="text-[9px] font-mono text-text-dim">
           Active: <span class="text-cyan">{props.value}</span> — takes effect on next client connect
         </p>
       </Show>
@@ -382,7 +382,7 @@ const ProxyIPHeaderInput: Component<{ value: string; onChange: (v: string) => vo
 
 const LoadingIndicator: Component = () => (
   <div class="flex items-center justify-center py-12">
-    <div class="text-text-dim text-[10px] font-mono uppercase tracking-wider animate-pulse">
+    <div class="text-text-dim text-[11px] font-mono uppercase tracking-wider animate-pulse">
       Loading configuration...
     </div>
   </div>

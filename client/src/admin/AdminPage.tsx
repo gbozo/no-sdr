@@ -84,7 +84,7 @@ const AdminPage: Component = () => {
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
-          <span class="text-[10px] font-mono uppercase tracking-wider">Back to SDR</span>
+          <span class="text-[11px] font-mono uppercase tracking-wider">Back to SDR</span>
         </button>
 
         <h1 class="font-mono text-xs font-bold tracking-[0.15em] uppercase flex-1">
@@ -98,21 +98,21 @@ const AdminPage: Component = () => {
           <div class="flex items-center gap-3">
             {/* Dirty indicator */}
             <Show when={adminStore.dirty()}>
-              <span class="text-[9px] font-mono text-amber uppercase tracking-wider animate-pulse">
+              <span class="text-[10px] font-mono text-amber uppercase tracking-wider animate-pulse">
                 Unsaved Changes
               </span>
             </Show>
 
             {/* Save success */}
             <Show when={adminStore.saveSuccess()}>
-              <span class="text-[9px] font-mono text-status-online uppercase tracking-wider">
+              <span class="text-[10px] font-mono text-status-online uppercase tracking-wider">
                 Saved
               </span>
             </Show>
 
             {/* Save error */}
             <Show when={!!adminStore.saveError()}>
-              <span class="text-[9px] font-mono text-status-error uppercase tracking-wider max-w-48 truncate" title={adminStore.saveError()}>
+              <span class="text-[10px] font-mono text-status-error uppercase tracking-wider max-w-48 truncate" title={adminStore.saveError()}>
                 {adminStore.saveError()}
               </span>
             </Show>
@@ -121,7 +121,7 @@ const AdminPage: Component = () => {
             <button
               onClick={() => adminStore.saveConfig()}
               disabled={!adminStore.dirty() || adminStore.saving()}
-              class={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider rounded-sm border transition-all
+              class={`px-3 py-1 text-[11px] font-mono uppercase tracking-wider rounded-sm border transition-all
                 ${adminStore.dirty()
                   ? 'border-cyan text-cyan hover:bg-cyan hover:text-text-inverse'
                   : 'border-border text-text-dim cursor-not-allowed opacity-50'}`}
@@ -132,7 +132,7 @@ const AdminPage: Component = () => {
             {/* Logout */}
             <button
               onClick={() => adminStore.logout()}
-              class="px-2 py-1 text-[9px] font-mono uppercase tracking-wider
+              class="px-2 py-1 text-[10px] font-mono uppercase tracking-wider
                      text-text-dim hover:text-status-error border border-border rounded-sm
                      hover:border-status-error transition-colors"
             >
@@ -168,7 +168,7 @@ const AdminPage: Component = () => {
 
               {/* Version info at bottom */}
               <div class="border-t border-border px-4 py-3">
-                <p class="text-[8px] font-mono text-text-dim uppercase tracking-wider">
+                <p class="text-[9px] font-mono text-text-dim uppercase tracking-wider">
                   Config v{adminStore.configVersion()}
                 </p>
               </div>
@@ -198,7 +198,7 @@ const NavItem: Component<{ id: AdminSection; label: string; icon: string; active
     <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d={props.icon} />
     </svg>
-    <span class="text-[11px] font-mono uppercase tracking-wider">{props.label}</span>
+    <span class="text-[12px] font-mono uppercase tracking-wider">{props.label}</span>
   </button>
 );
 
@@ -252,12 +252,12 @@ const LoginForm: Component<{ password: string; setPassword: (v: string) => void;
       />
 
       <Show when={!!adminStore.authError()}>
-        <p class="mt-2 text-[10px] font-mono text-status-error">{adminStore.authError()}</p>
+        <p class="mt-2 text-[11px] font-mono text-status-error">{adminStore.authError()}</p>
       </Show>
 
       <button
         type="submit"
-        class="mt-4 w-full px-3 py-2 text-[10px] font-mono uppercase tracking-wider
+        class="mt-4 w-full px-3 py-2 text-[11px] font-mono uppercase tracking-wider
                border border-cyan text-cyan rounded-sm
                hover:bg-cyan hover:text-text-inverse transition-colors"
       >

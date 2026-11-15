@@ -59,7 +59,7 @@ const STATUS_LABEL: Record<DongleStatus, string> = {
 };
 
 const StatusBadge: Component<{ status: DongleStatus }> = (props) => (
-  <span class={`text-[8px] font-mono uppercase tracking-wider border px-1.5 py-0.5 rounded-sm ${STATUS_BADGE[props.status]}`}>
+  <span class={`text-[9px] font-mono uppercase tracking-wider border px-1.5 py-0.5 rounded-sm ${STATUS_BADGE[props.status]}`}>
     {STATUS_LABEL[props.status]}
   </span>
 );
@@ -130,11 +130,11 @@ const DevicesSection: Component = () => {
   return (
     <div class="max-w-3xl">
       <h2 class="text-sm font-mono uppercase tracking-wider text-text-primary mb-1">SDR Devices</h2>
-      <p class="text-[10px] font-mono text-text-dim mb-6">Manage receivers, profiles, and hardware settings</p>
+      <p class="text-[11px] font-mono text-text-dim mb-6">Manage receivers, profiles, and hardware settings</p>
 
       {/* Breadcrumb */}
       <Show when={view() !== 'list'}>
-        <nav class="flex items-center gap-1 mb-4 text-[10px] font-mono">
+        <nav class="flex items-center gap-1 mb-4 text-[11px] font-mono">
           <button onClick={goToList} class="text-cyan hover:underline">Devices</button>
           <span class="text-text-dim">/</span>
           <Show when={view() === 'dongle' || view() === 'profile'}>
@@ -151,7 +151,7 @@ const DevicesSection: Component = () => {
 
       <Show when={adminStore.donglesLoading()}>
         <div class="flex items-center justify-center py-12">
-          <div class="text-text-dim text-[10px] font-mono uppercase tracking-wider animate-pulse">
+          <div class="text-text-dim text-[11px] font-mono uppercase tracking-wider animate-pulse">
             Loading devices...
           </div>
         </div>
@@ -192,8 +192,8 @@ const DongleList: Component<{ onSelect: (id: string) => void; onAdd: () => void 
     <div class="space-y-2">
       <For each={adminStore.dongles()} fallback={
         <div class="p-8 border border-border/40 rounded-md bg-sdr-surface/30 text-center">
-          <p class="text-[10px] font-mono text-text-dim uppercase mb-3">No receivers configured</p>
-          <button onClick={props.onAdd} class="mil-btn text-[10px]">+ Add Receiver</button>
+          <p class="text-[11px] font-mono text-text-dim uppercase mb-3">No receivers configured</p>
+          <button onClick={props.onAdd} class="mil-btn text-[11px]">+ Add Receiver</button>
         </div>
       }>
         {(dongle) => (
@@ -213,10 +213,10 @@ const DongleList: Component<{ onSelect: (id: string) => void; onAdd: () => void 
                   <span class="text-xs font-mono text-text-primary truncate">{dongle.name}</span>
                   <StatusBadge status={dongleStatus(dongle)} />
                   <Show when={!dongle.enabled}>
-                    <span class="text-[8px] font-mono text-amber/80 uppercase border border-amber/30 px-1 rounded-sm">disabled</span>
+                    <span class="text-[9px] font-mono text-amber/80 uppercase border border-amber/30 px-1 rounded-sm">disabled</span>
                   </Show>
                 </div>
-                <div class="text-[9px] font-mono text-text-dim mt-0.5">
+                <div class="text-[10px] font-mono text-text-dim mt-0.5">
                   {dongle.source?.type || 'unknown'} — {dongle.profiles?.length || 0} profile{(dongle.profiles?.length || 0) !== 1 ? 's' : ''}
                   <Show when={dongle.running}>
                     {' · '}{(dongle.clientCount ?? 0)} client{(dongle.clientCount ?? 0) !== 1 ? 's' : ''}
@@ -235,7 +235,7 @@ const DongleList: Component<{ onSelect: (id: string) => void; onAdd: () => void 
       <button
         onClick={props.onAdd}
         class="w-full p-3 border border-dashed border-border/40 rounded-md
-               text-[10px] font-mono text-text-dim uppercase tracking-wider
+               text-[11px] font-mono text-text-dim uppercase tracking-wider
                hover:border-cyan/40 hover:text-cyan transition-colors"
       >
         + Add Receiver
@@ -429,17 +429,17 @@ const DongleEditor: Component<{
                 <h3 class="text-sm font-mono text-text-primary">{d().name}</h3>
                 <StatusBadge status={dongleStatus(d())} />
                 <Show when={d().state?.status && !['running', 'stopped', 'disabled'].includes(d().state!.status)}>
-                  <span class="text-[8px] font-mono uppercase tracking-wider border border-amber/40 text-amber/90 bg-amber/5 px-1.5 py-0.5 rounded-sm">
+                  <span class="text-[9px] font-mono uppercase tracking-wider border border-amber/40 text-amber/90 bg-amber/5 px-1.5 py-0.5 rounded-sm">
                     {d().state!.status}
                   </span>
                 </Show>
                 <Show when={d().running}>
-                  <span class="text-[9px] font-mono text-text-dim">
+                  <span class="text-[10px] font-mono text-text-dim">
                     {(d().clientCount ?? 0)} client{(d().clientCount ?? 0) !== 1 ? 's' : ''}
                   </span>
                 </Show>
                 <Show when={!d().enabled}>
-                  <span class="text-[8px] font-mono text-amber/80 uppercase border border-amber/30 px-1 rounded-sm">disabled</span>
+                  <span class="text-[9px] font-mono text-amber/80 uppercase border border-amber/30 px-1 rounded-sm">disabled</span>
                 </Show>
               </div>
               <div class="flex items-center gap-2">
@@ -447,7 +447,7 @@ const DongleEditor: Component<{
                   <button
                     onClick={handleStart}
                     disabled={d().running || action() !== null}
-                    class={`mil-btn text-[9px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                    class={`mil-btn text-[10px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed ${
                       !d().running && action() === null ? 'border-green-500/50 text-green-400' : ''
                     }`}
                   >
@@ -456,30 +456,30 @@ const DongleEditor: Component<{
                   <button
                     onClick={handleStop}
                     disabled={!d().running || action() !== null}
-                    class={`mil-btn text-[9px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                    class={`mil-btn text-[10px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed ${
                       d().running && action() === null ? 'border-red-500/50 text-red-400' : ''
                     }`}
                   >
                     {action() === 'stop' ? 'Stopping…' : 'Stop'}
                   </button>
-                  <button onClick={startEditing} class="mil-btn text-[9px] px-2 py-1">Edit</button>
+                  <button onClick={startEditing} class="mil-btn text-[10px] px-2 py-1">Edit</button>
                 </Show>
                 <Show when={editing()}>
-                  <button onClick={saveDongle} class="mil-btn text-[9px] px-2 py-1 border-cyan text-cyan">Save</button>
-                  <button onClick={cancelEditing} class="mil-btn text-[9px] px-2 py-1">Cancel</button>
+                  <button onClick={saveDongle} class="mil-btn text-[10px] px-2 py-1 border-cyan text-cyan">Save</button>
+                  <button onClick={cancelEditing} class="mil-btn text-[10px] px-2 py-1">Cancel</button>
                 </Show>
               </div>
             </div>
 
             <Show when={actionError()}>
-              <div class="text-[10px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded-sm px-3 py-2">
+              <div class="text-[11px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded-sm px-3 py-2">
                 {actionError()}
               </div>
             </Show>
 
             <Show when={d().state?.lastError}>
-              <div class="text-[10px] font-mono text-amber/90 border border-amber/30 bg-amber/5 rounded-sm px-3 py-2 break-words">
-                <span class="uppercase tracking-wider text-[8px] text-amber/70">Source: </span>
+              <div class="text-[11px] font-mono text-amber/90 border border-amber/30 bg-amber/5 rounded-sm px-3 py-2 break-words">
+                <span class="uppercase tracking-wider text-[9px] text-amber/70">Source: </span>
                 {d().state?.lastError}
               </div>
             </Show>
@@ -511,7 +511,7 @@ const DongleEditor: Component<{
               </div>
 
               <Show when={isHackRf(sourceType()) || isPluto(sourceType()) || isLime(sourceType())}>
-                <p class="text-[9px] font-mono text-text-dim">
+                <p class="text-[10px] font-mono text-text-dim">
                   Receive-only in this WebSDR build: transmit controls are not exposed.
                 </p>
               </Show>
@@ -547,12 +547,12 @@ const DongleEditor: Component<{
                       </For>
                     </select>
                     <button type="button" onClick={() => scanDevices(sourceType())} disabled={scanning()}
-                      class="mil-btn text-[9px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed">
+                      class="mil-btn text-[10px] px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed">
                       {scanning() ? 'Scanning…' : 'Scan'}
                     </button>
                   </div>
                   <Show when={scanError()}>
-                    <p class="text-[9px] font-mono text-amber/80 mt-1">{scanError()}</p>
+                    <p class="text-[10px] font-mono text-amber/80 mt-1">{scanError()}</p>
                   </Show>
                 </FieldGroup>
               </Show>
@@ -587,7 +587,7 @@ const DongleEditor: Component<{
                       </For>
                     </select>
                   </Show>
-                  <span class="text-[8px] font-mono text-text-dim mt-0.5 block">
+                  <span class="text-[9px] font-mono text-text-dim mt-0.5 block">
                     Device initialisation rate; profiles are capped at this.
                   </span>
                 </FieldGroup>
@@ -797,7 +797,7 @@ const DongleEditor: Component<{
                         class="admin-input w-24" />
                     </FieldGroup>
                   </div>
-                  <p class="text-[9px] font-mono text-text-dim pt-1">
+                  <p class="text-[10px] font-mono text-text-dim pt-1">
                     Changing the ADC rate or DDC bins reopens the receiver. Output rate is
                     ADC × bins ÷ 8192.
                   </p>
@@ -991,7 +991,7 @@ const DongleEditor: Component<{
                     <ToggleChip label="Calibrate at Open" value={Boolean(sourceSetting('calibrate') ?? true)} onChange={(v) => updateLocalSetting('calibrate', v)} />
                     <ToggleChip label="IQ Correction" value={Boolean(sourceSetting('iqCorrection') ?? true)} onChange={(v) => updateLocalSetting('iqCorrection', v)} />
                   </div>
-                  <p class="text-[9px] font-mono text-text-dim pt-1">TX is disabled in this build.</p>
+                  <p class="text-[10px] font-mono text-text-dim pt-1">TX is disabled in this build.</p>
                 </Show>
               </Show>
 
@@ -1120,12 +1120,12 @@ const DongleEditor: Component<{
               <div class="border border-red-500/30 rounded-md p-3 bg-red-500/5">
                 <Show when={!confirmDelete()} fallback={
                   <div class="flex items-center gap-3">
-                    <p class="text-[10px] font-mono text-red-400">Are you sure? This cannot be undone.</p>
-                    <button onClick={handleDelete} class="text-[9px] font-mono px-2 py-1 border border-red-500 text-red-400 rounded-sm hover:bg-red-500/20">Confirm</button>
-                    <button onClick={() => setConfirmDelete(false)} class="text-[9px] font-mono px-2 py-1 border border-border text-text-dim rounded-sm">Cancel</button>
+                    <p class="text-[11px] font-mono text-red-400">Are you sure? This cannot be undone.</p>
+                    <button onClick={handleDelete} class="text-[10px] font-mono px-2 py-1 border border-red-500 text-red-400 rounded-sm hover:bg-red-500/20">Confirm</button>
+                    <button onClick={() => setConfirmDelete(false)} class="text-[10px] font-mono px-2 py-1 border border-border text-text-dim rounded-sm">Cancel</button>
                   </div>
                 }>
-                  <button onClick={() => setConfirmDelete(true)} class="text-[9px] font-mono text-red-400 hover:text-red-300">
+                  <button onClick={() => setConfirmDelete(true)} class="text-[10px] font-mono text-red-400 hover:text-red-300">
                     Delete this receiver...
                   </button>
                 </Show>
@@ -1135,18 +1135,18 @@ const DongleEditor: Component<{
             {/* Profiles Section */}
             <div class="border-t border-border/40 pt-6">
               <div class="flex items-center justify-between mb-3">
-                <h4 class="text-[11px] font-mono uppercase tracking-wider text-text-secondary">Profiles</h4>
+                <h4 class="text-[12px] font-mono uppercase tracking-wider text-text-secondary">Profiles</h4>
                 <div class="flex items-center gap-2">
                   <div class="relative">
                     <button onClick={() => setPresetOpen(!presetOpen())}
-                      class="mil-btn text-[9px] px-2 py-1">
+                      class="mil-btn text-[10px] px-2 py-1">
                       + From Preset
                     </button>
                     <Show when={presetOpen()}>
                       <PresetDropdown onSelect={handleAddProfile} onClose={() => setPresetOpen(false)} />
                     </Show>
                   </div>
-                  <button onClick={() => handleAddProfile()} class="mil-btn text-[9px] px-2 py-1">+ Blank</button>
+                  <button onClick={() => handleAddProfile()} class="mil-btn text-[10px] px-2 py-1">+ Blank</button>
                 </div>
               </div>
 
@@ -1190,7 +1190,7 @@ const ProfileList: Component<{
     <div class="space-y-1.5">
       <For each={props.profiles} fallback={
         <div class="p-4 border border-border/30 rounded-md text-center">
-          <p class="text-[9px] font-mono text-text-dim uppercase">No profiles — add one from a preset or blank</p>
+          <p class="text-[10px] font-mono text-text-dim uppercase">No profiles — add one from a preset or blank</p>
         </div>
       }>
         {(profile, index) => (
@@ -1216,10 +1216,10 @@ const ProfileList: Component<{
             {/* Profile info */}
             <div class="flex-1 min-w-0 cursor-pointer" onClick={() => props.onEdit(profile)}>
               <div class="flex items-center gap-2">
-                <span class="text-[10px] font-mono text-text-primary truncate">{profile.name}</span>
-                <span class="text-[8px] font-mono text-cyan uppercase">{profile.mode}</span>
+                <span class="text-[11px] font-mono text-text-primary truncate">{profile.name}</span>
+                <span class="text-[9px] font-mono text-cyan uppercase">{profile.mode}</span>
               </div>
-              <div class="text-[9px] font-mono text-text-dim mt-0.5">
+              <div class="text-[10px] font-mono text-text-dim mt-0.5">
                 {formatFrequency(profile.centerFrequency)} — {formatSampleRate(profile.sampleRate)} — FFT {profile.fftSize}
               </div>
             </div>
@@ -1286,8 +1286,8 @@ const ProfileEditor: Component<{
       <div class="flex items-center justify-between">
         <h3 class="text-xs font-mono text-text-primary">{local().name || 'Profile'}</h3>
         <div class="flex items-center gap-2">
-          <button onClick={save} class="mil-btn text-[9px] px-3 py-1 border-cyan text-cyan">Save Profile</button>
-          <button onClick={props.onBack} class="mil-btn text-[9px] px-2 py-1">Cancel</button>
+          <button onClick={save} class="mil-btn text-[10px] px-3 py-1 border-cyan text-cyan">Save Profile</button>
+          <button onClick={props.onBack} class="mil-btn text-[10px] px-2 py-1">Cancel</button>
         </div>
       </div>
 
@@ -1310,7 +1310,7 @@ const ProfileEditor: Component<{
             <input type="number" value={local().centerFrequency || 0}
               onInput={(e) => update('centerFrequency', parseInt(e.currentTarget.value) || 0)}
               class="admin-input w-full" />
-            <span class="text-[8px] font-mono text-text-dim mt-0.5 block">
+            <span class="text-[9px] font-mono text-text-dim mt-0.5 block">
               {formatFrequency(local().centerFrequency || 0)}
             </span>
           </FieldGroup>
@@ -1339,7 +1339,7 @@ const ProfileEditor: Component<{
                 {(rate) => <option value={String(rate)}>{formatSampleRate(rate)}</option>}
               </For>
             </select>
-            <span class="text-[8px] font-mono text-text-dim mt-0.5 block">
+            <span class="text-[9px] font-mono text-text-dim mt-0.5 block">
               {dongleRate() <= 0
                 ? 'No dongle limit configured; the profile rate is used.'
                 : (local().sampleRate || 0) > dongleRate()
@@ -1418,7 +1418,7 @@ const ProfileEditor: Component<{
             <input type="number" value={local().preFilterNbThreshold || 10} min={3} max={50}
               onInput={(e) => update('preFilterNbThreshold', parseInt(e.currentTarget.value) || 10)}
               class="admin-input w-20" />
-            <span class="text-[8px] font-mono text-text-dim ml-2">Range: 3-50 (lower = more aggressive)</span>
+            <span class="text-[9px] font-mono text-text-dim ml-2">Range: 3-50 (lower = more aggressive)</span>
           </FieldGroup>
         </Show>
       </div>
@@ -1427,12 +1427,12 @@ const ProfileEditor: Component<{
       <div class="border border-red-500/30 rounded-md p-3 bg-red-500/5">
         <Show when={!confirmDelete()} fallback={
           <div class="flex items-center gap-3">
-            <p class="text-[10px] font-mono text-red-400">Delete this profile?</p>
-            <button onClick={handleDelete} class="text-[9px] font-mono px-2 py-1 border border-red-500 text-red-400 rounded-sm hover:bg-red-500/20">Confirm</button>
-            <button onClick={() => setConfirmDelete(false)} class="text-[9px] font-mono px-2 py-1 border border-border text-text-dim rounded-sm">Cancel</button>
+            <p class="text-[11px] font-mono text-red-400">Delete this profile?</p>
+            <button onClick={handleDelete} class="text-[10px] font-mono px-2 py-1 border border-red-500 text-red-400 rounded-sm hover:bg-red-500/20">Confirm</button>
+            <button onClick={() => setConfirmDelete(false)} class="text-[10px] font-mono px-2 py-1 border border-border text-text-dim rounded-sm">Cancel</button>
           </div>
         }>
-          <button onClick={() => setConfirmDelete(true)} class="text-[9px] font-mono text-red-400 hover:text-red-300">
+          <button onClick={() => setConfirmDelete(true)} class="text-[10px] font-mono text-red-400 hover:text-red-300">
             Delete this profile...
           </button>
         </Show>
@@ -1460,7 +1460,7 @@ const PresetDropdown: Component<{ onSelect: (preset: any) => void; onClose: () =
     <div class="absolute right-0 top-full mt-1 z-50 w-72 max-h-80 overflow-y-auto
                 bg-sdr-surface border border-border rounded-md shadow-xl">
       <div class="sticky top-0 bg-sdr-surface border-b border-border/40 px-3 py-2 flex items-center justify-between">
-        <span class="text-[9px] font-mono uppercase text-text-secondary">Select Preset</span>
+        <span class="text-[10px] font-mono uppercase text-text-secondary">Select Preset</span>
         <button onClick={props.onClose} class="text-text-dim hover:text-text-primary">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -1471,7 +1471,7 @@ const PresetDropdown: Component<{ onSelect: (preset: any) => void; onClose: () =
         <For each={Array.from(grouped().entries())}>
           {([category, presets]) => (
             <div class="mb-1">
-              <div class="px-2 py-1 text-[8px] font-mono uppercase tracking-wider text-text-dim">
+              <div class="px-2 py-1 text-[9px] font-mono uppercase tracking-wider text-text-dim">
                 {PRESET_CATEGORIES[category]}
               </div>
               <For each={presets}>
@@ -1480,8 +1480,8 @@ const PresetDropdown: Component<{ onSelect: (preset: any) => void; onClose: () =
                     onClick={() => props.onSelect(preset)}
                     class="w-full text-left px-2 py-1.5 rounded-sm hover:bg-cyan/10 transition-colors"
                   >
-                    <div class="text-[10px] font-mono text-text-primary">{preset.name}</div>
-                    <div class="text-[8px] font-mono text-text-dim">{preset.description}</div>
+                    <div class="text-[11px] font-mono text-text-primary">{preset.name}</div>
+                    <div class="text-[9px] font-mono text-text-dim">{preset.description}</div>
                   </button>
                 )}
               </For>
@@ -1499,7 +1499,7 @@ const PresetDropdown: Component<{ onSelect: (preset: any) => void; onClose: () =
 
 const FieldGroup: Component<{ label: string; children: any }> = (props) => (
   <div>
-    <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1 block">{props.label}</label>
+    <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim mb-1 block">{props.label}</label>
     {props.children}
   </div>
 );
@@ -1512,7 +1512,7 @@ const ToggleChip: Component<{ label: string; value: boolean; onChange: (v: boole
   <button
     type="button"
     onClick={() => props.onChange(!props.value)}
-    class={`px-2.5 py-1 text-[9px] font-mono uppercase tracking-wider rounded-sm border transition-colors ${
+    class={`px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider rounded-sm border transition-colors ${
       props.value
         ? 'border-cyan text-cyan bg-cyan/10'
         : 'border-border text-text-dim hover:text-text-secondary'
@@ -1523,7 +1523,7 @@ const ToggleChip: Component<{ label: string; value: boolean; onChange: (v: boole
 );
 
 const StatusChip: Component<{ label: string; active?: boolean }> = (props) => (
-  <span class={`px-2 py-0.5 text-[8px] font-mono uppercase tracking-wider rounded-sm border ${
+  <span class={`px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider rounded-sm border ${
     props.active ? 'border-cyan/40 text-cyan/80 bg-cyan/5' : 'border-border text-text-dim'
   }`}>
     {props.label}

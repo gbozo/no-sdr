@@ -113,15 +113,15 @@ const WefaxDisplay: Component = () => {
           when={displayImage()}
           fallback={
             <div class="h-full min-h-[180px] flex flex-col items-center justify-center gap-2 px-6 text-center">
-              <span class="text-[9px] font-mono uppercase tracking-[0.18em] text-cyan/70">
+              <span class="text-[10px] font-mono uppercase tracking-[0.18em] text-cyan/70">
                 Weather facsimile
               </span>
-              <p class="text-[10px] font-mono text-text-dim max-w-md leading-relaxed">
+              <p class="text-[11px] font-mono text-text-dim max-w-md leading-relaxed">
                 Waiting for a WEFAX start tone. Tune to an HF radiofax schedule
                 (7.880 MHz is a common chart frequency) and make sure the decoder
                 is centred on the station.
               </p>
-              <p class="text-[8px] font-mono text-text-dim/70">
+              <p class="text-[9px] font-mono text-text-dim/70">
                 {status().ioc} · {status().lpm} LPM · subcarrier{' '}
                 {status().subcarrierHz.toFixed(0)} Hz
               </p>
@@ -146,10 +146,10 @@ const WefaxDisplay: Component = () => {
       <aside class="md:w-[300px] shrink-0 overflow-auto max-h-[45vh] md:max-h-none bg-sdr-surface/20">
         <div class="p-3 space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">
+            <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
               WEFAX
             </span>
-            <span class={`text-[8px] font-mono uppercase tracking-wider ${
+            <span class={`text-[9px] font-mono uppercase tracking-wider ${
               status().receiving && !subcarrierValid()
                 ? 'text-red-400'
                 : displayImage()?.complete ? 'text-green-400' : 'text-amber'
@@ -159,14 +159,14 @@ const WefaxDisplay: Component = () => {
           </div>
 
           <Show when={status().receiving && !subcarrierValid()}>
-            <div class="text-[8px] font-mono text-red-400 border border-red-400/30 bg-red-400/5 rounded-sm px-2 py-1.5 leading-relaxed">
+            <div class="text-[9px] font-mono text-red-400 border border-red-400/30 bg-red-400/5 rounded-sm px-2 py-1.5 leading-relaxed">
               Subcarrier {status().subcarrierHz.toFixed(0)} Hz is outside the
               WEFAX 1500–2300 Hz band. This is probably not a WEFAX signal —
               check the tuning and the published chart frequency.
             </div>
           </Show>
 
-          <div class="grid grid-cols-2 gap-x-3 gap-y-2 text-[9px] font-mono">
+          <div class="grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] font-mono">
             <Metric label="Image" value={displayImage() ? String(displayImage()!.imageId) : '—'} />
             <Metric label="Lines" value={String(displayImage()?.height ?? 0)} />
             <Metric label="Rows" value={String(displayImage()?.rows.length ?? 0)} />
@@ -185,10 +185,10 @@ const WefaxDisplay: Component = () => {
           </div>
 
           <div class="border-t border-border/30 pt-2">
-            <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">
+            <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">
               Chart
             </div>
-            <p class="text-[9px] font-mono text-text-secondary leading-relaxed">
+            <p class="text-[10px] font-mono text-text-secondary leading-relaxed">
               WEFAX sends a continuous raster. The start tone announces IOC 576/288,
               phasing locates the left edge, and the stop tone ends the chart.
             </p>
@@ -196,13 +196,13 @@ const WefaxDisplay: Component = () => {
 
           <Show when={history().length > 0}>
             <div class="border-t border-border/30 pt-2">
-              <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">
+              <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">
                 Recent charts
               </div>
               <div class="flex flex-wrap gap-1">
                 <button
                   onClick={() => setPicked(null)}
-                  class={`px-1.5 py-0.5 rounded-sm border text-[8px] font-mono ${
+                  class={`px-1.5 py-0.5 rounded-sm border text-[9px] font-mono ${
                     picked() === null
                       ? 'border-cyan/60 text-cyan'
                       : 'border-border/40 text-text-dim hover:text-text-secondary'
@@ -214,7 +214,7 @@ const WefaxDisplay: Component = () => {
                   {(item) => (
                     <button
                       onClick={() => setPicked(item.imageId)}
-                      class={`px-1.5 py-0.5 rounded-sm border text-[8px] font-mono tabular-nums ${
+                      class={`px-1.5 py-0.5 rounded-sm border text-[9px] font-mono tabular-nums ${
                         picked() === item.imageId
                           ? 'border-cyan/60 text-cyan'
                           : 'border-border/40 text-text-dim hover:text-text-secondary'
@@ -230,7 +230,7 @@ const WefaxDisplay: Component = () => {
           </Show>
 
           <Show when={displayImage()?.complete}>
-            <p class="text-[9px] font-mono text-green-400/80">
+            <p class="text-[10px] font-mono text-green-400/80">
               Chart complete — waiting for the next start tone.
             </p>
           </Show>
@@ -242,8 +242,8 @@ const WefaxDisplay: Component = () => {
 
 const Metric: Component<{ label: string; value: string }> = (props) => (
   <div>
-    <div class="text-[7px] uppercase tracking-wider text-text-dim/70">{props.label}</div>
-    <div class="text-[9px] text-text-primary break-all">{props.value}</div>
+    <div class="text-[9px] uppercase tracking-wider text-text-dim/70">{props.label}</div>
+    <div class="text-[10px] text-text-primary break-all">{props.value}</div>
   </div>
 );
 

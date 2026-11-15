@@ -72,6 +72,10 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --font-display: 'DSEG7 Classic', 'Share Tech Mono', 'JetBrains Mono', monospace;
 
+  /* Text sizes, nudged +1px from the Tailwind defaults for readability */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+
   /* Shadows */
   --shadow-glow-cyan: 0 0 18px rgba(74, 163, 255, 0.16);
   --shadow-glow-green: 0 0 12px rgba(56, 193, 128, 0.2);
@@ -148,7 +152,7 @@
     padding: 8px 12px;
     border-bottom: 1px solid var(--color-border);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
@@ -440,7 +444,7 @@
   .sdr-btn {
     padding: 6px 12px;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -475,7 +479,7 @@
   .sdr-mode-btn {
     padding: 6px 12px;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -507,7 +511,7 @@
     padding: 7px 10px 6px;
     min-width: 44px;
     font-family: var(--font-mono);
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.12em;
@@ -587,7 +591,7 @@
     background: var(--color-sdr-base);
     border: 1px solid var(--color-border);
     border-radius: 2px;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-family: var(--font-mono);
     color: var(--color-text-primary);
     transition: border-color 150ms;
@@ -603,6 +607,15 @@
 
 /* ---- Global Styles ---- */
 @layer base {
+  /* Compact controls — tight line box keeps buttons/fields short while the
+     larger type stays readable */
+  button,
+  input,
+  select,
+  textarea {
+    line-height: 0.5;
+  }
+
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-border) transparent;

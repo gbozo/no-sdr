@@ -167,7 +167,7 @@ const VuMeter: Component<{ audioOpen: () => boolean }> = (props) => {
 
       // Channel label
       ctx2d.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx2d.font = `${Math.round(rowH * 0.55)}px monospace`;
+      ctx2d.font = `${Math.max(9, Math.round(rowH * 0.55))}px monospace`;
       ctx2d.textAlign = 'left';
       ctx2d.textBaseline = 'middle';
       ctx2d.fillText(labels[ch], pad, y + rowH * 0.5);
@@ -181,7 +181,7 @@ const VuMeter: Component<{ audioOpen: () => boolean }> = (props) => {
       { db: -20, label: '-20' },
     ];
     const FLOOR2 = -40;
-    ctx2d.font = '6px monospace';
+    ctx2d.font = '9px monospace';
     ctx2d.textAlign = 'center';
     ctx2d.fillStyle = 'rgba(255,255,255,0.2)';
     for (const { db, label } of scalePoints) {
@@ -449,7 +449,7 @@ const DongleProfileSelector: Component = () => {
             <path d="M9 8h3M9 11h3"/>
             <path d="M4 5L11 2" stroke-linecap="round"/>
           </svg>
-          <span class="text-[10px] font-mono text-text-dim">
+          <span class="text-[11px] font-mono text-text-dim">
             {store.connectionState() === 'unconfigured'
               ? 'No receivers configured'
               : store.connectionState() === 'connecting'
@@ -475,18 +475,18 @@ const DongleProfileSelector: Component = () => {
             <path d="M4 5L11 2" stroke-linecap="round"/>
           </svg>
 
-          <Show when={currentLabel()} fallback={<span class="text-[10px] font-mono text-text-dim">No receiver</span>}>
+          <Show when={currentLabel()} fallback={<span class="text-[11px] font-mono text-text-dim">No receiver</span>}>
             {(label) => (
               <div class="flex items-center gap-1.5 min-w-0 flex-1">
                 <Show when={label().profileName}>
-                  <span class="text-[10px] font-mono text-text-primary truncate font-medium">
+                  <span class="text-[11px] font-mono text-text-primary truncate font-medium">
                     {label().profileName}
                   </span>
                   <svg class="w-2.5 h-2.5 text-text-muted shrink-0" viewBox="0 0 10 10" fill="none">
                     <path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </Show>
-                <span class="text-[10px] font-mono text-[var(--sdr-accent)] truncate">
+                <span class="text-[11px] font-mono text-[var(--sdr-accent)] truncate">
                   {label().freq}
                 </span>
               </div>
@@ -517,11 +517,11 @@ const DongleProfileSelector: Component = () => {
                       }}
                     >
                       <div class={`w-1.5 h-1.5 rounded-full shrink-0 ${dongle.running ? 'bg-status-online' : 'bg-status-offline'}`} />
-                      <span class={`text-[10px] font-mono font-medium ${store.activeDongleId() === dongle.id ? 'text-[var(--sdr-accent)]' : 'text-text-primary'}`}>
+                      <span class={`text-[11px] font-mono font-medium ${store.activeDongleId() === dongle.id ? 'text-[var(--sdr-accent)]' : 'text-text-primary'}`}>
                         {dongle.name}
                       </span>
                       <Show when={dongle.clientCount > 0}>
-                        <span class="ml-auto text-[8px] font-mono text-text-dim">
+                        <span class="ml-auto text-[9px] font-mono text-text-dim">
                           {dongle.clientCount} user{dongle.clientCount > 1 ? 's' : ''}
                         </span>
                       </Show>
@@ -544,8 +544,8 @@ const DongleProfileSelector: Component = () => {
                                 <svg class={`w-2.5 h-2.5 shrink-0 ${isActive() ? 'text-cyan' : 'text-text-muted'}`} viewBox="0 0 10 10" fill="none">
                                   <path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                                 </svg>
-                                <span class="text-[10px] font-mono truncate">{profile.name}</span>
-                                <span class="ml-auto text-[9px] font-mono text-text-dim whitespace-nowrap">
+                                <span class="text-[11px] font-mono truncate">{profile.name}</span>
+                                <span class="ml-auto text-[10px] font-mono text-text-dim whitespace-nowrap">
                                   {(profile.centerFrequency / 1e6).toFixed(3)} MHz
                                 </span>
                               </button>
@@ -570,11 +570,11 @@ const DongleProfileSelector: Component = () => {
                 {(d) => (
                   <div class="flex items-center gap-2 px-3 py-1.5 border-t border-border">
                     <div class={`w-1.5 h-1.5 rounded-full shrink-0 ${d().running ? 'bg-status-online' : 'bg-status-offline'}`} />
-                    <span class="text-[9px] font-mono text-text-secondary truncate">{d().name}</span>
+                    <span class="text-[10px] font-mono text-text-secondary truncate">{d().name}</span>
                     <Show when={d().source}>
-                      <span class="text-[8px] font-mono text-text-dim uppercase">{d().source}</span>
+                      <span class="text-[9px] font-mono text-text-dim uppercase">{d().source}</span>
                     </Show>
-                    <span class="ml-auto text-[8px] font-mono text-text-dim">
+                    <span class="ml-auto text-[9px] font-mono text-text-dim">
                       {(store.sampleRate() / 1e6).toFixed(2)} MSPS
                     </span>
                   </div>
@@ -615,11 +615,11 @@ const ModeSelector: Component = () => {
       >
         <span>Demodulation</span>
         <Show when={!open()}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="ml-auto text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {DEMOD_MODES[store.mode()]?.shortName ?? ''}
           </span>
         </Show>
-        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`ml-auto text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-2">
@@ -636,7 +636,7 @@ const ModeSelector: Component = () => {
             )}
           </For>
         </div>
-        <div class="mt-2 text-[9px] text-text-dim font-mono">
+        <div class="mt-2 text-[10px] text-text-dim font-mono">
           {DEMOD_MODES[store.mode()]?.description ?? ''}
         </div>
 
@@ -645,10 +645,10 @@ const ModeSelector: Component = () => {
           {/* Filter Bandwidth */}
           <div class="flex-1 min-w-0">
             <div class="flex justify-between items-center mb-1">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                 Filter BW
               </label>
-              <span class="text-[9px] font-mono text-text-dim">
+              <span class="text-[10px] font-mono text-text-dim">
                 {(store.bandwidth() / 1000).toFixed(1)} kHz
               </span>
             </div>
@@ -666,10 +666,10 @@ const ModeSelector: Component = () => {
           {/* Squelch */}
           <div class="flex-1 min-w-0">
             <div class="flex justify-between items-center mb-1">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                 Squelch
               </label>
-              <span class="text-[9px] font-mono text-text-dim">
+              <span class="text-[10px] font-mono text-text-dim">
                 {store.squelch() !== null ? `${store.squelch()} dB` : 'Off'}
               </span>
             </div>
@@ -696,7 +696,7 @@ const ModeSelector: Component = () => {
             title="Show or hide the digital decoding workspace below the waterfall"
           >
             <span>Digital Decoders</span>
-            <span class={`text-[8px] tracking-wider ${store.decoderPanelOpen() ? 'text-cyan' : 'text-text-dim'}`}>
+            <span class={`text-[9px] tracking-wider ${store.decoderPanelOpen() ? 'text-cyan' : 'text-text-dim'}`}>
               {store.decoderPanelOpen() ? 'ON' : 'OFF'}
             </span>
           </button>
@@ -706,7 +706,7 @@ const ModeSelector: Component = () => {
             title="Show or hide the signal analysis workspace below the waterfall"
           >
             <span>Signal Analysis</span>
-            <span class={`text-[8px] tracking-wider ${store.analysisPanelOpen() ? 'text-cyan' : 'text-text-dim'}`}>
+            <span class={`text-[9px] tracking-wider ${store.analysisPanelOpen() ? 'text-cyan' : 'text-text-dim'}`}>
               {store.analysisPanelOpen() ? 'ON' : 'OFF'}
             </span>
           </button>
@@ -717,7 +717,7 @@ const ModeSelector: Component = () => {
               title="Capture raw IQ and identify the tuned signal"
             >
               <span>Identify Signal</span>
-              <span class="text-[8px] tracking-wider text-text-dim">RF</span>
+              <span class="text-[9px] tracking-wider text-text-dim">RF</span>
             </button>
           </Show>
         </div>
@@ -745,14 +745,14 @@ const AudioControls: Component = () => {
       >
         <span>Audio</span>
         <Show when={!open()}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="ml-auto text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {Math.round(store.volume() * 100)}% {store.muted() ? '· muted' : ''}{store.stereoDetected() ? ' · stereo' : ''}
           </span>
         </Show>
         {/* Stereo indicator — visible for WFM, AM (auto-detected), and AM Stereo */}
         <Show when={open() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo')}>
           <span
-            class={`ml-auto text-[9px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded border transition-all duration-500 ${
+            class={`ml-auto text-[10px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded border transition-all duration-500 ${
               store.stereoDetected()
                 ? 'text-green border-green/40 bg-green-dim shadow-[0_0_6px_rgba(56,193,128,0.3)]'
                 : 'text-text-muted border-border bg-transparent opacity-50'
@@ -769,7 +769,7 @@ const AudioControls: Component = () => {
             STEREO
           </span>
         </Show>
-        <span class={`${open() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo') ? '' : 'ml-auto'} text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`${open() && (store.mode() === 'wfm' || store.mode() === 'am' || store.mode() === 'am-stereo') ? '' : 'ml-auto'} text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-3 space-y-3">
@@ -778,10 +778,10 @@ const AudioControls: Component = () => {
           {/* Volume */}
           <div class="flex-1 min-w-0">
             <div class="flex justify-between items-center mb-1">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                 Volume
               </label>
-              <span class="text-[9px] font-mono text-text-dim">
+              <span class="text-[10px] font-mono text-text-dim">
                 {Math.round(store.volume() * 100)}%
               </span>
             </div>
@@ -799,10 +799,10 @@ const AudioControls: Component = () => {
           {/* Balance (L/R) */}
           <div class="flex-1 min-w-0">
             <div class="flex justify-between items-center mb-1">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                 Balance
               </label>
-              <span class="text-[9px] font-mono text-text-dim min-w-[28px] text-right">
+              <span class="text-[10px] font-mono text-text-dim min-w-[28px] text-right">
                 {store.balance() === 0 ? 'C' : store.balance() < 0 ? `L${Math.round(Math.abs(store.balance()) * 100)}` : `R${Math.round(store.balance() * 100)}`}
               </span>
             </div>
@@ -819,7 +819,7 @@ const AudioControls: Component = () => {
               {/* Center tick mark */}
               <div class="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-text-dim pointer-events-none" />
             </div>
-            <div class="flex justify-between text-[7px] text-text-muted font-mono mt-0.5">
+            <div class="flex justify-between text-[9px] text-text-muted font-mono mt-0.5">
               <span>L</span><span>C</span><span>R</span>
             </div>
           </div>
@@ -859,8 +859,8 @@ const AudioControls: Component = () => {
         <Show when={store.loudness()}>
           <div>
             <div class="flex justify-between items-center mb-0.5">
-              <span class="text-[7px] font-mono text-text-muted uppercase tracking-wider">Compressor GR</span>
-              <span class="text-[7px] font-mono text-text-dim">
+              <span class="text-[9px] font-mono text-text-muted uppercase tracking-wider">Compressor GR</span>
+              <span class="text-[9px] font-mono text-text-dim">
                 {(() => {
                   const gr = (tick(), engine.getAudioCompressor()?.reduction ?? 0);
                   return `${gr.toFixed(1)} dB`;
@@ -878,7 +878,7 @@ const AudioControls: Component = () => {
                 }}
               />
             </div>
-            <div class="flex justify-between text-[6px] font-mono text-text-muted mt-0.5">
+            <div class="flex justify-between text-[9px] font-mono text-text-muted mt-0.5">
               <span>0 dB</span><span>GR</span><span>−20 dB</span>
             </div>
           </div>
@@ -891,10 +891,10 @@ const AudioControls: Component = () => {
             <Show when={store.stereoEnabled() && store.iqCodec() !== 'opus' && store.iqCodec() !== 'opus-hq' && store.iqCodec() !== 'opus-lo'}>
               <div>
                 <div class="flex justify-between items-center mb-1">
-                  <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+                  <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                     Stereo Threshold
                   </label>
-                  <span class="text-[9px] font-mono text-text-dim min-w-[36px] text-right">
+                  <span class="text-[10px] font-mono text-text-dim min-w-[36px] text-right">
                     {store.stereoThreshold()} dB
                   </span>
                 </div>
@@ -907,14 +907,14 @@ const AudioControls: Component = () => {
                   onInput={(e) => engine.setStereoThreshold(parseInt(e.currentTarget.value))}
                   class="sdr-range"
                 />
-                <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                <div class="text-[9px] font-mono text-text-muted mt-0.5">
                   Decode stereo only when signal &gt; {store.stereoThreshold()} dB
                 </div>
                 {/* Stereo blend indicator — live 0→1 from PilotPLL */}
                 <div class="mt-2">
                   <div class="flex justify-between items-center mb-0.5">
-                    <span class="text-[7px] font-mono text-text-muted uppercase tracking-wider">Pilot blend</span>
-                    <span class="text-[7px] font-mono text-text-dim">
+                    <span class="text-[9px] font-mono text-text-muted uppercase tracking-wider">Pilot blend</span>
+                    <span class="text-[9px] font-mono text-text-dim">
                        {(tick(), Math.round(engine.getStereoBlend() * 100))}%
                      </span>
                   </div>
@@ -928,7 +928,7 @@ const AudioControls: Component = () => {
                       }}
                     />
                   </div>
-                  <div class="flex justify-between text-[6px] font-mono text-text-muted mt-0.5">
+                  <div class="flex justify-between text-[9px] font-mono text-text-muted mt-0.5">
                     <span>MONO</span><span>BLEND</span><span>STEREO</span>
                   </div>
                 </div>
@@ -936,7 +936,7 @@ const AudioControls: Component = () => {
             </Show>
             {/* Opus stereo info */}
             <Show when={store.stereoEnabled() && (store.iqCodec() === 'opus' || store.iqCodec() === 'opus-hq' || store.iqCodec() === 'opus-lo')}>
-              <div class="text-[7px] font-mono text-text-muted">
+              <div class="text-[9px] font-mono text-text-muted">
                 Server-side stereo decoding via Opus
               </div>
             </Show>
@@ -946,7 +946,7 @@ const AudioControls: Component = () => {
         {/* 5-Band Equalizer */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               VU Meter
             </label>
           </div>
@@ -956,19 +956,19 @@ const AudioControls: Component = () => {
         {/* 5-Band Equalizer — spacer below VU */}
         <div>
           <div class="flex justify-between items-center mb-2">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Equalizer
             </label>
             <div class="flex items-center gap-2">
               <button
-                class="text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors"
+                class="text-[9px] font-mono text-text-dim hover:text-text-secondary transition-colors"
                 onClick={() => store.setAudioSpectrumVisible(!store.audioSpectrumVisible())}
                 title={store.audioSpectrumVisible() ? 'Hide spectrum' : 'Show spectrum'}
               >
                 {store.audioSpectrumVisible() ? 'Hide' : 'Spectrum'}
               </button>
               <button
-                class="text-[8px] font-mono text-text-dim hover:text-text-secondary transition-colors"
+                class="text-[9px] font-mono text-text-dim hover:text-text-secondary transition-colors"
                 onClick={() => {
                   engine.setEqLow(0);
                   engine.setEqLowMid(0);
@@ -1043,7 +1043,7 @@ const EqBand: Component<{
 }> = (props) => {
   return (
     <div class="flex-1 flex flex-col items-center gap-1">
-      <span class="text-[8px] font-mono text-text-dim">{props.label}</span>
+      <span class="text-[9px] font-mono text-text-dim">{props.label}</span>
       <div class="h-20 flex items-center justify-center relative">
         <input
           type="range"
@@ -1056,12 +1056,12 @@ const EqBand: Component<{
           class="sdr-range-vertical"
         />
       </div>
-      <span class={`text-[8px] font-mono font-bold ${
+      <span class={`text-[9px] font-mono font-bold ${
         props.value === 0 ? 'text-text-dim' : props.value > 0 ? 'text-cyan' : 'text-amber'
       }`}>
         {props.value > 0 ? '+' : ''}{props.value}
       </span>
-      <span class="text-[7px] font-mono text-text-muted">{props.sublabel}</span>
+      <span class="text-[9px] font-mono text-text-muted">{props.sublabel}</span>
     </div>
   );
 };
@@ -1080,18 +1080,18 @@ const NoiseReduction: Component = () => {
       >
         <span>Noise Reduction</span>
         <Show when={!open()}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="ml-auto text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {[store.nrEnabled() ? 'NR' : '', store.agcEnabled() ? 'AGC' : ''].filter(Boolean).join(' · ') || 'off'}
           </span>
         </Show>
-        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`ml-auto text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-3 space-y-3">
         {/* Adaptive NR (LMS) */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Adaptive NR
             </label>
             <button
@@ -1105,10 +1105,10 @@ const NoiseReduction: Component = () => {
           <Show when={store.nrEnabled()}>
             <div>
               <div class="flex justify-between items-center mb-1">
-                <label class="text-[9px] font-mono text-text-dim">
+                <label class="text-[10px] font-mono text-text-dim">
                   Strength
                 </label>
-                <span class="text-[9px] font-mono text-text-dim">
+                <span class="text-[10px] font-mono text-text-dim">
                   {Math.round(store.nrStrength() * 100)}%
                 </span>
               </div>
@@ -1121,7 +1121,7 @@ const NoiseReduction: Component = () => {
                 onInput={(e) => engine.setNrStrength(parseInt(e.currentTarget.value) / 100)}
                 class="sdr-range"
               />
-              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+              <div class="text-[9px] font-mono text-text-muted mt-0.5">
                 LMS adaptive predictor — best for SSB/CW. May affect music on AM/FM.
               </div>
             </div>
@@ -1131,7 +1131,7 @@ const NoiseReduction: Component = () => {
         {/* AGC (Automatic Gain Control) */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               AGC
             </label>
             <button
@@ -1145,10 +1145,10 @@ const NoiseReduction: Component = () => {
           <Show when={store.agcEnabled()}>
             <div>
               <div class="flex justify-between items-center mb-1">
-                <label class="text-[9px] font-mono text-text-dim">
+                <label class="text-[10px] font-mono text-text-dim">
                   Decay
                 </label>
-                <span class="text-[9px] font-mono text-text-dim">
+                <span class="text-[10px] font-mono text-text-dim">
                   {store.agcDecayMs()} ms
                 </span>
               </div>
@@ -1162,7 +1162,7 @@ const NoiseReduction: Component = () => {
                 onInput={(e) => engine.setAgcDecay(parseInt(e.currentTarget.value))}
                 class="sdr-range"
               />
-              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+              <div class="text-[9px] font-mono text-text-muted mt-0.5">
                 Hang-timer AGC — fast attack, adjustable decay
               </div>
             </div>
@@ -1172,7 +1172,7 @@ const NoiseReduction: Component = () => {
         {/* Rumble Filter (HPF) */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Rumble Filter
             </label>
             <button
@@ -1186,10 +1186,10 @@ const NoiseReduction: Component = () => {
           <Show when={store.rumbleFilterEnabled()}>
             <div>
               <div class="flex justify-between items-center mb-1">
-                <label class="text-[9px] font-mono text-text-dim">
+                <label class="text-[10px] font-mono text-text-dim">
                   Cutoff
                 </label>
-                <span class="text-[9px] font-mono text-text-dim">
+                <span class="text-[10px] font-mono text-text-dim">
                   {store.rumbleFilterCutoff()} Hz
                 </span>
               </div>
@@ -1203,7 +1203,7 @@ const NoiseReduction: Component = () => {
                 onInput={(e) => engine.setRumbleFilterCutoff(parseInt(e.currentTarget.value))}
                 class="sdr-range"
               />
-              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+              <div class="text-[9px] font-mono text-text-muted mt-0.5">
                 4th-order HPF — removes hum, wind, and rumble below cutoff
               </div>
             </div>
@@ -1213,7 +1213,7 @@ const NoiseReduction: Component = () => {
         {/* Auto-Notch (tone removal) */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Auto-Notch
             </label>
             <button
@@ -1225,7 +1225,7 @@ const NoiseReduction: Component = () => {
             </button>
           </div>
           <Show when={store.autoNotchEnabled()}>
-            <div class="text-[7px] font-mono text-text-muted">
+            <div class="text-[9px] font-mono text-text-muted">
               LMS adaptive — removes 50/60Hz harmonics and carrier tones automatically
             </div>
           </Show>
@@ -1235,7 +1235,7 @@ const NoiseReduction: Component = () => {
         <Show when={store.mode() === 'wfm' && store.stereoDetected()}>
           <div>
             <div class="flex justify-between items-center mb-1">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                 Hi-Blend
               </label>
               <button
@@ -1249,11 +1249,11 @@ const NoiseReduction: Component = () => {
             <Show when={store.hiBlendEnabled()}>
               <div>
                 <div class="flex justify-between items-center mb-1">
-                  <label class="text-[9px] font-mono text-text-dim">
+                  <label class="text-[10px] font-mono text-text-dim">
                     Cutoff
                   </label>
                   <div class="flex items-center gap-2">
-                    <span class="text-[9px] font-mono text-text-dim">
+                    <span class="text-[10px] font-mono text-text-dim">
                       {((store.hiBlendAuto() ? store.hiBlendAutoCutoff() : store.hiBlendCutoff()) / 1000).toFixed(1)} kHz
                     </span>
                     <button
@@ -1276,7 +1276,7 @@ const NoiseReduction: Component = () => {
                   onInput={(e) => engine.setHiBlendCutoff(parseInt(e.currentTarget.value))}
                   class="sdr-range disabled:opacity-40"
                 />
-                <div class="text-[7px] font-mono text-text-muted mt-0.5">
+                <div class="text-[9px] font-mono text-text-muted mt-0.5">
                   Below cutoff: full stereo. Above: fades to mono. Reduces FM hiss.
                 </div>
               </div>
@@ -1288,7 +1288,7 @@ const NoiseReduction: Component = () => {
         <Show when={store.mode() === 'wfm' || store.mode() === 'nfm'}>
           <div>
             <div class="flex justify-between items-center mb-1">
-              <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+              <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
                 De-emphasis
               </label>
               <div class="flex gap-1">
@@ -1307,7 +1307,7 @@ const NoiseReduction: Component = () => {
                 </For>
               </div>
             </div>
-            <div class="text-[7px] font-mono text-text-muted mt-0.5">
+            <div class="text-[9px] font-mono text-text-muted mt-0.5">
               FM high-frequency roll-off — match your region's broadcast standard
             </div>
           </div>
@@ -1316,7 +1316,7 @@ const NoiseReduction: Component = () => {
         {/* Soft Mute */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Soft Mute
             </label>
             <button
@@ -1330,10 +1330,10 @@ const NoiseReduction: Component = () => {
           <Show when={store.softMuteEnabled()}>
             <div>
               <div class="flex justify-between items-center mb-1">
-                <label class="text-[9px] font-mono text-text-dim">
+                <label class="text-[10px] font-mono text-text-dim">
                   Threshold
                 </label>
-                <span class="text-[9px] font-mono text-text-dim">
+                <span class="text-[10px] font-mono text-text-dim">
                   {store.softMuteThreshold()} dB
                 </span>
               </div>
@@ -1347,7 +1347,7 @@ const NoiseReduction: Component = () => {
                 onInput={(e) => engine.setSoftMuteThreshold(parseInt(e.currentTarget.value))}
                 class="sdr-range"
               />
-              <div class="text-[7px] font-mono text-text-muted mt-0.5">
+              <div class="text-[9px] font-mono text-text-muted mt-0.5">
                 Below threshold: volume fades to silence. Above: full volume.
               </div>
             </div>
@@ -1401,22 +1401,22 @@ const WaterfallSettings: Component = () => {
       >
         <span>Waterfall</span>
         <Show when={!open()}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="ml-auto text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {store.waterfallTheme()} · FFT {store.fftSize()} · {store.waterfallAutoRange() ? 'auto' : `${store.waterfallMin()}/${store.waterfallMax()} dB`}
           </span>
         </Show>
-        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`ml-auto text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-3 space-y-3">
         {/* Color Theme Dropdown */}
         <div>
-          <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider mb-1 block">
+          <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider mb-1 block">
             Color Theme
           </label>
           <div class="relative">
             <button
-              class="w-full flex items-center justify-between px-2 py-1.5 rounded border border-border bg-sdr-surface text-[10px] font-mono"
+              class="w-full flex items-center justify-between px-2 py-1.5 rounded border border-border bg-sdr-surface text-[11px] font-mono"
               onClick={() => setThemeDropdownOpen(!themeDropdownOpen())}
             >
               <span>{store.waterfallTheme()}</span>
@@ -1436,7 +1436,7 @@ const WaterfallSettings: Component = () => {
                 <For each={themes}>
                   {(theme) => (
                     <button
-                      class={`w-full px-2 py-1 text-left text-[10px] font-mono hover:bg-sdr-hover flex items-center gap-2
+                      class={`w-full px-2 py-1 text-left text-[11px] font-mono hover:bg-sdr-hover flex items-center gap-2
                         ${store.waterfallTheme() === theme ? 'bg-sdr-elevated text-text-primary' : 'text-text-secondary'}`}
                       onClick={() => {
                         engine.setWaterfallTheme(theme);
@@ -1461,7 +1461,7 @@ const WaterfallSettings: Component = () => {
 
         {/* Auto-Range Toggle */}
         <div class="flex items-center justify-between">
-          <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+          <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
             Auto Scale
           </label>
           <button
@@ -1475,10 +1475,10 @@ const WaterfallSettings: Component = () => {
         {/* Min dB */}
         <div class={store.waterfallAutoRange() ? 'opacity-50 pointer-events-none' : ''}>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Min Level
             </label>
-            <span class="text-[9px] font-mono text-text-dim">{store.waterfallMin()} dB</span>
+            <span class="text-[10px] font-mono text-text-dim">{store.waterfallMin()} dB</span>
           </div>
           <input
             type="range"
@@ -1494,10 +1494,10 @@ const WaterfallSettings: Component = () => {
         {/* Max dB */}
         <div class={store.waterfallAutoRange() ? 'opacity-50 pointer-events-none' : ''}>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Max Level
             </label>
-            <span class="text-[9px] font-mono text-text-dim">{store.waterfallMax()} dB</span>
+            <span class="text-[10px] font-mono text-text-dim">{store.waterfallMax()} dB</span>
           </div>
           <input
             type="range"
@@ -1511,24 +1511,24 @@ const WaterfallSettings: Component = () => {
         </div>
 
         {/* Current range display */}
-        <div class="text-[8px] font-mono text-text-dim text-center">
+        <div class="text-[9px] font-mono text-text-dim text-center">
           Range: {store.waterfallMin()} to {store.waterfallMax()} dB
           ({store.waterfallMax() - store.waterfallMin()} dB span)
         </div>
 
         {/* FFT Info */}
         <div class="mt-2 pt-2 border-t border-border/40 flex justify-between items-center">
-          <span class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">FFT Size</span>
-          <span class="text-[9px] font-mono text-text-dim">{store.fftSize()} bins</span>
+          <span class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">FFT Size</span>
+          <span class="text-[10px] font-mono text-text-dim">{store.fftSize()} bins</span>
         </div>
 
         {/* Gamma / contrast */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               Contrast
             </label>
-            <span class="text-[9px] font-mono text-text-dim">
+            <span class="text-[10px] font-mono text-text-dim">
               {store.waterfallGamma().toFixed(2)}
               {store.waterfallGamma() > 1 ? ' (dark)' : store.waterfallGamma() < 1 ? ' (bright)' : ' (linear)'}
             </span>
@@ -1543,7 +1543,7 @@ const WaterfallSettings: Component = () => {
             onInput={(e) => engine.setWaterfallGamma(parseInt(e.currentTarget.value) / 100)}
             class="sdr-range"
           />
-          <div class="flex justify-between text-[7px] font-mono text-text-dim mt-0.5">
+          <div class="flex justify-between text-[9px] font-mono text-text-dim mt-0.5">
             <span>0.30 bright</span>
             <span>1.00</span>
             <span>dark 3.00</span>
@@ -1676,7 +1676,7 @@ const SMeter: Component = () => {
     ctx.stroke();
 
     // Right-side dB scale labels: -120, -80, -40, -13
-    ctx.font      = `${Math.max(7, h * 0.22)}px monospace`;
+    ctx.font      = `${Math.max(9, h * 0.22)}px monospace`;
     ctx.textAlign = 'right';
     const labelDb = [-120, -80, -40, -13];
     for (const db of labelDb) {
@@ -1891,14 +1891,14 @@ const SMeter: Component = () => {
       minorPcts.push((majorPcts[i] + majorPcts[i + 1]) / 2);
     }
     const outerR        = radius + 5;
-    const tickFont      = Math.max(7, w * 0.030);
-    const smallTickFont = Math.max(6, w * 0.024);
+    const tickFont      = Math.max(9, w * 0.030);
+    const smallTickFont = Math.max(9, w * 0.024);
     const s9Pct         = majorPcts[5];
     const midAngle      = pctToAngle(50);
 
     // ── "SIGNAL LEVEL" label ──
     const labelR = outerR + 10;
-    const labelFont = Math.max(7, w * 0.028);
+    const labelFont = Math.max(9, w * 0.028);
     ctx.font         = `900 ${labelFont}px "Arial", sans-serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
@@ -2003,7 +2003,7 @@ const SMeter: Component = () => {
 
     // ── Power scale ──
     const powerR    = outerR - 22;
-    const powerFont = Math.max(5, w * 0.021);
+    const powerFont = Math.max(9, w * 0.021);
 
     // Arc guide
     ctx.beginPath();
@@ -2207,12 +2207,12 @@ const SMeter: Component = () => {
     // ── dB + SNR readout ──
     const sigLvlInk = currentTheme === 'crt' ? 'rgba(0,50,10,0.65)'   : currentTheme === 'vfd' ? 'rgba(60,40,10,0.70)'  : 'rgba(20,45,100,0.65)';
     const snrInk    = currentTheme === 'crt' ? 'rgba(0,50,10,0.50)'   : currentTheme === 'vfd' ? 'rgba(60,40,10,0.55)'  : 'rgba(20,45,100,0.50)';
-    const readoutSize = Math.max(8, w * 0.032);
+    const readoutSize = Math.max(9, w * 0.032);
     ctx.font      = `${readoutSize}px "Arial", sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillStyle = sigLvlInk;
     ctx.fillText(`${store.signalLevel().toFixed(0)} dBm`, cx, cy - radius * 0.32);
-    const snrSize = Math.max(6, w * 0.026);
+    const snrSize = Math.max(9, w * 0.026);
     ctx.font      = `${snrSize}px "Arial", sans-serif`;
     ctx.fillStyle = snrInk;
     ctx.fillText(`SNR ${store.snr().toFixed(0)} dB`, cx, cy - radius * 0.32 + readoutSize * 1.3);
@@ -2262,23 +2262,23 @@ const SMeter: Component = () => {
       >
         <span>Signal</span>
         <Show when={!open()}>
-          <span class="text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {store.signalLevel().toFixed(0)} dBm · SNR {store.snr().toFixed(0)} dB
           </span>
         </Show>
         <button
-          class="ml-auto text-[9px] font-mono text-text-dim hover:text-text-secondary transition-colors uppercase tracking-wider"
+          class="ml-auto text-[10px] font-mono text-text-dim hover:text-text-secondary transition-colors uppercase tracking-wider"
           onClick={(e) => { e.stopPropagation(); toggleStyle(); }}
           title={`Switch to ${store.meterStyle() === 'bar' ? 'needle' : 'bar'} meter`}
         >
           {store.meterStyle() === 'bar' ? 'Needle' : 'Bar'}
         </button>
-        <span class={`text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-3">
         <Show when={store.meterStyle() === 'bar'}>
-          <div class="flex justify-between text-[10px] text-text-primary font-mono mb-1">
+          <div class="flex justify-between text-[11px] text-text-primary font-mono mb-1">
             <span>S-Meter</span>
             <span class="text-text-secondary">
               {store.signalLevel().toFixed(0)} dBm
@@ -2312,7 +2312,7 @@ const SMeter: Component = () => {
             />
           </div>
           {/* Scale labels aligned to fixed dB positions */}
-          <div class="relative text-[9px] text-text-primary font-mono mt-0.5 h-3">
+          <div class="relative text-[10px] text-text-primary font-mono mt-0.5 h-3">
             <span class="absolute -translate-x-1/2" style={{ left:  '0%' }}>S1</span>
             <span class="absolute -translate-x-1/2" style={{ left: '14.3%' }}>3</span>
             <span class="absolute -translate-x-1/2" style={{ left: '28.6%' }}>5</span>
@@ -2341,7 +2341,7 @@ const SMeter: Component = () => {
 
         {/* Signal history graph — always visible below the meter */}
         <div class="mt-2">
-          {/* <div class="text-[7px] font-mono uppercase tracking-[0.12em] text-text-muted mb-0.5">
+          {/* <div class="text-[9px] font-mono uppercase tracking-[0.12em] text-text-muted mb-0.5">
             History
           </div> */}
           <canvas
@@ -2423,23 +2423,23 @@ const CodecSettings: Component = () => {
       >
         <span>Compression</span>
         <Show when={!open()}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="ml-auto text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {formatRate(store.fftWireBytes() + store.iqWireBytes())}
             {' '}
             {savingsText(store.fftRawBytes() + store.iqRawBytes(), store.fftWireBytes() + store.iqWireBytes())}
           </span>
         </Show>
-        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`ml-auto text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-2 space-y-2">
         {/* FFT Codec */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               FFT
             </label>
-            <span class="text-[9px] font-mono text-text-dim">
+            <span class="text-[10px] font-mono text-text-dim">
               {ratioText(fftRatio())}
               {' '}
               <span class="text-neon">{formatRate(store.fftWireBytes())}</span>
@@ -2461,10 +2461,10 @@ const CodecSettings: Component = () => {
         {/* IQ Codec */}
         <div>
           <div class="flex justify-between items-center mb-1">
-            <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
               IQ
             </label>
-            <span class="text-[9px] font-mono text-text-dim">
+            <span class="text-[10px] font-mono text-text-dim">
               {ratioText(iqRatio())}
               {' '}
               <span class="text-neon">{formatRate(store.iqWireBytes())}</span>
@@ -2484,7 +2484,7 @@ const CodecSettings: Component = () => {
           </div>
         </div>
         {/* Stats summary */}
-        <div class="border-t border-border/40 pt-1.5 text-[8px] font-mono text-text-dim leading-relaxed">
+        <div class="border-t border-border/40 pt-1.5 text-[9px] font-mono text-text-dim leading-relaxed">
           <div class="flex justify-between">
             <span>Total wire</span>
             <span class="text-text-secondary">{formatRate(store.fftWireBytes() + store.iqWireBytes())}</span>
@@ -2556,11 +2556,11 @@ const Bookmarks: Component = () => {
       >
         <span>Bookmarks</span>
         <Show when={!open()}>
-          <span class="ml-auto text-[9px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
+          <span class="ml-auto text-[10px] font-mono text-[var(--sdr-accent)] normal-case tracking-normal font-normal">
             {store.bookmarks().length} saved
           </span>
         </Show>
-        <span class={`ml-auto text-text-muted text-[9px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
+        <span class={`ml-auto text-text-muted text-[10px] transition-transform ${open() ? 'rotate-0' : '-rotate-90'}`}>▾</span>
       </div>
       <Show when={open()}>
         <div class="p-2 space-y-1.5">
@@ -2571,7 +2571,7 @@ const Bookmarks: Component = () => {
             name="bookmark-label"
             aria-label="Bookmark label"
             class="flex-1 bg-sdr-base border border-border rounded-sm
-                   px-2 py-0.5 text-[9px] font-mono text-text-primary
+                   px-2 py-0.5 text-[10px] font-mono text-text-primary
                    placeholder:text-text-muted focus:outline-none focus:border-[var(--sdr-accent)]"
             placeholder="Label (optional)"
             value={label()}
@@ -2579,7 +2579,7 @@ const Bookmarks: Component = () => {
             onKeyDown={e => e.key === 'Enter' && handleAdd()}
           />
           <button
-            class="sdr-btn sdr-btn-primary text-[8px] px-2 shrink-0"
+            class="sdr-btn sdr-btn-primary text-[9px] px-2 shrink-0"
             onClick={handleAdd}
             title="Bookmark current frequency"
           >
@@ -2589,7 +2589,7 @@ const Bookmarks: Component = () => {
 
         {/* Bookmark list */}
         <Show when={store.bookmarks().length === 0}>
-          <div class="text-[8px] font-mono text-text-muted text-center py-1">
+          <div class="text-[9px] font-mono text-text-muted text-center py-1">
             No bookmarks
           </div>
         </Show>
@@ -2601,7 +2601,7 @@ const Bookmarks: Component = () => {
                 fallback={
                   <button
                     class="flex-1 text-left px-1.5 py-0.5 rounded-sm
-                           text-[9px] font-mono text-text-primary
+                           text-[10px] font-mono text-text-primary
                            hover:bg-sdr-elevated transition-colors truncate"
                     title={`${formatHz(bm.hz)} · ${(bm.decoder || bm.mode).toUpperCase()}`}
                     onClick={() => handleRecall(bm)}
@@ -2609,9 +2609,9 @@ const Bookmarks: Component = () => {
                   >
                     <span class="text-[var(--sdr-accent)] mr-1">▶</span>
                     <span class="text-text-secondary mr-1.5">{bm.label}</span>
-                    <span class="text-text-muted text-[8px]">{formatHz(bm.hz)}</span>
+                    <span class="text-text-muted text-[9px]">{formatHz(bm.hz)}</span>
                     <Show when={bm.decoder}>
-                      <span class="ml-1 text-[7px] font-mono uppercase tracking-wide text-cyan">
+                      <span class="ml-1 text-[9px] font-mono uppercase tracking-wide text-cyan">
                         {bm.decoder}
                       </span>
                     </Show>
@@ -2620,7 +2620,7 @@ const Bookmarks: Component = () => {
               >
                 <input
                   class="flex-1 bg-sdr-base border border-[var(--sdr-accent)] rounded-sm
-                         px-1.5 py-0.5 text-[9px] font-mono text-text-primary
+                         px-1.5 py-0.5 text-[10px] font-mono text-text-primary
                          focus:outline-none"
                   value={editLabel()}
                   onInput={e => setEditLabel(e.currentTarget.value)}
@@ -2634,7 +2634,7 @@ const Bookmarks: Component = () => {
               </Show>
               <button
                 class="opacity-0 group-hover:opacity-100 transition-opacity
-                       text-text-muted hover:text-status-error text-[9px] px-0.5 shrink-0"
+                       text-text-muted hover:text-status-error text-[10px] px-0.5 shrink-0"
                 title="Delete bookmark"
                 onClick={() => handleDelete(bm.id)}
               >
@@ -2766,7 +2766,7 @@ const AdminPanel: Component = () => {
                 onInput={(e) => setPassword(e.currentTarget.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                 class="w-full bg-sdr-base border border-border rounded-sm px-2 py-1.5
-                       text-[10px] font-mono text-text-primary placeholder:text-text-muted
+                       text-[11px] font-mono text-text-primary placeholder:text-text-muted
                        focus:border-border-focus focus:outline-none"
               />
               <button
@@ -2777,7 +2777,7 @@ const AdminPanel: Component = () => {
                 {loading() ? 'Authenticating...' : 'Login'}
               </button>
               <Show when={error()}>
-                <div class="text-[9px] font-mono text-status-error">{error()}</div>
+                <div class="text-[10px] font-mono text-status-error">{error()}</div>
               </Show>
             </div>
           }
@@ -2785,11 +2785,11 @@ const AdminPanel: Component = () => {
           {/* Admin Controls */}
           <div class="space-y-3">
             <div class="flex justify-between items-center">
-              <span class="text-[9px] font-mono text-amber uppercase tracking-wider font-bold">
+              <span class="text-[10px] font-mono text-amber uppercase tracking-wider font-bold">
                 Admin Mode
               </span>
               <button
-                class="text-[8px] font-mono text-text-dim hover:text-text-secondary"
+                class="text-[9px] font-mono text-text-dim hover:text-text-secondary"
                 onClick={handleLogout}
               >
                 Logout
@@ -2803,9 +2803,9 @@ const AdminPanel: Component = () => {
                   <div class="flex items-center justify-between">
                     <div class="flex items-center gap-1.5">
                       <div class={`w-1.5 h-1.5 rounded-full ${dongle.running ? 'bg-status-online' : 'bg-status-offline'}`} />
-                      <span class="text-[10px] font-mono text-text-primary">{dongle.name}</span>
+                      <span class="text-[11px] font-mono text-text-primary">{dongle.name}</span>
                     </div>
-                    <span class="text-[8px] font-mono text-text-dim">
+                    <span class="text-[9px] font-mono text-text-dim">
                       {dongle.clientCount} user{dongle.clientCount !== 1 ? 's' : ''}
                     </span>
                   </div>
@@ -2813,7 +2813,7 @@ const AdminPanel: Component = () => {
                   <div class="flex gap-1">
                     <Show when={dongle.running}>
                       <button
-                        class="sdr-btn flex-1 text-[8px] bg-status-error/20 text-status-error hover:bg-status-error/30"
+                        class="sdr-btn flex-1 text-[9px] bg-status-error/20 text-status-error hover:bg-status-error/30"
                         onClick={() => handleStopDongle(dongle.id)}
                         disabled={loading()}
                       >
@@ -2822,7 +2822,7 @@ const AdminPanel: Component = () => {
                     </Show>
                     <Show when={!dongle.running}>
                       <button
-                        class="sdr-btn flex-1 text-[8px] bg-status-online/20 text-status-online hover:bg-status-online/30"
+                        class="sdr-btn flex-1 text-[9px] bg-status-online/20 text-status-online hover:bg-status-online/30"
                         onClick={() => handleStartDongle(dongle.id)}
                         disabled={loading()}
                       >
@@ -2830,7 +2830,7 @@ const AdminPanel: Component = () => {
                       </button>
                     </Show>
                     <button
-                      class="sdr-btn flex-1 text-[8px]"
+                      class="sdr-btn flex-1 text-[9px]"
                       onClick={() => loadProfiles(dongle.id)}
                     >
                       Profiles
@@ -2840,13 +2840,13 @@ const AdminPanel: Component = () => {
                   {/* Profile list (shown when loaded) */}
                   <Show when={profiles().length > 0}>
                     <div class="space-y-0.5">
-                      <div class="text-[8px] font-mono text-text-dim uppercase tracking-wider mb-1">
+                      <div class="text-[9px] font-mono text-text-dim uppercase tracking-wider mb-1">
                         Switch Profile:
                       </div>
                       <For each={profiles()}>
                         {(profile) => (
                           <button
-                            class={`w-full text-left px-2 py-1 rounded-sm text-[9px] font-mono
+                            class={`w-full text-left px-2 py-1 rounded-sm text-[10px] font-mono
                                     transition-colors duration-100
                                     ${store.activeProfileId() === profile.id
                                       ? 'bg-cyan-dim text-cyan'
@@ -2855,7 +2855,7 @@ const AdminPanel: Component = () => {
                             disabled={loading()}
                           >
                             <div>{profile.name}</div>
-                            <div class="text-[7px] text-text-dim">
+                            <div class="text-[9px] text-text-dim">
                               {(profile.centerFrequency / 1e6).toFixed(3)} MHz — {profile.defaultMode.toUpperCase()}
                             </div>
                           </button>
@@ -2868,7 +2868,7 @@ const AdminPanel: Component = () => {
             </For>
 
             <Show when={error()}>
-              <div class="text-[9px] font-mono text-status-error">{error()}</div>
+              <div class="text-[10px] font-mono text-status-error">{error()}</div>
             </Show>
           </div>
         </Show>
@@ -2923,11 +2923,11 @@ const IdentifyControls: Component = () => {
   return (
     <div class="border-t border-border/40 pt-3 space-y-2">
       <div class="flex items-center justify-between gap-2">
-        <label class="text-[9px] font-mono text-text-secondary uppercase tracking-wider">
+        <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
           Identify Song
         </label>
         <Show when={state() === 'done' && result()?.match}>
-          <span class="text-[8px] font-mono text-[var(--sdr-accent)] normal-case truncate max-w-[160px]">
+          <span class="text-[9px] font-mono text-[var(--sdr-accent)] normal-case truncate max-w-[160px]">
             {result()?.artist} — {result()?.title}
           </span>
         </Show>
@@ -2957,7 +2957,7 @@ const IdentifyControls: Component = () => {
       <Show when={state() === 'done' || state() === 'error'}>
         <Show when={result()?.match}
           fallback={
-            <div class="text-[9px] font-mono text-text-dim text-center py-1">
+            <div class="text-[10px] font-mono text-text-dim text-center py-1">
               {state() === 'error'
                 ? (result()?.error ?? 'Recognition failed')
                 : 'No match found'}
@@ -2965,10 +2965,10 @@ const IdentifyControls: Component = () => {
           }
         >
           <div class="border border-border rounded-sm bg-sdr-elevated p-2 space-y-1">
-            <div class="text-[11px] font-mono text-text-primary font-semibold leading-tight">
+            <div class="text-[12px] font-mono text-text-primary font-semibold leading-tight">
               {result()?.title}
             </div>
-            <div class="text-[9px] font-mono text-text-secondary">
+            <div class="text-[10px] font-mono text-text-secondary">
               {result()?.artist}
               <Show when={result()?.album}>
                 <span class="text-text-dim"> · {result()?.album}</span>
@@ -2978,23 +2978,23 @@ const IdentifyControls: Component = () => {
             <div class="flex gap-2 pt-1">
               <Show when={result()?.spotify}>
                 <a href={result()!.spotify} target="_blank" rel="noopener"
-                   class="text-[8px] font-mono uppercase tracking-wider text-[#1DB954] hover:brightness-125 transition-all">
+                   class="text-[9px] font-mono uppercase tracking-wider text-[#1DB954] hover:brightness-125 transition-all">
                   Spotify
                 </a>
               </Show>
               <Show when={result()?.youtube}>
                 <a href={result()!.youtube} target="_blank" rel="noopener"
-                   class="text-[8px] font-mono uppercase tracking-wider text-[#FF0000] hover:brightness-125 transition-all">
+                   class="text-[9px] font-mono uppercase tracking-wider text-[#FF0000] hover:brightness-125 transition-all">
                   YouTube
                 </a>
               </Show>
               <Show when={result()?.apple}>
                 <a href={result()!.apple} target="_blank" rel="noopener"
-                   class="text-[8px] font-mono uppercase tracking-wider text-text-dim hover:text-text-secondary transition-all">
+                   class="text-[9px] font-mono uppercase tracking-wider text-text-dim hover:text-text-secondary transition-all">
                   Apple
                 </a>
               </Show>
-              <span class="ml-auto text-[7px] font-mono text-text-muted">
+              <span class="ml-auto text-[9px] font-mono text-text-muted">
                 via {result()?.service ?? '—'}
               </span>
             </div>

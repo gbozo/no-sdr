@@ -37,7 +37,7 @@ const HfdlDisplay: Component = () => {
 
   return (
     <div class="flex-1 min-h-0 flex flex-col bg-sdr-surface/30">
-      <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+      <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
         <Show when={status()?.unavailable}>
           {(message) => (
             <div class="text-amber">
@@ -82,7 +82,7 @@ const HfdlDisplay: Component = () => {
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         <div class="flex flex-col min-w-0 min-h-0 md:flex-1 border-b md:border-b-0 md:border-r border-border/40">
           <div class="flex-1 min-h-0 overflow-auto">
-            <table class="w-full text-[8px] font-mono">
+            <table class="w-full text-[9px] font-mono">
               <thead class="sticky top-0 z-10 bg-sdr-surface">
                 <tr>
                   <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -119,7 +119,7 @@ const HfdlDisplay: Component = () => {
             </table>
 
             <Show when={log().length === 0}>
-              <div class="px-2 py-3 text-[8px] font-mono space-y-1">
+              <div class="px-2 py-3 text-[9px] font-mono space-y-1">
                 <p class="text-text-dim">No HFDL events heard</p>
                 <p class="text-text-dim/70">
                   HFDL uses 24 kHz lanes on HF. Tune an assigned channel such as
@@ -132,7 +132,7 @@ const HfdlDisplay: Component = () => {
 
         <Show when={selectedDecode()}>
           {(entry) => (
-            <div class="md:w-[34%] min-h-[120px] md:min-h-0 overflow-auto border-t md:border-t-0 border-border/40 px-2 py-1.5 text-[8px] font-mono">
+            <div class="md:w-[34%] min-h-[120px] md:min-h-0 overflow-auto border-t md:border-t-0 border-border/40 px-2 py-1.5 text-[9px] font-mono">
               <div class="flex items-center gap-2 mb-1">
                 <span class="text-cyan uppercase tracking-wider">HFDL {entry().kind}</span>
                 <span class="text-text-dim">{timeOf(entry().unix)}</span>

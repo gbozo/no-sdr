@@ -63,7 +63,7 @@ const Vdl2Display: Component = () => {
 
   return (
     <div class="flex-1 min-h-0 flex flex-col bg-sdr-surface/30">
-      <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+      <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
         <Show when={status()?.unavailable}>
           {(message) => (
             <div class="text-amber">
@@ -125,7 +125,7 @@ const Vdl2Display: Component = () => {
         {/* Message log + details */}
         <div class="flex flex-col min-w-0 min-h-0 md:flex-1 border-b md:border-b-0 md:border-r border-border/40">
           <div class="flex-1 min-h-0 overflow-auto">
-            <table class="w-full text-[8px] font-mono">
+            <table class="w-full text-[9px] font-mono">
               <thead class="sticky top-0 z-10 bg-sdr-surface">
                 <tr>
                   <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -164,7 +164,7 @@ const Vdl2Display: Component = () => {
             </table>
 
             <Show when={messages().length === 0}>
-              <div class="px-2 py-3 text-[8px] font-mono space-y-1">
+              <div class="px-2 py-3 text-[9px] font-mono space-y-1">
                 <p class="text-text-dim">No VDL2 frames heard</p>
                 <p class="text-text-dim/70">
                   Tune to 136.8125 MHz with at least 350 kHz of span. VDL2 carries
@@ -176,7 +176,7 @@ const Vdl2Display: Component = () => {
 
           <Show when={selectedMessage()}>
             {(message) => (
-              <div class="shrink-0 border-t border-border/40 px-2 py-1.5 text-[8px] font-mono">
+              <div class="shrink-0 border-t border-border/40 px-2 py-1.5 text-[9px] font-mono">
                 <div class="flex items-center gap-2 mb-1">
                   <span class="text-cyan uppercase tracking-wider">VDL2 FRAME</span>
                   <span class="text-text-dim">{timeOf(message().at)}</span>
@@ -212,7 +212,7 @@ const Vdl2Display: Component = () => {
 
         {/* Station table */}
         <div class="md:w-[30%] min-h-[120px] md:min-h-0 overflow-auto">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface">
               <tr>
                 <th class="text-left px-1.5 py-1 text-text-dim">STATION</th>
@@ -246,7 +246,7 @@ const Vdl2Display: Component = () => {
             </tbody>
           </table>
           <Show when={stations().length === 0}>
-            <p class="text-[8px] font-mono text-text-dim px-2 py-3">No stations heard</p>
+            <p class="text-[9px] font-mono text-text-dim px-2 py-3">No stations heard</p>
           </Show>
         </div>
       </div>

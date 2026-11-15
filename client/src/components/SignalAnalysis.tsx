@@ -583,7 +583,7 @@ const SignalAnalysis: Component = () => {
     const yForDb = (db: number) => top + (1 - (db - viewMin) / dbSpan) * plotH;
 
     // Grid + dB labels.
-    ctx.font = '7px ui-monospace, monospace';
+    ctx.font = '9px ui-monospace, monospace';
     ctx.textBaseline = 'middle';
     const step = niceStep(dbSpan);
     const first = Math.ceil(viewMin / step) * step;
@@ -723,7 +723,7 @@ const SignalAnalysis: Component = () => {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = color;
-      ctx.font = '7px ui-monospace, monospace';
+      ctx.font = '9px ui-monospace, monospace';
       ctx.textAlign = x > left + plotW * 0.85 ? 'right' : 'left';
       ctx.textBaseline = 'top';
       ctx.fillText(label, x + (x > left + plotW * 0.85 ? -3 : 3), top + 2);
@@ -759,7 +759,7 @@ const SignalAnalysis: Component = () => {
       ctx.beginPath();
       ctx.arc(x, clamp(y, top + 2, top + plotH - 2), 2.2, 0, Math.PI * 2);
       ctx.fill();
-      ctx.font = '7px ui-monospace, monospace';
+      ctx.font = '9px ui-monospace, monospace';
       ctx.textAlign = x > left + plotW * 0.72 ? 'right' : 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = 'rgba(255,252,98,0.9)';
@@ -1284,33 +1284,33 @@ const SignalAnalysis: Component = () => {
   });
 
   return (
-    <div class="relative flex flex-col h-full min-h-0 bg-sdr-surface/30 text-[9px] font-mono overflow-hidden">
+    <div class="relative flex flex-col h-full min-h-0 bg-sdr-surface/30 text-[10px] font-mono overflow-hidden">
       {/* Toolbar */}
       <div class="flex flex-col gap-1 px-2 py-1 border-b border-border/40 shrink-0">
         <div class="flex flex-wrap items-center gap-1.5">
-          <span class="text-[8px] uppercase tracking-wider text-text-dim">Signal Analysis</span>
-          <span class="text-[7px] text-text-muted uppercase ml-2">Span</span>
+          <span class="text-[9px] uppercase tracking-wider text-text-dim">Signal Analysis</span>
+          <span class="text-[9px] text-text-muted uppercase ml-2">Span</span>
           <div class="flex items-center gap-1">
             <For each={SPAN_MODES}>
               {(mode) => (
                 <button
                   onClick={() => selectSpan(mode.id)}
                   title={mode.title}
-                  class={`mil-btn text-[8px] px-1.5 py-0.5 ${spanMode() === mode.id ? 'active border-cyan text-cyan' : ''}`}
+                  class={`mil-btn text-[9px] px-1.5 py-0.5 ${spanMode() === mode.id ? 'active border-cyan text-cyan' : ''}`}
                 >
                   {mode.label}
                 </button>
               )}
             </For>
           </div>
-          <span class="text-[7px] text-text-muted uppercase ml-2">Trace</span>
+          <span class="text-[9px] text-text-muted uppercase ml-2">Trace</span>
           <div class="flex items-center gap-1">
             <For each={TRACE_MODES}>
               {(mode) => (
                 <button
                   onClick={() => { setTraceMode(mode.id); if (mode.id === 'live') traceData = null; }}
                   title={mode.title}
-                  class={`mil-btn text-[8px] px-1.5 py-0.5 ${traceMode() === mode.id ? 'active border-amber text-amber' : ''}`}
+                  class={`mil-btn text-[9px] px-1.5 py-0.5 ${traceMode() === mode.id ? 'active border-amber text-amber' : ''}`}
                 >
                   {mode.label}
                 </button>
@@ -1320,44 +1320,35 @@ const SignalAnalysis: Component = () => {
           <div class="ml-auto flex items-center gap-1">
             <button
               onClick={() => setFrozen(v => !v)}
-              class={`mil-btn text-[8px] px-1.5 py-0.5 ${frozen() ? 'active border-amber text-amber' : ''}`}
+              class={`mil-btn text-[9px] px-1.5 py-0.5 ${frozen() ? 'active border-amber text-amber' : ''}`}
               title="Freeze the analysis workspace (F)"
             >
               {frozen() ? 'Frozen' : 'Freeze'}
             </button>
-            <button onClick={resetAnalysis} class="mil-btn text-[8px] px-1.5 py-0.5" title="Clear history and held traces (R)">
+            <button onClick={resetAnalysis} class="mil-btn text-[9px] px-1.5 py-0.5" title="Clear history and held traces (R)">
               Reset
             </button>
-            <Show when={store.pushServerConfig()?.identifyEnabled !== false}>
-              <button
-                onClick={() => store.setIdentifierOpen(true)}
-                class="mil-btn text-[8px] px-1.5 py-0.5"
-                title="Identify the tuned signal and suggest a decoder"
-              >
-                Identify
-              </button>
-            </Show>
-            <button onClick={copyReport} class="mil-btn text-[8px] px-1.5 py-0.5" title="Copy a plain-text measurement report (C)">
+            <button onClick={copyReport} class="mil-btn text-[9px] px-1.5 py-0.5" title="Copy a plain-text measurement report (C)">
               {copied() ? 'Copied' : 'Copy'}
             </button>
-            <button onClick={exportCsv} class="mil-btn text-[8px] px-1.5 py-0.5" title="Export measurements and peaks as CSV">
+            <button onClick={exportCsv} class="mil-btn text-[9px] px-1.5 py-0.5" title="Export measurements and peaks as CSV">
               CSV
             </button>
-            <button onClick={exportPng} class="mil-btn text-[8px] px-1.5 py-0.5" title="Export spectrum and waterfall as PNG">
+            <button onClick={exportPng} class="mil-btn text-[9px] px-1.5 py-0.5" title="Export spectrum and waterfall as PNG">
               PNG
             </button>
-            <button onClick={() => setShowLog(v => !v)} class={`mil-btn text-[8px] px-1.5 py-0.5 ${showLog() ? 'active' : ''}`} title="Show signal event log">
+            <button onClick={() => setShowLog(v => !v)} class={`mil-btn text-[9px] px-1.5 py-0.5 ${showLog() ? 'active' : ''}`} title="Show signal event log">
               Log
             </button>
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-1.5">
-          <label class="flex items-center gap-1 text-[7px] uppercase text-text-muted">
+          <label class="flex items-center gap-1 text-[9px] uppercase text-text-muted">
             Meas
             <select
               value={String(measureBw())}
               onChange={(e) => setMeasureBw(Number(e.currentTarget.value))}
-              class="bg-sdr-base border border-border/50 rounded-sm text-[8px] font-mono text-text-secondary px-1 py-0.5"
+              class="bg-sdr-base border border-border/50 rounded-sm text-[9px] font-mono text-text-secondary px-1 py-0.5"
               title="Measurement bandwidth independent of the demod filter"
             >
               <option value="0">Filter</option>
@@ -1367,7 +1358,7 @@ const SignalAnalysis: Component = () => {
             </select>
           </label>
           <Show when={markerReadout()}>
-            <span class="text-[8px] text-text-dim tabular-nums">
+            <span class="text-[9px] text-text-dim tabular-nums">
               A <span class="text-cyan">{fmtOffset(markerA())}</span> / {fmtLevel(markerReadout()!.aDb)}
               <span class="mx-1">·</span>
               B <span class="text-amber">{fmtOffset(markerB())}</span> / {fmtLevel(markerReadout()!.bDb)}
@@ -1379,23 +1370,23 @@ const SignalAnalysis: Component = () => {
           </Show>
           <button
             onClick={() => setSnapMarkers(v => !v)}
-            class={`mil-btn text-[8px] px-1.5 py-0.5 ${snapMarkers() ? 'active border-cyan text-cyan' : ''}`}
+            class={`mil-btn text-[9px] px-1.5 py-0.5 ${snapMarkers() ? 'active border-cyan text-cyan' : ''}`}
             title="Snap marker drags to nearby peaks (M)"
           >
             Snap
           </button>
-          <label class="flex items-center gap-1 text-[7px] uppercase text-text-muted ml-auto">
+          <label class="flex items-center gap-1 text-[9px] uppercase text-text-muted ml-auto">
             dBm cal
             <input
               type="number"
               step="1"
               value={dbmOffset()}
               onInput={(e) => saveDbmOffset(Number(e.currentTarget.value) || 0)}
-              class="w-14 bg-sdr-base border border-border/50 rounded-sm text-[8px] font-mono text-text-secondary px-1 py-0.5"
+              class="w-14 bg-sdr-base border border-border/50 rounded-sm text-[9px] font-mono text-text-secondary px-1 py-0.5"
               title="Calibration offset in dB: 0 displays dB, non-zero displays dBm"
             />
           </label>
-          <label class="flex items-center gap-1 text-[7px] uppercase text-text-muted">
+          <label class="flex items-center gap-1 text-[9px] uppercase text-text-muted">
             Hist
             <input
               type="range"
@@ -1408,7 +1399,7 @@ const SignalAnalysis: Component = () => {
               class="w-24 sdr-range disabled:opacity-40"
               title="Scrub back through recent FFT history while frozen"
             />
-            <span class="text-[7px] text-text-dim tabular-nums w-8">
+            <span class="text-[9px] text-text-dim tabular-nums w-8">
               {frozen() ? `${historyOffset()}f` : 'live'}
             </span>
           </label>
@@ -1428,12 +1419,12 @@ const SignalAnalysis: Component = () => {
               onMouseLeave={onSpectrumLeave}
             />
             <Show when={cursor()}>
-              <div class="absolute top-1 right-1 px-1.5 py-0.5 rounded-sm bg-black/70 border border-border/50 text-[8px] text-text-secondary pointer-events-none">
+              <div class="absolute top-1 right-1 px-1.5 py-0.5 rounded-sm bg-black/70 border border-border/50 text-[9px] text-text-secondary pointer-events-none">
                 {fmtFreq(cursor()!.hz)} · {cursor()!.db.toFixed(1)} dB
               </div>
             </Show>
             <Show when={frozen()}>
-              <div class="absolute top-1 left-1 px-1.5 py-0.5 rounded-sm bg-amber/15 border border-amber/40 text-[8px] text-amber uppercase tracking-wider pointer-events-none">
+              <div class="absolute top-1 left-1 px-1.5 py-0.5 rounded-sm bg-amber/15 border border-amber/40 text-[9px] text-amber uppercase tracking-wider pointer-events-none">
                 Frozen
               </div>
             </Show>
@@ -1545,19 +1536,19 @@ const SignalAnalysis: Component = () => {
         {/* Zoomed mini waterfall + level history */}
         <div class="w-full lg:w-[34%] lg:max-w-[320px] min-w-[190px] flex flex-col min-h-0 border-t lg:border-t-0 lg:border-l border-border/40">
           <div class="flex items-center justify-between px-2 py-0.5 border-b border-border/30 shrink-0">
-            <span class="text-[7px] uppercase tracking-wider text-text-dim">Zoomed Waterfall</span>
-            <span class="text-[7px] text-text-dim">{stats() ? fmtSpan(stats()!.spanHz) : '—'}</span>
+            <span class="text-[9px] uppercase tracking-wider text-text-dim">Zoomed Waterfall</span>
+            <span class="text-[9px] text-text-dim">{stats() ? fmtSpan(stats()!.spanHz) : '—'}</span>
           </div>
           <canvas ref={waterfallRef} class="flex-1 min-h-[80px] w-full" />
           <div class="flex items-center justify-between px-2 py-0.5 border-y border-border/30 shrink-0">
-            <span class="text-[7px] uppercase tracking-wider text-text-dim">Level History</span>
-            <span class="text-[7px] text-cyan">PEAK</span>
-            <span class="text-[7px] text-amber">FLOOR</span>
+            <span class="text-[9px] uppercase tracking-wider text-text-dim">Level History</span>
+            <span class="text-[9px] text-cyan">PEAK</span>
+            <span class="text-[9px] text-amber">FLOOR</span>
           </div>
           <canvas ref={levelRef} class="h-10 w-full shrink-0" />
           <div class="flex items-center justify-between px-2 py-0.5 border-y border-border/30 shrink-0">
-            <span class="text-[7px] uppercase tracking-wider text-text-dim">Peak Drift</span>
-            <span class={`text-[7px] tabular-nums ${Math.abs(driftHz()) > 0.5 ? 'text-amber' : 'text-text-dim'}`}>
+            <span class="text-[9px] uppercase tracking-wider text-text-dim">Peak Drift</span>
+            <span class={`text-[9px] tabular-nums ${Math.abs(driftHz()) > 0.5 ? 'text-amber' : 'text-text-dim'}`}>
               {fmtOffset(driftHz())}
             </span>
           </div>
@@ -1569,13 +1560,13 @@ const SignalAnalysis: Component = () => {
       <Show when={showLog()}>
         <div class="absolute right-1 top-12 bottom-1 w-[340px] max-w-[90%] z-20 flex flex-col rounded-sm border border-border bg-sdr-surface/95 shadow-xl">
           <div class="flex items-center justify-between px-2 py-1 border-b border-border/50">
-            <span class="text-[8px] uppercase tracking-wider text-text-dim">Signal Events</span>
-            <button onClick={() => setShowLog(false)} class="text-[9px] text-text-dim hover:text-amber px-1">✕</button>
+            <span class="text-[9px] uppercase tracking-wider text-text-dim">Signal Events</span>
+            <button onClick={() => setShowLog(false)} class="text-[10px] text-text-dim hover:text-amber px-1">✕</button>
           </div>
           <div class="flex-1 min-h-0 overflow-y-auto">
-            <For each={events()} fallback={<div class="px-2 py-2 text-[8px] text-text-dim">No events yet</div>}>
+            <For each={events()} fallback={<div class="px-2 py-2 text-[9px] text-text-dim">No events yet</div>}>
               {(event) => (
-                <div class="flex items-center gap-2 px-2 py-[2px] text-[8px] border-b border-border/10">
+                <div class="flex items-center gap-2 px-2 py-[2px] text-[9px] border-b border-border/10">
                   <span class="text-text-muted tabular-nums">
                     {new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
@@ -1594,10 +1585,10 @@ const SignalAnalysis: Component = () => {
 
 const Stat: Component<{ label: string; value: string; sub?: string; title?: string; tone?: string }> = (props) => (
   <div class="bg-sdr-surface/70 px-1.5 py-0.5 min-w-0" title={props.title}>
-    <div class="text-[7px] uppercase tracking-wider text-text-dim truncate">{props.label}</div>
-    <div class={`text-[9px] leading-tight whitespace-nowrap ${props.tone ?? 'text-text-primary'}`}>{props.value}</div>
+    <div class="text-[9px] uppercase tracking-wider text-text-dim truncate">{props.label}</div>
+    <div class={`text-[10px] leading-tight whitespace-nowrap ${props.tone ?? 'text-text-primary'}`}>{props.value}</div>
     <Show when={props.sub}>
-      <div class="text-[7px] leading-tight text-text-dim truncate">{props.sub}</div>
+      <div class="text-[9px] leading-tight text-text-dim truncate">{props.sub}</div>
     </Show>
   </div>
 );
@@ -1610,10 +1601,10 @@ const MarkerList: Component<{
   onBookmark?: (hz: number) => void;
 }> = (props) => (
   <div class="bg-sdr-surface/60 min-w-0 h-full overflow-y-auto">
-    <div class="px-2 py-0.5 text-[7px] uppercase tracking-wider text-text-dim border-b border-border/20">{props.title}</div>
-    <For each={props.items} fallback={<div class="px-2 py-1 text-[8px] text-text-dim">No markers</div>}>
+    <div class="px-2 py-0.5 text-[9px] uppercase tracking-wider text-text-dim border-b border-border/20">{props.title}</div>
+    <For each={props.items} fallback={<div class="px-2 py-1 text-[9px] text-text-dim">No markers</div>}>
       {(item) => (
-        <div class="flex items-center gap-1 px-2 py-[1px] text-[8px] border-b border-border/10 last:border-0">
+        <div class="flex items-center gap-1 px-2 py-[1px] text-[9px] border-b border-border/10 last:border-0">
           <button
             onClick={() => props.onTune?.(item.hz)}
             class="flex-1 min-w-0 flex items-center justify-between gap-2 hover:text-cyan text-left"

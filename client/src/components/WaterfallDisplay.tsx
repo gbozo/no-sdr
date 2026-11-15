@@ -738,7 +738,7 @@ const WaterfallDisplay: Component = () => {
           class="fixed z-50 pointer-events-none
                  px-2 py-0.5 rounded
                  bg-black/80 border border-white/10
-                 text-[10px] font-mono text-white/90
+                 text-[11px] font-mono text-white/90
                  whitespace-nowrap"
           style={{ left: `${cursorX() + 14}px`, top: `${cursorY() - 10}px` }}
         >
@@ -778,7 +778,7 @@ const WaterfallDisplay: Component = () => {
         <Show when={store.spectrumZoom()[0] > 0 || store.spectrumZoom()[1] < 1}>
           <button
             class="absolute top-1.5 right-2 z-10 px-1.5 h-5
-                   flex items-center text-[8px] font-mono rounded-sm
+                   flex items-center text-[9px] font-mono rounded-sm
                    border border-[var(--sdr-accent)] text-[var(--sdr-accent)]
                    hover:bg-[var(--sdr-accent)]/10 transition-colors"
             title="Reset zoom"
@@ -832,7 +832,7 @@ const WaterfallDisplay: Component = () => {
           style={{ top: '6px', left: '108px' }}
           title={`Averaging: ${store.spectrumAveraging()} — click to cycle`}
           onClick={nextAvg}>
-          <span class="text-[9px] font-mono font-bold leading-none">
+          <span class="text-[10px] font-mono font-bold leading-none">
             {store.spectrumAveraging()[0].toUpperCase()}
           </span>
         </button>
@@ -922,7 +922,7 @@ const WaterfallDisplay: Component = () => {
                    flex items-center gap-1.5
                    px-2.5 py-1 rounded
                    bg-black/75 border border-[var(--sdr-accent)]/60
-                   text-[var(--sdr-accent)] font-mono text-[9px] font-bold tracking-widest uppercase
+                   text-[var(--sdr-accent)] font-mono text-[10px] font-bold tracking-widest uppercase
                    hover:bg-[var(--sdr-accent)]/15 hover:border-[var(--sdr-accent)]
                    transition-colors cursor-pointer"
             onClick={() => setSeekOffset(0)}
@@ -939,7 +939,7 @@ const WaterfallDisplay: Component = () => {
           <div class="absolute bottom-2 right-3 pointer-events-none
                       px-2 py-0.5 rounded
                       bg-black/70 border border-[var(--sdr-accent)]/30">
-            <span class="text-[9px] font-mono text-[var(--sdr-accent)]/70 tabular-nums">
+            <span class="text-[10px] font-mono text-[var(--sdr-accent)]/70 tabular-nums">
               -{seekOffset()}s
             </span>
           </div>
@@ -949,7 +949,7 @@ const WaterfallDisplay: Component = () => {
         <Show when={bufferCount() > 0 && seekOffset() === 0 && !isScrubbing()}>
           <div class="absolute bottom-2 left-2 pointer-events-none
                       px-1.5 py-0.5 rounded opacity-30
-                      text-[7px] font-mono text-text-muted tracking-wide uppercase">
+                      text-[9px] font-mono text-text-muted tracking-wide uppercase">
             drag ↕ to rewind
           </div>
         </Show>
@@ -1120,7 +1120,7 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
             {(b) => (
               <span
                 class="absolute bottom-0 flex items-end justify-center
-                       text-[9px] font-mono text-white overflow-hidden whitespace-nowrap pb-px"
+                       text-[10px] font-mono text-white overflow-hidden whitespace-nowrap pb-px"
                 style={{
                   left: `${b.leftPct}%`,
                   width: `${b.widthPct}%`,
@@ -1210,7 +1210,7 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
                     background: '#000',
                     border: `1px solid ${unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : 'var(--sdr-accent)'}`,
                     'border-radius': '2px',
-                    'font-size': '9px',
+                    'font-size': '10px',
                     'font-family': 'JetBrains Mono, monospace',
                     color: unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : 'var(--sdr-accent)',
                     overflow: 'hidden',
@@ -1339,7 +1339,7 @@ const FrequencyScale: Component = () => {
                   {/* Label — major ticks only */}
                   <Show when={!isMinor}>
                     <span
-                      class="absolute bottom-[7px] text-[9px] font-mono leading-none"
+                      class="absolute bottom-[7px] text-[10px] font-mono leading-none"
                       style={{
                         left: `${pct}%`,
                         transform: 'translateX(-50%)',
@@ -1382,7 +1382,7 @@ const RdsOverlay: Component = () => {
       <div class="absolute bottom-2 left-2 pointer-events-none z-10
                   bg-black/40 border border-white/10 rounded px-2 py-1.5
                   max-w-[340px] flex items-start gap-2">
-        <div class={`text-[11px] font-bold font-mono leading-none mt-px select-none shrink-0
+        <div class={`text-[12px] font-bold font-mono leading-none mt-px select-none shrink-0
                      ${synced() ? 'text-white opacity-90' : 'text-text-muted opacity-40'}`}
              style={{ "letter-spacing": "0.5px" }}>
           RDS
@@ -1390,17 +1390,17 @@ const RdsOverlay: Component = () => {
         <Show when={hasData() || synced()}>
           <div class="min-w-0">
             <Show when={store.rdsPs()}>
-              <div class="text-[13px] font-mono font-bold text-white tracking-wider leading-tight">
+              <div class="text-[14px] font-mono font-bold text-white tracking-wider leading-tight">
                 {store.rdsPs()}
               </div>
             </Show>
             <Show when={store.rdsRt()}>
-              <div class="text-[9px] font-mono text-white/80 leading-tight mt-0.5 truncate">
+              <div class="text-[10px] font-mono text-white/80 leading-tight mt-0.5 truncate">
                 {store.rdsRt()}
               </div>
             </Show>
             <Show when={store.rdsPty() || store.rdsPi() || synced()}>
-              <div class="text-[7px] font-mono text-white/60 mt-0.5 flex gap-2">
+              <div class="text-[9px] font-mono text-white/60 mt-0.5 flex gap-2">
                 <Show when={store.rdsPty()}>
                   <span>{store.rdsPty()}</span>
                 </Show>
@@ -1410,7 +1410,7 @@ const RdsOverlay: Component = () => {
               </div>
             </Show>
             <Show when={store.rdsClock()}>
-              <div class="text-[7px] font-mono text-white/50 mt-0.5">
+              <div class="text-[9px] font-mono text-white/50 mt-0.5">
                 {store.rdsClock()}
               </div>
             </Show>

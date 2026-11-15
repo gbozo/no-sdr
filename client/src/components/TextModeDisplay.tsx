@@ -48,30 +48,30 @@ const TextModeDisplay: Component = () => {
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       <div class="flex-1 min-w-0 min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-border/40">
         <div class="flex items-center gap-3 px-2 py-1 border-b border-border/30 bg-sdr-surface/40">
-          <span class="text-[8px] font-mono uppercase tracking-wider text-cyan">{mode()}</span>
-          <span class="text-[8px] font-mono text-text-dim">
+          <span class="text-[9px] font-mono uppercase tracking-wider text-cyan">{mode()}</span>
+          <span class="text-[9px] font-mono text-text-dim">
             {status().listening ? 'LISTENING' : 'IDLE'}
           </span>
-          <span class="text-[8px] font-mono text-text-dim">
+          <span class="text-[9px] font-mono text-text-dim">
             {status().level.toFixed(1)} dB
           </span>
-          <span class="text-[8px] font-mono text-text-dim">
+          <span class="text-[9px] font-mono text-text-dim">
             {Math.round(status().audioHz)} Hz audio
           </span>
-          <span class="ml-auto text-[8px] font-mono text-text-dim">
+          <span class="ml-auto text-[9px] font-mono text-text-dim">
             {messages().length} chunks
           </span>
           <button
             type="button"
             onClick={() => setShowChunks((value) => !value)}
-            class="mil-btn text-[8px] px-1.5 py-0.5"
+            class="mil-btn text-[9px] px-1.5 py-0.5"
           >
             {showChunks() ? 'TEXT' : 'CHUNKS'}
           </button>
           <button
             type="button"
             onClick={() => store.clearText()}
-            class="mil-btn text-[8px] px-1.5 py-0.5 text-red-400 border-red-500/30"
+            class="mil-btn text-[9px] px-1.5 py-0.5 text-red-400 border-red-500/30"
           >
             CLEAR
           </button>
@@ -82,14 +82,14 @@ const TextModeDisplay: Component = () => {
           fallback={
             <pre
               ref={logRef}
-              class="flex-1 min-h-0 overflow-auto px-3 py-2 text-[11px] leading-[1.45] font-mono whitespace-pre-wrap break-words text-text-primary bg-sdr-base/30"
+              class="flex-1 min-h-0 overflow-auto px-3 py-2 text-[12px] leading-[1.45] font-mono whitespace-pre-wrap break-words text-text-primary bg-sdr-base/30"
             >
               {joined() || 'Waiting for text — tune to the signal and check the mode parameters.'}
             </pre>
           }
         >
           <div class="flex-1 min-h-0 overflow-auto">
-            <table class="w-full text-[8px] font-mono">
+            <table class="w-full text-[9px] font-mono">
               <thead class="sticky top-0 z-10 bg-sdr-surface text-text-dim">
                 <tr>
                   <th class="text-left px-2 py-1">TIME</th>
@@ -126,29 +126,29 @@ const TextModeDisplay: Component = () => {
       </div>
 
       <div class="w-full md:w-[310px] shrink-0 p-3 space-y-3 overflow-auto">
-        <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim">Mode</div>
+        <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Mode</div>
         <div class="text-sm font-mono text-text-primary">{mode()}</div>
 
-        <div class="grid grid-cols-2 gap-2 text-[9px] font-mono">
+        <div class="grid grid-cols-2 gap-2 text-[10px] font-mono">
           <div class="border border-border/30 rounded-sm p-2">
-            <div class="text-text-dim uppercase text-[8px]">Audio</div>
+            <div class="text-text-dim uppercase text-[9px]">Audio</div>
             <div class="text-text-primary">{Math.round(status().audioHz)} Hz</div>
           </div>
           <div class="border border-border/30 rounded-sm p-2">
-            <div class="text-text-dim uppercase text-[8px]">Level</div>
+            <div class="text-text-dim uppercase text-[9px]">Level</div>
             <div class="text-text-primary">{status().level.toFixed(1)} dB</div>
           </div>
           <div class="border border-border/30 rounded-sm p-2">
-            <div class="text-text-dim uppercase text-[8px]">State</div>
+            <div class="text-text-dim uppercase text-[9px]">State</div>
             <div class="text-text-primary">{status().listening ? 'Listening' : 'Idle'}</div>
           </div>
           <div class="border border-border/30 rounded-sm p-2">
-            <div class="text-text-dim uppercase text-[8px]">Chunks</div>
+            <div class="text-text-dim uppercase text-[9px]">Chunks</div>
             <div class="text-text-primary">{messages().length}</div>
           </div>
           <Show when={status().baud !== undefined}>
             <div class="border border-border/30 rounded-sm p-2">
-              <div class="text-text-dim uppercase text-[8px]">
+              <div class="text-text-dim uppercase text-[9px]">
                 {store.decoderMode() === 'rtty' ? 'Baud' : 'Symbol rate'}
               </div>
               <div class="text-text-primary">{status().baud?.toFixed(2)} Bd</div>
@@ -156,19 +156,19 @@ const TextModeDisplay: Component = () => {
           </Show>
           <Show when={status().shiftHz !== undefined}>
             <div class="border border-border/30 rounded-sm p-2">
-              <div class="text-text-dim uppercase text-[8px]">Shift</div>
+              <div class="text-text-dim uppercase text-[9px]">Shift</div>
               <div class="text-text-primary">{Math.round(status().shiftHz ?? 0)} Hz</div>
             </div>
           </Show>
           <Show when={status().afcHz !== undefined}>
             <div class="border border-border/30 rounded-sm p-2">
-              <div class="text-text-dim uppercase text-[8px]">AFC</div>
+              <div class="text-text-dim uppercase text-[9px]">AFC</div>
               <div class="text-text-primary">{Math.round(status().afcHz ?? 0)} Hz</div>
             </div>
           </Show>
           <Show when={status().reverse !== undefined}>
             <div class="border border-border/30 rounded-sm p-2">
-              <div class="text-text-dim uppercase text-[8px]">Tones</div>
+              <div class="text-text-dim uppercase text-[9px]">Tones</div>
               <div class={status().reverse ? 'text-amber' : 'text-text-primary'}>
                 {status().reverse ? 'Reversed' : 'Normal'}
               </div>
@@ -176,7 +176,7 @@ const TextModeDisplay: Component = () => {
           </Show>
         </div>
 
-        <div class="text-[9px] font-mono text-text-dim leading-relaxed border-t border-border/30 pt-3">
+        <div class="text-[10px] font-mono text-text-dim leading-relaxed border-t border-border/30 pt-3">
           <p>
             Continuous keyboard modes: text appears as it is decoded; there is no
             slot timer or map.

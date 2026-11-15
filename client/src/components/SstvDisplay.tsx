@@ -105,15 +105,15 @@ const SstvDisplay: Component = () => {
           when={image()}
           fallback={
             <div class="h-full min-h-[180px] flex flex-col items-center justify-center gap-2 px-6 text-center">
-              <span class="text-[9px] font-mono uppercase tracking-[0.18em] text-cyan/70">
+              <span class="text-[10px] font-mono uppercase tracking-[0.18em] text-cyan/70">
                 Slow-scan television
               </span>
-              <p class="text-[10px] font-mono text-text-dim max-w-md leading-relaxed">
+              <p class="text-[11px] font-mono text-text-dim max-w-md leading-relaxed">
                 Waiting for an SSTV VIS header. Tune to a known SSTV frequency
                 (14.230 MHz is the common HF calling frequency) and centre the
                 decoder on the station.
               </p>
-              <p class="text-[8px] font-mono text-text-dim/70">
+              <p class="text-[9px] font-mono text-text-dim/70">
                 {status().mode ?? 'auto-detect'} · signal {status().signal.toFixed(2)}
               </p>
             </div>
@@ -137,8 +137,8 @@ const SstvDisplay: Component = () => {
       <aside class="md:w-[320px] shrink-0 overflow-auto bg-sdr-surface/20">
         <div class="p-3 space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">SSTV</span>
-            <span class={`text-[8px] font-mono uppercase tracking-wider ${
+            <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">SSTV</span>
+            <span class={`text-[9px] font-mono uppercase tracking-wider ${
               status().unsupported ? 'text-amber' : image()?.complete ? 'text-green-400' : 'text-amber'
             }`}>
               {stateLabel()}
@@ -146,13 +146,13 @@ const SstvDisplay: Component = () => {
           </div>
 
           <Show when={status().unsupported}>
-            <p class="text-[9px] font-mono text-amber/90 border border-amber/30 bg-amber/5 rounded-sm p-2 leading-relaxed">
+            <p class="text-[10px] font-mono text-amber/90 border border-amber/30 bg-amber/5 rounded-sm p-2 leading-relaxed">
               Received a valid header for {status().unsupported}, which this
               decoder cannot draw.
             </p>
           </Show>
 
-          <div class="grid grid-cols-2 gap-x-3 gap-y-2 text-[9px] font-mono">
+          <div class="grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] font-mono">
             <Metric label="Image" value={image() ? String(image()!.imageId) : '—'} />
             <Metric label="Mode" value={image()?.mode ?? status().mode ?? '—'} />
             <Metric label="Size" value={image() ? `${image()!.width}×${image()!.height}` : '—'} />
@@ -163,7 +163,7 @@ const SstvDisplay: Component = () => {
 
           <Show when={list().length > 0}>
             <div class="border-t border-border/30 pt-2">
-              <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">
+              <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">
                 Received pictures
               </div>
               <div class="space-y-1">
@@ -171,7 +171,7 @@ const SstvDisplay: Component = () => {
                   {(item: SstvImage) => (
                     <button
                       onClick={() => setPicked(item.imageId)}
-                      class={`w-full text-left px-2 py-1 rounded-sm border text-[8px] font-mono ${
+                      class={`w-full text-left px-2 py-1 rounded-sm border text-[9px] font-mono ${
                         image()?.imageId === item.imageId
                           ? 'border-cyan/50 text-cyan bg-cyan/5'
                           : 'border-border/40 text-text-dim hover:border-cyan/30'
@@ -180,7 +180,7 @@ const SstvDisplay: Component = () => {
                       <span class="inline-block w-10">#{item.imageId}</span>
                       <span>{item.mode ?? 'SSTV'}</span>
                       <span class="float-right">{item.complete ? 'complete' : 'live'}</span>
-                      <div class="text-[7px] text-text-dim/70 mt-0.5">
+                      <div class="text-[9px] text-text-dim/70 mt-0.5">
                         {item.width}×{item.height}
                         {item.callsign ? ` · ${item.callsign}` : ''}
                       </div>
@@ -192,10 +192,10 @@ const SstvDisplay: Component = () => {
           </Show>
 
           <div class="border-t border-border/30 pt-2">
-            <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">
+            <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">
               Picture
             </div>
-            <p class="text-[9px] font-mono text-text-secondary leading-relaxed">
+            <p class="text-[10px] font-mono text-text-secondary leading-relaxed">
               SSTV sends a VIS header, then RGB scan lines at 1500–2300 Hz.
               Pictures stay in local history until the decoder is changed.
             </p>
@@ -208,8 +208,8 @@ const SstvDisplay: Component = () => {
 
 const Metric: Component<{ label: string; value: string }> = (props) => (
   <div>
-    <div class="text-[7px] uppercase tracking-wider text-text-dim/70">{props.label}</div>
-    <div class="text-[9px] text-text-primary break-all">{props.value}</div>
+    <div class="text-[9px] uppercase tracking-wider text-text-dim/70">{props.label}</div>
+    <div class="text-[10px] text-text-primary break-all">{props.value}</div>
   </div>
 );
 

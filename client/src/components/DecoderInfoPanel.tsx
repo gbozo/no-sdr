@@ -33,20 +33,20 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
         <div class="flex items-start gap-3 px-3 py-2 border-b border-border/50 shrink-0">
           <div class="min-w-0">
             <div class="flex items-center gap-2">
-              <span class="text-[11px] font-mono font-bold text-text-primary uppercase tracking-wider">
+              <span class="text-[12px] font-mono font-bold text-text-primary uppercase tracking-wider">
                 {base()?.name ?? props.mode}
               </span>
-              <span class="text-[8px] font-mono uppercase tracking-wider text-cyan border border-cyan/30 rounded px-1">
+              <span class="text-[9px] font-mono uppercase tracking-wider text-cyan border border-cyan/30 rounded px-1">
                 {base()?.shortName ?? props.mode.toUpperCase()}
               </span>
             </div>
-            <div class="text-[8px] font-mono text-text-dim mt-0.5 truncate">
+            <div class="text-[9px] font-mono text-text-dim mt-0.5 truncate">
               {base()?.description ?? 'Digital decoder'}
             </div>
           </div>
           <button
             onClick={props.onClose}
-            class="ml-auto text-[10px] font-mono text-text-dim hover:text-amber px-1 py-0.5"
+            class="ml-auto text-[11px] font-mono text-text-dim hover:text-amber px-1 py-0.5"
             title="Close decoder information"
           >
             ✕
@@ -57,7 +57,7 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
           <Show when={info()}>
             {(data) => (
               <>
-                <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[8px] font-mono">
+                <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] font-mono">
                   <div>
                     <span class="text-text-dim uppercase tracking-wider">Protocol</span>
                     <div class="text-text-secondary">{data().protocol}</div>
@@ -78,15 +78,15 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
 
                 <div>
                   <div class="flex items-center justify-between mb-1">
-                    <span class="text-[8px] font-mono uppercase tracking-wider text-text-dim">Typical waterfall signature</span>
-                    <span class="text-[7px] font-mono text-text-muted">illustrative</span>
+                    <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">Typical waterfall signature</span>
+                    <span class="text-[9px] font-mono text-text-muted">illustrative</span>
                   </div>
                   <SignalPreview mode={props.mode} preview={data().preview} />
-                  <p class="text-[8px] font-mono text-text-secondary mt-1">{data().waterfall}</p>
+                  <p class="text-[9px] font-mono text-text-secondary mt-1">{data().waterfall}</p>
                 </div>
 
                 <div>
-                  <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">Typical frequencies</div>
+                  <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">Typical frequencies</div>
                   <div class="grid grid-cols-2 sm:grid-cols-3 gap-1">
                     <For each={data().frequencies}>
                       {(f) => (
@@ -96,7 +96,7 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
                             engine.tune(f.hz - store.centerFrequency());
                           }}
                           disabled={!inSpan(f.hz)}
-                          class={`flex items-center justify-between gap-2 px-1.5 py-0.5 rounded-sm border text-left text-[8px] font-mono ${
+                          class={`flex items-center justify-between gap-2 px-1.5 py-0.5 rounded-sm border text-left text-[9px] font-mono ${
                             inSpan(f.hz)
                               ? 'border-border/40 text-text-secondary hover:border-cyan/50 hover:text-cyan'
                               : 'border-border/20 text-text-muted cursor-not-allowed'
@@ -104,26 +104,26 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
                           title={inSpan(f.hz) ? `Tune to ${fmtFreq(f.hz)}` : 'Outside the current receiver span'}
                         >
                           <span class="truncate">{f.label}</span>
-                          <span class="tabular-nums text-[7px]">{fmtFreq(f.hz)}</span>
+                          <span class="tabular-nums text-[9px]">{fmtFreq(f.hz)}</span>
                         </button>
                       )}
                     </For>
                   </div>
-                  <div class="text-[7px] font-mono text-text-muted mt-1">
+                  <div class="text-[9px] font-mono text-text-muted mt-1">
                     Dimmed frequencies are outside the current receiver span. Change profile/centre to receive them.
                   </div>
                 </div>
 
                 <div>
-                  <div class="text-[8px] font-mono uppercase tracking-wider text-text-dim mb-1">What to look for</div>
-                  <ul class="space-y-1 text-[8px] font-mono text-text-secondary">
+                  <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">What to look for</div>
+                  <ul class="space-y-1 text-[9px] font-mono text-text-secondary">
                     <For each={data().tips}>
                       {(tip) => <li class="flex gap-1.5"><span class="text-cyan">•</span><span>{tip}</span></li>}
                     </For>
                   </ul>
                 </div>
 
-                <div class="text-[7px] font-mono text-text-muted border-t border-border/30 pt-1.5">
+                <div class="text-[9px] font-mono text-text-muted border-t border-border/30 pt-1.5">
                   Typical calling/operating channels; regional usage and schedules vary. Waterfall previews are illustrative, not recordings.
                 </div>
               </>
@@ -256,7 +256,7 @@ const SignalPreview: Component<{ mode: string; preview: DecoderPreviewStyle }> =
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
     ctx.fillStyle = 'rgba(120,140,160,0.5)';
-    ctx.font = '7px ui-monospace, monospace';
+    ctx.font = '9px ui-monospace, monospace';
     ctx.textAlign = 'left';
     ctx.fillText('frequency →', 4, h - 4);
     ctx.save();

@@ -67,7 +67,7 @@ const NavtexDisplay: Component = () => {
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       {/* Message table */}
       <div class="flex flex-col min-w-0 min-h-0 md:w-[44%] border-b md:border-b-0 md:border-r border-border/40">
-        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-text-dim">
             <span class="uppercase tracking-wider text-text-secondary">NAVTEX</span>
             <span>{messages().length} MESSAGES</span>
@@ -83,7 +83,7 @@ const NavtexDisplay: Component = () => {
         </div>
 
         <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface">
               <tr>
                 <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -120,7 +120,7 @@ const NavtexDisplay: Component = () => {
           </table>
 
           <Show when={messages().length === 0}>
-            <div class="px-2 py-3 text-[8px] font-mono text-text-dim">
+            <div class="px-2 py-3 text-[9px] font-mono text-text-dim">
               Waiting for a NAVTEX message. Tune 518 kHz (English international),
               490 kHz (national language) or 4209.5 kHz (tropical) in USB with a
               3 kHz profile. The receiver needs a few seconds of phasing before
@@ -135,7 +135,7 @@ const NavtexDisplay: Component = () => {
         <Show
           when={selected()}
           fallback={
-            <div class="h-full flex items-center justify-center px-4 text-center text-[9px] font-mono text-text-dim">
+            <div class="h-full flex items-center justify-center px-4 text-center text-[10px] font-mono text-text-dim">
               Select a message to read the full safety broadcast.
             </div>
           }
@@ -143,23 +143,23 @@ const NavtexDisplay: Component = () => {
           {(message) => (
             <div class="p-3 space-y-2">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/30 pb-2">
-                <span class="text-[10px] font-mono uppercase tracking-wider text-cyan">
+                <span class="text-[11px] font-mono uppercase tracking-wider text-cyan">
                   {message().station}
                   {message().subject}
                   {String(message().serial).padStart(2, '0')}
                 </span>
-                <span class="text-[8px] font-mono text-text-secondary">
+                <span class="text-[9px] font-mono text-text-secondary">
                   {subjectLabel(message().subject)}
                 </span>
-                <span class="text-[8px] font-mono text-text-dim">
+                <span class="text-[9px] font-mono text-text-dim">
                   {formatTime(message().at)}
                 </span>
-                <span class="ml-auto text-[8px] font-mono text-text-dim">
+                <span class="ml-auto text-[9px] font-mono text-text-dim">
                   {message().complete ? 'COMPLETE' : 'PARTIAL'}
                   {message().lost > 0 ? ` · ${message().lost} LOST` : ''}
                 </span>
               </div>
-              <pre class="whitespace-pre-wrap break-words text-[10px] leading-relaxed font-mono text-text-primary">
+              <pre class="whitespace-pre-wrap break-words text-[11px] leading-relaxed font-mono text-text-primary">
                 {message().text.trim()}
               </pre>
             </div>

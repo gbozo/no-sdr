@@ -48,7 +48,7 @@ const AprsDisplay: Component = () => {
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       {/* Packet table */}
       <div class="flex flex-col min-w-0 min-h-0 md:w-[52%] border-b md:border-b-0 md:border-r border-border/40">
-        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[8px] font-mono leading-relaxed">
+        <div class="shrink-0 px-2 py-1 border-b border-border/30 text-[9px] font-mono leading-relaxed">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-text-dim">
             <span class="uppercase tracking-wider text-text-secondary">APRS</span>
             <span>{packets().length} PACKETS</span>
@@ -62,7 +62,7 @@ const AprsDisplay: Component = () => {
         </div>
 
         <div class="flex-1 min-h-0 overflow-auto">
-          <table class="w-full text-[8px] font-mono">
+          <table class="w-full text-[9px] font-mono">
             <thead class="sticky top-0 z-10 bg-sdr-surface">
               <tr>
                 <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
@@ -98,7 +98,7 @@ const AprsDisplay: Component = () => {
           </table>
 
           <Show when={packets().length === 0}>
-            <div class="px-2 py-3 text-[8px] font-mono text-text-dim">
+            <div class="px-2 py-3 text-[9px] font-mono text-text-dim">
               Waiting for an APRS packet. Tune 144.390 MHz (regional channel) with a 12.5 kHz
               NFM profile; APRS is 1200 baud Bell 202 AX.25.
             </div>
@@ -107,7 +107,7 @@ const AprsDisplay: Component = () => {
 
         <Show when={selected()}>
           {(packet) => (
-            <div class="shrink-0 border-t border-border/40 px-2 py-1.5 text-[8px] font-mono">
+            <div class="shrink-0 border-t border-border/40 px-2 py-1.5 text-[9px] font-mono">
               <div class="flex items-center gap-2 mb-1">
                 <span class="text-cyan uppercase tracking-wider">{packet().from}</span>
                 <span class="text-text-dim">{packet().to}</span>
@@ -152,10 +152,10 @@ const AprsDisplay: Component = () => {
           onSelect={(from) => setSelectedFrom((current) => (current === from ? null : from))}
         />
         <div class="absolute top-1 left-1.5 z-[400] flex items-center gap-2 pointer-events-auto">
-          <span class="text-[8px] font-mono text-cyan/80 bg-black/50 px-1">APRS STATIONS</span>
+          <span class="text-[9px] font-mono text-cyan/80 bg-black/50 px-1">APRS STATIONS</span>
           <button
             onClick={() => setFollowSelected((v) => !v)}
-            class="text-[8px] font-mono uppercase tracking-wider bg-black/50 px-1 text-text-dim hover:text-cyan"
+            class="text-[9px] font-mono uppercase tracking-wider bg-black/50 px-1 text-text-dim hover:text-cyan"
           >
             {followSelected() ? 'follow' : 'free'}
           </button>
