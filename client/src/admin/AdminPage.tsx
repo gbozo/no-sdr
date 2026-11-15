@@ -88,7 +88,7 @@ const AdminPage: Component = () => {
         </button>
 
         <h1 class="font-mono text-xs font-bold tracking-[0.15em] uppercase flex-1">
-          <span class="text-cyan">NO</span><span class="text-text-dim">(DE)</span><span class="text-cyan">-SDR</span>
+          <span class="text-cyan">NO</span><span class="text-text-primary">-SDR</span>
           <span class="text-text-dim ml-2">/</span>
           <span class="text-amber ml-2">ADMIN</span>
         </h1>
