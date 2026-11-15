@@ -1,6 +1,6 @@
 # Tasks — Digital Decoders
 
-Last updated: v2.19.0
+Last updated: v2.20.0
 
 FT8/FT4/FT2 background and foreground decoding are implemented. The items below
 are the remaining decoder work, in intended order.
