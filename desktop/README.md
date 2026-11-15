@@ -1,4 +1,4 @@
-# NO(DE)-SDR Desktop
+# NO-SDR Desktop
 
 Electron shell for the Rust WebSDR backend. The desktop app starts the bundled
 `serverrs` binary on a loopback port, keeps the existing REST/WebSocket
@@ -14,9 +14,9 @@ protocol, and opens the normal SolidJS client in a Chromium window.
 
 On first launch the app creates a per-user directory:
 
-- Windows: `%APPDATA%/NO(DE)-SDR`
-- macOS: `~/Library/Application Support/NO(DE)-SDR`
-- Linux: `~/.config/NO(DE)-SDR`
+- Windows: `%APPDATA%/NO-SDR`
+- macOS: `~/Library/Application Support/NO-SDR`
+- Linux: `~/.config/NO-SDR`
 
 The default config is copied there once and then owned by the user. Admin
 changes and server logs stay in that directory; they are not written into the

@@ -1,4 +1,4 @@
-// Electron shell for NO(DE)-SDR.
+// Electron shell for NO-SDR.
 //
 // The Rust server remains the single source of truth. This process only
 // prepares a per-user config/state directory, starts a bundled serverrs on a
@@ -15,7 +15,11 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 
-const APP_NAME = 'NO(DE)-SDR';
+const APP_NAME = 'NO-SDR';
+// Earlier builds used a different app name, which put the per-user config under
+// a different directory. Migrate that directory once so existing users keep
+// their settings.
+const LEGACY_APP_NAME = 'NO(DE)-SDR';
 const DEV_ROOT = path.resolve(__dirname, '..');
 const SERVER_BINARY = process.platform === 'win32' ? 'serverrs.exe' : 'serverrs';
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
@@ -73,6 +77,25 @@ function bookmarksTemplateDir() {
     : path.join(DEV_ROOT, 'bookmarks');
 }
 
+function migrateLegacyUserData(userData) {
+  try {
+    const legacy = path.join(app.getPath('appData'), LEGACY_APP_NAME);
+    if (legacy === userData) return;
+    if (!fs.existsSync(legacy) || fs.existsSync(userData)) return;
+    fs.mkdirSync(path.dirname(userData), { recursive: true });
+    try {
+      fs.renameSync(legacy, userData);
+    } catch {
+      // Different volume or a locked file: copy then drop the old directory.
+      fs.cpSync(legacy, userData, { recursive: true });
+      fs.rmSync(legacy, { recursive: true, force: true });
+    }
+  } catch (err) {
+    // Never block startup on this; a fresh per-user directory is the fallback.
+    console.error(`could not migrate legacy user data: ${err.message}`);
+  }
+}
+
 function userPaths() {
   const userData = app.getPath('userData');
   return {
@@ -86,6 +109,7 @@ function userPaths() {
 
 function ensureUserData() {
   const paths = userPaths();
+  migrateLegacyUserData(paths.userData);
   fs.mkdirSync(path.dirname(paths.config), { recursive: true });
   fs.mkdirSync(paths.bookmarks, { recursive: true });
 
@@ -212,7 +236,7 @@ function startServer(port, paths) {
     appendLog(`[desktop] server exited code=${code} signal=${signal}\n`);
     if (!quitting && mainWindow) {
       dialog.showErrorBox(
-        'NO(DE)-SDR server stopped',
+        'NO-SDR server stopped',
         `The receiver server exited unexpectedly.\n\nSee ${paths.log} for details.`
       );
       app.quit();
@@ -310,7 +334,7 @@ async function startDesktopApp() {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     appendLog(`[desktop] startup failed: ${detail}\n`);
-    dialog.showErrorBox('NO(DE)-SDR could not start', detail);
+    dialog.showErrorBox('NO-SDR could not start', detail);
     app.quit();
   }
 }
