@@ -154,6 +154,10 @@ pub struct ServerConfig {
     /// the Identify controls and closes any open identifier panel.
     #[serde(default = "default_true")]
     pub identify_enabled: bool,
+    /// Users ribbon visibility: `off`, `users` (frequency only) or `ip`
+    /// (frequency and resolved client IP).
+    #[serde(default = "default_users_ribbon")]
+    pub users_ribbon: String,
     /// Tracing/log level: trace, debug, info, warn, error (or off).
     /// `LOG_LEVEL` in the environment overrides this.
     #[serde(default)]
@@ -194,6 +198,7 @@ impl Default for ServerConfig {
             location: String::new(),
             demo_mode: false,
             identify_enabled: true,
+            users_ribbon: default_users_ribbon(),
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
@@ -422,6 +427,10 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.log_level.is_empty() {
         cfg.server.log_level = "info".to_string();
     }
+    cfg.server.users_ribbon = cfg.server.users_ribbon.trim().to_ascii_lowercase();
+    if cfg.server.users_ribbon.is_empty() {
+        cfg.server.users_ribbon = default_users_ribbon();
+    }
 }
 
 /// YAML `enabled`/`autoStart` default to true only when the keys are absent.
@@ -478,6 +487,12 @@ pub fn validate(cfg: &Config) -> Result<()> {
             cfg.server.log_level
         );
     }
+    if !["off", "users", "ip"].contains(&cfg.server.users_ribbon.as_str()) {
+        bail!(
+            "config: server.usersRibbon must be one of [\"off\", \"users\", \"ip\"], got {:?}",
+            cfg.server.users_ribbon
+        );
+    }
     for (i, d) in cfg.decoders.iter().enumerate() {
         if d.id.trim().is_empty() {
             bail!("config: decoders[{i}]: id is required");
@@ -527,6 +542,10 @@ pub fn is_power_of_two(n: i32) -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_users_ribbon() -> String {
+    "users".to_string()
 }
 
 /// Default bookmarks directory: `<dir of config>/../bookmarks`.
@@ -616,6 +635,7 @@ mod tests {
         assert_eq!(cfg.server.port, 1234);
         assert_eq!(cfg.server.host, "0.0.0.0");
         assert!(cfg.server.identify_enabled);
+        assert_eq!(cfg.server.users_ribbon, "users");
         assert_eq!(cfg.server.allowed_fft_codecs, DEFAULT_FFT_CODECS);
         let p = &cfg.dongles[0].profiles[0];
         assert_eq!(p.fft_size, 4096);

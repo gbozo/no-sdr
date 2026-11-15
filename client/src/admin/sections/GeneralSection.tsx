@@ -148,6 +148,20 @@ const GeneralSection: Component = () => {
                 onChange={(v) => adminStore.updateServerConfigField('identifyEnabled', v)}
               />
             </FieldRow>
+            <FieldRow
+              label="Users Ribbon"
+              help="Show where connected listeners are tuned. IP mode also reveals their resolved address; Off hides the ribbon entirely."
+            >
+              <SelectInput
+                value={cfg().usersRibbon}
+                onChange={(v) => adminStore.updateServerConfigField('usersRibbon', v as 'off' | 'users' | 'ip')}
+                options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'users', label: 'Users only' },
+                  { value: 'ip', label: 'Users + IP' },
+                ]}
+              />
+            </FieldRow>
           </SettingsGroup>
 
           {/* Allowed Codecs */}

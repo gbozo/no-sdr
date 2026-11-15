@@ -38,6 +38,7 @@ export class RawIqProbe {
       };
 
       ws.onopen = () => {
+        ws.send(JSON.stringify({ cmd: 'ribbon_hidden', hidden: true }));
         ws.send(JSON.stringify({ cmd: 'subscribe', dongleId: this.dongleId, profileId: this.profileId }));
       };
       ws.onerror = fail;

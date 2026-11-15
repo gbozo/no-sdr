@@ -655,6 +655,7 @@ export class SdrEngine {
       store.setConnected(false);
       store.setConnectionState('disconnected');
       this.reconnecting = true;
+      store.setUserLocations([]);
       // FIX: Clear activeDongleId so state_sync triggers resubscription on reconnect
       store.setActiveDongleId('');
       console.log('[SDR] WebSocket disconnected');
@@ -1234,6 +1235,7 @@ export class SdrEngine {
         // Capture client-side state before the server profile defaults overwrite it.
         // hadPriorSubscription persists across reconnects (unlike activeDongleId which
         // is cleared on disconnect), so this correctly identifies a reconnect scenario.
+        store.setUserLocations([]);
         const isReconnect    = this.hadPriorSubscription;
         const prevTuneOffset = isReconnect ? store.tuneOffset()  : 0;
         const prevMode       = isReconnect ? store.mode()        : null;
@@ -1634,6 +1636,10 @@ export class SdrEngine {
       case 'server_config_updated':
         store.setPushServerConfig(meta.server);
         if (meta.version) store.setConfigVersion(meta.version);
+        break;
+
+      case 'user_locations':
+        store.setUserLocations(meta.users ?? []);
         break;
 
       case 'config_saved':

@@ -26,7 +26,7 @@ use crate::history::FftBuffer;
 use crate::ws::{
     pack_audio_opus_message, pack_codec_status_message, pack_fft_adpcm_message,
     pack_fft_compressed_message, pack_iq_adpcm_message, pack_iq_message, pack_meta_message,
-    pack_rds_message, ClientCommand, CodecStatus, ServerMeta, WsManager, MSG_META,
+    pack_rds_message, ClientCommand, CodecStatus, ServerMeta, UserLocation, WsManager, MSG_META,
 };
 
 #[cfg(feature = "airspy")]
@@ -142,6 +142,7 @@ pub struct ServerConfigInfo {
     pub location: String,
     pub demo_mode: bool,
     pub identify_enabled: bool,
+    pub users_ribbon: String,
 }
 
 /// Generic config-change notification sent as a META message.
@@ -289,6 +290,8 @@ pub struct Manager {
     /// Last per-dongle subscribed-client counts, used to broadcast
     /// `dongle_status` only when a count actually changes.
     last_client_counts: Mutex<HashMap<String, usize>>,
+    /// Throttle user-ribbon broadcasts while a client drags the VFO.
+    last_user_broadcast: Mutex<HashMap<String, Instant>>,
     recorder: Recorder,
     get_version: Mutex<Option<Arc<dyn Fn() -> u64 + Send + Sync>>>,
     identify_token_func:
@@ -343,6 +346,7 @@ impl Manager {
             #[cfg(feature = "decoders")]
             decoder_store,
             last_client_counts: Mutex::new(HashMap::new()),
+            last_user_broadcast: Mutex::new(HashMap::new()),
             recorder: Recorder::new("recordings"),
             get_version: Mutex::new(None),
             identify_token_func: Mutex::new(None),
@@ -2094,6 +2098,64 @@ impl Manager {
         }
     }
 
+    /// Publish every listener's tuning position for the current dongle. The
+    /// client only receives IPs when the administrator selected `ip`; `users`
+    /// sends frequencies and modes without addresses.
+    fn broadcast_user_locations(&self, dongle_id: &str) {
+        let mode = self.cfg.read().server.users_ribbon.clone();
+        if mode == "off" {
+            return;
+        }
+        let profile = match self.dongles.read().get(dongle_id) {
+            Some(ad) => ad.profile.read().clone(),
+            None => return,
+        };
+        let users: Vec<UserLocation> = self
+            .ws
+            .subscribed_clients(dongle_id)
+            .into_iter()
+            .filter(|client| !client.hidden_from_ribbon())
+            .map(|client| {
+                let state = client.snapshot();
+                UserLocation {
+                    client_id: client.persistent_id.clone(),
+                    conn_index: client.conn_index,
+                    profile_id: state.profile_id,
+                    ip: if mode == "ip" {
+                        Some(client.remote_addr.clone())
+                    } else {
+                        None
+                    },
+                    frequency_hz: profile.center_frequency + state.tune_offset,
+                    mode: state.mode,
+                    bandwidth: state.bandwidth,
+                }
+            })
+            .collect();
+        let meta = ServerMeta {
+            msg_type: "user_locations".to_string(),
+            dongle_id: Some(dongle_id.to_string()),
+            users: Some(users),
+            ..Default::default()
+        };
+        self.ws.broadcast(dongle_id, pack_meta_message(&meta));
+    }
+
+    fn broadcast_user_locations_throttled(&self, dongle_id: &str) {
+        let now = Instant::now();
+        {
+            let mut last = self.last_user_broadcast.lock();
+            if last
+                .get(dongle_id)
+                .is_some_and(|at| now.duration_since(*at) < Duration::from_millis(250))
+            {
+                return;
+            }
+            last.insert(dongle_id.to_string(), now);
+        }
+        self.broadcast_user_locations(dongle_id);
+    }
+
     fn update_chunk_size(cp: &mut ClientPipeline, rate: i32) {
         let size = (rate as f64 * 2.0 * 0.020) as usize;
         if size > 0 && size != cp.chunk_size {
@@ -2146,6 +2208,7 @@ impl Manager {
             "set_pre_filter_nb_threshold" => {
                 self.handle_set_pre_filter_nb_threshold(client_id, cmd)
             }
+            "ribbon_hidden" => {}
             "mute" | "volume" => {}
             other => debug!(client = %client_id, cmd = other, "unhandled command"),
         }
@@ -2293,9 +2356,15 @@ impl Manager {
         } else {
             default_bandwidth_for_mode(&mode)
         };
+        // The server's copy of the client state is also the source for the
+        // users ribbon. Apply the profile defaults the client is about to see
+        // so a first-time listener is not shown at the centre frequency.
+        client.set_tune_offset(profile.tune_offset as i64);
+        client.set_mode(&mode);
+        client.set_bandwidth(meta_bw as i64);
         let meta = ServerMeta {
             msg_type: "subscribed".to_string(),
-            dongle_id: Some(dongle_id),
+            dongle_id: Some(dongle_id.clone()),
             profile_id: Some(profile.id.clone()),
             center_freq: Some(profile.center_frequency as f64),
             sample_rate: Some(sample_rate as i64),
@@ -2308,13 +2377,22 @@ impl Manager {
         };
         self.send_meta(client_id, meta);
         self.ws.set_client_profile_id(client_id, &profile.id);
+        self.broadcast_user_locations(&dongle_id);
     }
 
     fn handle_unsubscribe(&self, client_id: &str) {
+        let dongle_id = self
+            .ws
+            .get_client(client_id)
+            .map(|client| client.subscribed_to())
+            .unwrap_or_default();
         if let Some(client) = self.ws.get_client(client_id) {
             client.unsubscribe();
         }
         self.destroy_client_pipeline(client_id);
+        if !dongle_id.is_empty() {
+            self.broadcast_user_locations(&dongle_id);
+        }
     }
 
     fn handle_audio_enabled(&self, client_id: &str, cmd: &ClientCommand) {
@@ -2420,6 +2498,12 @@ impl Manager {
                 cp.scope = None;
             }
         }
+        if let Some(client) = self.ws.get_client(client_id) {
+            let dongle_id = client.subscribed_to();
+            if !dongle_id.is_empty() {
+                self.broadcast_user_locations_throttled(&dongle_id);
+            }
+        }
     }
 
     fn handle_bandwidth(&self, client_id: &str, cmd: &ClientCommand) {
@@ -2435,6 +2519,12 @@ impl Manager {
             }
             if let Some(opus) = cp.opus_pipeline.as_mut() {
                 opus.set_bandwidth(bandwidth);
+            }
+        }
+        if let Some(client) = self.ws.get_client(client_id) {
+            let dongle_id = client.subscribed_to();
+            if !dongle_id.is_empty() {
+                self.broadcast_user_locations_throttled(&dongle_id);
             }
         }
     }
@@ -2467,6 +2557,12 @@ impl Manager {
         }
         cp.accum_pos = 0;
         cp.adpcm_enc.reset();
+        if let Some(client) = self.ws.get_client(client_id) {
+            let dongle_id = client.subscribed_to();
+            if !dongle_id.is_empty() {
+                self.broadcast_user_locations_throttled(&dongle_id);
+            }
+        }
     }
 
     fn handle_set_deemphasis(&self, client_id: &str, cmd: &ClientCommand) {
@@ -3202,6 +3298,7 @@ impl Manager {
             location: cfg.server.location.clone(),
             demo_mode: cfg.server.demo_mode,
             identify_enabled: cfg.server.identify_enabled,
+            users_ribbon: cfg.server.users_ribbon.clone(),
         }
     }
 
@@ -3473,6 +3570,12 @@ impl Manager {
                         ..Default::default()
                     };
                     mgr.ws.broadcast_all(pack_meta_message(&meta));
+                }
+
+                // Keep the users ribbon fresh, including disconnects that do
+                // not emit a tune command.
+                for (id, _) in &current_counts {
+                    mgr.broadcast_user_locations(id);
                 }
             }
         });

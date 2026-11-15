@@ -102,6 +102,7 @@ export type ClientCommand =
   | { cmd: 'stereo_enabled'; enabled: boolean }
   | { cmd: 'deemphasis'; deemphasis: number }
   | { cmd: 'request_history' }
+  | { cmd: 'ribbon_hidden'; hidden: boolean }
   | { cmd: 'set_pre_filter_nb'; enabled: boolean }
   | { cmd: 'set_pre_filter_nb_threshold'; threshold: number }
   // Admin commands
@@ -166,6 +167,19 @@ export interface PushServerConfig {
   location: string;
   demoMode: boolean;
   identifyEnabled: boolean;
+  usersRibbon: 'off' | 'users' | 'ip';
+}
+
+/** One connected listener's tuning position for the users ribbon. */
+export interface UserLocation {
+  clientId: string;
+  connIndex: number;
+  profileId?: string;
+  /** Only present when the administrator enables IP display. */
+  ip?: string;
+  frequencyHz: number;
+  mode: string;
+  bandwidth: number;
 }
 
 export type ServerMeta =
@@ -173,6 +187,7 @@ export type ServerMeta =
   | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number }
   | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number }
   | { type: 'dongle_status'; dongleId: string; running: boolean; clientCount: number }
+  | { type: 'user_locations'; dongleId: string; users: UserLocation[] }
   | { type: 'error'; message: string; code?: string }
   | { type: 'admin_auth_ok' }
   | { type: 'decoder_data'; decoderType: string; data: unknown }

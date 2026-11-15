@@ -871,6 +871,7 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "adminPassword": cfg.server.admin_password,
             "demoMode": cfg.server.demo_mode,
             "identifyEnabled": cfg.server.identify_enabled,
+            "usersRibbon": cfg.server.users_ribbon,
             "fftHistoryFftSize": cfg.server.fft_history_fft_size,
             "fftHistoryCompression": cfg.server.fft_history_compression,
             "allowedFftCodecs": cfg.server.allowed_fft_codecs,
@@ -949,6 +950,8 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         set_i32!("fftHistoryFftSize", fft_history_fft_size);
         set_bool!("demoMode", demo_mode);
         set_bool!("identifyEnabled", identify_enabled);
+        set_string!("usersRibbon", users_ribbon);
+        s.users_ribbon = s.users_ribbon.trim().to_ascii_lowercase();
 
         if let Some(v) = map.get("opusComplexity").and_then(|v| v.as_i64()) {
             s.opus_complexity = v.clamp(0, 10) as i32;

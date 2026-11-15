@@ -175,6 +175,9 @@ pub struct ClientState {
     pub decoder: String,
     /// Whether this client wants the zoomed decoder spectrum stream.
     pub decoder_scope: bool,
+    /// Temporary helper connections (the raw-IQ identifier probe) stay out
+    /// of the public users ribbon.
+    pub hidden_from_ribbon: bool,
     /// Requested decoder scope frame rate, clamped to 2–20 fps.
     pub decoder_scope_fps: u32,
     pub tune_offset: i64,
@@ -369,6 +372,22 @@ impl Client {
         self.state.lock().tune_offset
     }
 
+    pub fn set_tune_offset(&self, offset: i64) {
+        self.state.lock().tune_offset = offset;
+    }
+
+    pub fn set_mode(&self, mode: &str) {
+        self.state.lock().mode = mode.to_string();
+    }
+
+    pub fn set_bandwidth(&self, bandwidth: i64) {
+        self.state.lock().bandwidth = bandwidth;
+    }
+
+    pub fn hidden_from_ribbon(&self) -> bool {
+        self.state.lock().hidden_from_ribbon
+    }
+
     pub fn bandwidth(&self) -> i64 {
         self.state.lock().bandwidth
     }
@@ -430,6 +449,10 @@ impl Client {
                     st.tune_offset = 0;
                     st.bandwidth = 0;
                 }
+                None
+            }
+            "ribbon_hidden" => {
+                st.hidden_from_ribbon = cmd.hidden.unwrap_or(false);
                 None
             }
             "tune" => {
@@ -634,6 +657,11 @@ mod tests {
 
         assert!(c.update_from_command(&cmd(r#"{"cmd":"subscribe","dongleId":"d1"}"#), &allowed).is_none());
         assert_eq!(c.subscribed_to(), "d1");
+        c.update_from_command(&cmd(r#"{"cmd":"ribbon_hidden","hidden":true}"#), &allowed);
+        assert!(c.hidden_from_ribbon());
+        // Re-subscribing keeps the helper-connection marker.
+        c.update_from_command(&cmd(r#"{"cmd":"subscribe","dongleId":"d1"}"#), &allowed);
+        assert!(c.hidden_from_ribbon());
         // subscribe resets stereo and audio
         assert!(!c.stereo_enabled());
         assert!(!c.audio_enabled());

@@ -26,6 +26,21 @@ pub const MSG_FFT_HISTORY: u8 = 0x0D; // Waterfall history burst
 /// for it with `{"cmd":"decoder_scope","enabled":true}`.
 pub const MSG_DECODER_SCOPE: u8 = 0x0E; // [version][flags][reserved][startHz][bins][hzPerBin][minDb][maxDb][u8 bins]
 
+/// One connected listener's tuning position for the users ribbon.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserLocation {
+    pub client_id: String,
+    pub conn_index: i64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub profile_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+    pub frequency_hz: i64,
+    pub mode: String,
+    pub bandwidth: i64,
+}
+
 /// Metadata sent to a connected client.
 ///
 /// Field order mirrors the Go struct so serialized key order matches.
@@ -77,6 +92,9 @@ pub struct ServerMeta {
     pub running: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_count: Option<i64>,
+    // Users ribbon
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub users: Option<Vec<UserLocation>>,
 }
 
 /// Parsed command from the client (JSON text).
@@ -122,6 +140,9 @@ pub struct ClientCommand {
     /// `cmd: "decoder_scope"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<u32>,
+    /// Hide a helper connection from the public users ribbon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -522,6 +543,33 @@ mod tests {
         assert_eq!(i16::from_le_bytes(msg[21..23].try_into().unwrap()), -130);
         assert_eq!(i16::from_le_bytes(msg[23..25].try_into().unwrap()), 0);
         assert_eq!(&msg[25..], &[0, 128, 255]);
+    }
+
+    #[test]
+    fn user_locations_meta_shape() {
+        let msg = pack_meta_message(&ServerMeta {
+            msg_type: "user_locations".into(),
+            dongle_id: Some("d1".into()),
+            users: Some(vec![UserLocation {
+                client_id: "abc".into(),
+                conn_index: 2,
+                profile_id: "p1".into(),
+                ip: Some("192.0.2.5".into()),
+                frequency_hz: 14_074_000,
+                mode: "usb".into(),
+                bandwidth: 2_400,
+            }]),
+            ..Default::default()
+        });
+        assert_eq!(msg[0], MSG_META);
+        let v: serde_json::Value = serde_json::from_slice(&msg[1..]).unwrap();
+        assert_eq!(v["type"], "user_locations");
+        assert_eq!(v["dongleId"], "d1");
+        assert_eq!(v["users"][0]["clientId"], "abc");
+        assert_eq!(v["users"][0]["connIndex"], 2);
+        assert_eq!(v["users"][0]["frequencyHz"], 14_074_000);
+        assert_eq!(v["users"][0]["ip"], "192.0.2.5");
+        assert_eq!(v["users"][0]["mode"], "usb");
     }
 
     #[test]

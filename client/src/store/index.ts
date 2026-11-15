@@ -20,6 +20,7 @@ import type {
   DongleProfile,
   PushDongleInfo,
   PushServerConfig,
+  UserLocation,
   AdsbAircraft,
   AdsbSnapshot,
   AcarsMessage,
@@ -117,6 +118,8 @@ function createStore() {
   const [activeProfile, setActiveProfile] = createSignal<DongleProfile | null>(null);
   const [activeProfileId, setActiveProfileId] = createSignal('');
   const [profiles, setProfiles] = createSignal<DongleProfile[]>([]);
+  const [userLocations, setUserLocations] = createSignal<UserLocation[]>([]);
+  const [usersRibbonVisible, setUsersRibbonVisible] = persist<boolean>('usersRibbonVisible', true);
 
   // ---- Push-based dongle state (from WS notifications) ----
   const [pushDongles, setPushDongles] = createSignal<PushDongleInfo[]>([]);
@@ -454,6 +457,8 @@ function createStore() {
     // Push-based state
     pushDongles, setPushDongles,
     pushServerConfig, setPushServerConfig,
+    userLocations, setUserLocations,
+    usersRibbonVisible, setUsersRibbonVisible,
     configVersion, setConfigVersion,
     connectionState, setConnectionState,
     serverVersion, setServerVersion,

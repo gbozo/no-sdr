@@ -12,6 +12,7 @@ import DecoderDisplay from './components/DecoderDisplay.js';
 import SignalAnalysis from './components/SignalAnalysis.js';
 import SignalIdentifier from './components/SignalIdentifier.js';
 import FrequencyDisplay from './components/FrequencyDisplay.js';
+import UserRibbon from './components/UserRibbon.js';
 import ControlPanel from './components/ControlPanel.js';
 import ConnectionOverlay from './components/ConnectionOverlay.js';
 
@@ -468,6 +469,8 @@ const App: Component = () => {
           <div class="p-2 pb-0">
             <FrequencyDisplay />
           </div>
+
+          <UserRibbon />
 
           {/* Main waterfall, split with the active workspace(s) */}
           <div class="md:flex-1 md:min-h-0 p-2 flex flex-col gap-2" style="min-height: 50vh">
