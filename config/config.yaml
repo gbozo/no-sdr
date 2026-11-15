@@ -30,6 +30,7 @@ server:
   acrcloudHost: identify-eu-west-1.acrcloud.com
   acrcloudAccessKey: 9233f967382c7a171794366539a2ff2b
   acrcloudAccessSecret: TM2aWry4BU6bnnR2lxNYZMdggZp7QjuJnwybut3O
+  openWeatherMapApiKey: ''
 dongles:
 - id: dongle-mooroo30
   name: Remote-GBserv

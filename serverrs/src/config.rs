@@ -220,6 +220,10 @@ pub struct ServerConfig {
     pub acrcloud_access_key: String,
     #[serde(default)]
     pub acrcloud_access_secret: String,
+    /// OpenWeatherMap API key for the map weather/cloud overlay. Admin-only:
+    /// intentionally not part of the public server metadata.
+    #[serde(default)]
+    pub open_weather_map_api_key: String,
 }
 
 impl Default for ServerConfig {
@@ -247,6 +251,7 @@ impl Default for ServerConfig {
             acrcloud_host: String::new(),
             acrcloud_access_key: String::new(),
             acrcloud_access_secret: String::new(),
+            open_weather_map_api_key: String::new(),
         }
     }
 }

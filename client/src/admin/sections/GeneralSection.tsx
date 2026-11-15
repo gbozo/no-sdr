@@ -60,6 +60,23 @@ const GeneralSection: Component = () => {
             />
           </SettingsGroup>
 
+          {/* Weather overlay */}
+          <SettingsGroup
+            title="Weather Overlay"
+            description="OpenWeatherMap API key for the future cloud/weather overlay on OpenStreetMap."
+          >
+            <FieldRow
+              label="API Key"
+              help="Create a key at openweathermap.org/api. It stays server-side and is not sent to clients."
+            >
+              <ApiKeyInput
+                value={cfg().openWeatherMapApiKey}
+                onChange={(v) => adminStore.updateServerConfigField('openWeatherMapApiKey', v)}
+                placeholder="OpenWeatherMap API key"
+              />
+            </FieldRow>
+          </SettingsGroup>
+
           {/* Network */}
           <SettingsGroup title="Network" description="Server bind address (requires restart to take effect)">
             <FieldRow label="Host" help="IP address to bind to (0.0.0.0 = all interfaces)">
@@ -239,6 +256,20 @@ const TextInput: Component<{ value: string; onChange: (v: string) => void; place
     value={props.value}
     onInput={(e) => props.onChange(e.currentTarget.value)}
     placeholder={props.placeholder}
+    class="w-full px-3 py-1.5 bg-sdr-base border border-border rounded-sm
+           text-xs font-mono text-text-primary placeholder-text-dim
+           focus:outline-none focus:border-cyan transition-colors"
+  />
+);
+
+const ApiKeyInput: Component<{ value: string; onChange: (v: string) => void; placeholder?: string }> = (props) => (
+  <input
+    type="text"
+    value={props.value}
+    onInput={(e) => props.onChange(e.currentTarget.value)}
+    placeholder={props.placeholder}
+    autocomplete="off"
+    spellcheck={false}
     class="w-full px-3 py-1.5 bg-sdr-base border border-border rounded-sm
            text-xs font-mono text-text-primary placeholder-text-dim
            focus:outline-none focus:border-cyan transition-colors"

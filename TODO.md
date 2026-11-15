@@ -40,3 +40,7 @@ See [WORK.md](./WORK.md) for the active task backlog and completed history.
 - [x] Admin **General → Receiver Location (Map)** with OpenStreetMap tiles, Nominatim address search, click-to-pin and draggable marker
 - [x] `server.receiverLatitude` / `server.receiverLongitude`, stored separately from the display-only `server.location` text
 - [x] Coordinates exposed in public server metadata for future contact/decoder map overlays
+
+### Weather overlay credentials
+- [x] Admin **General → Weather Overlay** setting for the OpenWeatherMap API key
+- [x] `server.openWeatherMapApiKey` persisted through Save Config and kept out of public server metadata for future server-side cloud/weather map tiles
