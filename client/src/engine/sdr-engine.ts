@@ -29,6 +29,11 @@ import {
   FFT_HISTORY_CODEC_NONE,
   FFT_HISTORY_CODEC_DEFLATE,
   FFT_HISTORY_CODEC_ADPCM,
+  decodeFftFrame,
+  decodeFftHistoryFrame,
+  packWaterfallView,
+  type FftFrameInfo,
+  type FftHistoryInfo,
   type ServerMeta,
   type ClientCommand,
   type CodecType,
@@ -36,14 +41,6 @@ import {
   type IqCodecType,
   type DemodMode,
 } from '~/shared';
-import {
-  decodeTiledFftFrame,
-  decodeTiledFftHistory,
-  packWaterfallView,
-  type TiledFftFrame,
-  type TiledFftHistory,
-  type WaterfallMetaFields,
-} from '~/shared/tile-protocol-stubs';
 import { inflateSync } from 'fflate';
 import { OpusDecoder } from 'opus-decoder';
 import type { FftDecodeRequest, FftDecodeResult } from './fft-decode.worker.js';
@@ -58,6 +55,106 @@ import { RumbleFilter, AutoNotch, HiBlendFilter } from './audio-filters.js';
 import { store } from '../store/index.js';
 import type { Bookmark } from '../store/index.js';
 import { ALL_FFT_CODECS, ALL_IQ_CODECS } from '../store/index.js';
+
+/**
+ * One decoded tiled FFT frame: the protocol header (tier/tile tag + bin count)
+ * plus the dequantized dB bins. Built at the WS handler from `decodeFftFrame`
+ * (header only) + the shared per-codec dequant below.
+ */
+interface DecodedTiledFrame {
+  tier: number;
+  tileIndex: number;
+  tileCount: number;
+  binCount: number;
+  bins: Float32Array;
+}
+
+/** One decoded tiled history burst: header fields + oldest-first dB frames. */
+interface DecodedTiledHistory {
+  tier: number;
+  tileIndex: number;
+  tileCount: number;
+  binCount: number;
+  frames: Float32Array[];
+}
+
+/**
+ * Dequantize a tiled FFT frame body to dB bins. The tile header has already
+ * been parsed by `decodeFftFrame`; `info.payloadOffset` points at the first
+ * codec byte within `data`. The per-codec expansion is identical to the legacy
+ * `fft-decode.worker` path (raw f32 / u8 expand / ADPCM / delta+deflate), only
+ * the starting offset moves from the legacy fixed position to `payloadOffset`.
+ */
+function dequantTiledFftFrame(data: ArrayBuffer, info: FftFrameInfo): Float32Array {
+  const off = info.payloadOffset;
+  switch (info.type) {
+    case MSG_FFT:
+      // Raw Float32 bins from payloadOffset to end.
+      return new Float32Array(data.slice(off));
+    case MSG_FFT_COMPRESSED: {
+      const minDb = info.minDb ?? 0;
+      const maxDb = info.maxDb ?? 0;
+      const range = maxDb - minDb;
+      const comp = new Uint8Array(data, off);
+      const bins = new Float32Array(comp.length);
+      for (let i = 0; i < comp.length; i++) bins[i] = minDb + (comp[i] / 255) * range;
+      return bins;
+    }
+    case MSG_FFT_ADPCM:
+      // ADPCM payload carries its own inner [i16 min][i16 max] header.
+      return decodeFftAdpcm(data.slice(off));
+    case MSG_FFT_DEFLATE: {
+      const minDb = info.minDb ?? 0;
+      const maxDb = info.maxDb ?? 0;
+      const binCount = info.binCount ?? 0;
+      const delta = inflateSync(new Uint8Array(data, off));
+      const u8 = new Uint8Array(binCount);
+      u8[0] = delta[0];
+      for (let i = 1; i < binCount; i++) u8[i] = (u8[i - 1] + delta[i]) & 0xff;
+      const range = maxDb - minDb;
+      const bins = new Float32Array(binCount);
+      for (let i = 0; i < binCount; i++) bins[i] = minDb + (u8[i] / 255) * range;
+      return bins;
+    }
+    default:
+      return new Float32Array(0);
+  }
+}
+
+/**
+ * Dequantize a tiled history burst to oldest-first dB frames. Mirrors the
+ * legacy 0x0D history handler's per-codec expansion (delta+deflate / ADPCM /
+ * raw u8), reading from `info.payloadOffset` instead of the legacy fixed 11.
+ */
+function dequantTiledFftHistory(data: ArrayBuffer, info: FftHistoryInfo): Float32Array[] {
+  const { frameCount, binCount, minDb, maxDb, codec, payloadOffset } = info;
+  if (frameCount === 0 || binCount === 0) return [];
+  const total = frameCount * binCount;
+  const range = maxDb - minDb;
+  let flat: Float32Array;
+
+  if (codec === FFT_HISTORY_CODEC_DEFLATE) {
+    const delta = inflateSync(new Uint8Array(data, payloadOffset));
+    const u8 = new Uint8Array(total);
+    u8[0] = delta[0];
+    for (let i = 1; i < total; i++) u8[i] = (u8[i - 1] + delta[i]) & 0xff;
+    flat = new Float32Array(total);
+    for (let i = 0; i < total; i++) flat[i] = minDb + (u8[i] / 255) * range;
+  } else if (codec === FFT_HISTORY_CODEC_ADPCM) {
+    flat = decodeFftAdpcm(data.slice(payloadOffset));
+  } else {
+    // FFT_HISTORY_CODEC_NONE — raw Uint8 frames.
+    const u8 = new Uint8Array(data, payloadOffset, total);
+    flat = new Float32Array(total);
+    for (let i = 0; i < total; i++) flat[i] = minDb + (u8[i] / 255) * range;
+  }
+
+  const frames: Float32Array[] = new Array(frameCount);
+  for (let f = 0; f < frameCount; f++) {
+    frames[f] = flat.slice(f * binCount, (f + 1) * binCount);
+  }
+  return frames;
+}
 
 /**
  * Map the 0-1 noise-blanker slider to the server's threshold multiplier.
@@ -256,7 +353,7 @@ export class SdrEngine {
     this.tiledViewStartFrac = startFrac;
     this.tiledViewEndFrac = endFrac;
     this.tiledActive = true;
-    this.send(packWaterfallView(px, startFrac, endFrac, fps) as unknown as ClientCommand);
+    this.send(packWaterfallView(px, startFrac, endFrac, fps));
     // The incoming strip is already cropped to the view, so the renderers must
     // draw it edge-to-edge — their internal zoom is reset to the full strip.
     this.spectrumWorker?.postMessage({ type: 'reset-zoom' });
@@ -282,7 +379,7 @@ export class SdrEngine {
   }
 
   /** Route one decoded tiled FFT frame into its ring and restitch the strip. */
-  private handleTiledFrame(frame: TiledFftFrame): void {
+  private handleTiledFrame(frame: DecodedTiledFrame): void {
     const { tier, tileIndex, tileCount } = frame;
 
     // Tier switch (server authoritative) — reallocate stitch state and drop
@@ -391,7 +488,7 @@ export class SdrEngine {
   }
 
   /** Route a decoded tiled history burst into its (tier,tileIndex) ring. */
-  private handleTiledHistory(hist: TiledFftHistory): void {
+  private handleTiledHistory(hist: DecodedTiledHistory): void {
     const key = this.tileKey(hist.tier, hist.tileIndex);
     let ring = this.tileRings.get(key);
     if (!ring || ring.binCount !== hist.binCount) {
@@ -917,13 +1014,24 @@ export class SdrEngine {
         this.bwFftWireBytes += payload.byteLength;
 
         // Tiled path: once a waterfall_view has been sent, the server streams
-        // tagged whole-tile frames (4-byte tile header + legacy payload). Decode
-        // on the main thread, route by (tier,tileIndex), and stitch/crop locally.
+        // tagged whole-tile frames (V1 tier header + legacy codec body). Decode
+        // the header with the protocol decoder, dequant the body from its
+        // reported payloadOffset, then route by (tier,tileIndex) and stitch.
         if (this.tiledActive && store.waterfallProtocol() === 1) {
-          const tf = decodeTiledFftFrame(type, payload);
-          if (tf && tf.bins.length > 0) {
-            this.bwFftRawBytes += tf.bins.length * 4;
-            this.handleTiledFrame(tf);
+          const info = decodeFftFrame(data, true);
+          if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
+              && info.tileCount !== undefined) {
+            const bins = dequantTiledFftFrame(data, info);
+            if (bins.length > 0) {
+              this.bwFftRawBytes += bins.length * 4;
+              this.handleTiledFrame({
+                tier: info.tier,
+                tileIndex: info.tileIndex,
+                tileCount: info.tileCount,
+                binCount: bins.length,
+                bins,
+              });
+            }
           }
           break;
         }
@@ -1080,10 +1188,23 @@ export class SdrEngine {
 
       case MSG_FFT_HISTORY: {
         // Tiled path: server sends a tagged 0x0D burst per (tier,tile) when
-        // entering a view. Route each into its per-tile ring for prefill.
+        // entering a view. Decode the header + dequant frames from the reported
+        // payloadOffset, then route each into its per-tile ring for prefill.
         if (this.tiledActive && store.waterfallProtocol() === 1) {
-          const th = decodeTiledFftHistory(payload);
-          if (th) this.handleTiledHistory(th);
+          const info = decodeFftHistoryFrame(data, true);
+          if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
+              && info.tileCount !== undefined) {
+            const frames = dequantTiledFftHistory(data, info);
+            if (frames.length > 0) {
+              this.handleTiledHistory({
+                tier: info.tier,
+                tileIndex: info.tileIndex,
+                tileCount: info.tileCount,
+                binCount: info.binCount,
+                frames,
+              });
+            }
+          }
           break;
         }
         // Wire (payload, after type byte stripped):
@@ -1462,12 +1583,9 @@ export class SdrEngine {
         store.setAvailableFftCodecs(meta.allowedFftCodecs ?? ALL_FFT_CODECS);
         store.setAvailableIqCodecs(meta.allowedIqCodecs ?? ALL_IQ_CODECS);
         // Segmented multi-tier waterfall capability (absent on legacy servers).
-        {
-          const wf = meta as unknown as WaterfallMetaFields;
-          store.setWaterfallProtocol(wf.waterfallProtocol ?? 0);
-          if (wf.waterfallTileBins && wf.waterfallTileBins > 0) {
-            store.setEffectiveTileBins(wf.waterfallTileBins);
-          }
+        store.setWaterfallProtocol(meta.waterfallProtocol ?? 0);
+        if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
+          store.setEffectiveTileBins(meta.waterfallTileBins);
         }
         break;
 
@@ -1493,11 +1611,8 @@ export class SdrEngine {
         // Fresh subscription — return to the legacy full-span path until the
         // user triggers a zoom (first waterfall_view). Capture any per-profile
         // tile width override.
-        {
-          const wf = meta as unknown as WaterfallMetaFields;
-          if (wf.waterfallTileBins && wf.waterfallTileBins > 0) {
-            store.setEffectiveTileBins(wf.waterfallTileBins);
-          }
+        if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
+          store.setEffectiveTileBins(meta.waterfallTileBins);
         }
         this.resetTiledState();
         // Apply the profile's default tune offset so the displayed frequency
@@ -1627,11 +1742,8 @@ export class SdrEngine {
         this.fftBuffer.reset();
         this.waterfallWorker?.postMessage({ type: 'clear' });
         // New profile → back to legacy full-span until the user zooms again.
-        {
-          const wf = meta as unknown as WaterfallMetaFields;
-          if (wf.waterfallTileBins && wf.waterfallTileBins > 0) {
-            store.setEffectiveTileBins(wf.waterfallTileBins);
-          }
+        if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
+          store.setEffectiveTileBins(meta.waterfallTileBins);
         }
         this.resetTiledState();
         // Update resampler for new mode's output rate
