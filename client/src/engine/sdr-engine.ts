@@ -26,7 +26,6 @@ import {
   DEMOD_MODES,
   ImaAdpcmDecoder,
   decodeFftAdpcm,
-  FFT_HISTORY_CODEC_NONE,
   FFT_HISTORY_CODEC_DEFLATE,
   FFT_HISTORY_CODEC_ADPCM,
   decodeFftFrame,
@@ -304,7 +303,14 @@ export class SdrEngine {
   // All tiled state is inert until the server advertises waterfallProtocol===1
   // AND the client has sent its first waterfall_view. Until then the legacy
   // full-span path below is used unchanged.
-  private tiledActive = false;                 // a waterfall_view has been sent
+  //
+  // tiledRequested: a waterfall_view has been sent, so incoming frames may begin
+  //   arriving tiled — we attempt a V1 decode and rely on the version-nibble
+  //   guard to treat still-in-flight legacy frames as non-tiled.
+  // tiledActive: the first genuinely-tiled frame has been received; only then do
+  //   stitch/crop engage and legacy rendering stops.
+  private tiledRequested = false;              // a waterfall_view has been sent
+  private tiledActive = false;                 // a real tiled frame has arrived
   private tiledTier = 0;                        // tier of the active view (from frame tags)
   private tiledTileCount = 0;                   // tiles spanning the active view
   private tiledBaseTileIndex = 0;               // lowest tileIndex in the active view
@@ -314,6 +320,10 @@ export class SdrEngine {
   private tileRings = new Map<string, FftFrameBuffer>();
   // Latest decoded tile per tileIndex for the active tier, for live stitching.
   private tiledLatest = new Map<number, Float32Array>();
+  // Tier each tiledLatest entry belongs to — lets a tier switch preserve tiles
+  // just prefilled for the NEW tier (seeded by handleTiledHistory) while still
+  // evicting stale entries from the previous tier.
+  private tiledLatestTier = new Map<number, number>();
 
   private tileKey(tier: number, tileIndex: number): string {
     return `${tier}:${tileIndex}`;
@@ -352,7 +362,9 @@ export class SdrEngine {
     store.setSelectedTier(this.expectedTier(startFrac, endFrac, px));
     this.tiledViewStartFrac = startFrac;
     this.tiledViewEndFrac = endFrac;
-    this.tiledActive = true;
+    // Mark that a view was requested so the receive path begins attempting V1
+    // decode; tiledActive flips only once a real tiled frame arrives.
+    this.tiledRequested = true;
     this.send(packWaterfallView(px, startFrac, endFrac, fps));
     // The incoming strip is already cropped to the view, so the renderers must
     // draw it edge-to-edge — their internal zoom is reset to the full strip.
@@ -366,6 +378,7 @@ export class SdrEngine {
    * disconnect, or a non-tiled server).
    */
   private resetTiledState(): void {
+    this.tiledRequested = false;
     this.tiledActive = false;
     this.tiledTier = 0;
     this.tiledTileCount = 0;
@@ -374,6 +387,7 @@ export class SdrEngine {
     this.tiledViewEndFrac = 1;
     this.tileRings.clear();
     this.tiledLatest.clear();
+    this.tiledLatestTier.clear();
     store.setSelectedTier(0);
     store.setActiveTiles([]);
   }
@@ -383,11 +397,18 @@ export class SdrEngine {
     const { tier, tileIndex, tileCount } = frame;
 
     // Tier switch (server authoritative) — reallocate stitch state and drop
-    // rings belonging to the previous tier.
+    // rings belonging to the previous tier. Preserve any tiledLatest entries
+    // already seeded for the NEW tier (prefill via handleTiledHistory) so the
+    // prefilled line renders immediately instead of one frame blank.
     if (tier !== this.tiledTier || tileCount !== this.tiledTileCount) {
       this.tiledTier = tier;
       this.tiledTileCount = tileCount;
-      this.tiledLatest.clear();
+      for (const [idx, seededTier] of [...this.tiledLatestTier.entries()]) {
+        if (seededTier !== tier) {
+          this.tiledLatest.delete(idx);
+          this.tiledLatestTier.delete(idx);
+        }
+      }
       for (const key of [...this.tileRings.keys()]) {
         if (!key.startsWith(`${tier}:`)) this.tileRings.delete(key);
       }
@@ -404,6 +425,7 @@ export class SdrEngine {
     }
     ring.push(frame.bins);
     this.tiledLatest.set(tileIndex, frame.bins);
+    this.tiledLatestTier.set(tileIndex, tier);
 
     const stitched = this.stitchActiveTiles();
     if (stitched) {
@@ -497,8 +519,11 @@ export class SdrEngine {
     }
     for (const f of hist.frames) ring.push(f);
     // Seed the live map so the next stitch shows prefilled data immediately.
+    // Tag it with this tier so the tier-switch clear in handleTiledFrame does
+    // not discard the seed before the first live frame of the new tier lands.
     if (hist.frames.length > 0) {
       this.tiledLatest.set(hist.tileIndex, hist.frames[hist.frames.length - 1]);
+      this.tiledLatestTier.set(hist.tileIndex, hist.tier);
     }
   }
 
@@ -1013,27 +1038,39 @@ export class SdrEngine {
         this.bwFftFrames++;
         this.bwFftWireBytes += payload.byteLength;
 
-        // Tiled path: once a waterfall_view has been sent, the server streams
-        // tagged whole-tile frames (V1 tier header + legacy codec body). Decode
-        // the header with the protocol decoder, dequant the body from its
-        // reported payloadOffset, then route by (tier,tileIndex) and stitch.
-        if (this.tiledActive && store.waterfallProtocol() === 1) {
-          const info = decodeFftFrame(data, true);
-          if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
-              && info.tileCount !== undefined) {
-            const bins = dequantTiledFftFrame(data, info);
-            if (bins.length > 0) {
-              this.bwFftRawBytes += bins.length * 4;
-              this.handleTiledFrame({
-                tier: info.tier,
-                tileIndex: info.tileIndex,
-                tileCount: info.tileCount,
-                binCount: bins.length,
-                bins,
-              });
+        // Tiled path: once a waterfall_view has been requested the server will
+        // switch this client to tagged whole-tile frames (V1 tier header +
+        // legacy codec body). We attempt a V1 decode while a view is pending or
+        // active; decodeFftFrame's version-nibble guard reports still-in-flight
+        // legacy frames as non-tiled, so those fall through to the legacy path.
+        // tiledActive flips only on the first genuinely-tiled frame.
+        if (store.waterfallProtocol() === 1 && (this.tiledActive || this.tiledRequested)) {
+          let handledTiled = false;
+          try {
+            const info = decodeFftFrame(data, true);
+            if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
+                && info.tileCount !== undefined) {
+              this.tiledActive = true;
+              const bins = dequantTiledFftFrame(data, info);
+              if (bins.length > 0) {
+                this.bwFftRawBytes += bins.length * 4;
+                this.handleTiledFrame({
+                  tier: info.tier,
+                  tileIndex: info.tileIndex,
+                  tileCount: info.tileCount,
+                  binCount: bins.length,
+                  bins,
+                });
+              }
+              handledTiled = true;
             }
+          } catch (e) {
+            // Truncated/corrupt tiled frame — drop it rather than throwing.
+            console.error('[FFT] tiled frame decode error:', e);
+            handledTiled = true;
           }
-          break;
+          if (handledTiled) break;
+          // else: a legacy frame still in flight — fall through to the worker.
         }
 
         // Dispatch raw payload to the FFT decode worker (zero-copy via transfer).
@@ -1190,22 +1227,29 @@ export class SdrEngine {
         // Tiled path: server sends a tagged 0x0D burst per (tier,tile) when
         // entering a view. Decode the header + dequant frames from the reported
         // payloadOffset, then route each into its per-tile ring for prefill.
-        if (this.tiledActive && store.waterfallProtocol() === 1) {
-          const info = decodeFftHistoryFrame(data, true);
-          if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
-              && info.tileCount !== undefined) {
-            const frames = dequantTiledFftHistory(data, info);
-            if (frames.length > 0) {
-              this.handleTiledHistory({
-                tier: info.tier,
-                tileIndex: info.tileIndex,
-                tileCount: info.tileCount,
-                binCount: info.binCount,
-                frames,
-              });
+        if (store.waterfallProtocol() === 1 && (this.tiledActive || this.tiledRequested)) {
+          try {
+            const info = decodeFftHistoryFrame(data, true);
+            if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
+                && info.tileCount !== undefined) {
+              const frames = dequantTiledFftHistory(data, info);
+              if (frames.length > 0) {
+                this.handleTiledHistory({
+                  tier: info.tier,
+                  tileIndex: info.tileIndex,
+                  tileCount: info.tileCount,
+                  binCount: info.binCount,
+                  frames,
+                });
+              }
+              break;
             }
+            // Non-tiled burst still in flight — fall through to the legacy path.
+          } catch (e) {
+            // Truncated/corrupt tiled history — drop it rather than throwing.
+            console.error('[FFT_HISTORY] tiled decode error:', e);
+            break;
           }
-          break;
         }
         // Wire (payload, after type byte stripped):
         //   [Uint16 frameCount LE][Uint32 binCount LE][Int16 minDb LE][Int16 maxDb LE]
@@ -2657,8 +2701,10 @@ export class SdrEngine {
 
   resetSpectrumZoom(): void {
     store.setSpectrumZoom([0, 1]);
-    // Once tiled, a full-span reset is itself a (coarsest-tier) waterfall_view.
-    if (store.waterfallProtocol() === 1 && this.tiledActive) {
+    // Once a tiled view is active or pending, a full-span reset is itself a
+    // (coarsest-tier) waterfall_view — re-send so the pending view fractions
+    // track the user's intent rather than going stale.
+    if (store.waterfallProtocol() === 1 && (this.tiledActive || this.tiledRequested)) {
       this.sendWaterfallView(store.waterfallSpeed());
       return;
     }
@@ -2951,7 +2997,7 @@ export class SdrEngine {
     }
     // Tiled path: viewport width drives tier/tile selection, so a resize must
     // re-request the view at the new pixel width.
-    if (store.waterfallProtocol() === 1 && this.tiledActive) {
+    if (store.waterfallProtocol() === 1 && (this.tiledActive || this.tiledRequested)) {
       this.sendWaterfallView(store.waterfallSpeed());
     }
   }
