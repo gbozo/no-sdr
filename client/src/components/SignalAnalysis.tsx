@@ -1271,6 +1271,9 @@ const SignalAnalysis: Component = () => {
       clearInterval(timer);
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('mouseup', onMouseUp);
+      // Hand the waterfall view back to whatever the operator was looking at
+      // before the pane narrowed it to the analysis window.
+      engine.releaseAnalysisWindow();
     });
   });
 

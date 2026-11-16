@@ -210,9 +210,13 @@ export interface UserLocation {
 }
 
 export type ServerMeta =
-  | { type: 'welcome'; clientId: string; connIndex: number; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[]; waterfallProtocol?: number; waterfallTileBins?: number }
-  | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number; waterfallProtocol?: number; waterfallTileBins?: number }
-  | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number; waterfallProtocol?: number; waterfallTileBins?: number }
+  | { type: 'welcome'; clientId: string; connIndex: number; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[]; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
+  | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
+  | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
+  // Server-initiated refresh event: the tier ladder was rebuilt (admin config
+  // change, dongle restart) or an operator forced a refresh. Clients must drop
+  // their tiled state and re-send `waterfall_view` for the current geometry.
+  | { type: 'waterfall_refresh'; dongleId?: string; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
   | { type: 'dongle_status'; dongleId: string; running: boolean; clientCount: number }
   | { type: 'user_locations'; dongleId: string; users: UserLocation[] }
   | { type: 'error'; message: string; code?: string }
@@ -536,7 +540,7 @@ export function packRdsMessage(rdsData: object): ArrayBuffer {
 
 /** The decoded tier/tile tag from a V1 tiled FFT frame. */
 export interface TileTag {
-  /** Resolution tier index (0 = coarsest). */
+  /** Resolution tier index (0 = finest, 3 = coarsest). */
   tier: number;
   /** This tile's index within the tier. */
   tileIndex: number;

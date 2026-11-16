@@ -133,6 +133,11 @@ pub struct ServerMeta {
     pub waterfall_protocol: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waterfall_tile_bins: Option<u32>,
+    /// Effective number of fold tiers for the tiered waterfall on this dongle
+    /// (fold ladder = 1, 2, 4, … octaves). Absent means "derive from
+    /// fftSize/waterfallTileBins", which is what legacy clients do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waterfall_tier_count: Option<u32>,
 }
 
 /// Parsed command from the client (JSON text).
@@ -496,18 +501,16 @@ pub fn pack_fft_history_tiled(
     let bin_count = frames.first().map(|f| f.len()).unwrap_or(0);
     let min_f = min_db as f32;
     let max_f = max_db as f32;
-    let range = (max_f - min_f).max(1e-6);
-
-    // Quantize all frames to u8 (contiguous, frame-major), mirroring the
-    // non-tiled history builder's `compress_fft` quantization.
-    let mut quantized: Vec<u8> = Vec::with_capacity(frame_count as usize * bin_count);
-    for frame in frames {
-        quantized.extend_from_slice(&compress_fft(frame, min_f, max_f));
-    }
 
     let payload: Vec<u8> = match codec {
         1 => {
-            // delta over the whole quantized buffer, then raw deflate
+            // Quantize all frames to u8 (contiguous, frame-major), mirroring the
+            // non-tiled history builder's `compress_fft` quantization, then
+            // delta over the whole buffer and raw deflate.
+            let mut quantized: Vec<u8> = Vec::with_capacity(frame_count as usize * bin_count);
+            for frame in frames {
+                quantized.extend_from_slice(&compress_fft(frame, min_f, max_f));
+            }
             use std::io::Write;
             let mut delta = Vec::with_capacity(quantized.len());
             if let Some(first) = quantized.first() {
@@ -525,14 +528,22 @@ pub fn pack_fft_history_tiled(
             }
         }
         2 => {
-            // ADPCM over reconstructed float dB values
-            let mut float_db = Vec::with_capacity(quantized.len());
-            for b in &quantized {
-                float_db.push(*b as f32 / 255.0 * range + min_f);
+            // ADPCM is float-valued (its own inner min/max header), so encode
+            // the source dB frames directly. Round-tripping through u8 first
+            // would add a lossy quantization step the client does not undo.
+            let mut flat: Vec<f32> = Vec::with_capacity(frame_count as usize * bin_count);
+            for frame in frames {
+                flat.extend_from_slice(frame);
             }
-            encode_fft_adpcm(&float_db, min_f, max_f)
+            encode_fft_adpcm(&flat, min_f, max_f)
         }
-        _ => quantized,
+        _ => {
+            let mut quantized: Vec<u8> = Vec::with_capacity(frame_count as usize * bin_count);
+            for frame in frames {
+                quantized.extend_from_slice(&compress_fft(frame, min_f, max_f));
+            }
+            quantized
+        }
     };
 
     let mut buf = Vec::with_capacity(1 + 1 + 6 + 2 + 4 + 2 + 2 + 1 + payload.len());
@@ -964,6 +975,27 @@ mod tests {
     }
 
     #[test]
+    fn waterfall_refresh_event_shape() {
+        // The refresh event is a meta message the server can send at any time;
+        // it must carry the ladder geometry so clients can validate tile tags
+        // immediately after dropping their old state.
+        let meta = ServerMeta {
+            msg_type: "waterfall_refresh".into(),
+            dongle_id: Some("d1".into()),
+            waterfall_protocol: Some(1),
+            waterfall_tile_bins: Some(512),
+            waterfall_tier_count: Some(5),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&meta).unwrap();
+        assert_eq!(v["type"], "waterfall_refresh");
+        assert_eq!(v["dongleId"], "d1");
+        assert_eq!(v["waterfallProtocol"], 1);
+        assert_eq!(v["waterfallTileBins"], 512);
+        assert_eq!(v["waterfallTierCount"], 5);
+    }
+
+    #[test]
     fn waterfall_meta_fields_optional() {
         // Absent by default.
         let meta = ServerMeta {
@@ -973,16 +1005,19 @@ mod tests {
         let v = serde_json::to_value(&meta).unwrap();
         assert!(v.get("waterfallProtocol").is_none());
         assert!(v.get("waterfallTileBins").is_none());
+        assert!(v.get("waterfallTierCount").is_none());
 
         // Present when set.
         let meta = ServerMeta {
             msg_type: "subscribed".into(),
             waterfall_protocol: Some(1),
             waterfall_tile_bins: Some(1024),
+            waterfall_tier_count: Some(5),
             ..Default::default()
         };
         let v = serde_json::to_value(&meta).unwrap();
         assert_eq!(v["waterfallProtocol"], 1);
         assert_eq!(v["waterfallTileBins"], 1024);
+        assert_eq!(v["waterfallTierCount"], 5);
     }
 }

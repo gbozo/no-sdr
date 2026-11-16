@@ -23,7 +23,7 @@ use crate::codec::{FftDeflateEncoder, ImaAdpcmEncoder};
 use crate::config::{Config, DongleConfig, DongleProfile};
 use crate::dsp::{fold_frame, FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
 use crate::history::FftBuffer;
-use super::waterfall::{self, TierModel, TileState, NUM_TIERS};
+use super::waterfall::{self, TierModel, TileState};
 use crate::ws::{
     pack_audio_opus_message, pack_codec_status_message, pack_fft_adpcm_message,
     pack_fft_adpcm_tiled, pack_fft_compressed_message, pack_fft_compressed_tiled,
@@ -673,18 +673,30 @@ impl Manager {
             30
         };
 
-        // Tiered-waterfall parameters. `history_frames` reuses the per-tile
-        // history depth from `fft_history_fft_size` as a frame count hint, but
-        // defaults to the same 1024-frame depth as the legacy full-span ring
-        // when unset or not meaningful as a frame count.
-        let (waterfall_tile_bins, history_frames) = {
+        // Tiered-waterfall parameters. Per-tile history depth is deliberately
+        // shorter than the 1024-frame legacy ring: a tile ring is
+        // `history_frames * effective_tile_bins * 4` bytes and every tier can
+        // hold `fft_size / (4 * tile_bins)` tiles, so the 1024-frame default
+        // alone would allow hundreds of MiB of tier history on a 65536-bin FFT.
+        let (waterfall_tile_bins, history_frames, tier_count) = {
             let cfg = self.cfg.read();
             let tile_bins = if cfg.server.waterfall_tile_bins > 0 {
                 cfg.server.waterfall_tile_bins as usize
             } else {
                 1024
             };
-            (tile_bins, 1024usize)
+            let frames = if cfg.server.waterfall_tile_history_frames > 0 {
+                cfg.server.waterfall_tile_history_frames as usize
+            } else {
+                256
+            };
+            // 0 = auto (the model picks the largest useful octave ladder).
+            let tiers = if cfg.server.waterfall_tier_count > 0 {
+                cfg.server.waterfall_tier_count as usize
+            } else {
+                0
+            };
+            (tile_bins, frames, tiers)
         };
 
         // Open the source first. This is where local USB can fail (device
@@ -732,7 +744,7 @@ impl Manager {
                 // Empty tier model: no tile history is allocated until a client
                 // sends a `waterfall_view`, so the per-dongle startup cost is
                 // unchanged for the common (non-tiered) case.
-                let tiers = TierModel::new(fft_size, waterfall_tile_bins, history_frames);
+                let tiers = TierModel::new(fft_size, waterfall_tile_bins, history_frames, tier_count);
                 Ok((fft_proc, deflate_enc, deflate_floor_enc, history, tiers))
             })
             .await
@@ -768,6 +780,10 @@ impl Manager {
         });
 
         self.dongles.write().insert(id.clone(), ad.clone());
+        // A (re)started dongle may have a different FFT size or profile, so any
+        // client still attached must rebuild its tiled view. No-op when the
+        // dongle has no subscribers (the usual case on first start).
+        self.refresh_waterfall_clients(Some(&id));
 
         let mgr = Arc::clone(self);
         let ad_task = ad.clone();
@@ -1620,7 +1636,11 @@ impl Manager {
     fn push_tiered_history(&self, ad: &Arc<ActiveDongle>, frame: &[f32]) {
         let mut model = ad.tiers.lock();
         let tile_bins = model.effective_tile_bins;
-        for tier in 0..NUM_TIERS {
+        // One sequence number per finest frame: the broadcast path reuses the
+        // fold produced here instead of folding the same frame a second time.
+        model.seq = model.seq.wrapping_add(1);
+        let seq = model.seq;
+        for tier in 0..model.tiers.len() {
             if !model.tiers[tier].any_active() {
                 continue;
             }
@@ -1630,6 +1650,7 @@ impl Manager {
                 let mut fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
                 fold_frame(frame, &mut fold_buf, factor);
                 model.tiers[tier].fold_buf = fold_buf;
+                model.tiers[tier].folded_seq = seq;
             }
             let folded_len = model.tiers[tier].fold_buf.len();
             let tiles_len = model.tiers[tier].tiles.len();
@@ -1700,13 +1721,16 @@ impl Manager {
         // (m1) Encode every demanded tiered (tier,tile,codec) ONCE, under a
         // single `tiers` lock that is released BEFORE any `ws.send_to`. Fold
         // each needed tier exactly once (not per client) inside the lock.
+        // Views are stored clamped to the ladder, but clamp again here so a
+        // model rebuilt under a shorter ladder cannot index past its end.
+        let max_tier = ad.tiers.lock().tier_count().saturating_sub(1);
         let tiled_cache: HashMap<(u8, u16, String), Vec<u8>> = {
             // Gather the demanded set: for each view-holding client, its tier
             // and the tiles it is viewing, paired with its codec key.
             let mut demanded: HashMap<(u8, u16, String), ()> = HashMap::new();
             for (client, key) in &client_codecs {
                 if let Some(view) = views.get(&client.id) {
-                    let tier = view.tier.min(NUM_TIERS - 1) as u8;
+                    let tier = view.tier.min(max_tier) as u8;
                     for &tile_index in &view.tiles {
                         demanded.insert((tier, tile_index as u16, key.clone()), ());
                     }
@@ -1721,7 +1745,7 @@ impl Manager {
 
         for (client, key) in client_codecs {
             if let Some(view) = views.get(&client.id) {
-                let tier = view.tier.min(NUM_TIERS - 1) as u8;
+                let tier = view.tier.min(max_tier) as u8;
                 for &tile_index in &view.tiles {
                     let cache_key = (tier, tile_index as u16, key.clone());
                     if let Some(bytes) = tiled_cache.get(&cache_key) {
@@ -1785,23 +1809,32 @@ impl Manager {
         let tile_bins = model.effective_tile_bins;
 
         // Which tiers are demanded (fold each of these exactly once).
-        let mut tiers_needed = [false; NUM_TIERS];
+        let max_tier = model.tier_count().saturating_sub(1);
+        let mut tiers_needed = vec![false; model.tier_count()];
         for (tier, _, _) in demanded.keys() {
-            let t = (*tier as usize).min(NUM_TIERS - 1);
+            let t = (*tier as usize).min(max_tier);
             tiers_needed[t] = true;
         }
-        for tier in 0..NUM_TIERS {
+        for tier in 0..model.tier_count() {
             if !tiers_needed[tier] {
+                continue;
+            }
+            // `push_tiered_history` already folded this same frame for every
+            // tier with active tiles, and a demanded tier always has one, so
+            // this is normally a no-op. The seq guard keeps it correct if a
+            // tile became active between the two calls.
+            if model.tiers[tier].folded_seq == model.seq {
                 continue;
             }
             let factor = model.tiers[tier].factor;
             let mut fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
             fold_frame(frame, &mut fold_buf, factor);
             model.tiers[tier].fold_buf = fold_buf;
+            model.tiers[tier].folded_seq = model.seq;
         }
 
         for ((tier_u8, tile_u16, codec_key), ()) in demanded.iter() {
-            let tier = (*tier_u8 as usize).min(NUM_TIERS - 1);
+            let tier = (*tier_u8 as usize).min(max_tier);
             let tile_index = *tile_u16 as usize;
             if tile_index >= model.tiers[tier].tiles.len() {
                 continue;
@@ -2632,19 +2665,12 @@ impl Manager {
         client.set_tune_offset(profile.tune_offset as i64);
         client.set_mode(&mode);
         client.set_bandwidth(meta_bw as i64);
-        // Advertise the tiered-waterfall protocol and effective tile size so
-        // the client can size its viewport requests. effectiveTileBins is
-        // clamped to fftSize/8 per the frozen contract.
-        let effective_tile_bins = {
-            let model = self.dongles.read().get(&dongle_id).map(|d| {
-                let m = d.tiers.lock();
-                m.effective_tile_bins as u32
-            });
-            model.unwrap_or_else(|| {
-                let tb = self.cfg.read().server.waterfall_tile_bins.max(1) as usize;
-                waterfall::effective_tile_bins(profile.fft_size as usize, tb) as u32
-            })
-        };
+        // Advertise the tiered-waterfall geometry so the client can size its
+        // viewport requests and validate tile tags. effectiveTileBins is
+        // clamped to fftSize/8 per the frozen contract; the tier count is the
+        // length of the generated octave ladder for this dongle.
+        let (effective_tile_bins, tier_count) =
+            self.waterfall_geometry(&dongle_id, profile.fft_size);
         let meta = ServerMeta {
             msg_type: "subscribed".to_string(),
             dongle_id: Some(dongle_id.clone()),
@@ -2658,6 +2684,7 @@ impl Manager {
             tune_offset: Some(profile.tune_offset as i64),
             waterfall_protocol: Some(1),
             waterfall_tile_bins: Some(effective_tile_bins),
+            waterfall_tier_count: Some(tier_count),
             ..Default::default()
         };
         self.send_meta(client_id, meta);
@@ -2772,6 +2799,29 @@ impl Manager {
     /// refcounts (allocating/freeing tile state on 0↔1 transitions), prefill
     /// each newly-entered tile's history, and store the active view on the
     /// client's pipeline so `broadcast_fft_frame` routes tiled frames to it.
+    /// Effective `(effectiveTileBins, tierCount)` advertised to clients for a
+    /// dongle: read from the running tier model, or recomputed from config and
+    /// the profile's FFT size when the dongle is not running (mirrors
+    /// `TierModel::new`'s clamping so both paths agree).
+    fn waterfall_geometry(&self, dongle_id: &str, fft_size: i32) -> (u32, u32) {
+        if let Some(d) = self.dongles.read().get(dongle_id) {
+            let m = d.tiers.lock();
+            return (m.effective_tile_bins as u32, m.tier_count() as u32);
+        }
+        let cfg = self.cfg.read();
+        let fft_size = fft_size.max(0) as usize;
+        let tb = cfg.server.waterfall_tile_bins.max(1) as usize;
+        let eff = waterfall::effective_tile_bins(fft_size, tb);
+        let max_tiers = TierModel::max_tiers_for(fft_size, eff);
+        let requested = cfg.server.waterfall_tier_count.max(0) as usize;
+        let count = if requested == 0 {
+            max_tiers
+        } else {
+            requested.clamp(1, waterfall::MAX_TIERS).min(max_tiers)
+        };
+        (eff as u32, count as u32)
+    }
+
     fn handle_waterfall_view(&self, client_id: &str, cmd: &ClientCommand) {
         // Validate the view fields before doing any work. NaN comparisons are
         // always false, so `end_frac <= start_frac` alone lets NaN through —
@@ -2810,11 +2860,19 @@ impl Manager {
         // A waterfall view may exist without audio/decoder, so ensure a
         // pipeline exists to hold the view (the frozen contract stores the
         // active view on ClientPipeline).
-        let cp = match self.client_pipelines.lock().get(client_id).cloned() {
+        //
+        // The lookup guard must be dropped BEFORE `create_client_pipeline`:
+        // that function re-locks `client_pipelines`, and `parking_lot::Mutex`
+        // is not reentrant, so keeping the scrutinee guard alive here would
+        // self-deadlock the map lock and hang every other client (FFT
+        // broadcast, subscribe, disconnect and further commands all block).
+        let existing = { self.client_pipelines.lock().get(client_id).cloned() };
+        let cp = match existing {
             Some(cp) => cp,
             None => {
                 self.create_client_pipeline(client_id);
-                match self.client_pipelines.lock().get(client_id).cloned() {
+                let created = { self.client_pipelines.lock().get(client_id).cloned() };
+                match created {
                     Some(cp) => cp,
                     None => return,
                 }
@@ -2823,15 +2881,12 @@ impl Manager {
 
         // Read the two values in separate lock scopes so there is no
         // tiers↔cp lock-ordering constraint here (n3).
-        let fft_size = ad.tiers.lock().fft_size;
+        // Pick the tier from the model's own ladder (tier count is configurable).
+        let tier = {
+            let model = ad.tiers.lock();
+            model.target_tier(viewport_px, cmd.start_frac, cmd.end_frac)
+        };
         let prev_view = cp.lock().wf_view.clone();
-
-        let tier = waterfall::target_tier(
-            fft_size,
-            viewport_px,
-            cmd.start_frac,
-            cmd.end_frac,
-        );
         let tiles = {
             let model = ad.tiers.lock();
             waterfall::overlapping_tiles(&model, tier, cmd.start_frac, cmd.end_frac)
@@ -2885,12 +2940,9 @@ impl Manager {
     /// `true` if this call performed the allocation (i.e. the tile is newly
     /// active), so the caller can prefill its history.
     fn acquire_tile(&self, ad: &Arc<ActiveDongle>, tier: usize, tile_index: usize) -> bool {
-        if tier >= NUM_TIERS {
-            return false;
-        }
         let (tile_bins, history_frames, needs_alloc) = {
             let mut model = ad.tiers.lock();
-            if tile_index >= model.tiers[tier].tiles.len() {
+            if tier >= model.tier_count() || tile_index >= model.tiers[tier].tiles.len() {
                 return false;
             }
             let tile_bins = model.effective_tile_bins;
@@ -2931,11 +2983,8 @@ impl Manager {
     /// Release a tile from a view: decrement its refcount, tearing down the
     /// `TileState` (freeing its history ring) on the 1->0 transition.
     fn release_tile(&self, ad: &Arc<ActiveDongle>, tier: usize, tile_index: usize) {
-        if tier >= NUM_TIERS {
-            return;
-        }
         let mut model = ad.tiers.lock();
-        if tile_index >= model.tiers[tier].tiles.len() {
+        if tier >= model.tier_count() || tile_index >= model.tiers[tier].tiles.len() {
             return;
         }
         let drop_it = if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
@@ -2960,14 +3009,17 @@ impl Manager {
         const MIN_DB: f32 = -130.0;
         const MAX_DB: f32 = 0.0;
 
-        let (frames, tile_count, codec_byte) = {
+        // Clone the `Arc<FftBuffer>` under the `tiers` lock, then read the ring
+        // outside it: `get_range()` copies up to `history_frames * tile_bins`
+        // floats and must not stall the FFT broadcast holding the same lock.
+        let (history, tile_count, codec_byte) = {
             let model = ad.tiers.lock();
-            if tier >= NUM_TIERS || tile_index >= model.tiers[tier].tiles.len() {
+            if tier >= model.tier_count() || tile_index >= model.tiers[tier].tiles.len() {
                 return;
             }
             let tile_count = model.tiers[tier].tiles.len() as u16;
-            let frames = match model.tiers[tier].tiles[tile_index].as_ref() {
-                Some(tile) => tile.history.get_range(),
+            let history = match model.tiers[tier].tiles[tile_index].as_ref() {
+                Some(tile) => tile.history.clone(),
                 None => return,
             };
             // Mirror the legacy history codec selection.
@@ -2979,8 +3031,9 @@ impl Manager {
                     _ => 0u8,
                 }
             };
-            (frames, tile_count, codec)
+            (history, tile_count, codec)
         };
+        let frames = history.get_range();
         if frames.is_empty() {
             return;
         }
@@ -3576,6 +3629,97 @@ impl Manager {
         }
     }
 
+    /// Sends a `waterfall_refresh` event to subscribed clients so they drop
+    /// their tiled state and re-request a viewport.
+    ///
+    /// Clients act on this for three reasons: the server rebuilt its tier
+    /// ladder, a dongle (re)started with a new FFT size, or an operator asked
+    /// for a refresh. In-flight FFT frames are dropped per client because they
+    /// carry tile tags from the previous geometry. Returns the number of
+    /// clients notified.
+    ///
+    /// `dongle` limits the refresh to one dongle; `None` refreshes every
+    /// running dongle.
+    pub fn refresh_waterfall_clients(&self, dongle: Option<&str>) -> usize {
+        let dongles: Vec<Arc<ActiveDongle>> = self
+            .dongles
+            .read()
+            .values()
+            .filter(|ad| dongle.is_none_or(|id| ad.id == id))
+            .cloned()
+            .collect();
+        let mut notified = 0;
+        for ad in dongles {
+            let (eff_bins, count) = {
+                let model = ad.tiers.lock();
+                (model.effective_tile_bins as u32, model.tier_count() as u32)
+            };
+            for client in self.ws.subscribed_clients(&ad.id) {
+                client.drop_queued_fft();
+                let meta = ServerMeta {
+                    msg_type: "waterfall_refresh".to_string(),
+                    dongle_id: Some(ad.id.clone()),
+                    waterfall_protocol: Some(1),
+                    waterfall_tile_bins: Some(eff_bins),
+                    waterfall_tier_count: Some(count),
+                    ..Default::default()
+                };
+                self.ws.send_to(&client.id, pack_meta_message(&meta));
+                notified += 1;
+            }
+        }
+        notified
+    }
+
+    /// Rebuilds the tiered-waterfall model of every running dongle from the
+    /// current config (called after an admin edit of the waterfall settings).
+    ///
+    /// Replacing the whole model drops every tile with it, so no refcount
+    /// bookkeeping is needed: detach the views *first* (so no client keeps a
+    /// view pointing into the old ladder), swap the model, then tell each
+    /// subscribed client the new geometry so it can re-request its viewport.
+    pub fn apply_waterfall_config(&self) {
+        let (tile_bins, history_frames, tier_count) = {
+            let cfg = self.cfg.read();
+            let tb = cfg.server.waterfall_tile_bins.max(1) as usize;
+            let hf = cfg.server.waterfall_tile_history_frames.max(1) as usize;
+            // 0 = auto (the model picks the largest useful octave ladder).
+            let tc = cfg.server.waterfall_tier_count.max(0) as usize;
+            (tb, hf, tc)
+        };
+        let dongles: Vec<Arc<ActiveDongle>> = self.dongles.read().values().cloned().collect();
+        for ad in dongles {
+            let fft_size = ad.tiers.lock().fft_size;
+            // Detach views before the swap: their tile indices belong to the
+            // old ladder, and holding the `tiers` lock across the detach would
+            // risk a lock-order cycle with the view handlers.
+            let pipelines: Vec<Arc<Mutex<ClientPipeline>>> = {
+                let map = self.client_pipelines.lock();
+                map.iter()
+                    .filter(|(_, cp)| cp.lock().dongle_id == ad.id)
+                    .map(|(_, cp)| cp.clone())
+                    .collect()
+            };
+            for cp in pipelines {
+                cp.lock().wf_view = None;
+            }
+            let (eff_bins, count) = {
+                let mut model = ad.tiers.lock();
+                *model = TierModel::new(fft_size, tile_bins, history_frames, tier_count);
+                (model.effective_tile_bins as u32, model.tier_count() as u32)
+            };
+            let notified = self.refresh_waterfall_clients(Some(&ad.id));
+            debug!(
+                dongle = %ad.id,
+                fft_size,
+                tile_bins = eff_bins,
+                tiers = count,
+                clients = notified,
+                "tiered waterfall model rebuilt"
+            );
+        }
+    }
+
     /// Switches a running dongle to another profile.
     pub fn switch_profile(&self, dongle_id: &str, profile_id: &str) -> Result<()> {
         let ad = match self.dongles.read().get(dongle_id) {
@@ -3642,7 +3786,33 @@ impl Manager {
             let _ = cmd.set_offset_tuning(dcfg.offset_tuning as u32);
         }
 
-        if profile.fft_size > 0 {
+        // Detach every client waterfall view BEFORE the tier model is replaced.
+        // Tile refcounts belong to the model that owns the tiles, so releasing
+        // them after the swap would decrement fresh tiles a client may already
+        // have re-acquired for the new span.
+        {
+            let pipelines: Vec<Arc<Mutex<ClientPipeline>>> = {
+                let map = self.client_pipelines.lock();
+                map.iter()
+                    .filter(|(_, cp)| cp.lock().dongle_id == dongle_id)
+                    .map(|(_, cp)| cp.clone())
+                    .collect()
+            };
+            let mut views = Vec::new();
+            for cp in pipelines {
+                if let Some(view) = cp.lock().wf_view.take() {
+                    views.push(view);
+                }
+            }
+            for view in views {
+                for &tile_index in &view.tiles {
+                    self.release_tile(&ad, view.tier, tile_index);
+                }
+            }
+        }
+
+        let rebuilt_tiers = profile.fft_size > 0;
+        if rebuilt_tiers {
             let fft_fps = if profile.fft_fps > 0 {
                 profile.fft_fps
             } else {
@@ -3662,18 +3832,25 @@ impl Manager {
             *ad.deflate_enc.lock() = FftDeflateEncoder::new(fft_size);
             *ad.deflate_floor_enc.lock() = FftDeflateEncoder::new(fft_size);
             // The tier model is sized by fft_size; rebuild it empty. Any
-            // client waterfall views are cleared below so no stale tile index
-            // survives the profile switch.
-            let (tile_bins, history_frames) = {
+            // client waterfall views were detached above so no stale tile
+            // index survives the profile switch.
+            let (tile_bins, history_frames, tier_count) = {
                 let cfg = self.cfg.read();
                 let tb = if cfg.server.waterfall_tile_bins > 0 {
                     cfg.server.waterfall_tile_bins as usize
                 } else {
                     1024
                 };
-                (tb, 1024usize)
+                let hf = if cfg.server.waterfall_tile_history_frames > 0 {
+                    cfg.server.waterfall_tile_history_frames as usize
+                } else {
+                    256
+                };
+                let tc = cfg.server.waterfall_tier_count.max(0) as usize;
+                (tb, hf, tc)
             };
-            *ad.tiers.lock() = TierModel::new(fft_size, tile_bins, history_frames);
+            *ad.tiers.lock() =
+                TierModel::new(fft_size, tile_bins, history_frames, tier_count);
         }
 
         *ad.profile.write() = profile.clone();
@@ -3689,19 +3866,11 @@ impl Manager {
 
         let mode = profile.mode.clone();
         let default_bw = default_bandwidth_for_mode(&mode) as i64;
-        // Recompute the effective tile width from the just-rebuilt tier model
-        // so clients update their crop math after a profile switch (M1). Mirror
-        // the `subscribed` meta path's fallback for a missing dongle entry.
-        let effective_tile_bins = {
-            let model = self.dongles.read().get(dongle_id).map(|d| {
-                let m = d.tiers.lock();
-                m.effective_tile_bins as u32
-            });
-            model.unwrap_or_else(|| {
-                let tb = self.cfg.read().server.waterfall_tile_bins.max(1) as usize;
-                waterfall::effective_tile_bins(profile.fft_size as usize, tb) as u32
-            })
-        };
+        // Recompute the tile width and ladder length from the just-rebuilt tier
+        // model so clients update their crop math and tile-tag validation after
+        // a profile switch (M1).
+        let (effective_tile_bins, tier_count) =
+            self.waterfall_geometry(dongle_id, profile.fft_size);
         let subscribed = self.ws.subscribed_clients(dongle_id);
         for client in subscribed {
             client.drop_queued_fft();
@@ -3717,6 +3886,7 @@ impl Manager {
                 tuning_step: Some(profile.tuning_step as i64),
                 waterfall_protocol: Some(1),
                 waterfall_tile_bins: Some(effective_tile_bins),
+                waterfall_tier_count: Some(tier_count),
                 ..Default::default()
             };
             self.ws.send_to(&client.id, pack_meta_message(&meta));
@@ -3731,12 +3901,14 @@ impl Manager {
                 .map(|(id, cp)| (id.clone(), cp.clone()))
                 .collect()
         };
+        // Views were detached and their tiles released before the tier model
+        // was rebuilt; just clear any that appeared in the meantime.
+        let mut released_views: Vec<waterfall::WaterfallView> = Vec::new();
         for (_, cp) in pipelines {
             let mut cp = cp.lock();
-            // The tier model was rebuilt for the new fft_size, so any prior
-            // waterfall view points at now-freed tiles. Clear it; the client
-            // will send a fresh `waterfall_view` for the new span.
-            cp.wf_view = None;
+            if let Some(view) = cp.wf_view.take() {
+                released_views.push(view);
+            }
             let rate = output_rate_for_mode_bandwidth(&mode, default_bw as i32);
             cp.extractor.set_output_sample_rate(rate);
             cp.mode = mode.clone();
@@ -3769,6 +3941,16 @@ impl Manager {
             }
             cp.accum_pos = 0;
             cp.adpcm_enc.reset();
+        }
+        // Views that appeared after the detach step belong to the current model
+        // when it was not rebuilt; release them there. After a rebuild they
+        // belong to no live model, so dropping them is correct.
+        if !rebuilt_tiers && !released_views.is_empty() {
+            for view in released_views {
+                for &tile_index in &view.tiles {
+                    self.release_tile(&ad, view.tier, tile_index);
+                }
+            }
         }
 
         info!(

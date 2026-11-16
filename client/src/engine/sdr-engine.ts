@@ -156,6 +156,52 @@ function dequantTiledFftHistory(data: ArrayBuffer, info: FftHistoryInfo): Float3
 }
 
 /**
+ * Sanity-check a decoded V1 tier/tile tag before accepting a frame as tiled.
+ *
+ * The 0x11 verFlags probe cannot distinguish a genuine tile header from a
+ * legacy frame whose first body byte happens to be 0x11/0x31/... (1 in 32 for
+ * inbound legacy frames during the transition). Rejecting implausible tags
+ * keeps those frames on the legacy path instead of rendering garbage, and
+ * bounds the strip allocation derived from `tileCount`.
+ */
+function isPlausibleTileTag(
+  tier: number | undefined,
+  tileIndex: number | undefined,
+  tileCount: number | undefined,
+): boolean {
+  if (tier === undefined || tileIndex === undefined || tileCount === undefined) return false;
+  if (!Number.isInteger(tier) || tier < 0 || tier > maxTierIndex()) return false;
+  if (!Number.isInteger(tileCount) || tileCount < 1 || tileCount > 4096) return false;
+  if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= tileCount) return false;
+  const fftSize = store.fftSize();
+  const tileBins = store.effectiveTileBins();
+  if (fftSize > 0 && tileBins > 0) {
+    // Ladder is octave-spaced (factor 1 << tier), so tierN/fftSize >> tier.
+    const expected = Math.max(1, Math.floor(Math.max(1, fftSize >> tier) / tileBins));
+    if (tileCount !== expected) return false;
+  }
+  return true;
+}
+
+/**
+ * Coarsest valid tier index. The server advertises its ladder length in the
+ * subscribed/profile meta; without it (older server) derive the same octave
+ * ladder from the FFT and tile geometry: one tier per octave until the
+ * coarsest tier is a single whole tile.
+ */
+function maxTierIndex(): number {
+  const advertised = store.waterfallTierCount();
+  if (advertised > 0) return advertised - 1;
+  const fftSize = store.fftSize();
+  const tileBins = store.effectiveTileBins();
+  if (fftSize > 0 && tileBins > 0) {
+    const octaves = Math.floor(Math.log2(Math.max(1, fftSize / tileBins)));
+    return Math.max(0, Math.min(7, octaves));
+  }
+  return 4; // matches the server's historical default ladder
+}
+
+/**
  * Map the 0-1 noise-blanker slider to the server's threshold multiplier.
  * Higher level = lower threshold = more aggressive (20x .. 2x the running mean).
  * Used both for live slider moves and for restoring state after a reconnect —
@@ -316,18 +362,17 @@ export class SdrEngine {
   private tiledBaseTileIndex = 0;               // lowest tileIndex in the active view
   private tiledViewStartFrac = 0;               // exact view fractions to crop to
   private tiledViewEndFrac = 1;
-  // Per-(tier,tileIndex) rings of whole decoded tiles for prefill on switch.
-  private tileRings = new Map<string, FftFrameBuffer>();
   // Latest decoded tile per tileIndex for the active tier, for live stitching.
+  // Pruned to the tiles currently covered by the view so a long pan session
+  // cannot grow the stitched strip (and the per-frame allocation) forever.
   private tiledLatest = new Map<number, Float32Array>();
   // Tier each tiledLatest entry belongs to — lets a tier switch preserve tiles
   // just prefilled for the NEW tier (seeded by handleTiledHistory) while still
   // evicting stale entries from the previous tier.
   private tiledLatestTier = new Map<number, number>();
-
-  private tileKey(tier: number, tileIndex: number): string {
-    return `${tier}:${tileIndex}`;
-  }
+  // User zoom to restore when the Signal Analysis pane stops overriding the
+  // view with its measurement window (null = no override active).
+  private analysisPrevZoom: [number, number] | null = null;
 
   /** Viewport width in device-independent px (waterfall canvas), ≥1. */
   private get viewportPx(): number {
@@ -344,7 +389,7 @@ export class SdrEngine {
     const span = Math.max(1e-9, endFrac - startFrac);
     const binsInView = span * store.fftSize();
     const t = Math.round(Math.log2(Math.max(1, binsInView / Math.max(1, viewportPx))));
-    return Math.max(0, Math.min(3, t));
+    return Math.max(0, Math.min(maxTierIndex(), t));
   }
 
   /**
@@ -366,6 +411,10 @@ export class SdrEngine {
     // decode; tiledActive flips only once a real tiled frame arrives.
     this.tiledRequested = true;
     this.send(packWaterfallView(px, startFrac, endFrac, fps));
+    // Every strip from here on is cropped to a new window, so buffered frames
+    // from the previous crop no longer align: drop them instead of replaying
+    // mis-registered seek-back frames.
+    this.fftBuffer.reset();
     // The incoming strip is already cropped to the view, so the renderers must
     // draw it edge-to-edge — their internal zoom is reset to the full strip.
     this.spectrumWorker?.postMessage({ type: 'reset-zoom' });
@@ -385,21 +434,20 @@ export class SdrEngine {
     this.tiledBaseTileIndex = 0;
     this.tiledViewStartFrac = 0;
     this.tiledViewEndFrac = 1;
-    this.tileRings.clear();
     this.tiledLatest.clear();
     this.tiledLatestTier.clear();
+    this.analysisPrevZoom = null;
     store.setSelectedTier(0);
     store.setActiveTiles([]);
   }
 
-  /** Route one decoded tiled FFT frame into its ring and restitch the strip. */
+  /** Route one decoded tiled FFT frame into the stitch map and restitch the strip. */
   private handleTiledFrame(frame: DecodedTiledFrame): void {
     const { tier, tileIndex, tileCount } = frame;
 
-    // Tier switch (server authoritative) — reallocate stitch state and drop
-    // rings belonging to the previous tier. Preserve any tiledLatest entries
-    // already seeded for the NEW tier (prefill via handleTiledHistory) so the
-    // prefilled line renders immediately instead of one frame blank.
+    // Tier switch (server authoritative) — drop tiles belonging to any other
+    // tier, but keep entries already seeded for the NEW tier (prefill via
+    // handleTiledHistory) so the prefilled line renders immediately.
     if (tier !== this.tiledTier || tileCount !== this.tiledTileCount) {
       this.tiledTier = tier;
       this.tiledTileCount = tileCount;
@@ -409,23 +457,12 @@ export class SdrEngine {
           this.tiledLatestTier.delete(idx);
         }
       }
-      for (const key of [...this.tileRings.keys()]) {
-        if (!key.startsWith(`${tier}:`)) this.tileRings.delete(key);
-      }
       this.fftBuffer.reset();
     }
 
-    // Per-tile ring (prefill history + seek-back) keyed by (tier,tileIndex).
-    const key = this.tileKey(tier, tileIndex);
-    let ring = this.tileRings.get(key);
-    const tileBins = store.effectiveTileBins();
-    if (!ring || ring.binCount !== frame.binCount) {
-      ring = new FftFrameBuffer(256, frame.binCount || tileBins);
-      this.tileRings.set(key, ring);
-    }
-    ring.push(frame.bins);
     this.tiledLatest.set(tileIndex, frame.bins);
     this.tiledLatestTier.set(tileIndex, tier);
+    this.pruneTilesOutsideView();
 
     const stitched = this.stitchActiveTiles();
     if (stitched) {
@@ -466,38 +503,45 @@ export class SdrEngine {
     // back to the meta-advertised effectiveTileBins.
     const firstTile = this.tiledLatest.get(indices[0])!;
     const tileBins = firstTile.length > 0 ? firstTile.length : store.effectiveTileBins();
-    this.tiledBaseTileIndex = indices[0];
-    store.setActiveTiles(indices);
 
-    // Strip width = tileCount * effectiveTileBins (may exceed a single frame).
-    const stripBins = tileCount * tileBins;
+    // Stitch only the tile range the view actually overlaps, not the whole
+    // tier: a deeply zoomed view at the finest tier touches 1 tile out of up
+    // to 64, and allocating the full tier width every frame would waste
+    // hundreds of KB per frame for columns that are immediately cropped away.
+    const range = this.visibleTileRange();
+    const first = range ? range[0] : indices[0];
+    const last = range ? range[1] : indices[indices.length - 1];
+    const windowTiles = last - first + 1;
+    this.tiledBaseTileIndex = first;
+    store.setActiveTiles(indices.filter((idx) => idx >= first && idx <= last));
+
+    const stripBins = windowTiles * tileBins;
     const strip = new Float32Array(stripBins);
     // Fill from each tile; missing tiles stay at 0 (floor) until they arrive.
     for (const idx of indices) {
-      const col = (idx - this.tiledBaseTileIndex) * tileBins;
+      const col = (idx - first) * tileBins;
       if (col < 0 || col >= stripBins) continue;
       const tile = this.tiledLatest.get(idx)!;
       const n = Math.min(tileBins, tile.length, stripBins - col);
       strip.set(tile.subarray(0, n), col);
     }
 
-    return this.cropStripToView(strip, tileCount, tileBins);
+    return this.cropStripToView(strip, windowTiles);
   }
 
   /**
    * Crop a full-tier-aligned strip to the exact [startFrac, endFrac] view. The
-   * strip's lowest bin corresponds to tiledBaseTileIndex; tiles cover the full
-   * tier so the base tile's low edge is baseTileIndex/tilesPerTier of the span.
+   * strip's lowest bin corresponds to `tiledBaseTileIndex` and covers
+   * `windowTiles` tiles of the full tier, whose tile count comes from the frame
+   * tag (server-authoritative) rather than local metadata.
    */
-  private cropStripToView(strip: Float32Array, tileCount: number, tileBins: number): Float32Array {
+  private cropStripToView(strip: Float32Array, windowTiles: number): Float32Array {
     const start = this.tiledViewStartFrac;
     const end = this.tiledViewEndFrac;
-    // Fraction of full span covered by one tile.
-    const tierBins = store.fftSize() >> this.tiledTier;
-    const tilesPerTier = Math.max(1, Math.round(tierBins / tileBins));
+    const tilesPerTier = Math.max(1, this.tiledTileCount);
     const tileFrac = 1 / tilesPerTier;
     const stripStartFrac = this.tiledBaseTileIndex * tileFrac;
-    const stripSpanFrac = tileCount * tileFrac;
+    const stripSpanFrac = windowTiles * tileFrac;
     if (stripSpanFrac <= 0) return strip;
 
     // Map the view [start,end] into strip-bin coordinates.
@@ -509,15 +553,35 @@ export class SdrEngine {
     return strip.slice(a, b);
   }
 
-  /** Route a decoded tiled history burst into its (tier,tileIndex) ring. */
-  private handleTiledHistory(hist: DecodedTiledHistory): void {
-    const key = this.tileKey(hist.tier, hist.tileIndex);
-    let ring = this.tileRings.get(key);
-    if (!ring || ring.binCount !== hist.binCount) {
-      ring = new FftFrameBuffer(256, hist.binCount);
-      this.tileRings.set(key, ring);
+  /**
+   * Tile index range the current view overlaps, using the same arithmetic as
+   * the server (`floor(start*count)..=ceil(end*count)-1`). Null when no tiled
+   * view is active.
+   */
+  private visibleTileRange(): [number, number] | null {
+    const count = this.tiledTileCount;
+    if (count <= 0) return null;
+    const first = Math.max(0, Math.min(count - 1, Math.floor(this.tiledViewStartFrac * count)));
+    const last = Math.max(first, Math.min(count - 1, Math.ceil(this.tiledViewEndFrac * count) - 1));
+    return [first, last];
+  }
+
+  /** Keep only tiles covered by the current view. */
+  private pruneTilesOutsideView(): void {
+    if (this.tiledLatest.size === 0) return;
+    const range = this.visibleTileRange();
+    if (!range) return;
+    const [first, last] = range;
+    for (const idx of [...this.tiledLatest.keys()]) {
+      if (idx < first || idx > last) {
+        this.tiledLatest.delete(idx);
+        this.tiledLatestTier.delete(idx);
+      }
     }
-    for (const f of hist.frames) ring.push(f);
+  }
+
+  /** Route a decoded tiled history burst: seed the stitch map for prefill. */
+  private handleTiledHistory(hist: DecodedTiledHistory): void {
     // Seed the live map so the next stitch shows prefilled data immediately.
     // Tag it with this tier so the tier-switch clear in handleTiledFrame does
     // not discard the seed before the first live frame of the new tier lands.
@@ -1048,16 +1112,15 @@ export class SdrEngine {
           let handledTiled = false;
           try {
             const info = decodeFftFrame(data, true);
-            if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
-                && info.tileCount !== undefined) {
+            if (info.tiled && isPlausibleTileTag(info.tier, info.tileIndex, info.tileCount)) {
               this.tiledActive = true;
               const bins = dequantTiledFftFrame(data, info);
               if (bins.length > 0) {
                 this.bwFftRawBytes += bins.length * 4;
                 this.handleTiledFrame({
-                  tier: info.tier,
-                  tileIndex: info.tileIndex,
-                  tileCount: info.tileCount,
+                  tier: info.tier!,
+                  tileIndex: info.tileIndex!,
+                  tileCount: info.tileCount!,
                   binCount: bins.length,
                   bins,
                 });
@@ -1230,14 +1293,13 @@ export class SdrEngine {
         if (store.waterfallProtocol() === 1 && (this.tiledActive || this.tiledRequested)) {
           try {
             const info = decodeFftHistoryFrame(data, true);
-            if (info.tiled && info.tier !== undefined && info.tileIndex !== undefined
-                && info.tileCount !== undefined) {
+            if (info.tiled && isPlausibleTileTag(info.tier, info.tileIndex, info.tileCount)) {
               const frames = dequantTiledFftHistory(data, info);
               if (frames.length > 0) {
                 this.handleTiledHistory({
-                  tier: info.tier,
-                  tileIndex: info.tileIndex,
-                  tileCount: info.tileCount,
+                  tier: info.tier!,
+                  tileIndex: info.tileIndex!,
+                  tileCount: info.tileCount!,
                   binCount: info.binCount,
                   frames,
                 });
@@ -1631,6 +1693,7 @@ export class SdrEngine {
         if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
           store.setEffectiveTileBins(meta.waterfallTileBins);
         }
+        store.setWaterfallTierCount(meta.waterfallTierCount ?? 0);
         break;
 
       case 'subscribed': {
@@ -1652,12 +1715,15 @@ export class SdrEngine {
         store.setSampleRate(meta.sampleRate);
         store.setFftSize(meta.fftSize);
         store.setTuningStep(meta.tuningStep ?? 0);
-        // Fresh subscription — return to the legacy full-span path until the
-        // user triggers a zoom (first waterfall_view). Capture any per-profile
-        // tile width override.
+        // Fresh subscription: adopt this profile's tiled geometry and reset
+        // the ladder state. The viewport is (re)requested at the end of this
+        // handler, so a tiled server streams a screen-sized strip immediately
+        // instead of a full-resolution frame. Capture any per-profile tile
+        // width override first.
         if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
           store.setEffectiveTileBins(meta.waterfallTileBins);
         }
+        store.setWaterfallTierCount(meta.waterfallTierCount ?? 0);
         this.resetTiledState();
         // Apply the profile's default tune offset so the displayed frequency
         // matches what the server is actually demodulating. On reconnect the
@@ -1744,12 +1810,57 @@ export class SdrEngine {
         // Request waterfall history to prefill the display immediately
         this.send({ cmd: 'request_history' });
 
+        // Establish the tiled viewport for this subscription. A tiled-capable
+        // server should stream the screen-sized view from the very first frame
+        // — including the full span, where the chosen tier is simply the one
+        // that matches the canvas width — so the client never has to download a
+        // full-resolution frame it cannot show. The legacy path is kept only
+        // for servers that do not advertise the protocol.
+        {
+          const [zs, ze] = store.spectrumZoom();
+          if (this.sendWaterfallView(store.waterfallSpeed())) {
+            // tiled view requested; nothing else to do
+          } else if (zs > 0.0001 || ze < 0.9999) {
+            // Legacy server with a restored zoom: re-apply the worker crop.
+            this.spectrumWorker?.postMessage({ type: 'set-zoom', start: zs, end: ze });
+            this.waterfallWorker?.postMessage({ type: 'set-zoom', start: zs, end: ze });
+            this.scheduleWaterfallPrefill();
+          }
+        }
+
         // Re-send noise blanker state (persisted in localStorage but not part of subscribe reset)
         if (store.nbEnabled()) {
           this.send({ cmd: 'set_pre_filter_nb', enabled: true });
           this.send({ cmd: 'set_pre_filter_nb_threshold', threshold: nbThresholdForLevel(store.nbLevel()) });
         }
         this.reconnecting = false;
+        break;
+      }
+
+      case 'waterfall_refresh': {
+        // Server-initiated refresh: the tier ladder changed (admin config,
+        // dongle restart) or an operator forced one. Adopt the advertised
+        // geometry, forget the old tile buffers, and re-request the viewport.
+        if (meta.dongleId && store.activeDongleId() && meta.dongleId !== store.activeDongleId()) {
+          break;
+        }
+        if (meta.waterfallProtocol) store.setWaterfallProtocol(meta.waterfallProtocol);
+        if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
+          store.setEffectiveTileBins(meta.waterfallTileBins);
+        }
+        store.setWaterfallTierCount(meta.waterfallTierCount ?? 0);
+        // Re-request whenever the client was on the tiled path — including a
+        // full-span tiled view, which must not silently degrade to the legacy
+        // full-frame stream just because the zoom window is [0,1].
+        const wasTiled = this.tiledActive || this.tiledRequested;
+        this.resetTiledState();
+        if (wasTiled) {
+          this.sendWaterfallView(store.waterfallSpeed());
+        } else {
+          this.spectrumWorker?.postMessage({ type: 'reset-zoom' });
+          this.waterfallWorker?.postMessage({ type: 'reset-zoom' });
+          this.scheduleWaterfallPrefill();
+        }
         break;
       }
 
@@ -1789,6 +1900,7 @@ export class SdrEngine {
         if (meta.waterfallTileBins && meta.waterfallTileBins > 0) {
           store.setEffectiveTileBins(meta.waterfallTileBins);
         }
+        store.setWaterfallTierCount(meta.waterfallTierCount ?? 0);
         this.resetTiledState();
         // Update resampler for new mode's output rate
         this.updateResampleRatio();
@@ -2682,11 +2794,14 @@ export class SdrEngine {
    * Both spectrum and waterfall renderers are updated.
    */
   setSpectrumZoom(start: number, end: number): void {
+    // An explicit zoom means the operator is driving again: drop any pending
+    // restore from the Signal Analysis pane.
+    this.analysisPrevZoom = null;
     store.setSpectrumZoom([start, end]);
-    // Tiled path: when the server supports the segmented waterfall and the user
-    // has a real zoom window, request the matching tiles instead of faking the
-    // zoom by remapping the coarse full-span frame. sendWaterfallView resets the
-    // renderers' internal zoom because the incoming strip is already cropped.
+    // Tiled path: whenever the server supports the segmented waterfall, request
+    // the tiles for this window instead of letting the renderers remap a coarse
+    // full-span frame. sendWaterfallView resets the renderers' internal zoom
+    // because the incoming strip is already cropped.
     const isRealZoom = start > 0.0001 || end < 0.9999;
     if (store.waterfallProtocol() === 1 && (this.tiledActive || isRealZoom)) {
       this.sendWaterfallView(store.waterfallSpeed());
@@ -2700,6 +2815,7 @@ export class SdrEngine {
   }
 
   resetSpectrumZoom(): void {
+    this.analysisPrevZoom = null;
     store.setSpectrumZoom([0, 1]);
     // Once a tiled view is active or pending, a full-span reset is itself a
     // (coarsest-tier) waterfall_view — re-send so the pending view fractions
@@ -2780,8 +2896,32 @@ export class SdrEngine {
         this.tiledViewEndFrac >= endFrac - 1e-6) {
       return;
     }
+    // Remember the operator's zoom the first time the pane hijacks the view so
+    // releaseAnalysisWindow() can put it back.
+    if (!this.analysisPrevZoom) {
+      this.analysisPrevZoom = store.spectrumZoom();
+    }
     store.setSpectrumZoom([startFrac, endFrac]);
     this.sendWaterfallView(store.waterfallSpeed());
+  }
+
+  /**
+   * Restore the view the operator had before the Signal Analysis pane narrowed
+   * it to its measurement window. No-op when no override is active.
+   */
+  releaseAnalysisWindow(): void {
+    const prev = this.analysisPrevZoom;
+    if (!prev) return;
+    this.analysisPrevZoom = null;
+    const [start, end] = prev;
+    store.setSpectrumZoom([start, end]);
+    if (store.waterfallProtocol() === 1) {
+      this.sendWaterfallView(store.waterfallSpeed());
+      return;
+    }
+    this.spectrumWorker?.postMessage({ type: 'set-zoom', start, end });
+    this.waterfallWorker?.postMessage({ type: 'set-zoom', start, end });
+    this.scheduleWaterfallPrefill();
   }
 
   /** Zoomed foreground-decoder spectra, oldest first. */

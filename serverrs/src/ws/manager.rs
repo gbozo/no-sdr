@@ -54,6 +54,9 @@ pub struct WsManager {
     /// effective value (clamped to fftSize/8) is sent later on
     /// `subscribed`/`profile_changed`.
     waterfall_tile_bins: AtomicUsize,
+    /// Configured `waterfallTierCount` (0 = auto). Advertised in `welcome`;
+    /// the authoritative per-profile value rides on `subscribed`.
+    waterfall_tier_count: AtomicUsize,
     stale_started: AtomicBool,
     total_bytes: Arc<AtomicU64>,
 }
@@ -76,6 +79,7 @@ impl WsManager {
             real_ip_header: RwLock::new(String::new()),
             max_fft_fps: AtomicUsize::new(30),
             waterfall_tile_bins: AtomicUsize::new(1024),
+            waterfall_tier_count: AtomicUsize::new(0),
             stale_started: AtomicBool::new(false),
             total_bytes: Arc::new(AtomicU64::new(0)),
         }
@@ -101,6 +105,16 @@ impl WsManager {
 
     pub fn waterfall_tile_bins(&self) -> usize {
         self.waterfall_tile_bins.load(Ordering::SeqCst)
+    }
+
+    /// Set the configured fold-tier count advertised in the `welcome` meta
+    /// (`0` = automatic, decided per profile from the FFT/tile geometry).
+    pub fn set_waterfall_tier_count(&self, tiers: usize) {
+        self.waterfall_tier_count.store(tiers, Ordering::SeqCst);
+    }
+
+    pub fn waterfall_tier_count(&self) -> usize {
+        self.waterfall_tier_count.load(Ordering::SeqCst)
     }
 
     fn write_chan_cap(&self) -> usize {
@@ -480,6 +494,7 @@ impl WsManager {
             // value arrives later on `subscribed`/`profile_changed`.
             waterfall_protocol: Some(1),
             waterfall_tile_bins: Some(self.waterfall_tile_bins() as u32),
+            waterfall_tier_count: Some(self.waterfall_tier_count() as u32),
             ..Default::default()
         }));
 

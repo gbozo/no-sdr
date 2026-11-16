@@ -346,6 +346,9 @@ function createStore() {
   const [waterfallProtocol, setWaterfallProtocol] = createSignal(0);
   // Finest tile width in bins (meta.waterfallTileBins, default 1024).
   const [effectiveTileBins, setEffectiveTileBins] = createSignal(1024);
+  // Fold-ladder length (meta.waterfallTierCount). 0 = derive it from
+  // fftSize/effectiveTileBins, which is what the server would do anyway.
+  const [waterfallTierCount, setWaterfallTierCount] = createSignal(0);
   // Tier currently selected by the active waterfall_view (client estimate used
   // only for local buffer sizing; the server is authoritative via frame tags).
   const [selectedTier, setSelectedTier] = createSignal(0);
@@ -1341,6 +1344,7 @@ function createStore() {
     fftSize, setFftSize,
     waterfallProtocol, setWaterfallProtocol,
     effectiveTileBins, setEffectiveTileBins,
+    waterfallTierCount, setWaterfallTierCount,
     selectedTier, setSelectedTier,
     activeTiles, setActiveTiles,
 

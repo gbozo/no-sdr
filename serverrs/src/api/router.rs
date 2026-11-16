@@ -46,6 +46,7 @@ pub fn build_router(state: AppState) -> Router {
             put(admin::update_bookmark).delete(admin::delete_bookmark),
         )
         .route("/save-config", post(admin::save_config))
+        .route("/waterfall/refresh", post(admin::refresh_waterfall))
         .route(
             "/server/config",
             get(admin::get_server_config).put(admin::update_server_config),

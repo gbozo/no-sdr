@@ -876,6 +876,9 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "usersRibbon": cfg.server.users_ribbon,
             "fftHistoryFftSize": cfg.server.fft_history_fft_size,
             "fftHistoryCompression": cfg.server.fft_history_compression,
+            "waterfallTileBins": cfg.server.waterfall_tile_bins,
+            "waterfallTileHistoryFrames": cfg.server.waterfall_tile_history_frames,
+            "waterfallTierCount": cfg.server.waterfall_tier_count,
             "allowedFftCodecs": cfg.server.allowed_fft_codecs,
             "allowedIqCodecs": cfg.server.allowed_iq_codecs,
             "opusComplexity": cfg.server.opus_complexity,
@@ -916,6 +919,7 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
 
     let mut codecs_changed = false;
     let mut real_ip_changed = false;
+    let waterfall_changed: bool;
 
     {
         let mut cfg = state.cfg.write();
@@ -989,6 +993,33 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
             real_ip_changed = true;
         }
 
+        // Tiered waterfall. Tile width must stay a power of two, so an invalid
+        // width is ignored rather than persisted (config::validate rejects it
+        // on save, and a rejected save would lose every other pending edit).
+        let prev_waterfall = (
+            s.waterfall_tile_bins,
+            s.waterfall_tile_history_frames,
+            s.waterfall_tier_count,
+        );
+        if let Some(v) = map.get("waterfallTileBins").and_then(|v| v.as_i64()) {
+            let v = v as i32;
+            if v > 0 && v <= 16384 && (v as u32).is_power_of_two() {
+                s.waterfall_tile_bins = v;
+            }
+        }
+        if let Some(v) = map.get("waterfallTileHistoryFrames").and_then(|v| v.as_i64()) {
+            s.waterfall_tile_history_frames = (v as i32).clamp(1, 65535);
+        }
+        if let Some(v) = map.get("waterfallTierCount").and_then(|v| v.as_i64()) {
+            s.waterfall_tier_count = (v as i32).clamp(0, 8);
+        }
+        waterfall_changed = prev_waterfall
+            != (
+                s.waterfall_tile_bins,
+                s.waterfall_tile_history_frames,
+                s.waterfall_tier_count,
+            );
+
         // Decoder database maintenance settings. These live in the top-level
         // `database` block rather than `server`, but the admin page saves them
         // through the same endpoint so one Save Config persists everything.
@@ -1017,6 +1048,11 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         let header = state.cfg.read().server.real_ip_header.clone();
         state.ws.set_real_ip_header(&header);
     }
+    if waterfall_changed {
+        // Rebuild every running dongle's tier ladder in place and tell clients
+        // to re-request their viewport (no dongle restart needed).
+        state.mgr.apply_waterfall_config();
+    }
     {
         let password = state.cfg.read().server.admin_password.clone();
         state.auth.set_password(&password);
@@ -1028,6 +1064,17 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         StatusCode::OK,
         json!({"status": "ok", "version": version}),
         Some(version),
+    )
+}
+
+/// Forces a `waterfall_refresh` event to every subscribed client: they drop
+/// their tiled state and re-request a viewport from the current geometry.
+pub async fn refresh_waterfall(State(state): State<AppState>) -> Response {
+    let clients = state.mgr.refresh_waterfall_clients(None);
+    json_response(
+        StatusCode::OK,
+        json!({"status": "refreshed", "clients": clients}),
+        None,
     )
 }
 
