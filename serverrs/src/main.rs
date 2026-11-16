@@ -131,6 +131,7 @@ async fn async_main() -> Result<()> {
         }
     }
     ws.set_max_fft_fps(max_fps);
+    ws.set_waterfall_tile_bins(cfg.server.waterfall_tile_bins.max(0) as usize);
 
     let cfg = Arc::new(RwLock::new(cfg));
     let cfg_version = Arc::new(ConfigVersion::new());

@@ -49,6 +49,11 @@ pub struct WsManager {
     allowed: RwLock<AllowedCodecs>,
     real_ip_header: RwLock<String>,
     max_fft_fps: AtomicUsize,
+    /// Base (configured) waterfall tile bins, advertised in the `welcome`
+    /// meta as the default `waterfallTileBins`. The authoritative per-profile
+    /// effective value (clamped to fftSize/8) is sent later on
+    /// `subscribed`/`profile_changed`.
+    waterfall_tile_bins: AtomicUsize,
     stale_started: AtomicBool,
     total_bytes: Arc<AtomicU64>,
 }
@@ -70,6 +75,7 @@ impl WsManager {
             allowed: RwLock::new(AllowedCodecs::default()),
             real_ip_header: RwLock::new(String::new()),
             max_fft_fps: AtomicUsize::new(30),
+            waterfall_tile_bins: AtomicUsize::new(1024),
             stale_started: AtomicBool::new(false),
             total_bytes: Arc::new(AtomicU64::new(0)),
         }
@@ -84,6 +90,17 @@ impl WsManager {
 
     pub fn max_fft_fps(&self) -> usize {
         self.max_fft_fps.load(Ordering::SeqCst)
+    }
+
+    /// Set the base (configured) waterfall tile bins advertised at connect
+    /// time in the `welcome` meta. A non-positive value keeps the 1024 default.
+    pub fn set_waterfall_tile_bins(&self, bins: usize) {
+        let bins = if bins == 0 { 1024 } else { bins };
+        self.waterfall_tile_bins.store(bins, Ordering::SeqCst);
+    }
+
+    pub fn waterfall_tile_bins(&self) -> usize {
+        self.waterfall_tile_bins.load(Ordering::SeqCst)
     }
 
     fn write_chan_cap(&self) -> usize {
@@ -454,6 +471,15 @@ impl WsManager {
             server_version: Some(SERVER_VERSION.into()),
             allowed_fft_codecs: Some(allowed_fft),
             allowed_iq_codecs: Some(allowed_iq),
+            // Advertise the tiered-waterfall capability at connect time, as the
+            // frozen spec (§5.1) requires: the client reads `waterfallProtocol`
+            // ONLY from the welcome meta. `waterfallTileBins` here is the base
+            // (configured) default — at welcome time no dongle/profile is
+            // subscribed yet, so the profile-specific effective value (clamped
+            // to fftSize/8) cannot be computed. The authoritative effective
+            // value arrives later on `subscribed`/`profile_changed`.
+            waterfall_protocol: Some(1),
+            waterfall_tile_bins: Some(self.waterfall_tile_bins() as u32),
             ..Default::default()
         }));
 
