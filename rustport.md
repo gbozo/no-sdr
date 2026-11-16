@@ -7,7 +7,7 @@ has been removed from this branch; `serverrs/` is now the only server.
 Target: `serverrs/` Cargo crate, binary `serverrs` (same HTTP/WS API + binary
 protocol as before).
 
-## Current status (2.21.0)
+## Current status (2.21.1)
 
 - Rust backend is feature-complete for the existing client: FFT/IQ streaming,
   ADPCM/deflate/Opus codecs, all demodulators, RDS (incl. group 4A clock),
@@ -40,7 +40,25 @@ protocol as before).
 - CI: `.github/workflows/rust-binaries.yml` builds Linux amd64 v1-v4, Linux
   arm64 Cortex-A53/A72/A76, macOS arm64/Intel, Windows 11 and portable release
   archives. `docker/Dockerfile.rust` builds the multi-CPU Alpine image.
-- Latest published release: `v2.21.0`. Tiered (segmented) waterfall: the
+- Latest published release: `v2.21.1`. Native USB reliability: the bulk
+  endpoint is now armed only after the profile's startup command batch, and
+  endpoint-resetting commands (direct sampling) quiesce the queue first — an
+  HF/MW profile first in the list used to reset the endpoint under 16 armed
+  transfers, which stalled in a loop on older hosts until the dongle
+  watchdog restarted it. Stall recovery is bounded (10) with an actionable
+  error, the USB link speed is logged and warned about, `source.settings`
+  `transfers`/`transferKib` are honoured, and a claim fallback covers
+  pre-4.6 kernels whose `USBDEVFS_DISCONNECT_CLAIM` is missing. Gain is
+  resolved once (profile > dongle > auto), shares one routine between start
+  and profile switch (the switch used to skip the digital AGC), rounds
+  instead of truncating, and the native driver logs the snapped hardware
+  step (23.0 dB requested -> 22.9 dB on an R820T). Client: decoder Admin
+  pickers keep their selection and show stored modes that are not in the
+  catalog; ADS-B/AIS/VDL2/HFDL tables update in place instead of rebuilding
+  every row twice a second. CI: the release job now generates a portable
+  `SHA256SUMS` and a separate `SHA256SUMS.desktop` (the old duplicate name
+  failed the v2.21.0 release job).
+- Previous release: `v2.21.0`. Tiered (segmented) waterfall: the
   server keeps one octave fold ladder per dongle (1..=8 tiers, auto-sized from
   `fftSize/effectiveTileBins`), encodes only the tiles a client's viewport
   overlaps, and folds them once per frame; frames carry a V1 `verFlags` byte
@@ -164,6 +182,7 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-17: Version 2.21.1. Native rtlsdr reliability and gain diagnostics: startup command batch applied before the endpoint is armed (rtl_tcp order), direct-sampling changes cancel/drain the bulk queue first, bounded stall recovery with an actionable error, USB link speed logged and checked against the sample rate, pre-4.6 kernel claim fallback, and `source.settings.transfers`/`transferKib` honoured. Gain resolves profile > dongle > auto through one shared routine (profile switches now re-apply the digital AGC), rounds tenths, and logs the snapped hardware step plus its origin. rtl_tcp logs commands at debug and reports the gain-table size rather than a bogus gain. Client: decoder admin pickers keep their selection (and show unknown stored modes), and ADS-B/AIS/VDL2/HFDL tables use positional rows so 2 Hz snapshots no longer rebuilt every row. CI: portable and desktop checksum manifests are distinct.
 - 2026-11-16: Version 2.21.0. Tiered segmented waterfall. Per-dongle octave fold ladder (1..=8 tiers, auto from `fftSize`/`effectiveTileBins`), per-tile encoders and history rings allocated lazily with refcounts, V1 tiled framers for `0x01/0x04/0x08/0x0B/0x0D` (`verFlags = 0x11` + 6-byte tier/tile block), encode-once-per-`(tier,tile,codec)` broadcast, per-tile history prefill, hot ladder rebuild on admin edits and a `waterfall_refresh` meta event (config change, dongle restart, or manual trigger). Client stitches/crops tiles, validates tags against the advertised ladder, requests a screen-sized view from the first frame, re-requests on resize and refresh, and falls back to legacy frames for servers without the protocol. Config: `waterfallTileBins` (1024), `waterfallTileHistoryFrames` (256), `waterfallTierCount` (0 = auto), all admin-editable. Fixes a server-wide deadlock in `handle_waterfall_view`, ~4x tiered history memory reduction, single fold per frame per tier, tile refcount release on profile switch, and the Signal Analysis pane no longer leaves the waterfall zoom hijacked. Measured on a real rtl_tcp dongle at 16384 bins: 55.9 KB/s legacy vs 6.7-9.0 KB/s tiled.
 - 2026-11-15: Version 2.20.0. Background decoder admin/history: curated mode catalog, decoder CRUD with immediate worker reload, per-decoder retention and 30-minute purges, SQLite history/summary/modes APIs with configured-decoder filtering and `includeUnconfigured` audit mode, VDL2/HFDL/ISM snapshot dedupe, client History panel with merged live/persisted tables, and ADS-B/AIS entity history. Admin: OpenStreetMap receiver location with Nominatim search/click/drag pin, plus an OpenWeatherMap API key setting for the future cloud overlay.
 - 2026-11-15: Version 2.19.0. Foreground decoder scope and stats: exact window metadata, live status/slot events, opt-in `0x0E` zoom spectrum tapped from the mfsk/JS8 channel, FT8-style JS8 waterfall, decode markers, micro tuning, FEC/CRC/confidence columns and a full-path FT8 channel regression test. Fixes the foreground nanosecond/millisecond mismatch and pads startup slot boundaries for FT8/FT4/JS8/meteor.
