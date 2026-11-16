@@ -422,10 +422,17 @@ jobs:
           pattern: no-sdr-electron-*
           path: electron-dist
           merge-multiple: true
+      # Two distinct manifests: the portable server archives and the desktop
+      # installers. They used to be generated (or not) as two files both named
+      # `SHA256SUMS`, which collided on upload and made the release job fail.
+      - name: Checksums for portable archives
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
       - name: Checksums for desktop packages
         run: |
           cd electron-dist
-          sha256sum ./* > SHA256SUMS
+          sha256sum ./* > SHA256SUMS.desktop
       - name: Attach portable archives and desktop packages to release
         uses: softprops/action-gh-release@v3
         with:
@@ -438,4 +445,4 @@ jobs:
             electron-dist/*.dmg
             electron-dist/*.zip
             electron-dist/*.exe
-            electron-dist/SHA256SUMS
+            electron-dist/SHA256SUMS.desktop
