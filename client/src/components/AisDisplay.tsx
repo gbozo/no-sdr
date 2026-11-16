@@ -4,7 +4,7 @@
 // Vessel table on the left, OpenStreetMap on the right. The server re-sends
 // the whole table twice a second; this component only renders it.
 
-import { Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Component, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { store } from '../store/index.js';
 import AisMap from './AisMap.js';
 import type { AisVessel } from '~/shared';
@@ -178,34 +178,36 @@ const AisDisplay: Component = () => {
               </tr>
             </thead>
             <tbody>
-              <For each={sorted()}>
+              {/* Index, not For: the vessel table is replaced whole on each
+                  snapshot, and identity-keyed rows would be rebuilt each time. */}
+              <Index each={sorted()}>
                 {(vessel) => {
-                  const isSelected = () => selectedMmsi() === vessel.mmsi;
+                  const isSelected = () => selectedMmsi() === vessel().mmsi;
                   return (
                     <tr
-                      onClick={() => setSelectedMmsi(isSelected() ? null : vessel.mmsi)}
+                      onClick={() => setSelectedMmsi(isSelected() ? null : vessel().mmsi)}
                       class={`border-t border-border/20 cursor-pointer ${
                         isSelected() ? 'bg-cyan/10 text-cyan' : ''
                       } hover:bg-cyan/5`}
                     >
-                      <td class="px-1.5 py-1 whitespace-nowrap text-text-dim">{vessel.mmsi}</td>
-                      <td class="px-1.5 py-1 whitespace-nowrap text-text-primary">{label(vessel)}</td>
+                      <td class="px-1.5 py-1 whitespace-nowrap text-text-dim">{vessel().mmsi}</td>
+                      <td class="px-1.5 py-1 whitespace-nowrap text-text-primary">{label(vessel())}</td>
                       <td class="px-1.5 py-1 whitespace-nowrap text-text-secondary">
-                        {kindLabel(vessel.kind)}
+                        {kindLabel(vessel().kind)}
                       </td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{speed(vessel)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{degrees(vessel.cog_deg)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{degrees(vessel.heading_deg)}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{speed(vessel())}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{degrees(vessel().cog_deg)}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{degrees(vessel().heading_deg)}</td>
                       <td class="px-1.5 py-1 truncate max-w-[110px] text-text-secondary">
-                        {vessel.destination || ''}
+                        {vessel().destination || ''}
                       </td>
                       <td class="px-1.5 py-1 text-right whitespace-nowrap text-text-dim">
-                        {formatAge(ageSeconds(vessel, nowSec()))}
+                        {formatAge(ageSeconds(vessel(), nowSec()))}
                       </td>
                     </tr>
                   );
                 }}
-              </For>
+              </Index>
             </tbody>
           </table>
 

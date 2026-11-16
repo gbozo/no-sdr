@@ -5,7 +5,7 @@
 // the whole table about twice a second; this component only renders state, it
 // never appends rows or rebuilds the map.
 
-import { Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Component, For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { store } from '../store/index.js';
 import AdsbMap, { icaoHex } from './AdsbMap.js';
 import type { AdsbAircraft } from '~/shared';
@@ -184,32 +184,36 @@ const AdsbDisplay: Component = () => {
               </tr>
             </thead>
             <tbody>
-              <For each={sorted()}>
+              {/* Index, not For: the server replaces the whole aircraft array
+                  twice a second, so identity-keyed rows would be destroyed and
+                  rebuilt every snapshot (visible as table flicker). Index keeps
+                  the row DOM and only updates the cell values. */}
+              <Index each={sorted()}>
                 {(ac) => {
-                  const key = icaoHex(ac.icao);
-                  const isSelected = () => selectedIcao() === key;
+                  const key = () => icaoHex(ac().icao);
+                  const isSelected = () => selectedIcao() === key();
                   return (
                     <tr
-                      onClick={() => setSelectedIcao(isSelected() ? null : key)}
+                      onClick={() => setSelectedIcao(isSelected() ? null : key())}
                       class={`border-t border-border/20 cursor-pointer ${
-                        isSelected() ? 'bg-cyan/10 text-cyan' : ac.emergency ? 'text-amber' : ''
+                        isSelected() ? 'bg-cyan/10 text-cyan' : ac().emergency ? 'text-amber' : ''
                       } hover:bg-cyan/5`}
-                      title={ac.emergency ?? undefined}
+                      title={ac().emergency ?? undefined}
                     >
-                      <td class="px-1.5 py-1 whitespace-nowrap text-text-dim">{key}</td>
-                      <td class="px-1.5 py-1 whitespace-nowrap text-text-primary">{label(ac)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{altitude(ac)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{speed(ac)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{heading(ac)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{verticalRate(ac)}</td>
-                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{squawk(ac)}</td>
+                      <td class="px-1.5 py-1 whitespace-nowrap text-text-dim">{key()}</td>
+                      <td class="px-1.5 py-1 whitespace-nowrap text-text-primary">{label(ac())}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{altitude(ac())}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{speed(ac())}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{heading(ac())}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{verticalRate(ac())}</td>
+                      <td class="px-1.5 py-1 text-right whitespace-nowrap">{squawk(ac())}</td>
                       <td class="px-1.5 py-1 text-right whitespace-nowrap text-text-dim">
-                        {formatAge(ageSeconds(ac, nowSec()))}
+                        {formatAge(ageSeconds(ac(), nowSec()))}
                       </td>
                     </tr>
                   );
                 }}
-              </For>
+              </Index>
             </tbody>
           </table>
 
