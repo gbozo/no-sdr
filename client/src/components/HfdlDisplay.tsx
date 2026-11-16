@@ -5,7 +5,7 @@
 // than a map mode; the table is the primary view, with a details pane for the
 // payload fields the parser surfaced.
 
-import { Component, For, Show, createMemo, createSignal } from 'solid-js';
+import { Component, Index, Show, createMemo, createSignal } from 'solid-js';
 import { store } from '../store/index.js';
 import type { HfdlDecode } from '~/shared';
 
@@ -94,27 +94,27 @@ const HfdlDisplay: Component = () => {
                 </tr>
               </thead>
               <tbody>
-                <For each={log()}>
+                <Index each={log()}>
                   {(entry) => (
                     <tr
-                      onClick={() => setSelected(selected() === entry.unix ? null : entry.unix)}
+                      onClick={() => setSelected(selected() === entry().unix ? null : entry().unix)}
                       class={`border-t border-border/20 cursor-pointer hover:bg-cyan/5 ${
-                        selected() === entry.unix ? 'bg-cyan/10 text-cyan' : ''
+                        selected() === entry().unix ? 'bg-cyan/10 text-cyan' : ''
                       }`}
                     >
-                      <td class="px-1.5 py-1 text-text-dim whitespace-nowrap">{timeOf(entry.unix)}</td>
-                      <td class="px-1.5 py-1 text-text-primary whitespace-nowrap">{entry.kind}</td>
-                      <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{entry.gs ?? ''}</td>
-                      <td class="px-1.5 py-1 text-right text-text-dim whitespace-nowrap">{entry.freqKhz}</td>
+                      <td class="px-1.5 py-1 text-text-dim whitespace-nowrap">{timeOf(entry().unix)}</td>
+                      <td class="px-1.5 py-1 text-text-primary whitespace-nowrap">{entry().kind}</td>
+                      <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{entry().gs ?? ''}</td>
+                      <td class="px-1.5 py-1 text-right text-text-dim whitespace-nowrap">{entry().freqKhz}</td>
                       <td class="px-1.5 py-1 text-right text-text-dim whitespace-nowrap">
-                        {entry.snrDb == null ? '' : entry.snrDb.toFixed(1)}
+                        {entry().snrDb == null ? '' : entry().snrDb!.toFixed(1)}
                       </td>
                       <td class="px-1.5 py-1 text-text-secondary break-all">
-                        {positionText(entry) || entry.details}
+                        {positionText(entry()) || entry().details}
                       </td>
                     </tr>
                   )}
-                </For>
+                </Index>
               </tbody>
             </table>
 

@@ -2,7 +2,7 @@
 // Decoders Section — background decoder config + stored history
 // ============================================================
 
-import { Component, For, Show, createSignal, onMount } from 'solid-js';
+import { Component, For, Show, createEffect, createSignal, onMount } from 'solid-js';
 import {
   adminStore,
   type DecoderConfig,
@@ -79,6 +79,11 @@ const DecodersSection: Component = () => {
   const [recent, setRecent] = createSignal<StoredMessage[]>([]);
   const [recentLoading, setRecentLoading] = createSignal(false);
   const [purgeMode, setPurgeMode] = createSignal('');
+  // Selection of the "Add decoder" mode picker. Kept in a signal: binding a
+  // reactive expression straight to <select value> re-applies it on every
+  // re-run (mode list refresh, adding() etc.) and snaps the operator's choice
+  // back to the first entry.
+  const [addMode, setAddMode] = createSignal('');
   const [purgeDays, setPurgeDays] = createSignal(7);
   const [purgeMessage, setPurgeMessage] = createSignal('');
   const [adding, setAdding] = createSignal(false);
@@ -96,6 +101,16 @@ const DecodersSection: Component = () => {
     ['ft8', 'ft4', 'ft2', 'wspr', 'js8', 'adsb'].filter((mode) =>
       modes().some((info) => info.mode === mode),
     );
+
+  // Keep the add-mode selection valid as the mode list arrives or refreshes;
+  // default to the first common mode only when there is no usable selection.
+  createEffect(() => {
+    const list = modes();
+    const current = addMode();
+    if (current && list.some((info) => info.mode === current)) return;
+    const preferred = commonModes()[0] ?? list[0]?.mode ?? '';
+    if (preferred !== current) setAddMode(preferred);
+  });
 
   async function loadRecent(): Promise<void> {
     setRecentLoading(true);
@@ -290,7 +305,6 @@ const DecodersSection: Component = () => {
                       <FieldLabel>Dongle</FieldLabel>
                       <select
                         class="admin-input"
-                        value={decoder.dongleId}
                         onChange={(event) =>
                           adminStore.updateDecoder(decoder.id, {
                             dongleId: event.currentTarget.value,
@@ -299,7 +313,12 @@ const DecodersSection: Component = () => {
                       >
                         <For each={dongles()}>
                           {(dongle) => (
-                            <option value={dongle.id}>{dongle.name || dongle.id}</option>
+                            <option
+                              value={dongle.id}
+                              selected={dongle.id === decoder.dongleId}
+                            >
+                              {dongle.name || dongle.id}
+                            </option>
                           )}
                         </For>
                       </select>
@@ -341,7 +360,6 @@ const DecodersSection: Component = () => {
                       <FieldLabel>Mode</FieldLabel>
                       <select
                         class="admin-input"
-                        value={decoder.mode}
                         onChange={(event) => {
                           const mode = event.currentTarget.value;
                           const next = modeInfo(mode);
@@ -356,8 +374,22 @@ const DecodersSection: Component = () => {
                           });
                         }}
                       >
+                        {/* Keep the stored mode visible even when the catalog
+                            does not list it (older config or mode not built). */}
+                        <Show when={!modeInfo(decoder.mode)}>
+                          <option value={decoder.mode} selected>
+                            {decoder.mode.toUpperCase()} — unavailable
+                          </option>
+                        </Show>
                         <For each={modes()}>
-                          {(mode) => <option value={mode.mode}>{mode.label}</option>}
+                          {(mode) => (
+                            <option
+                              value={mode.mode}
+                              selected={mode.mode === decoder.mode}
+                            >
+                              {mode.label}
+                            </option>
+                          )}
                         </For>
                       </select>
                     </div>
@@ -400,20 +432,21 @@ const DecodersSection: Component = () => {
           <select
             class="admin-input w-44"
             id="decoder-add-mode"
-            value={commonModes()[0] ?? modes()[0]?.mode ?? ''}
+            onChange={(event) => setAddMode(event.currentTarget.value)}
           >
             <For each={modes()}>
-              {(mode) => <option value={mode.mode}>{mode.label} — {mode.category}</option>}
+              {(mode) => (
+                <option value={mode.mode} selected={mode.mode === addMode()}>
+                  {mode.label} — {mode.category}
+                </option>
+              )}
             </For>
           </select>
           <button
             class="px-3 py-1 text-[10px] font-mono uppercase rounded border border-accent/40 text-accent hover:bg-accent hover:text-text-inverse transition-colors disabled:opacity-40"
             disabled={adding() || dongles().length === 0}
             onClick={() => {
-              const select = document.getElementById(
-                'decoder-add-mode',
-              ) as HTMLSelectElement | null;
-              const info = modeInfo(select?.value ?? '');
+              const info = modeInfo(addMode());
               if (info) addDecoder(info);
             }}
           >

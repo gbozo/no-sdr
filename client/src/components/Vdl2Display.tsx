@@ -4,7 +4,7 @@
 // Message log on the left, station table on the right. VDL2 is a message
 // service, not a position mode, so there is no map.
 
-import { Component, For, Show, createMemo, createSignal } from 'solid-js';
+import { Component, Index, Show, createMemo, createSignal } from 'solid-js';
 import { store } from '../store/index.js';
 import type { Vdl2Message } from '~/shared';
 
@@ -137,29 +137,32 @@ const Vdl2Display: Component = () => {
                 </tr>
               </thead>
               <tbody>
-                <For each={messages()}>
-                  {(message) => (
+                <Index each={messages()}>
+                  {(message) => {
+                    const key = () => rowKey(message());
+                    return (
                     <tr
-                      onClick={() => setSelected(rowKey(message) === selected() ? null : rowKey(message))}
+                      onClick={() => setSelected(key() === selected() ? null : key())}
                       class={`border-t border-border/20 cursor-pointer hover:bg-cyan/5 ${
-                        rowKey(message) === selected() ? 'bg-cyan/10 text-cyan' : ''
+                        key() === selected() ? 'bg-cyan/10 text-cyan' : ''
                       }`}
                     >
-                      <td class="px-1.5 py-1 text-text-dim whitespace-nowrap">{timeOf(message.at)}</td>
+                      <td class="px-1.5 py-1 text-text-dim whitespace-nowrap">{timeOf(message().at)}</td>
                       <td class="px-1.5 py-1 text-right text-text-dim whitespace-nowrap">
-                        {(message.freq_hz / 1e6).toFixed(3)}
+                        {(message().freq_hz / 1e6).toFixed(3)}
                       </td>
                       <td class="px-1.5 py-1 whitespace-nowrap text-text-secondary">
-                        {message.srcHex} → {message.dstHex}
+                        {message().srcHex} → {message().dstHex}
                       </td>
-                      <td class="px-1.5 py-1 whitespace-nowrap text-text-dim">{message.frameLabel}</td>
-                      <td class="px-1.5 py-1 text-text-primary break-all">{message.summary}</td>
+                      <td class="px-1.5 py-1 whitespace-nowrap text-text-dim">{message().frameLabel}</td>
+                      <td class="px-1.5 py-1 text-text-primary break-all">{message().summary}</td>
                       <td class="px-1.5 py-1 text-right whitespace-nowrap text-text-dim">
-                        {Math.round(message.snr_db)}
+                        {Math.round(message().snr_db)}
                       </td>
                     </tr>
-                  )}
-                </For>
+                    );
+                  }}
+                </Index>
               </tbody>
             </table>
 
@@ -222,27 +225,27 @@ const Vdl2Display: Component = () => {
               </tr>
             </thead>
             <tbody>
-              <For each={sortedStations()}>
+              <Index each={sortedStations()}>
                 {(station) => (
                   <tr
                     onClick={() =>
-                      setFilterSrc(filterSrc() === station.addr ? null : station.addr)
+                      setFilterSrc(filterSrc() === station().addr ? null : station().addr)
                     }
                     class={`border-t border-border/20 cursor-pointer hover:bg-cyan/5 ${
-                      filterSrc() === station.addr ? 'bg-cyan/10 text-cyan' : ''
+                      filterSrc() === station().addr ? 'bg-cyan/10 text-cyan' : ''
                     }`}
                   >
                     <td class="px-1.5 py-1 text-text-primary whitespace-nowrap">
-                      {stationLabel(station.registration, station.flight, station.addr.toString(16).toUpperCase().padStart(6, '0'))}
+                      {stationLabel(station().registration, station().flight, station().addr.toString(16).toUpperCase().padStart(6, '0'))}
                     </td>
-                    <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{station.kind}</td>
+                    <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{station().kind}</td>
                     <td class="px-1.5 py-1 text-text-dim whitespace-nowrap">
-                      {Math.max(0, Math.round(Date.now() / 1000 - station.last_at))}s
+                      {Math.max(0, Math.round(Date.now() / 1000 - station().last_at))}s
                     </td>
-                    <td class="px-1.5 py-1 text-right text-text-dim">{station.messages}</td>
+                    <td class="px-1.5 py-1 text-right text-text-dim">{station().messages}</td>
                   </tr>
                 )}
-              </For>
+              </Index>
             </tbody>
           </table>
           <Show when={stations().length === 0}>
