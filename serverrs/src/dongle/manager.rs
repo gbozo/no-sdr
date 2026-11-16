@@ -863,8 +863,16 @@ impl Manager {
                         serial = %serial,
                         "opening local USB rtlsdr"
                     );
+                    // `spawn_blocking` needs owned data; the settings map is
+                    // small and only read at open.
+                    let settings = dcfg.source.settings.clone();
                     let source = tokio::task::spawn_blocking(move || {
-                        RtlSdrSource::open(device_index, &serial, sample_rate)
+                        RtlSdrSource::open_with_settings(
+                            device_index,
+                            &serial,
+                            sample_rate,
+                            &settings,
+                        )
                     })
                     .await
                     .map_err(|e| anyhow!("local rtlsdr open task failed: {e}"))??;
@@ -1226,6 +1234,13 @@ impl Manager {
         dcfg: &DongleConfig,
         profile: &DongleProfile,
     ) {
+        self.apply_tuning(cmd, dcfg, profile);
+        self.apply_gain_and_hw(cmd, dcfg, profile);
+    }
+
+    /// Tuning commands shared by every source: centre frequency, sample rate,
+    /// PPM correction and bias-T.
+    fn apply_tuning(&self, cmd: &CommandHandle, dcfg: &DongleConfig, profile: &DongleProfile) {
         let _ =
             cmd.set_frequency((profile.center_frequency + profile.oscillator_offset as i64) as u32);
         let sample_rate = effective_sample_rate(dcfg.sample_rate, profile.sample_rate);
@@ -1234,7 +1249,13 @@ impl Manager {
             let _ = cmd.set_frequency_correction(dcfg.ppm as u32);
         }
         let _ = cmd.set_bias_t(dcfg.bias_t as u32);
+    }
 
+    /// Gain and hardware options. Per-driver settings run first; the RTL-family
+    /// tail resolves the manual/automatic gain and pushes the remaining
+    /// hardware switches. Shared by dongle start and profile switches so both
+    /// paths cannot drift apart.
+    fn apply_gain_and_hw(&self, cmd: &CommandHandle, dcfg: &DongleConfig, profile: &DongleProfile) {
         if dcfg.source.kind == "sdrplay" {
             let settings = &dcfg.source.settings;
             let get_i64 = |key: &str| settings.get(key).and_then(serde_json::Value::as_i64);
@@ -1445,23 +1466,44 @@ impl Manager {
             return;
         }
 
-        let gain = if profile.gain > 0.0 {
-            Some(profile.gain)
+        // A profile gain wins over the dongle gain; neither set (0) means
+        // automatic tuner gain. The resolved origin is logged because a dongle
+        // at `gain: 0` can still run manual gain from its profile.
+        let (gain, gain_source) = if profile.gain > 0.0 {
+            (Some(profile.gain), "profile")
         } else if dcfg.gain > 0.0 {
-            Some(dcfg.gain)
+            (Some(dcfg.gain), "dongle")
         } else {
-            None
+            (None, "auto")
         };
         match gain {
             Some(gain) => {
                 let _ = cmd.set_gain_mode(1);
-                let _ = cmd.set_gain((gain * 10.0) as u32);
+                // RTL-family SET_GAIN takes tenths of a dB.
+                let _ = cmd.set_gain((gain * 10.0).round() as u32);
+                info!(
+                    source = %dcfg.source.kind,
+                    gain_db = gain,
+                    gain_from = %gain_source,
+                    dongle_gain_db = dcfg.gain,
+                    profile_gain_db = profile.gain,
+                    profile = %profile.id,
+                    "tuner gain applied (manual)"
+                );
             }
-            // No explicit gain means automatic tuner gain. Always send the
-            // mode so a profile switch away from a manual-gain profile does
-            // not leave the tuner stuck at the previous gain.
             None => {
+                // Always send the mode so a profile switch away from a
+                // manual-gain profile does not leave the tuner latched at the
+                // previous gain.
                 let _ = cmd.set_gain_mode(0);
+                info!(
+                    source = %dcfg.source.kind,
+                    gain_from = %gain_source,
+                    dongle_gain_db = dcfg.gain,
+                    profile_gain_db = profile.gain,
+                    profile = %profile.id,
+                    "tuner gain applied (automatic)"
+                );
             }
         }
         let direct_sampling = if profile.direct_sampling != 0 {
@@ -3120,26 +3162,10 @@ impl Manager {
                     ),
                 }
             }
-            if profile.gain > 0.0 {
-                let _ = cmd.set_gain_mode(1);
-                let _ = cmd.set_gain((profile.gain * 10.0) as u32);
-            } else if dcfg.gain > 0.0 {
-                let _ = cmd.set_gain_mode(1);
-                let _ = cmd.set_gain((dcfg.gain * 10.0) as u32);
-            } else {
-                // Explicitly return to automatic tuner gain when the new
-                // profile has no manual gain (otherwise the previous manual
-                // gain stays latched on the tuner).
-                let _ = cmd.set_gain_mode(0);
-            }
-            let direct = if profile.direct_sampling != 0 {
-                profile.direct_sampling
-            } else {
-                dcfg.direct_sampling
-            };
-            let _ = cmd.set_direct_sampling(direct as u32);
-            let _ = cmd.set_bias_t(dcfg.bias_t as u32);
-            let _ = cmd.set_offset_tuning(dcfg.offset_tuning as u32);
+            // Gain, direct sampling, bias-T, RTL AGC and offset tuning: the
+            // same routine dongle start uses, so a profile switch cannot miss
+            // a setting (the digital-AGC flag used to be skipped here).
+            self.apply_gain_and_hw(cmd, &dcfg, &profile);
         }
 
         if profile.fft_size > 0 {

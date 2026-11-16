@@ -237,6 +237,45 @@ fn reset_device(device: &nusb::Device, label: &str) {
     }
 }
 
+/// Claims the streaming interface, detaching any kernel driver.
+///
+/// `USBDEVFS_DISCONNECT_CLAIM` (what `nusb` uses) only exists from Linux 4.6.
+/// On older kernels the ioctl is simply unknown and the claim fails with
+/// `ENOTTY`, even though `rtl_tcp`/librtlsdr works there because libusb falls
+/// back to the much older `USBDEVFS_DISCONNECT` + `USBDEVFS_CLAIMINTERFACE`
+/// pair. Do the same: on an unsupported-ioctl error, detach explicitly and
+/// then claim.
+fn claim_interface(device: &nusb::Device, label: &str) -> Result<nusb::Interface> {
+    let first = device.detach_and_claim_interface(INTERFACE).wait();
+    match first {
+        Ok(iface) => Ok(iface),
+        Err(e) if claim_ioctl_unsupported(&e) => {
+            tracing::info!(
+                "USBDEVFS_DISCONNECT_CLAIM unsupported ({}); using detach + claim \
+                 (pre-4.6 kernel fallback)",
+                e
+            );
+            // ENODATA just means no kernel driver was bound.
+            if let Err(detach_err) = device.detach_kernel_driver(INTERFACE) {
+                tracing::debug!("detach_kernel_driver: {detach_err}");
+            }
+            device
+                .claim_interface(INTERFACE)
+                .wait()
+                .map_err(|e| Error::from_open(e, &label))
+        }
+        Err(e) => Err(Error::from_open(e, &label)),
+    }
+}
+
+/// Whether an error means the kernel does not implement the ioctl at all.
+fn claim_ioctl_unsupported(err: &nusb::Error) -> bool {
+    // ENOTTY (25) = unknown ioctl; EINVAL (22) = unsupported request on some
+    // kernels; ENOSYS (38) on old Android kernels. EBUSY means a driver is
+    // bound and the combined ioctl refused, which the fallback can still fix.
+    matches!(err.os_error(), Some(25) | Some(22) | Some(38) | Some(16))
+}
+
 /// An opened dongle: the claimed interface plus the identity we opened it by.
 ///
 /// Not `Clone` on purpose — see the module invariant.
@@ -246,6 +285,9 @@ pub struct UsbDev {
     label: String,
     serial: Option<String>,
     is_blog_v4: bool,
+    /// Link speed reported by the bus. A dongle on a full-speed (USB 1.1)
+    /// port cannot carry 2.4 MSPS; the stream then stalls in a loop.
+    speed: Option<nusb::Speed>,
 }
 
 impl UsbDev {
@@ -303,6 +345,7 @@ impl UsbDev {
             format!("{manufacturer} {product}")
         };
 
+        let speed = info.speed();
         let device = info
             .open()
             .wait()
@@ -312,24 +355,35 @@ impl UsbDev {
         // Detaching is the whole answer to `dvb_usb_rtl28xxu` claiming the
         // dongle on Linux; it is a no-op on Windows and macOS. The kernel
         // driver rebinds by itself when the device is unplugged.
-        let iface = device
-            .detach_and_claim_interface(INTERFACE)
-            .wait()
-            .map_err(|e| Error::from_open(e, &label))?;
+        let iface = claim_interface(&device, &label)?;
 
         tracing::info!(
-            "opened RTL-SDR {label} (usb {:04x}:{:04x}, serial {})",
+            "opened RTL-SDR {label} (usb {:04x}:{:04x}, speed {:?}, serial {})",
             info.vendor_id(),
             info.product_id(),
+            speed,
             serial.as_deref().unwrap_or("none")
         );
+        if matches!(speed, Some(nusb::Speed::Low) | Some(nusb::Speed::Full)) {
+            tracing::warn!(
+                speed = ?speed,
+                "RTL-SDR is on a full-speed (USB 1.1) link: sample rates above \
+                 ~1 MSPS cannot be carried and the stream will stall"
+            );
+        }
 
         Ok(UsbDev {
             iface,
             label,
             serial,
             is_blog_v4,
+            speed,
         })
+    }
+
+    /// USB link speed, when the platform reports it.
+    pub fn speed(&self) -> Option<nusb::Speed> {
+        self.speed
     }
 
     pub fn label(&self) -> &str {

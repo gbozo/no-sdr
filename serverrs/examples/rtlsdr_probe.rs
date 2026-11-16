@@ -89,6 +89,14 @@ fn report(label: &str, s: &Stats) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // The driver reports the link speed, USB geometry, stall recovery and
+    // gain steps through `tracing`; without a subscriber a failing dongle
+    // prints nothing useful.
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_target(false)
+        .try_init();
+
     let devices = tokio::task::spawn_blocking(enumerate_local_devices)
         .await
         .context("enumeration task")?;
@@ -172,6 +180,13 @@ async fn main() -> Result<()> {
         println!("PASS");
         Ok(())
     } else {
-        bail!("one or more stages produced no samples")
+        bail!(
+            "one or more stages produced no samples. If this host is old or the \
+             dongle sits behind a hub, check the USB link speed above (a \
+             full-speed/1.1 link cannot carry 2.4 MSPS) and try the transfer \
+             overrides in config: source.settings.transfers / transferKib. \
+             Running rtl_tcp on a host where the dongle enumerates at high \
+             speed is the known-good fallback."
+        )
     }
 }
