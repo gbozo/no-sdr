@@ -30,6 +30,7 @@ pub mod rtlsdr;
 pub mod rtltcp;
 pub mod scan;
 pub mod source;
+pub mod waterfall;
 
 pub use demo::{DemoConfig, DemoSource, SignalConfig};
 pub use manager::{

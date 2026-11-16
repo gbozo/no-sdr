@@ -201,6 +201,23 @@ pub struct ServerConfig {
     pub fft_history_fft_size: i32,
     #[serde(default)]
     pub fft_history_compression: String,
+    /// Target bins per waterfall tile for the tiered (segmented) waterfall.
+    /// Must be a positive power of two. The effective value is clamped to
+    /// `min(waterfallTileBins, fftSize/8)` per dongle (`effectiveTileBins`).
+    #[serde(default = "default_waterfall_tile_bins")]
+    pub waterfall_tile_bins: i32,
+    /// Number of fold tiers (resolution levels) for the tiered waterfall.
+    /// `0` = automatic: as many octave folds as the FFT/tile geometry can use
+    /// (e.g. 4 for 8192 bins with 1024-bin tiles, 5 for 16384, 7 for 65536).
+    /// An explicit value is clamped to `1..=8` and to that same useful maximum.
+    #[serde(default)]
+    pub waterfall_tier_count: i32,
+    /// Frames of history kept per waterfall tile for the prefill burst on
+    /// entering a view. Each active tile costs
+    /// `waterfallTileHistoryFrames * effectiveTileBins * 4` bytes, so this is
+    /// the main lever on tiered-waterfall memory use.
+    #[serde(default = "default_waterfall_tile_history_frames")]
+    pub waterfall_tile_history_frames: i32,
     #[serde(default)]
     pub allowed_fft_codecs: Vec<String>,
     #[serde(default)]
@@ -243,6 +260,9 @@ impl Default for ServerConfig {
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
+            waterfall_tile_bins: default_waterfall_tile_bins(),
+            waterfall_tile_history_frames: default_waterfall_tile_history_frames(),
+            waterfall_tier_count: 0,
             allowed_fft_codecs: Vec::new(),
             allowed_iq_codecs: Vec::new(),
             opus_complexity: 0,
@@ -541,6 +561,27 @@ pub fn validate(cfg: &Config) -> Result<()> {
             cfg.server.users_ribbon
         );
     }
+    if !is_power_of_two(cfg.server.waterfall_tile_bins) || cfg.server.waterfall_tile_bins <= 0 {
+        bail!(
+            "config: server.waterfallTileBins must be a positive power of 2, got {}",
+            cfg.server.waterfall_tile_bins
+        );
+    }
+    // The tiled history burst carries its frame count as a u16.
+    if !(1..=65535).contains(&cfg.server.waterfall_tile_history_frames) {
+        bail!(
+            "config: server.waterfallTileHistoryFrames must be 1..=65535, got {}",
+            cfg.server.waterfall_tile_history_frames
+        );
+    }
+    // `0` = auto (as many octave folds as the FFT/tile geometry supports).
+    // 8 matches `waterfall::MAX_TIERS`, the hard ceiling on the ladder.
+    if !(0..=8).contains(&cfg.server.waterfall_tier_count) {
+        bail!(
+            "config: server.waterfallTierCount must be 0 (auto) or 1..=8, got {}",
+            cfg.server.waterfall_tier_count
+        );
+    }
     if !cfg.server.receiver_latitude.is_finite()
         || !(-90.0..=90.0).contains(&cfg.server.receiver_latitude)
     {
@@ -625,6 +666,16 @@ fn default_true() -> bool {
 
 fn default_users_ribbon() -> String {
     "users".to_string()
+}
+
+/// Default bins per waterfall tile for the tiered waterfall.
+fn default_waterfall_tile_bins() -> i32 {
+    1024
+}
+
+/// Default per-tile history depth for the tiered waterfall prefill burst.
+fn default_waterfall_tile_history_frames() -> i32 {
+    256
 }
 
 /// Default bookmarks directory: `<dir of config>/../bookmarks`.
@@ -876,5 +927,60 @@ mod tests {
         let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
         apply_profile_defaults(&mut cfg);
         assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn waterfall_tile_defaults_and_validation() {
+        let cfg = parse("dongles: []\n");
+        // Tiered-waterfall defaults: 1024-bin tiles, 256 frames of per-tile
+        // history (a quarter of the legacy 1024-frame ring, to bound memory).
+        assert_eq!(cfg.server.waterfall_tile_bins, 1024);
+        assert_eq!(cfg.server.waterfall_tile_history_frames, 256);
+        // 0 = automatic ladder length (decided per dongle from fft/tile geometry).
+        assert_eq!(cfg.server.waterfall_tier_count, 0);
+        assert!(validate(&cfg).is_ok());
+
+        for bad in ["0", "70000", "-1"] {
+            let value: serde_yaml::Value = serde_yaml::from_str(&format!(
+                "server:\n  waterfallTileHistoryFrames: {bad}\ndongles: []\n"
+            ))
+            .unwrap();
+            let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+            apply_defaults(&mut cfg);
+            apply_profile_defaults(&mut cfg);
+            assert!(
+                validate(&cfg).is_err(),
+                "waterfallTileHistoryFrames={bad} must be rejected"
+            );
+        }
+
+        let value: serde_yaml::Value =
+            serde_yaml::from_str("server:\n  waterfallTileBins: 1000\ndongles: []\n").unwrap();
+        let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+        apply_defaults(&mut cfg);
+        apply_profile_defaults(&mut cfg);
+        assert!(validate(&cfg).is_err(), "non-power-of-two tile width");
+
+        // Tier count: 0 (auto) and 1..=8 are valid, anything else is rejected.
+        for good in ["0", "1", "5", "8"] {
+            let value: serde_yaml::Value = serde_yaml::from_str(&format!(
+                "server:\n  waterfallTierCount: {good}\ndongles: []\n"
+            ))
+            .unwrap();
+            let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+            apply_defaults(&mut cfg);
+            apply_profile_defaults(&mut cfg);
+            assert!(validate(&cfg).is_ok(), "waterfallTierCount={good} must be accepted");
+        }
+        for bad in ["9", "-1"] {
+            let value: serde_yaml::Value = serde_yaml::from_str(&format!(
+                "server:\n  waterfallTierCount: {bad}\ndongles: []\n"
+            ))
+            .unwrap();
+            let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+            apply_defaults(&mut cfg);
+            apply_profile_defaults(&mut cfg);
+            assert!(validate(&cfg).is_err(), "waterfallTierCount={bad} must be rejected");
+        }
     }
 }

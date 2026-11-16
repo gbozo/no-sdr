@@ -80,6 +80,10 @@ interface AnalysisConfig {
   tuneHz: number;
   bandwidth: number;
   measureBwHz: number;
+  // Tiled waterfall: absolute-Hz coverage of the (cropped) frame. When unset
+  // the frame is a full-span frame covering centerHz ± sampleRate/2.
+  frameLowHz?: number;
+  frameSpanHz?: number;
 }
 
 interface LevelPoint {
@@ -177,8 +181,11 @@ function analyse(frame: Float32Array, cfg: AnalysisConfig, spanHz: number): Anal
   const frameLen = frame.length;
   if (frameLen === 0 || cfg.sampleRate <= 0) return null;
 
-  const hzPerBin = cfg.sampleRate / frameLen;
-  const frameLow = cfg.centerHz - cfg.sampleRate / 2;
+  // Tiled path supplies the frame's true Hz coverage; otherwise the frame is a
+  // full-span frame covering centerHz ± sampleRate/2.
+  const frameSpan = cfg.frameSpanHz && cfg.frameSpanHz > 0 ? cfg.frameSpanHz : cfg.sampleRate;
+  const frameLow = cfg.frameLowHz != null ? cfg.frameLowHz : cfg.centerHz - cfg.sampleRate / 2;
+  const hzPerBin = frameSpan / frameLen;
   const wantedLow = cfg.tuneHz - spanHz / 2;
   const wantedHigh = cfg.tuneHz + spanHz / 2;
   const start = clamp(Math.floor((wantedLow - frameLow) / hzPerBin), 0, frameLen - 1);
@@ -442,13 +449,20 @@ const SignalAnalysis: Component = () => {
   let dragging: 'a' | 'b' | null = null;
   let loadedSpanKey = '';
 
-  const config = (): AnalysisConfig => ({
-    sampleRate: store.sampleRate(),
-    centerHz: store.centerFrequency(),
-    tuneHz: store.tunedFrequency(),
-    bandwidth: store.bandwidth(),
-    measureBwHz: measureBw() > 0 ? measureBw() : Math.max(1, store.bandwidth()),
-  });
+  const config = (): AnalysisConfig => {
+    const coverage = engine.getLatestFftFrameCoverage();
+    return {
+      sampleRate: store.sampleRate(),
+      centerHz: store.centerFrequency(),
+      tuneHz: store.tunedFrequency(),
+      bandwidth: store.bandwidth(),
+      measureBwHz: measureBw() > 0 ? measureBw() : Math.max(1, store.bandwidth()),
+      // When a tiled view is active the latest frame is a cropped strip.
+      ...(coverage
+        ? { frameLowHz: coverage.lowHz, frameSpanHz: coverage.highHz - coverage.lowHz }
+        : {}),
+    };
+  };
 
   const fmtLevel = (db: number): string =>
     `${(db + dbmOffset()).toFixed(1)} ${dbmOffset() === 0 ? 'dB' : 'dBm'}`;
@@ -1183,6 +1197,14 @@ const SignalAnalysis: Component = () => {
     try {
       localStorage.setItem(`node-sdr:analysis.span.${store.activeProfileId() || store.mode()}`, mode);
     } catch { /* ignore */ }
+    // Tiled waterfall: request the finest tiles covering this analysis window so
+    // occupied-bandwidth / channel-power read high-resolution data. On legacy
+    // servers this is a no-op and the coarse full-span frame is used as before.
+    if (engine.isTiledWaterfall || store.waterfallProtocol() === 1) {
+      const span = spanForMode(mode, store.bandwidth(), store.sampleRate());
+      const tune = store.tunedFrequency();
+      engine.requestAnalysisWindow(tune - span / 2, tune + span / 2);
+    }
   };
 
   const cycleTrace = () => {
@@ -1249,6 +1271,9 @@ const SignalAnalysis: Component = () => {
       clearInterval(timer);
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('mouseup', onMouseUp);
+      // Hand the waterfall view back to whatever the operator was looking at
+      // before the pane narrowed it to the analysis window.
+      engine.releaseAnalysisWindow();
     });
   });
 

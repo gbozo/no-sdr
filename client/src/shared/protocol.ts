@@ -72,6 +72,28 @@ export const MSG_FFT_HISTORY = 0x0D;
  */
 export const MSG_DECODER_SCOPE = 0x0E;
 
+// ---- V1 segmented multi-tier waterfall protocol ----
+//
+// Affected FFT messages (0x01, 0x04, 0x08, 0x0B, 0x0D) may carry a `verFlags`
+// byte at byte offset 1 (immediately after the type byte). Legacy frames omit
+// it entirely, so the engine only reads it when the session negotiated
+// protocol v1 (via the `waterfallProtocol` meta field).
+//
+// verFlags layout:
+//   low nibble = protocol version (= WF_VER)
+//   bit 0x10   = TILED: a 6-byte tier/tile block follows
+//   bits 0x20/0x40/0x80 reserved (= 0)
+//
+// 6-byte tier/tile block (present only when TILED):
+//   [u8 tier][u8 reserved0=0][u16 tileIndex LE][u16 tileCount LE]
+
+/** Current waterfall protocol version carried in the low nibble of verFlags. */
+export const WF_VER = 1;
+/** verFlags bit set when a 6-byte tier/tile block follows. */
+export const WF_FLAG_TILED = 0x10;
+/** verFlags value for a tiled V1 FFT frame (WF_VER | WF_FLAG_TILED). */
+export const WF_VERFLAGS_TILED = WF_VER | WF_FLAG_TILED; // 0x11
+
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT data */
@@ -105,6 +127,8 @@ export type ClientCommand =
   | { cmd: 'ribbon_hidden'; hidden: boolean }
   | { cmd: 'set_pre_filter_nb'; enabled: boolean }
   | { cmd: 'set_pre_filter_nb_threshold'; threshold: number }
+  // Segmented multi-tier waterfall viewport negotiation
+  | { cmd: 'waterfall_view'; viewportPx: number; startFrac: number; endFrac: number; fps?: number }
   // Admin commands
   | { cmd: 'admin_auth'; password: string }
   | { cmd: 'admin_set_profile'; dongleId: string; profileId: string }
@@ -186,9 +210,13 @@ export interface UserLocation {
 }
 
 export type ServerMeta =
-  | { type: 'welcome'; clientId: string; connIndex: number; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[] }
-  | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number }
-  | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number }
+  | { type: 'welcome'; clientId: string; connIndex: number; serverVersion: string; allowedFftCodecs?: FftCodecType[]; allowedIqCodecs?: IqCodecType[]; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
+  | { type: 'subscribed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
+  | { type: 'profile_changed'; dongleId: string; profileId: string; centerFreq: number; sampleRate: number; fftSize: number; iqSampleRate: number; mode: string; tuningStep?: number; tuneOffset?: number; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
+  // Server-initiated refresh event: the tier ladder was rebuilt (admin config
+  // change, dongle restart) or an operator forced a refresh. Clients must drop
+  // their tiled state and re-send `waterfall_view` for the current geometry.
+  | { type: 'waterfall_refresh'; dongleId?: string; waterfallProtocol?: number; waterfallTileBins?: number; waterfallTierCount?: number }
   | { type: 'dongle_status'; dongleId: string; running: boolean; clientCount: number }
   | { type: 'user_locations'; dongleId: string; users: UserLocation[] }
   | { type: 'error'; message: string; code?: string }
@@ -498,6 +526,326 @@ export function packFftHistoryAdpcmMessage(
 export function packRdsMessage(rdsData: object): ArrayBuffer {
   const bytes = _textEncoder.encode(JSON.stringify(rdsData));
   return packBinaryMessage(MSG_RDS, bytes.buffer as ArrayBuffer);
+}
+
+// ============================================================
+// V1 segmented multi-tier waterfall — pack / unpack helpers
+// ============================================================
+//
+// These stay byte-identical with the Rust `pack_fft_*_tiled` /
+// `pack_fft_history_tiled` packers in serverrs/src/ws/protocol.rs. The leading
+// layout is always:
+//   [type][verFlags=0x11][tier][reserved0=0][tileIndex u16 LE][tileCount u16 LE]
+// followed by the per-message body in legacy order.
+
+/** The decoded tier/tile tag from a V1 tiled FFT frame. */
+export interface TileTag {
+  /** Resolution tier index (0 = finest, 3 = coarsest). */
+  tier: number;
+  /** This tile's index within the tier. */
+  tileIndex: number;
+  /** Total number of tiles in the tier. */
+  tileCount: number;
+}
+
+/** Common decode result for a 0x01/0x04/0x08/0x0B FFT frame. */
+export interface FftFrameInfo extends Partial<TileTag> {
+  /** Message type byte (MSG_FFT / MSG_FFT_COMPRESSED / MSG_FFT_ADPCM / MSG_FFT_DEFLATE). */
+  type: number;
+  /** True when the frame carried a V1 verFlags byte with the TILED bit. */
+  tiled: boolean;
+  /** dB range lower bound, when the message type carries one (0x04/0x0B). */
+  minDb?: number;
+  /** dB range upper bound, when the message type carries one (0x04/0x0B). */
+  maxDb?: number;
+  /** Decompressed bin count, when the message type carries one (0x0B). */
+  binCount?: number;
+  /**
+   * Byte offset (within the original frame buffer) of the first payload byte
+   * after all headers: raw f32 bins (0x01), quantized u8 bins (0x04),
+   * the ADPCM payload (0x08), or the deflate bytes (0x0B).
+   */
+  payloadOffset: number;
+}
+
+/** Decode result for a 0x0D waterfall history frame. */
+export interface FftHistoryInfo extends Partial<TileTag> {
+  type: number;
+  tiled: boolean;
+  frameCount: number;
+  binCount: number;
+  minDb: number;
+  maxDb: number;
+  /** 0 = NONE, 1 = DEFLATE, 2 = ADPCM (see FFT_HISTORY_CODEC_*). */
+  codec: number;
+  /** Byte offset of the first payload byte after the history header. */
+  payloadOffset: number;
+}
+
+/**
+ * Read the V1 verFlags byte + optional tier/tile block from a full frame
+ * buffer (type byte at offset 0). Returns the tag (if TILED) and the offset of
+ * the first body byte after the prefix.
+ *
+ * `v1` tells the decoder the session negotiated protocol v1, so byte 1 is a
+ * verFlags byte. When `v1` is false (legacy session) no verFlags byte exists
+ * and the body starts at offset 1.
+ */
+function readVerFlags(
+  view: DataView,
+  v1: boolean,
+): { tiled: boolean; tag?: TileTag; bodyOffset: number } {
+  if (!v1) return { tiled: false, bodyOffset: 1 };
+  const verFlags = view.getUint8(1);
+  // Guard: a legacy frame on a v1 session (no verFlags) is not expected, but
+  // if the version nibble does not match we treat it as non-tiled from byte 1.
+  if ((verFlags & 0x0f) !== WF_VER) {
+    return { tiled: false, bodyOffset: 1 };
+  }
+  if ((verFlags & WF_FLAG_TILED) === 0) {
+    return { tiled: false, bodyOffset: 2 };
+  }
+  const tier = view.getUint8(2);
+  // byte 3 = reserved0
+  const tileIndex = view.getUint16(4, true);
+  const tileCount = view.getUint16(6, true);
+  return { tiled: true, tag: { tier, tileIndex, tileCount }, bodyOffset: 8 };
+}
+
+/**
+ * Decode a 0x01/0x04/0x08/0x0B FFT frame header, returning the tier/tile tag
+ * (when present), the dB range / bin count (per message type) and the payload
+ * offset. Pass the full frame buffer (type byte at offset 0).
+ *
+ * `v1` selects whether byte 1 is read as a verFlags byte. For legacy sessions
+ * pass `false` and the existing non-tiled layout is assumed unchanged.
+ */
+export function decodeFftFrame(data: ArrayBuffer, v1: boolean): FftFrameInfo {
+  const view = new DataView(data);
+  const type = view.getUint8(0);
+  const { tiled, tag, bodyOffset } = readVerFlags(view, v1);
+  const info: FftFrameInfo = {
+    type,
+    tiled,
+    payloadOffset: bodyOffset,
+    ...(tag ?? {}),
+  };
+  switch (type) {
+    case MSG_FFT:
+      // body is raw f32 bins
+      info.payloadOffset = bodyOffset;
+      break;
+    case MSG_FFT_COMPRESSED:
+      info.minDb = view.getInt16(bodyOffset, true);
+      info.maxDb = view.getInt16(bodyOffset + 2, true);
+      info.payloadOffset = bodyOffset + 4;
+      break;
+    case MSG_FFT_ADPCM:
+      // ADPCM payload keeps its own inner [i16 min][i16 max] header; do not
+      // read it here. payloadOffset points at the start of that payload.
+      info.payloadOffset = bodyOffset;
+      break;
+    case MSG_FFT_DEFLATE:
+      info.minDb = view.getInt16(bodyOffset, true);
+      info.maxDb = view.getInt16(bodyOffset + 2, true);
+      info.binCount = view.getUint32(bodyOffset + 4, true);
+      info.payloadOffset = bodyOffset + 8;
+      break;
+    default:
+      info.payloadOffset = bodyOffset;
+      break;
+  }
+  return info;
+}
+
+/**
+ * Decode a 0x0D waterfall history frame header (legacy or V1 tiled). Returns
+ * the tier/tile tag (when tiled) plus the existing history fields and the
+ * payload offset. Pass the full frame buffer (type byte at offset 0).
+ */
+export function decodeFftHistoryFrame(data: ArrayBuffer, v1: boolean): FftHistoryInfo {
+  const view = new DataView(data);
+  const type = view.getUint8(0);
+  const { tiled, tag, bodyOffset } = readVerFlags(view, v1);
+  const frameCount = view.getUint16(bodyOffset, true);
+  const binCount = view.getUint32(bodyOffset + 2, true);
+  const minDb = view.getInt16(bodyOffset + 6, true);
+  const maxDb = view.getInt16(bodyOffset + 8, true);
+  const codec = view.getUint8(bodyOffset + 10);
+  return {
+    type,
+    tiled,
+    frameCount,
+    binCount,
+    minDb,
+    maxDb,
+    codec,
+    payloadOffset: bodyOffset + 11,
+    ...(tag ?? {}),
+  };
+}
+
+/**
+ * Pack a V1 tiled raw FFT frame.
+ * Wire: [0x01][0x11][tier][0][tileIndex u16 LE][tileCount u16 LE][f32 bins...]
+ */
+export function packFftRawTiled(
+  bins: Float32Array,
+  tier: number,
+  tileIndex: number,
+  tileCount: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(8 + bins.length * 4);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT);
+  view.setUint8(1, WF_VERFLAGS_TILED);
+  view.setUint8(2, tier);
+  view.setUint8(3, 0);
+  view.setUint16(4, tileIndex, true);
+  view.setUint16(6, tileCount, true);
+  // Copy bins as little-endian f32. new Float32Array(buf, 8) would honour host
+  // endianness; all supported targets are LE, matching the Rust side.
+  new Float32Array(buf, 8).set(bins);
+  return buf;
+}
+
+/**
+ * Pack a V1 tiled compressed FFT frame (quantized u8 bins).
+ * Wire: [0x04][0x11][tier][0][tileIndex u16][tileCount u16][i16 minDb][i16 maxDb][u8 bins...]
+ */
+export function packFftCompressedTiled(
+  data: Uint8Array,
+  minDb: number,
+  maxDb: number,
+  tier: number,
+  tileIndex: number,
+  tileCount: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(8 + 4 + data.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_COMPRESSED);
+  view.setUint8(1, WF_VERFLAGS_TILED);
+  view.setUint8(2, tier);
+  view.setUint8(3, 0);
+  view.setUint16(4, tileIndex, true);
+  view.setUint16(6, tileCount, true);
+  view.setInt16(8, Math.round(minDb), true);
+  view.setInt16(10, Math.round(maxDb), true);
+  new Uint8Array(buf, 12).set(data);
+  return buf;
+}
+
+/**
+ * Pack a V1 tiled ADPCM FFT frame. The ADPCM payload keeps its own inner
+ * [i16 minDb][i16 maxDb] header (produced by encodeFftAdpcm) — it is NOT
+ * duplicated or relocated here.
+ * Wire: [0x08][0x11][tier][0][tileIndex u16][tileCount u16][adpcm payload]
+ */
+export function packFftAdpcmTiled(
+  adpcmPayload: Uint8Array,
+  tier: number,
+  tileIndex: number,
+  tileCount: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(8 + adpcmPayload.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_ADPCM);
+  view.setUint8(1, WF_VERFLAGS_TILED);
+  view.setUint8(2, tier);
+  view.setUint8(3, 0);
+  view.setUint16(4, tileIndex, true);
+  view.setUint16(6, tileCount, true);
+  new Uint8Array(buf, 8).set(adpcmPayload);
+  return buf;
+}
+
+/**
+ * Pack a V1 tiled deflate FFT frame. `binCount` is the decompressed bin count
+ * of this tile.
+ * Wire: [0x0B][0x11][tier][0][tileIndex u16][tileCount u16][i16 minDb][i16 maxDb][u32 binCount][deflate bytes]
+ */
+export function packFftDeflateTiled(
+  deflatePayload: Uint8Array,
+  minDb: number,
+  maxDb: number,
+  binCount: number,
+  tier: number,
+  tileIndex: number,
+  tileCount: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(8 + 8 + deflatePayload.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_DEFLATE);
+  view.setUint8(1, WF_VERFLAGS_TILED);
+  view.setUint8(2, tier);
+  view.setUint8(3, 0);
+  view.setUint16(4, tileIndex, true);
+  view.setUint16(6, tileCount, true);
+  view.setInt16(8, Math.round(minDb), true);
+  view.setInt16(10, Math.round(maxDb), true);
+  view.setUint32(12, binCount, true);
+  new Uint8Array(buf, 16).set(deflatePayload);
+  return buf;
+}
+
+/**
+ * Pack a V1 tiled waterfall history burst. `codec` selects the payload
+ * encoding (FFT_HISTORY_CODEC_NONE / _DEFLATE / _ADPCM) and `payload` is the
+ * already-encoded body for that codec.
+ * Wire: [0x0D][0x11][tier][0][tileIndex u16][tileCount u16][u16 frameCount]
+ *        [u32 binCount][i16 minDb][i16 maxDb][u8 codec][payload]
+ */
+export function packFftHistoryTiled(
+  payload: Uint8Array,
+  frameCount: number,
+  binCount: number,
+  minDb: number,
+  maxDb: number,
+  codec: number,
+  tier: number,
+  tileIndex: number,
+  tileCount: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(8 + 11 + payload.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_FFT_HISTORY);
+  view.setUint8(1, WF_VERFLAGS_TILED);
+  view.setUint8(2, tier);
+  view.setUint8(3, 0);
+  view.setUint16(4, tileIndex, true);
+  view.setUint16(6, tileCount, true);
+  view.setUint16(8, frameCount, true);
+  view.setUint32(10, binCount, true);
+  view.setInt16(14, Math.round(minDb), true);
+  view.setInt16(16, Math.round(maxDb), true);
+  view.setUint8(18, codec);
+  new Uint8Array(buf, 19).set(payload);
+  return buf;
+}
+
+/**
+ * Build a `waterfall_view` client command object (JSON text command). The
+ * engine sends the returned object over the WebSocket as JSON.
+ *
+ * @param viewportPx display width in CSS pixels the client wants bins for
+ * @param startFrac  fractional start of the viewport within the span (0..1)
+ * @param endFrac    fractional end of the viewport within the span (0..1)
+ * @param fps        optional requested frame rate
+ */
+export function packWaterfallView(
+  viewportPx: number,
+  startFrac: number,
+  endFrac: number,
+  fps?: number,
+): Extract<ClientCommand, { cmd: 'waterfall_view' }> {
+  const cmd: Extract<ClientCommand, { cmd: 'waterfall_view' }> = {
+    cmd: 'waterfall_view',
+    viewportPx,
+    startFrac,
+    endFrac,
+  };
+  if (fps !== undefined) cmd.fps = fps;
+  return cmd;
 }
 
 

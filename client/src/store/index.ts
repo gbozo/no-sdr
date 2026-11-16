@@ -340,6 +340,21 @@ function createStore() {
   const [waterfallSpeed, setWaterfallSpeed] = createSignal(30); // fps
   const [fftSize, setFftSize] = createSignal(2048);
 
+  // ---- Segmented multi-tier waterfall ----
+  // waterfallProtocol: version advertised in the welcome meta (1 = tiled). 0 or
+  // absent means a legacy server — the client keeps the full-span path.
+  const [waterfallProtocol, setWaterfallProtocol] = createSignal(0);
+  // Finest tile width in bins (meta.waterfallTileBins, default 1024).
+  const [effectiveTileBins, setEffectiveTileBins] = createSignal(1024);
+  // Fold-ladder length (meta.waterfallTierCount). 0 = derive it from
+  // fftSize/effectiveTileBins, which is what the server would do anyway.
+  const [waterfallTierCount, setWaterfallTierCount] = createSignal(0);
+  // Tier currently selected by the active waterfall_view (client estimate used
+  // only for local buffer sizing; the server is authoritative via frame tags).
+  const [selectedTier, setSelectedTier] = createSignal(0);
+  // tileIndex values currently stitched into the visible strip (ascending Hz).
+  const [activeTiles, setActiveTiles] = createSignal<number[]>([]);
+
   // ---- Audio Start State ----
   // Persisted so HMR/reconnect can restore audio without another user gesture.
   const [audioStarted, setAudioStarted] = persist<boolean>('audio.started', false);
@@ -1327,6 +1342,11 @@ function createStore() {
     waterfallGamma, setWaterfallGamma,
     waterfallSpeed, setWaterfallSpeed,
     fftSize, setFftSize,
+    waterfallProtocol, setWaterfallProtocol,
+    effectiveTileBins, setEffectiveTileBins,
+    waterfallTierCount, setWaterfallTierCount,
+    selectedTier, setSelectedTier,
+    activeTiles, setActiveTiles,
 
     // UI State
     audioStarted, setAudioStarted,
