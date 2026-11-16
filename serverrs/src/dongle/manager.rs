@@ -1680,28 +1680,54 @@ impl Manager {
 
         // Legacy full-span cache, encoded at most once per codec.
         let mut cache: HashMap<String, Result<Vec<u8>, String>> = HashMap::new();
-        // Tiered cache keyed by (tier, tile_index, codec), encoded once.
-        let mut tiled_cache: HashMap<(u8, u16, String), Vec<u8>> = HashMap::new();
 
-        for client in clients {
-            let codec = client.fft_codec();
-            let key = if codec.is_empty() {
-                "none".to_string()
+        // Collect the per-client FFT codec once so we can both (a) gather the
+        // demanded tiered (tier,tile,codec) set under one tiers-lock pass and
+        // (b) route the shared buffers afterwards without re-locking.
+        let client_codecs: Vec<(Arc<crate::ws::Client>, String)> = clients
+            .into_iter()
+            .map(|client| {
+                let codec = client.fft_codec();
+                let key = if codec.is_empty() {
+                    "none".to_string()
+                } else {
+                    codec
+                };
+                (client, key)
+            })
+            .collect();
+
+        // (m1) Encode every demanded tiered (tier,tile,codec) ONCE, under a
+        // single `tiers` lock that is released BEFORE any `ws.send_to`. Fold
+        // each needed tier exactly once (not per client) inside the lock.
+        let tiled_cache: HashMap<(u8, u16, String), Vec<u8>> = {
+            // Gather the demanded set: for each view-holding client, its tier
+            // and the tiles it is viewing, paired with its codec key.
+            let mut demanded: HashMap<(u8, u16, String), ()> = HashMap::new();
+            for (client, key) in &client_codecs {
+                if let Some(view) = views.get(&client.id) {
+                    let tier = view.tier.min(NUM_TIERS - 1) as u8;
+                    for &tile_index in &view.tiles {
+                        demanded.insert((tier, tile_index as u16, key.clone()), ());
+                    }
+                }
+            }
+            if demanded.is_empty() {
+                HashMap::new()
             } else {
-                codec.clone()
-            };
+                self.encode_tiered_frames(ad, frame, MIN_DB, MAX_DB, &demanded)
+            }
+        };
 
+        for (client, key) in client_codecs {
             if let Some(view) = views.get(&client.id) {
-                self.send_tiered_frame(
-                    ad,
-                    frame,
-                    &client.id,
-                    &key,
-                    view,
-                    MIN_DB,
-                    MAX_DB,
-                    &mut tiled_cache,
-                );
+                let tier = view.tier.min(NUM_TIERS - 1) as u8;
+                for &tile_index in &view.tiles {
+                    let cache_key = (tier, tile_index as u16, key.clone());
+                    if let Some(bytes) = tiled_cache.get(&cache_key) {
+                        self.ws.send_to(&client.id, bytes.clone());
+                    }
+                }
                 continue;
             }
 
@@ -1741,121 +1767,100 @@ impl Manager {
         }
     }
 
-    /// Encode (once per `(tier, tile, codec)`) and send every tile in `view`
-    /// to one client. Tiered frames are folded from `frame` per tile and cached
-    /// in `tiled_cache` so multiple clients sharing a tier/tile/codec reuse the
-    /// same bytes within this broadcast.
-    #[allow(clippy::too_many_arguments)]
-    fn send_tiered_frame(
+    /// Encode every demanded `(tier, tile, codec)` into an owned byte buffer
+    /// under a single `tiers` lock and return the map. Each needed tier is
+    /// folded exactly once; no I/O happens while the lock is held, so callers
+    /// can send the shared buffers after the lock is dropped (m1). Preserves
+    /// the encode-once-per-`(tier,tile,codec)` sharing and the wire bytes.
+    fn encode_tiered_frames(
         &self,
         ad: &Arc<ActiveDongle>,
         frame: &[f32],
-        client_id: &str,
-        codec_key: &str,
-        view: &waterfall::WaterfallView,
         min_db: f32,
         max_db: f32,
-        tiled_cache: &mut HashMap<(u8, u16, String), Vec<u8>>,
-    ) {
+        demanded: &HashMap<(u8, u16, String), ()>,
+    ) -> HashMap<(u8, u16, String), Vec<u8>> {
+        let mut out: HashMap<(u8, u16, String), Vec<u8>> = HashMap::with_capacity(demanded.len());
         let mut model = ad.tiers.lock();
-        let tier = view.tier.min(NUM_TIERS - 1);
         let tile_bins = model.effective_tile_bins;
-        let factor = model.tiers[tier].factor;
-        let tile_count = model.tiers[tier].tiles.len() as u16;
 
-        // Fold the live frame into the tier's reusable buffer once per call.
-        {
+        // Which tiers are demanded (fold each of these exactly once).
+        let mut tiers_needed = [false; NUM_TIERS];
+        for (tier, _, _) in demanded.keys() {
+            let t = (*tier as usize).min(NUM_TIERS - 1);
+            tiers_needed[t] = true;
+        }
+        for tier in 0..NUM_TIERS {
+            if !tiers_needed[tier] {
+                continue;
+            }
+            let factor = model.tiers[tier].factor;
             let mut fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
             fold_frame(frame, &mut fold_buf, factor);
             model.tiers[tier].fold_buf = fold_buf;
         }
-        let folded_len = model.tiers[tier].fold_buf.len();
 
-        for &tile_index in &view.tiles {
+        for ((tier_u8, tile_u16, codec_key), ()) in demanded.iter() {
+            let tier = (*tier_u8 as usize).min(NUM_TIERS - 1);
+            let tile_index = *tile_u16 as usize;
             if tile_index >= model.tiers[tier].tiles.len() {
                 continue;
             }
+            let tile_count = model.tiers[tier].tiles.len() as u16;
+            let folded_len = model.tiers[tier].fold_buf.len();
             let start = tile_index * tile_bins;
             if start >= folded_len {
                 continue;
             }
             let end = (start + tile_bins).min(folded_len);
-            let cache_key = (tier as u8, tile_index as u16, codec_key.to_string());
 
-            if !tiled_cache.contains_key(&cache_key) {
-                // Borrow the fold buffer slice; encoders that need a per-tile
-                // deflate state live on the TileState.
-                let fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
-                let slice = &fold_buf[start..end];
-                let encoded = match codec_key {
-                    "deflate" => {
-                        if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
-                            Some(pack_fft_deflate_tiled(
-                                slice,
-                                min_db.round() as i16,
-                                max_db.round() as i16,
-                                tier as u8,
-                                tile_index as u16,
-                                tile_count,
-                                &mut tile.deflate_enc,
-                            ))
-                        } else {
-                            None
-                        }
-                    }
-                    "deflate-floor" => {
-                        if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
-                            Some(pack_fft_deflate_tiled(
-                                slice,
-                                min_db.round() as i16,
-                                max_db.round() as i16,
-                                tier as u8,
-                                tile_index as u16,
-                                tile_count,
-                                &mut tile.deflate_floor_enc,
-                            ))
-                        } else {
-                            None
-                        }
-                    }
-                    "adpcm" => Some(pack_fft_adpcm_tiled(
-                        slice,
-                        tier as u8,
-                        tile_index as u16,
-                        tile_count,
-                    )),
-                    "none" | "" => Some(pack_fft_compressed_tiled(
+            // Take the fold buffer out so we can borrow a slice while also
+            // mutably borrowing the per-tile deflate encoder.
+            let fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
+            let slice = &fold_buf[start..end];
+            let encoded = match codec_key.as_str() {
+                "deflate" => model.tiers[tier].tiles[tile_index].as_mut().map(|tile| {
+                    pack_fft_deflate_tiled(
                         slice,
                         min_db.round() as i16,
                         max_db.round() as i16,
-                        tier as u8,
-                        tile_index as u16,
+                        *tier_u8,
+                        *tile_u16,
                         tile_count,
-                    )),
-                    other => {
-                        // Unknown codec: raw float tiled frame so the client
-                        // still receives something decodable.
-                        warn!(client = %client_id, codec = %other, "unknown tiled FFT codec; sending raw");
-                        Some(pack_fft_raw_tiled(
-                            slice,
-                            tier as u8,
-                            tile_index as u16,
-                            tile_count,
-                        ))
-                    }
-                };
-                model.tiers[tier].fold_buf = fold_buf;
-                if let Some(bytes) = encoded {
-                    tiled_cache.insert(cache_key.clone(), bytes);
-                } else {
-                    continue;
+                        &mut tile.deflate_enc,
+                    )
+                }),
+                "deflate-floor" => model.tiers[tier].tiles[tile_index].as_mut().map(|tile| {
+                    pack_fft_deflate_tiled(
+                        slice,
+                        min_db.round() as i16,
+                        max_db.round() as i16,
+                        *tier_u8,
+                        *tile_u16,
+                        tile_count,
+                        &mut tile.deflate_floor_enc,
+                    )
+                }),
+                "adpcm" => Some(pack_fft_adpcm_tiled(slice, *tier_u8, *tile_u16, tile_count)),
+                "none" | "" => Some(pack_fft_compressed_tiled(
+                    slice,
+                    min_db.round() as i16,
+                    max_db.round() as i16,
+                    *tier_u8,
+                    *tile_u16,
+                    tile_count,
+                )),
+                other => {
+                    warn!(codec = %other, "unknown tiered FFT codec; sending raw");
+                    Some(pack_fft_raw_tiled(slice, *tier_u8, *tile_u16, tile_count))
                 }
-            }
-
-            if let Some(bytes) = tiled_cache.get(&cache_key) {
-                self.ws.send_to(client_id, bytes.clone());
+            };
+            model.tiers[tier].fold_buf = fold_buf;
+            if let Some(bytes) = encoded {
+                out.insert((*tier_u8, *tile_u16, codec_key.clone()), bytes);
             }
         }
+        out
     }
 
     fn process_client_iq(&self, ad: &Arc<ActiveDongle>, chunk: &[u8]) {
@@ -2768,15 +2773,27 @@ impl Manager {
     /// each newly-entered tile's history, and store the active view on the
     /// client's pipeline so `broadcast_fft_frame` routes tiled frames to it.
     fn handle_waterfall_view(&self, client_id: &str, cmd: &ClientCommand) {
-        // Reject a degenerate or inverted span rather than guessing.
-        if cmd.end_frac <= cmd.start_frac {
+        // Validate the view fields before doing any work. NaN comparisons are
+        // always false, so `end_frac <= start_frac` alone lets NaN through —
+        // reject non-finite and out-of-range fractions explicitly (m6).
+        let invalid = !cmd.start_frac.is_finite()
+            || !cmd.end_frac.is_finite()
+            || cmd.start_frac < 0.0
+            || cmd.end_frac > 1.0
+            || cmd.end_frac <= cmd.start_frac
+            || cmd.viewport_px <= 0;
+        if invalid {
             self.send_error(
                 client_id,
-                "waterfall_view: endFrac must be greater than startFrac".to_string(),
+                "waterfall_view: require finite 0.0<=startFrac<endFrac<=1.0 and viewportPx>0"
+                    .to_string(),
                 "WATERFALL_VIEW_INVALID",
             );
             return;
         }
+        // Clamp the viewport width to a sane upper bound after the >0 check so
+        // an absurd value cannot skew the tier selection (m6 spec: [1, 8192]).
+        let viewport_px = cmd.viewport_px.clamp(1, 8192);
 
         let dongle_id = match self.ws.get_client(client_id) {
             Some(c) => c.subscribed_to(),
@@ -2804,15 +2821,14 @@ impl Manager {
             }
         };
 
-        let (fft_size, prev_view) = {
-            let model = ad.tiers.lock();
-            let cp = cp.lock();
-            (model.fft_size, cp.wf_view.clone())
-        };
+        // Read the two values in separate lock scopes so there is no
+        // tiers↔cp lock-ordering constraint here (n3).
+        let fft_size = ad.tiers.lock().fft_size;
+        let prev_view = cp.lock().wf_view.clone();
 
         let tier = waterfall::target_tier(
             fft_size,
-            cmd.viewport_px,
+            viewport_px,
             cmd.start_frac,
             cmd.end_frac,
         );
@@ -2834,12 +2850,15 @@ impl Manager {
             self.release_tile(&ad, old_tier, old_tile);
         }
 
-        // Acquire newly-entered tiles (allocate on 0->1) and prefill history.
-        let mut newly_entered: Vec<usize> = Vec::new();
-        for &(_, new_tile) in next.difference(&prev) {
-            if self.acquire_tile(&ad, tier, new_tile) {
-                newly_entered.push(new_tile);
-            }
+        // Acquire newly-entered tiles. `acquire_tile`'s bool decides ALLOCATION
+        // only (0->1). Whether THIS client gets a history prefill is a separate
+        // question: it must receive one for every tile it is entering (present
+        // in the new view, absent from the old), even if a co-viewer already
+        // made the tile active (M2). Track the entered set separately.
+        let entered: Vec<usize> = next.difference(&prev).map(|&(_, t)| t).collect();
+        for &new_tile in &entered {
+            // Allocate/refcount; return value intentionally ignored here.
+            let _ = self.acquire_tile(&ad, tier, new_tile);
         }
 
         // Store the active view before emitting the prefill burst so a frame
@@ -2852,12 +2871,12 @@ impl Manager {
             });
         }
 
-        // Also raise refcounts for retained tiles that were already active on
-        // the same tier (no transition, no alloc) — handled implicitly: they
-        // stayed in `prev ∩ next`, so their refcount is unchanged, which is
-        // correct for a single client.
-        for tile_index in newly_entered {
-            self.prefill_tile_history(&ad, client_id, tier, tile_index);
+        // Prefill history for every tile this client just entered (whether or
+        // not it was already active for another client). `prefill_tile_history`
+        // skips tiles whose history ring is still empty, so a co-viewer that
+        // enters before any frame has arrived does not receive an empty burst.
+        for new_tile in entered {
+            self.prefill_tile_history(&ad, client_id, tier, new_tile);
         }
     }
 
@@ -2886,8 +2905,16 @@ impl Manager {
         if !needs_alloc {
             return false;
         }
-        // Allocate off the dongle IQ hot path. This runs on a WebSocket reader
-        // task (a tokio worker), and only on a view transition — not per frame.
+        // NOTE (m2): the TileState history ring (history_frames * tile_bins * 4
+        // bytes, capped at 1024 * effectiveTileBins * 4 ≈ 4 MiB for the default
+        // 1024-bin tile) is allocated inline here. This runs in the synchronous
+        // WebSocket command handler (a tokio reader task), which has no async
+        // context to offload into without making the entire command dispatch
+        // path async — out of scope for this change. The cost is bounded, only
+        // paid on a 0->1 tile transition (not per frame), and the allocation is
+        // done BEFORE re-taking the `tiers` lock, so it never blocks the FFT
+        // broadcast hot path. If this ever shows up on the reader task, lift the
+        // whole command path to async and wrap this in `spawn_blocking`.
         let mut tile = TileState::new(tile_bins, history_frames);
         tile.refcount = 1;
         let mut model = ad.tiers.lock();
@@ -3662,6 +3689,19 @@ impl Manager {
 
         let mode = profile.mode.clone();
         let default_bw = default_bandwidth_for_mode(&mode) as i64;
+        // Recompute the effective tile width from the just-rebuilt tier model
+        // so clients update their crop math after a profile switch (M1). Mirror
+        // the `subscribed` meta path's fallback for a missing dongle entry.
+        let effective_tile_bins = {
+            let model = self.dongles.read().get(dongle_id).map(|d| {
+                let m = d.tiers.lock();
+                m.effective_tile_bins as u32
+            });
+            model.unwrap_or_else(|| {
+                let tb = self.cfg.read().server.waterfall_tile_bins.max(1) as usize;
+                waterfall::effective_tile_bins(profile.fft_size as usize, tb) as u32
+            })
+        };
         let subscribed = self.ws.subscribed_clients(dongle_id);
         for client in subscribed {
             client.drop_queued_fft();
@@ -3675,6 +3715,8 @@ impl Manager {
                 iq_sample_rate: Some(output_rate_for_mode_bandwidth(&mode, default_bw as i32) as i64),
                 mode: Some(mode.clone()),
                 tuning_step: Some(profile.tuning_step as i64),
+                waterfall_protocol: Some(1),
+                waterfall_tile_bins: Some(effective_tile_bins),
                 ..Default::default()
             };
             self.ws.send_to(&client.id, pack_meta_message(&meta));
