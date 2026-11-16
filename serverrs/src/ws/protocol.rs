@@ -95,6 +95,16 @@ pub struct ServerMeta {
     // Users ribbon
     #[serde(skip_serializing_if = "Option::is_none")]
     pub users: Option<Vec<UserLocation>>,
+    // TODO(merge): provided by feat/fftbins-protocol — the protocol/meta owner
+    // finalizes these ServerMeta fields. Added here as minimal stubs so the
+    // server branch can advertise the tiered waterfall. Keep the protocol
+    // branch's definitions verbatim on merge if a conflict arises.
+    /// Tiered-waterfall wire protocol version (1 when supported).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waterfall_protocol: Option<u32>,
+    /// Effective bins per waterfall tile (effectiveTileBins).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waterfall_tile_bins: Option<u32>,
 }
 
 /// Parsed command from the client (JSON text).
@@ -143,6 +153,19 @@ pub struct ClientCommand {
     /// Hide a helper connection from the public users ribbon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    // TODO(merge): provided by feat/fftbins-protocol — the protocol branch owns
+    // these ClientCommand fields. Added here as minimal stubs so the server
+    // branch compiles and can read `waterfall_view` payloads. If the merge
+    // produces a conflict, keep the protocol branch's definitions verbatim.
+    /// Client viewport width in CSS pixels (waterfall_view).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub viewport_px: i64,
+    /// Fractional left edge of the visible span, 0.0..=1.0 (waterfall_view).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub start_frac: f64,
+    /// Fractional right edge of the visible span, 0.0..=1.0 (waterfall_view).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub end_frac: f64,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -350,6 +373,118 @@ pub fn pack_signal_level_message(level_db: f32) -> Vec<u8> {
     buf.push(MSG_SIGNAL_LEVEL);
     buf.extend_from_slice(&level_db.to_le_bytes());
     buf
+}
+
+// TODO(merge): provided by feat/fftbins-protocol — tiled-frame packers.
+//
+// The protocol/pack owner adds the canonical implementations of these
+// functions (and their exact byte layout). They are added here as minimal,
+// self-consistent stubs so the server branch compiles and can emit tiered
+// frames end-to-end; the merge will REPLACE these bodies with the protocol
+// branch's authoritative versions. Do not depend on the exact byte layout
+// below surviving the merge — only on the signatures.
+//
+// Stub wire layout (shared by all tiled frames): the ordinary non-tiled
+// frame produced by the matching `pack_fft_*` function, with a 5-byte tier
+// header `[tier u8][tileIndex u16 LE][tileCount u16 LE]` inserted immediately
+// after the leading message-type byte.
+
+/// Insert the shared tier header after `msg[0]` (the type byte).
+fn insert_tier_header_stub(mut msg: Vec<u8>, tier: u8, tile_index: u16, tile_count: u16) -> Vec<u8> {
+    let mut header = Vec::with_capacity(5);
+    header.push(tier);
+    header.extend_from_slice(&tile_index.to_le_bytes());
+    header.extend_from_slice(&tile_count.to_le_bytes());
+    msg.splice(1..1, header);
+    msg
+}
+
+/// TODO(merge): stub for feat/fftbins-protocol `pack_fft_deflate_tiled`.
+pub fn pack_fft_deflate_tiled(
+    bins: &[f32],
+    min_db: i16,
+    max_db: i16,
+    tier: u8,
+    tile_index: u16,
+    tile_count: u16,
+    enc: &mut crate::codec::FftDeflateEncoder,
+) -> Vec<u8> {
+    let msg = enc
+        .encode_message(MSG_FFT_DEFLATE, bins, min_db as f32, max_db as f32)
+        .unwrap_or_else(|_| pack_fft_deflate_message(&[], min_db, max_db, bins.len() as u32));
+    insert_tier_header_stub(msg, tier, tile_index, tile_count)
+}
+
+/// TODO(merge): stub for feat/fftbins-protocol `pack_fft_compressed_tiled`.
+pub fn pack_fft_compressed_tiled(
+    bins: &[f32],
+    min_db: i16,
+    max_db: i16,
+    tier: u8,
+    tile_index: u16,
+    tile_count: u16,
+) -> Vec<u8> {
+    let quantized = crate::codec::fft::compress_fft(bins, min_db as f32, max_db as f32);
+    let msg = pack_fft_compressed_message(&quantized, min_db, max_db);
+    insert_tier_header_stub(msg, tier, tile_index, tile_count)
+}
+
+/// TODO(merge): stub for feat/fftbins-protocol `pack_fft_adpcm_tiled`.
+pub fn pack_fft_adpcm_tiled(bins: &[f32], tier: u8, tile_index: u16, tile_count: u16) -> Vec<u8> {
+    use crate::dsp::fft_processor::{MAX_DB, MIN_DB};
+    let payload = crate::codec::adpcm::encode_fft_adpcm(bins, MIN_DB, MAX_DB);
+    let msg = pack_fft_adpcm_message(&payload);
+    insert_tier_header_stub(msg, tier, tile_index, tile_count)
+}
+
+/// TODO(merge): stub for feat/fftbins-protocol `pack_fft_raw_tiled`.
+pub fn pack_fft_raw_tiled(bins: &[f32], tier: u8, tile_index: u16, tile_count: u16) -> Vec<u8> {
+    let msg = pack_fft_message(bins);
+    insert_tier_header_stub(msg, tier, tile_index, tile_count)
+}
+
+/// TODO(merge): stub for feat/fftbins-protocol `pack_fft_history_tiled`.
+///
+/// `codec` selects the per-frame encoding (0 = raw u8, 1 = deflate, 2 = adpcm)
+/// in the real impl; this stub always emits codec 0 (raw quantized) with the
+/// shared tier header after the type byte.
+pub fn pack_fft_history_tiled(
+    frames: &[Vec<f32>],
+    min_db: i16,
+    max_db: i16,
+    codec: u8,
+    tier: u8,
+    tile_index: u16,
+    tile_count: u16,
+) -> Vec<u8> {
+    let _ = codec;
+    let bin_count = frames.first().map(|f| f.len()).unwrap_or(0);
+    let range = (max_db - min_db).max(1) as f32;
+    let mut quantized: Vec<u8> = Vec::with_capacity(frames.len() * bin_count);
+    let mut frame_count: u16 = 0;
+    for frame in frames {
+        if frame.len() != bin_count {
+            continue;
+        }
+        for &v in frame {
+            let norm = ((v - min_db as f32) / range).clamp(0.0, 1.0);
+            quantized.push((norm * 255.0) as u8);
+        }
+        frame_count = frame_count.saturating_add(1);
+    }
+
+    let mut msg = Vec::with_capacity(1 + 5 + 2 + 4 + 2 + 2 + 1 + quantized.len());
+    msg.push(MSG_FFT_HISTORY);
+    msg.push(tier);
+    msg.extend_from_slice(&tile_index.to_le_bytes());
+    msg.extend_from_slice(&tile_count.to_le_bytes());
+    msg.extend_from_slice(&frame_count.to_le_bytes());
+    msg.extend_from_slice(&(bin_count as u32).to_le_bytes());
+    msg.extend_from_slice(&min_db.to_le_bytes());
+    msg.extend_from_slice(&max_db.to_le_bytes());
+    msg.push(0); // stub codec byte: raw
+    msg.extend_from_slice(&quantized);
+    msg
 }
 
 /// Parse a JSON text command from the client.

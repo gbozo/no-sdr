@@ -201,6 +201,11 @@ pub struct ServerConfig {
     pub fft_history_fft_size: i32,
     #[serde(default)]
     pub fft_history_compression: String,
+    /// Target bins per waterfall tile for the tiered (segmented) waterfall.
+    /// Must be a positive power of two. The effective value is clamped to
+    /// `min(waterfallTileBins, fftSize/8)` per dongle (`effectiveTileBins`).
+    #[serde(default = "default_waterfall_tile_bins")]
+    pub waterfall_tile_bins: i32,
     #[serde(default)]
     pub allowed_fft_codecs: Vec<String>,
     #[serde(default)]
@@ -243,6 +248,7 @@ impl Default for ServerConfig {
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
+            waterfall_tile_bins: default_waterfall_tile_bins(),
             allowed_fft_codecs: Vec::new(),
             allowed_iq_codecs: Vec::new(),
             opus_complexity: 0,
@@ -541,6 +547,12 @@ pub fn validate(cfg: &Config) -> Result<()> {
             cfg.server.users_ribbon
         );
     }
+    if !is_power_of_two(cfg.server.waterfall_tile_bins) || cfg.server.waterfall_tile_bins <= 0 {
+        bail!(
+            "config: server.waterfallTileBins must be a positive power of 2, got {}",
+            cfg.server.waterfall_tile_bins
+        );
+    }
     if !cfg.server.receiver_latitude.is_finite()
         || !(-90.0..=90.0).contains(&cfg.server.receiver_latitude)
     {
@@ -625,6 +637,11 @@ fn default_true() -> bool {
 
 fn default_users_ribbon() -> String {
     "users".to_string()
+}
+
+/// Default bins per waterfall tile for the tiered waterfall.
+fn default_waterfall_tile_bins() -> i32 {
+    1024
 }
 
 /// Default bookmarks directory: `<dir of config>/../bookmarks`.
