@@ -12,7 +12,7 @@ use tokio::net::TcpStream;
 use tokio::process::{Child, Command as ProcessCommand};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::source::{CommandHandle, Source, SourceCommand};
 
@@ -72,10 +72,14 @@ impl RtlTcpSource {
             );
         }
 
+        // `tuner_gains` in the RTL0 header is the NUMBER of steps in the
+        // tuner's gain table (29 for an R820T), not a gain in dB. Log it under a
+        // name that says so; the gain actually applied is logged by the manager
+        // once it has resolved profile/dongle settings.
         info!(
             addr = %addr,
             tuner_type = info.tuner_type,
-            tuner_gains = info.tuner_gains,
+            tuner_gain_steps = info.tuner_gains,
             "rtl_tcp connected"
         );
 
@@ -86,6 +90,10 @@ impl RtlTcpSource {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     SourceCommand::Raw { cmd, value } => {
+                        // Wire-level view of what the manager asked for: the
+                        // remote does not report the gain it settled on, so this
+                        // is the only proof that the gain command was sent.
+                        debug!(cmd = format_args!("0x{cmd:02X}"), value, "rtl_tcp command");
                         let mut buf = [0u8; 5];
                         buf[0] = cmd;
                         buf[1..].copy_from_slice(&value.to_be_bytes());

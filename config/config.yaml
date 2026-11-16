@@ -54,6 +54,13 @@ dongles:
     binary: ''
     extraArgs: []
     spawnRtlTcp: false
+    # Native USB only. In-flight bulk transfers (default 16 x 16 KiB). On an
+    # old host/USB 1.1 port the bulk endpoint can stall repeatedly; try more
+    # and smaller transfers (e.g. 32 / 8) or fewer and larger (8 / 32), or run
+    # rtl_tcp on a host where the dongle enumerates at high speed.
+    # settings:
+    #   transfers: 16
+    #   transferKib: 16
   sampleRate: 2400000
   gain: 0.0
   ppmCorrection: 0

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use nusb::transfer::{Bulk, In, TransferError};
+use nusb::Endpoint;
 use nusb::MaybeFuture;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -39,6 +40,12 @@ const MAX_TRANSFER_KIB: usize = 256;
 /// The endpoint's packet size. Every transfer length must be a multiple of it.
 const BULK_PACKET: usize = 512;
 
+/// Consecutive endpoint stalls tolerated before the stream is declared dead.
+/// A healthy dongle never stalls; a repeating stall means the link cannot
+/// carry the rate (USB 1.1 hub, bad cable) or the device is wedged, and
+/// clearing the halt in a loop just burns CPU.
+const MAX_STALLS: u32 = 10;
+
 /// Where the dongle is left until the manager sends the user's tuning.
 const DEFAULT_CENTER_HZ: f64 = 100_000_000.0;
 
@@ -65,6 +72,21 @@ impl RtlSdrSource {
     /// loop starts both misreports the stream rate in logs and makes a dongle
     /// that cannot sustain 2.4 MSPS fail before the user's rate is applied.
     pub fn open(device_index: i32, serial: &str, sample_rate_hz: i32) -> Result<Self> {
+        Self::open_with_settings(device_index, serial, sample_rate_hz, &Default::default())
+    }
+
+    /// Opens the dongle, applying the operator's `source.settings` overrides.
+    ///
+    /// `transfers` / `transferKib` bound the in-flight bulk geometry. They are
+    /// the lever for hosts whose USB stack cannot keep up (old EHCI
+    /// controllers, hubs, USB 1.1 ports): fewer, larger transfers reduce URB
+    /// churn, more, smaller ones reduce FIFO-overflow stalls.
+    pub fn open_with_settings(
+        device_index: i32,
+        serial: &str,
+        sample_rate_hz: i32,
+        settings: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Self> {
         let mut cfg = RtlSdrConfig {
             device_index: device_index.max(0) as usize,
             sample_rate_hz: if sample_rate_hz > 0 {
@@ -74,6 +96,17 @@ impl RtlSdrSource {
             },
             ..RtlSdrConfig::default()
         };
+        if let Some(v) = settings.get("transfers").and_then(|v| v.as_u64()) {
+            cfg.transfers = v.clamp(MIN_TRANSFERS as u64, MAX_TRANSFERS as u64) as u8;
+        }
+        if let Some(v) = settings
+            .get("transferKib")
+            .or_else(|| settings.get("transfer_kib"))
+            .and_then(|v| v.as_u64())
+        {
+            cfg.transfer_kib =
+                v.clamp(MIN_TRANSFER_KIB as u64, MAX_TRANSFER_KIB as u64) as u16;
+        }
         let serial = serial.trim();
         if !serial.is_empty() {
             cfg.serial = Some(serial.to_string());
@@ -87,6 +120,9 @@ impl RtlSdrSource {
             label = %label,
             tuner = %device.tuner_name(),
             blog_v4 = device.is_blog_v4(),
+            speed = ?device.usb().speed(),
+            transfers = cfg.transfers,
+            transfer_kib = cfg.transfer_kib,
             "rtlsdr device opened"
         );
 
@@ -153,6 +189,53 @@ fn geometry(cfg: &RtlSdrConfig) -> (usize, usize) {
     (transfers, bytes)
 }
 
+/// Applies every queued command in order. Returns `true` when the source was
+/// asked to close.
+///
+/// `ep` is given while streaming so a command that reinitialises the endpoint
+/// (`SET_DIRECT_SAMPLING`) can quiesce the bulk queue first: resetting the
+/// endpoint underneath in-flight URBs is what makes them come back as stalls.
+fn drain_commands(
+    dev: &mut Device,
+    cmd_rx: &mut mpsc::UnboundedReceiver<SourceCommand>,
+    tuner_auto: &mut bool,
+    rtl_auto: &mut bool,
+    gain_db: &mut f64,
+    mut ep: Option<&mut Endpoint<Bulk, In>>,
+) -> bool {
+    loop {
+        let Ok(cmd) = cmd_rx.try_recv() else {
+            return false;
+        };
+        match cmd {
+            SourceCommand::Raw { cmd, value } => {
+                // Direct sampling powers the tuner down, re-inits it and resets
+                // the endpoint; do that with an empty transfer queue.
+                if cmd == 0x09 {
+                    if let Some(ep) = ep.as_deref_mut() {
+                        ep.cancel_all();
+                        let deadline = Instant::now() + Duration::from_millis(200);
+                        while ep.pending() > 0 && Instant::now() < deadline {
+                            if ep.wait_next_complete(Duration::from_millis(20)).is_none() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Err(e) = apply_command(dev, cmd, value, tuner_auto, rtl_auto, gain_db) {
+                    warn!(
+                        cmd = format!("{cmd:#04x}"),
+                        value,
+                        error = %e,
+                        "rtlsdr command failed"
+                    );
+                }
+            }
+            SourceCommand::Close => return true,
+        }
+    }
+}
+
 fn run_stream(
     mut dev: Device,
     cfg: RtlSdrConfig,
@@ -167,27 +250,59 @@ fn run_stream(
         .endpoint::<Bulk, In>(BULK_EP)
         .map_err(|e| anyhow!("cannot open the rtlsdr bulk endpoint: {e}"))?;
 
+    // The manager queues the profile's tuning/gain/direct-sampling batch right
+    // after opening the device, so it is already here. Apply it BEFORE arming
+    // the bulk endpoint: librtlsdr (and therefore rtl_tcp) resets the buffer
+    // only after all setup commands, and arming first leaves the first URBs
+    // racing the rate/LO programming — the stall loop old hosts hit.
+    let mut tuner_auto = cfg.agc.tuner_auto();
+    let mut rtl_auto = cfg.agc.rtl_auto();
+    let mut gain_db = cfg.tuner_gain_db;
+    if drain_commands(
+        &mut dev,
+        &mut cmd_rx,
+        &mut tuner_auto,
+        &mut rtl_auto,
+        &mut gain_db,
+        None,
+    ) {
+        dev.shutdown();
+        return Ok(());
+    }
+
     dev.reset_buffer()?;
     for _ in 0..in_flight {
         ep.submit(ep.allocate(xfer_bytes));
     }
 
+    let speed = dev.usb().speed();
     info!(
         transfers = in_flight,
         transfer_kib = xfer_bytes / 1024,
         rate_hz = dev.sample_rate(),
+        speed = ?speed,
         "rtlsdr streaming"
     );
+    if matches!(speed, Some(nusb::Speed::Low) | Some(nusb::Speed::Full))
+        && dev.sample_rate() > 1_024_000.0
+    {
+        warn!(
+            speed = ?speed,
+            rate_hz = dev.sample_rate(),
+            "USB link is full-speed (USB 1.1) but the sample rate needs a \
+             high-speed link: the bulk endpoint will stall. Use a USB 2.0 port \
+             or drop to ~1 MSPS (or run rtl_tcp on a host where the dongle \
+             enumerates at high speed)"
+        );
+    }
 
     // A short transfer can end on an odd byte. Dropping it would swap I and Q
     // for the rest of the session, so carry it into the next completion.
     let mut odd_carry: Option<u8> = None;
-    let mut tuner_auto = cfg.agc.tuner_auto();
-    let mut rtl_auto = cfg.agc.rtl_auto();
-    let mut gain_db = cfg.tuner_gain_db;
     let mut shutdown = false;
     let mut last_data = Instant::now();
     let mut constant_run = 0u32;
+    let mut stalls = 0u32;
 
     loop {
         if *cancel.borrow() {
@@ -198,30 +313,15 @@ fn run_stream(
         // Collapse the command channel between transfers. A retune costs
         // milliseconds of I2C, so apply whatever is queued in order rather
         // than letting a dial drag back up behind the operator's hand.
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                SourceCommand::Raw { cmd, value } => {
-                    if let Err(e) = apply_command(
-                        &mut dev,
-                        cmd,
-                        value,
-                        &mut tuner_auto,
-                        &mut rtl_auto,
-                        &mut gain_db,
-                    ) {
-                        warn!(
-                            cmd = format!("{cmd:#04x}"),
-                            value,
-                            error = %e,
-                            "rtlsdr command failed"
-                        );
-                    }
-                }
-                SourceCommand::Close => {
-                    shutdown = true;
-                    break;
-                }
-            }
+        if drain_commands(
+            &mut dev,
+            &mut cmd_rx,
+            &mut tuner_auto,
+            &mut rtl_auto,
+            &mut gain_db,
+            Some(&mut ep),
+        ) {
+            shutdown = true;
         }
         if shutdown {
             break;
@@ -253,6 +353,7 @@ fn run_stream(
                 let data = take_even(&buf, &mut odd_carry);
                 if !data.is_empty() {
                     last_data = Instant::now();
+                    stalls = 0;
                     if data.iter().all(|b| *b == data[0]) {
                         constant_run += 1;
                         if constant_run >= 500 {
@@ -276,7 +377,33 @@ fn run_stream(
                 return Err(anyhow!("the RTL-SDR was unplugged"));
             }
             Err(TransferError::Stall) => {
-                warn!("rtlsdr endpoint stalled; clearing and resynchronising");
+                stalls += 1;
+                if stalls > MAX_STALLS {
+                    return Err(anyhow!(
+                        "the RTL-SDR bulk endpoint stalled {stalls} times in a row at \
+                         {:.2} MSPS (USB {:?}). A dongle on a high-speed link that \
+                         streams fine under rtl_tcp/librtlsdr points at the endpoint \
+                         being reset while reads are queued (direct sampling) or at \
+                         the host's URB handling, not at raw link throughput. Try the \
+                         transfer overrides (source.settings.transfers / transferKib) \
+                         or rtl_tcp as the fallback, and include this log line in a \
+                         bug report",
+                        dev.sample_rate() / 1e6,
+                        dev.usb().speed()
+                    ));
+                }
+                // Warn about the first stalls, then keep quiet: a burst of them
+                // is the same problem and would flood the log.
+                if stalls <= 3 {
+                    warn!(
+                        stalls,
+                        speed = ?dev.usb().speed(),
+                        rate_hz = dev.sample_rate(),
+                        "rtlsdr endpoint stalled; clearing and resynchronising"
+                    );
+                } else {
+                    debug!(stalls, "rtlsdr endpoint stalled again");
+                }
                 let _ = ep.clear_halt().wait();
                 dev.reset_buffer()?;
                 odd_carry = None;
@@ -341,16 +468,32 @@ fn apply_command(
         // rtl_tcp gain mode: 0 = automatic tuner gain, 1 = manual.
         0x03 => {
             *tuner_auto = value == 0;
+            info!(
+                tuner_auto = *tuner_auto,
+                rtl_auto = *rtl_auto,
+                "tuner gain mode set"
+            );
             dev.set_agc(RtlSdrAgc::from_parts(*tuner_auto, *rtl_auto))?;
             if !*tuner_auto {
-                dev.set_gain_db(*gain_db)?;
+                // The manager follows the mode with an explicit SET_GAIN, which
+                // logs the hardware step; keep this one at debug to avoid two
+                // identical info lines per switch.
+                let eff = dev.set_gain_db(*gain_db)?;
+                debug!(requested_db = *gain_db, effective_db = eff, "tuner gain re-asserted with mode");
             }
         }
         // Tenths of a dB, as carried by rtl_tcp.
         0x04 => {
             *gain_db = value as f64 / 10.0;
             if !*tuner_auto {
-                dev.set_gain_db(*gain_db)?;
+                // The R820T only offers a discrete gain table; report the step
+                // the hardware actually selected, not just what we asked for.
+                let eff = dev.set_gain_db(*gain_db)?;
+                info!(
+                    requested_db = *gain_db,
+                    effective_db = eff,
+                    "tuner gain applied (snapped to hardware step)"
+                );
             }
         }
         0x05 => dev.set_ppm(value as i32)?,
