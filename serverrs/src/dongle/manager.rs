@@ -21,12 +21,15 @@ use crate::codec::adpcm::encode_fft_adpcm;
 use crate::codec::fft::compress_fft;
 use crate::codec::{FftDeflateEncoder, ImaAdpcmEncoder};
 use crate::config::{Config, DongleConfig, DongleProfile};
-use crate::dsp::{FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
+use crate::dsp::{fold_frame, FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
 use crate::history::FftBuffer;
+use super::waterfall::{self, TierModel, TileState, NUM_TIERS};
 use crate::ws::{
     pack_audio_opus_message, pack_codec_status_message, pack_fft_adpcm_message,
-    pack_fft_compressed_message, pack_iq_adpcm_message, pack_iq_message, pack_meta_message,
-    pack_rds_message, ClientCommand, CodecStatus, ServerMeta, UserLocation, WsManager, MSG_META,
+    pack_fft_adpcm_tiled, pack_fft_compressed_message, pack_fft_compressed_tiled,
+    pack_fft_deflate_tiled, pack_fft_history_tiled, pack_fft_raw_tiled, pack_iq_adpcm_message,
+    pack_iq_message, pack_meta_message, pack_rds_message, ClientCommand, CodecStatus, ServerMeta,
+    UserLocation, WsManager, MSG_META,
 };
 
 #[cfg(feature = "airspy")]
@@ -203,6 +206,12 @@ struct ActiveDongle {
     deflate_enc: Mutex<FftDeflateEncoder>,
     deflate_floor_enc: Mutex<FftDeflateEncoder>,
     history: FftBuffer,
+    /// Tiered (segmented) waterfall state. `fft_proc` produces the finest
+    /// (tier 0) frame; coarser tiers are folded from it on demand. Tiles are
+    /// allocated lazily when a client's `waterfall_view` first overlaps them.
+    /// The legacy full-span path above (`deflate_enc`/`history`) still serves
+    /// clients that never send a `waterfall_view`.
+    tiers: Mutex<TierModel>,
     iq_correct: Mutex<Option<IqCorrect>>,
     cancel: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
@@ -233,6 +242,10 @@ struct ClientPipeline {
     /// Whether this client has audio switched on. A decoder-only pipeline can
     /// skip the whole extractor/encoder path and still receive decoder output.
     audio_enabled: bool,
+    /// The client's active segmented-waterfall view (`None` until it sends a
+    /// `waterfall_view`). When `None` the client receives the legacy full-span
+    /// FFT broadcast; when `Some` it receives only the overlapping tiles.
+    wf_view: Option<waterfall::WaterfallView>,
     /// Per-client foreground decoder, built from the client's tune offset.
     #[cfg(feature = "decoders")]
     foreground: Option<crate::decoders::Channel>,
@@ -660,6 +673,20 @@ impl Manager {
             30
         };
 
+        // Tiered-waterfall parameters. `history_frames` reuses the per-tile
+        // history depth from `fft_history_fft_size` as a frame count hint, but
+        // defaults to the same 1024-frame depth as the legacy full-span ring
+        // when unset or not meaningful as a frame count.
+        let (waterfall_tile_bins, history_frames) = {
+            let cfg = self.cfg.read();
+            let tile_bins = if cfg.server.waterfall_tile_bins > 0 {
+                cfg.server.waterfall_tile_bins as usize
+            } else {
+                1024
+            };
+            (tile_bins, 1024usize)
+        };
+
         // Open the source first. This is where local USB can fail (device
         // missing, busy, or not passed into a container), and retrying it must
         // not allocate the 1024-frame FFT history (32 MB at 8192 bins) on every
@@ -688,7 +715,7 @@ impl Manager {
         // 1024-frame waterfall history (32 MB at 8192 bins) is CPU/allocation
         // heavy. Keep it off the async workers so an admin-triggered reinit
         // cannot stall HTTP/WebSocket service while the dongle restarts.
-        let (fft_proc, deflate_enc, deflate_floor_enc, history) =
+        let (fft_proc, deflate_enc, deflate_floor_enc, history, tiers) =
             tokio::task::spawn_blocking(move || -> Result<_> {
                 let fft_proc = FftProcessor::new(FftProcessorConfig {
                     fft_size,
@@ -702,7 +729,11 @@ impl Manager {
                 let deflate_floor_enc = FftDeflateEncoder::new(fft_size);
                 let history = FftBuffer::new(1024);
                 history.init_frames(fft_size);
-                Ok((fft_proc, deflate_enc, deflate_floor_enc, history))
+                // Empty tier model: no tile history is allocated until a client
+                // sends a `waterfall_view`, so the per-dongle startup cost is
+                // unchanged for the common (non-tiered) case.
+                let tiers = TierModel::new(fft_size, waterfall_tile_bins, history_frames);
+                Ok((fft_proc, deflate_enc, deflate_floor_enc, history, tiers))
             })
             .await
             .map_err(|e| anyhow!("dongle DSP init task failed: {e}"))??;
@@ -726,6 +757,7 @@ impl Manager {
             deflate_enc: Mutex::new(deflate_enc),
             deflate_floor_enc: Mutex::new(deflate_floor_enc),
             history,
+            tiers: Mutex::new(tiers),
             iq_correct: Mutex::new(if dcfg.iq_correction {
                 Some(IqCorrect::new(sample_rate as f64, 10.0, true))
             } else {
@@ -1574,7 +1606,50 @@ impl Manager {
         let frames = ad.fft_proc.lock().process_iq_data(&chunk);
         for frame in frames {
             ad.history.push(&frame);
+            // Fold the finest frame into each tier that has >=1 active tile and
+            // push each active tile's slice into its history ring. This feeds
+            // the per-tile history used for the prefill burst; the live frame
+            // is sliced again (cheaply) in `broadcast_fft_frame`.
+            self.push_tiered_history(ad, &frame);
             self.broadcast_fft_frame(ad, &frame);
+        }
+    }
+
+    /// Fold `frame` (the finest tier-0 frame) into each tier with at least one
+    /// active tile and push each active tile's slice into its history ring.
+    fn push_tiered_history(&self, ad: &Arc<ActiveDongle>, frame: &[f32]) {
+        let mut model = ad.tiers.lock();
+        let tile_bins = model.effective_tile_bins;
+        for tier in 0..NUM_TIERS {
+            if !model.tiers[tier].any_active() {
+                continue;
+            }
+            let factor = model.tiers[tier].factor;
+            // Fold into the tier's reusable buffer (tier 0 = identity copy).
+            {
+                let mut fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
+                fold_frame(frame, &mut fold_buf, factor);
+                model.tiers[tier].fold_buf = fold_buf;
+            }
+            let folded_len = model.tiers[tier].fold_buf.len();
+            let tiles_len = model.tiers[tier].tiles.len();
+            for tile_index in 0..tiles_len {
+                if model.tiers[tier].tiles[tile_index].is_none() {
+                    continue;
+                }
+                let start = tile_index * tile_bins;
+                if start >= folded_len {
+                    continue;
+                }
+                let end = (start + tile_bins).min(folded_len);
+                // Take the fold buffer out to satisfy the borrow checker while
+                // also mutably borrowing the tile.
+                let fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
+                if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
+                    tile.history.push(&fold_buf[start..end]);
+                }
+                model.tiers[tier].fold_buf = fold_buf;
+            }
         }
     }
 
@@ -1587,7 +1662,27 @@ impl Manager {
             return;
         }
 
+        // Clients that have sent a `waterfall_view` are served tiled frames;
+        // the view is stored on their ClientPipeline. Build a lookup of
+        // client_id -> (tier, tiles) for this dongle so we can route per client.
+        let views: HashMap<String, waterfall::WaterfallView> = {
+            let map = self.client_pipelines.lock();
+            map.iter()
+                .filter_map(|(id, cp)| {
+                    let cp = cp.lock();
+                    if cp.dongle_id != ad.id {
+                        return None;
+                    }
+                    cp.wf_view.clone().map(|v| (id.clone(), v))
+                })
+                .collect()
+        };
+
+        // Legacy full-span cache, encoded at most once per codec.
         let mut cache: HashMap<String, Result<Vec<u8>, String>> = HashMap::new();
+        // Tiered cache keyed by (tier, tile_index, codec), encoded once.
+        let mut tiled_cache: HashMap<(u8, u16, String), Vec<u8>> = HashMap::new();
+
         for client in clients {
             let codec = client.fft_codec();
             let key = if codec.is_empty() {
@@ -1595,6 +1690,21 @@ impl Manager {
             } else {
                 codec.clone()
             };
+
+            if let Some(view) = views.get(&client.id) {
+                self.send_tiered_frame(
+                    ad,
+                    frame,
+                    &client.id,
+                    &key,
+                    view,
+                    MIN_DB,
+                    MAX_DB,
+                    &mut tiled_cache,
+                );
+                continue;
+            }
+
             let msg = cache
                 .entry(key.clone())
                 .or_insert_with(|| match key.as_str() {
@@ -1627,6 +1737,123 @@ impl Manager {
                 Err(e) => {
                     warn!(client = %client.id, codec = %key, error = %e, "FFT encode failed");
                 }
+            }
+        }
+    }
+
+    /// Encode (once per `(tier, tile, codec)`) and send every tile in `view`
+    /// to one client. Tiered frames are folded from `frame` per tile and cached
+    /// in `tiled_cache` so multiple clients sharing a tier/tile/codec reuse the
+    /// same bytes within this broadcast.
+    #[allow(clippy::too_many_arguments)]
+    fn send_tiered_frame(
+        &self,
+        ad: &Arc<ActiveDongle>,
+        frame: &[f32],
+        client_id: &str,
+        codec_key: &str,
+        view: &waterfall::WaterfallView,
+        min_db: f32,
+        max_db: f32,
+        tiled_cache: &mut HashMap<(u8, u16, String), Vec<u8>>,
+    ) {
+        let mut model = ad.tiers.lock();
+        let tier = view.tier.min(NUM_TIERS - 1);
+        let tile_bins = model.effective_tile_bins;
+        let factor = model.tiers[tier].factor;
+        let tile_count = model.tiers[tier].tiles.len() as u16;
+
+        // Fold the live frame into the tier's reusable buffer once per call.
+        {
+            let mut fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
+            fold_frame(frame, &mut fold_buf, factor);
+            model.tiers[tier].fold_buf = fold_buf;
+        }
+        let folded_len = model.tiers[tier].fold_buf.len();
+
+        for &tile_index in &view.tiles {
+            if tile_index >= model.tiers[tier].tiles.len() {
+                continue;
+            }
+            let start = tile_index * tile_bins;
+            if start >= folded_len {
+                continue;
+            }
+            let end = (start + tile_bins).min(folded_len);
+            let cache_key = (tier as u8, tile_index as u16, codec_key.to_string());
+
+            if !tiled_cache.contains_key(&cache_key) {
+                // Borrow the fold buffer slice; encoders that need a per-tile
+                // deflate state live on the TileState.
+                let fold_buf = std::mem::take(&mut model.tiers[tier].fold_buf);
+                let slice = &fold_buf[start..end];
+                let encoded = match codec_key {
+                    "deflate" => {
+                        if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
+                            Some(pack_fft_deflate_tiled(
+                                slice,
+                                min_db.round() as i16,
+                                max_db.round() as i16,
+                                tier as u8,
+                                tile_index as u16,
+                                tile_count,
+                                &mut tile.deflate_enc,
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                    "deflate-floor" => {
+                        if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
+                            Some(pack_fft_deflate_tiled(
+                                slice,
+                                min_db.round() as i16,
+                                max_db.round() as i16,
+                                tier as u8,
+                                tile_index as u16,
+                                tile_count,
+                                &mut tile.deflate_floor_enc,
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                    "adpcm" => Some(pack_fft_adpcm_tiled(
+                        slice,
+                        tier as u8,
+                        tile_index as u16,
+                        tile_count,
+                    )),
+                    "none" | "" => Some(pack_fft_compressed_tiled(
+                        slice,
+                        min_db.round() as i16,
+                        max_db.round() as i16,
+                        tier as u8,
+                        tile_index as u16,
+                        tile_count,
+                    )),
+                    other => {
+                        // Unknown codec: raw float tiled frame so the client
+                        // still receives something decodable.
+                        warn!(client = %client_id, codec = %other, "unknown tiled FFT codec; sending raw");
+                        Some(pack_fft_raw_tiled(
+                            slice,
+                            tier as u8,
+                            tile_index as u16,
+                            tile_count,
+                        ))
+                    }
+                };
+                model.tiers[tier].fold_buf = fold_buf;
+                if let Some(bytes) = encoded {
+                    tiled_cache.insert(cache_key.clone(), bytes);
+                } else {
+                    continue;
+                }
+            }
+
+            if let Some(bytes) = tiled_cache.get(&cache_key) {
+                self.ws.send_to(client_id, bytes.clone());
             }
         }
     }
@@ -2021,6 +2248,7 @@ impl Manager {
             stereo_enabled,
             adpcm_buf: vec![0; (chunk_size + 1) / 2],
             audio_enabled,
+            wf_view: None,
             #[cfg(feature = "decoders")]
             foreground,
             #[cfg(feature = "decoders")]
@@ -2125,6 +2353,9 @@ impl Manager {
     fn destroy_client_pipeline(&self, client_id: &str) {
         let removed = self.client_pipelines.lock().remove(client_id);
         if let Some(cp) = removed {
+            // Release any waterfall tiles this client was holding so their
+            // per-tile history rings can be freed when the last viewer leaves.
+            self.clear_waterfall_view(client_id, &cp);
             if let Some(mut opus) = cp.lock().opus_pipeline.take() {
                 opus.close();
             }
@@ -2218,6 +2449,7 @@ impl Manager {
             "audio_enabled" => self.handle_audio_enabled(client_id, cmd),
             "decoder" => self.handle_decoder(client_id),
             "decoder_scope" => self.handle_decoder_scope(client_id, cmd),
+            "waterfall_view" => self.handle_waterfall_view(client_id, cmd),
             "tune" => self.handle_tune(client_id, cmd),
             "bandwidth" => self.handle_bandwidth(client_id, cmd),
             "mode" => self.handle_mode(client_id, cmd),
@@ -2395,6 +2627,19 @@ impl Manager {
         client.set_tune_offset(profile.tune_offset as i64);
         client.set_mode(&mode);
         client.set_bandwidth(meta_bw as i64);
+        // Advertise the tiered-waterfall protocol and effective tile size so
+        // the client can size its viewport requests. effectiveTileBins is
+        // clamped to fftSize/8 per the frozen contract.
+        let effective_tile_bins = {
+            let model = self.dongles.read().get(&dongle_id).map(|d| {
+                let m = d.tiers.lock();
+                m.effective_tile_bins as u32
+            });
+            model.unwrap_or_else(|| {
+                let tb = self.cfg.read().server.waterfall_tile_bins.max(1) as usize;
+                waterfall::effective_tile_bins(profile.fft_size as usize, tb) as u32
+            })
+        };
         let meta = ServerMeta {
             msg_type: "subscribed".to_string(),
             dongle_id: Some(dongle_id.clone()),
@@ -2406,6 +2651,8 @@ impl Manager {
             mode: Some(mode),
             tuning_step: Some(profile.tuning_step as i64),
             tune_offset: Some(profile.tune_offset as i64),
+            waterfall_protocol: Some(1),
+            waterfall_tile_bins: Some(effective_tile_bins),
             ..Default::default()
         };
         self.send_meta(client_id, meta);
@@ -2512,6 +2759,232 @@ impl Manager {
                     None
                 };
             }
+        }
+    }
+
+    /// Handle a `waterfall_view` command: pick a resolution tier for the
+    /// client's current zoom, resolve the overlapping tiles, update per-tile
+    /// refcounts (allocating/freeing tile state on 0↔1 transitions), prefill
+    /// each newly-entered tile's history, and store the active view on the
+    /// client's pipeline so `broadcast_fft_frame` routes tiled frames to it.
+    fn handle_waterfall_view(&self, client_id: &str, cmd: &ClientCommand) {
+        // Reject a degenerate or inverted span rather than guessing.
+        if cmd.end_frac <= cmd.start_frac {
+            self.send_error(
+                client_id,
+                "waterfall_view: endFrac must be greater than startFrac".to_string(),
+                "WATERFALL_VIEW_INVALID",
+            );
+            return;
+        }
+
+        let dongle_id = match self.ws.get_client(client_id) {
+            Some(c) => c.subscribed_to(),
+            None => return,
+        };
+        if dongle_id.is_empty() {
+            return;
+        }
+        let ad = match self.dongles.read().get(&dongle_id) {
+            Some(d) => d.clone(),
+            None => return,
+        };
+
+        // A waterfall view may exist without audio/decoder, so ensure a
+        // pipeline exists to hold the view (the frozen contract stores the
+        // active view on ClientPipeline).
+        let cp = match self.client_pipelines.lock().get(client_id).cloned() {
+            Some(cp) => cp,
+            None => {
+                self.create_client_pipeline(client_id);
+                match self.client_pipelines.lock().get(client_id).cloned() {
+                    Some(cp) => cp,
+                    None => return,
+                }
+            }
+        };
+
+        let (fft_size, prev_view) = {
+            let model = ad.tiers.lock();
+            let cp = cp.lock();
+            (model.fft_size, cp.wf_view.clone())
+        };
+
+        let tier = waterfall::target_tier(
+            fft_size,
+            cmd.viewport_px,
+            cmd.start_frac,
+            cmd.end_frac,
+        );
+        let tiles = {
+            let model = ad.tiers.lock();
+            waterfall::overlapping_tiles(&model, tier, cmd.start_frac, cmd.end_frac)
+        };
+
+        // Diff old vs new to find tiles to start (new) and stop (dropped).
+        let prev: std::collections::HashSet<(usize, usize)> = prev_view
+            .as_ref()
+            .map(|v| v.tiles.iter().map(|&t| (v.tier, t)).collect())
+            .unwrap_or_default();
+        let next: std::collections::HashSet<(usize, usize)> =
+            tiles.iter().map(|&t| (tier, t)).collect();
+
+        // Drop refcounts for tiles no longer in view.
+        for &(old_tier, old_tile) in prev.difference(&next) {
+            self.release_tile(&ad, old_tier, old_tile);
+        }
+
+        // Acquire newly-entered tiles (allocate on 0->1) and prefill history.
+        let mut newly_entered: Vec<usize> = Vec::new();
+        for &(_, new_tile) in next.difference(&prev) {
+            if self.acquire_tile(&ad, tier, new_tile) {
+                newly_entered.push(new_tile);
+            }
+        }
+
+        // Store the active view before emitting the prefill burst so a frame
+        // that races in is routed correctly.
+        {
+            let mut cp = cp.lock();
+            cp.wf_view = Some(waterfall::WaterfallView {
+                tier,
+                tiles: tiles.clone(),
+            });
+        }
+
+        // Also raise refcounts for retained tiles that were already active on
+        // the same tier (no transition, no alloc) — handled implicitly: they
+        // stayed in `prev ∩ next`, so their refcount is unchanged, which is
+        // correct for a single client.
+        for tile_index in newly_entered {
+            self.prefill_tile_history(&ad, client_id, tier, tile_index);
+        }
+    }
+
+    /// Acquire a tile for a view: increment its refcount, allocating the
+    /// `TileState` (and its history ring) on the 0->1 transition. Returns
+    /// `true` if this call performed the allocation (i.e. the tile is newly
+    /// active), so the caller can prefill its history.
+    fn acquire_tile(&self, ad: &Arc<ActiveDongle>, tier: usize, tile_index: usize) -> bool {
+        if tier >= NUM_TIERS {
+            return false;
+        }
+        let (tile_bins, history_frames, needs_alloc) = {
+            let mut model = ad.tiers.lock();
+            if tile_index >= model.tiers[tier].tiles.len() {
+                return false;
+            }
+            let tile_bins = model.effective_tile_bins;
+            let history_frames = model.history_frames;
+            if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
+                tile.refcount += 1;
+                (tile_bins, history_frames, false)
+            } else {
+                (tile_bins, history_frames, true)
+            }
+        };
+        if !needs_alloc {
+            return false;
+        }
+        // Allocate off the dongle IQ hot path. This runs on a WebSocket reader
+        // task (a tokio worker), and only on a view transition — not per frame.
+        let mut tile = TileState::new(tile_bins, history_frames);
+        tile.refcount = 1;
+        let mut model = ad.tiers.lock();
+        // Re-check in case a concurrent acquire allocated it first.
+        if let Some(existing) = model.tiers[tier].tiles[tile_index].as_mut() {
+            existing.refcount += 1;
+            false
+        } else {
+            model.tiers[tier].tiles[tile_index] = Some(tile);
+            true
+        }
+    }
+
+    /// Release a tile from a view: decrement its refcount, tearing down the
+    /// `TileState` (freeing its history ring) on the 1->0 transition.
+    fn release_tile(&self, ad: &Arc<ActiveDongle>, tier: usize, tile_index: usize) {
+        if tier >= NUM_TIERS {
+            return;
+        }
+        let mut model = ad.tiers.lock();
+        if tile_index >= model.tiers[tier].tiles.len() {
+            return;
+        }
+        let drop_it = if let Some(tile) = model.tiers[tier].tiles[tile_index].as_mut() {
+            tile.refcount = tile.refcount.saturating_sub(1);
+            tile.refcount == 0
+        } else {
+            false
+        };
+        if drop_it {
+            model.tiers[tier].tiles[tile_index] = None;
+        }
+    }
+
+    /// Send a history prefill burst for one newly-entered tile.
+    fn prefill_tile_history(
+        &self,
+        ad: &Arc<ActiveDongle>,
+        client_id: &str,
+        tier: usize,
+        tile_index: usize,
+    ) {
+        const MIN_DB: f32 = -130.0;
+        const MAX_DB: f32 = 0.0;
+
+        let (frames, tile_count, codec_byte) = {
+            let model = ad.tiers.lock();
+            if tier >= NUM_TIERS || tile_index >= model.tiers[tier].tiles.len() {
+                return;
+            }
+            let tile_count = model.tiers[tier].tiles.len() as u16;
+            let frames = match model.tiers[tier].tiles[tile_index].as_ref() {
+                Some(tile) => tile.history.get_range(),
+                None => return,
+            };
+            // Mirror the legacy history codec selection.
+            let codec = {
+                let c = self.cfg.read().server.fft_history_compression.clone();
+                match c.as_str() {
+                    "deflate" | "" => 1u8,
+                    "adpcm" => 2u8,
+                    _ => 0u8,
+                }
+            };
+            (frames, tile_count, codec)
+        };
+        if frames.is_empty() {
+            return;
+        }
+
+        let msg = pack_fft_history_tiled(
+            &frames,
+            MIN_DB.round() as i16,
+            MAX_DB.round() as i16,
+            codec_byte,
+            tier as u8,
+            tile_index as u16,
+            tile_count,
+        );
+        self.ws.send_to(client_id, msg);
+    }
+
+    /// Release all tiles held by a client's active waterfall view (used on
+    /// disconnect and on view replacement). Returns the view that was cleared.
+    fn clear_waterfall_view(&self, client_id: &str, cp: &Arc<Mutex<ClientPipeline>>) {
+        let (dongle_id, view) = {
+            let mut cp = cp.lock();
+            (cp.dongle_id.clone(), cp.wf_view.take())
+        };
+        let _ = client_id;
+        let Some(view) = view else { return };
+        let ad = match self.dongles.read().get(&dongle_id) {
+            Some(d) => d.clone(),
+            None => return,
+        };
+        for &tile_index in &view.tiles {
+            self.release_tile(&ad, view.tier, tile_index);
         }
     }
 
@@ -3161,6 +3634,19 @@ impl Manager {
             *ad.fft_proc.lock() = fft_proc;
             *ad.deflate_enc.lock() = FftDeflateEncoder::new(fft_size);
             *ad.deflate_floor_enc.lock() = FftDeflateEncoder::new(fft_size);
+            // The tier model is sized by fft_size; rebuild it empty. Any
+            // client waterfall views are cleared below so no stale tile index
+            // survives the profile switch.
+            let (tile_bins, history_frames) = {
+                let cfg = self.cfg.read();
+                let tb = if cfg.server.waterfall_tile_bins > 0 {
+                    cfg.server.waterfall_tile_bins as usize
+                } else {
+                    1024
+                };
+                (tb, 1024usize)
+            };
+            *ad.tiers.lock() = TierModel::new(fft_size, tile_bins, history_frames);
         }
 
         *ad.profile.write() = profile.clone();
@@ -3205,6 +3691,10 @@ impl Manager {
         };
         for (_, cp) in pipelines {
             let mut cp = cp.lock();
+            // The tier model was rebuilt for the new fft_size, so any prior
+            // waterfall view points at now-freed tiles. Clear it; the client
+            // will send a fresh `waterfall_view` for the new span.
+            cp.wf_view = None;
             let rate = output_rate_for_mode_bandwidth(&mode, default_bw as i32);
             cp.extractor.set_output_sample_rate(rate);
             cp.mode = mode.clone();
