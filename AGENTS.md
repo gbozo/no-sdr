@@ -82,6 +82,7 @@ pipelines.
 | `serverrs/src/dongle/opus_pipeline.rs` | Server-side demod + Opus encode per client | Per Opus-client |
 | `serverrs/src/codec/adpcm.rs` | IMA-ADPCM encoder/decoder (4:1 lossy) | Every IQ/FFT frame |
 | `serverrs/src/decoders/mod.rs` | OpenWebRX-style decoder workers: slotted FT8/FT4/FT2/FST4/Q65/JT65/JT9, raw-IQ ADS-B/AIS/VDL2/HFDL/ISM, APRS/NAVTEX/PACKET/WEFAX/SSTV/HELL/OLIVIA/THOR/FSQ/PSK31/RTTY/MSK144/FSK441/JS8 audio and DCF77/ALS162 time signals | YES (per dongle) |
+| `serverrs/src/decoders/scope.rs` | Per-client secondary FFT for decoder and signal-analysis subscriptions | Per subscribed client |
 | `serverrs/src/ws/manager.rs` | WS lifecycle, broadcast, aggregate traffic stats | YES |
 | `serverrs/src/ws/protocol.rs` | Binary WS protocol: pack/unpack, message types, client commands | Every WS message |
 | `serverrs/src/api/router.rs` | axum routes, admin API, static SPA, WebSocket upgrade | Request handler |
@@ -117,7 +118,8 @@ live under `serverrs/src/gpu/` behind a `gpu_vulkan` feature.
 | `0x08` | FFT_ADPCM | ADPCM on Int16(dB×100) |
 | `0x0B` | FFT_DEFLATE | Int16(minDb) + Int16(maxDb) + Uint32(binCount) + deflate bytes (DEFAULT) |
 | `0x0D` | FFT_HISTORY | Waterfall history burst |
-| `0x0E` | DECODER_SCOPE | Opt-in zoom FFT for a foreground decoder: `Uint8(version) + Uint8(flags) + Uint16(reserved) + Float64(startHz) + Uint32(binCount) + Float32(hzPerBin) + Int16(minDb) + Int16(maxDb) + Uint8[N]` |
+| `0x0E` | DECODER_SCOPE | Opt-in zoom FFT for a foreground decoder, scoped to the decoder bandwidth: `Uint8(version) + Uint8(flags) + Uint16(reserved) + Float64(startHz) + Uint32(binCount) + Float32(hzPerBin) + Int16(minDb) + Int16(maxDb) + Uint8[N]` |
+| `0x0F` | ANALYSIS_SCOPE | Per-client zoom FFT for Signal Analysis, scoped to the demodulator bandwidth. Same body as `0x0E`, independent subscription. |
 | `0x02` | IQ | Uint32(sampleRate) + Uint8(channels=2) + Uint8(reserved) + Int16 interleaved I/Q |
 | `0x09` | IQ_ADPCM | Uint32(sampleCount) + Uint32(sampleRate) + Uint8(channels=2) + Uint8(reserved) + ADPCM bytes (DEFAULT) |
 | `0x0C` | AUDIO_OPUS | Uint16(sampleCount) + Uint8(channels) + Opus packet |
@@ -127,7 +129,12 @@ live under `serverrs/src/gpu/` behind a `gpu_vulkan` feature.
 | `0x07` | SIGNAL_LEVEL | Float32 dB value |
 | `0x0A` | RDS | UTF-8 JSON (RDS data: ps, rt, ptyName, pi, pty, synced, optional clock) |
 
-Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, `stereo_enabled`, etc.)
+FFT messages (`0x01/0x04/0x08/0x0B/0x0D`) are always full-span frames: every
+frame carries `fftSize` bins covering the dongle's whole sample rate. The
+client zooms by cropping/decimating that single bin set — there is no
+segmented/tiled waterfall mode.
+
+Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, `stereo_enabled`, `decoder_scope`, `analysis_scope`, etc.). The two scope subscriptions are per-client secondary FFTs; they never change the main waterfall frame set.
 
 `META` (0x03) also carries `server_stats` every 2 s:
 `{cpuPercent, memMb, clients, wsBytesPerSec}` — `wsBytesPerSec` is the

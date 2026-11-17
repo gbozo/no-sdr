@@ -1510,6 +1510,31 @@ const WaterfallSettings: Component = () => {
           <span class="text-[10px] font-mono text-text-dim">{store.fftSize()} bins</span>
         </div>
 
+        {/* Secondary FFT frame rate (decoder pane + signal analysis) */}
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
+              Secondary FFT
+            </label>
+            <span class="text-[10px] font-mono text-text-dim">{store.secondaryFftFps()} fps</span>
+          </div>
+          <input
+            type="range"
+            aria-label="Secondary FFT frame rate"
+            min={1}
+            max={24}
+            step={1}
+            value={store.secondaryFftFps()}
+            onInput={(e) => engine.setSecondaryFftFps(parseInt(e.currentTarget.value))}
+            class="sdr-range"
+          />
+          <div class="flex justify-between text-[9px] font-mono text-text-dim mt-0.5">
+            <span>1 fps</span>
+            <span>16 default</span>
+            <span>24 fps</span>
+          </div>
+        </div>
+
         {/* Gamma / contrast */}
         <div>
           <div class="flex justify-between items-center mb-1">

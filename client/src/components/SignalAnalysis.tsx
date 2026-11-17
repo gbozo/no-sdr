@@ -2,23 +2,14 @@
 // node-sdr — Signal analysis workspace
 // ============================================================
 // Expert view for the currently tuned station: zoomed spectrum + waterfall,
-// instantaneous levels, master peak/low across the full FFT span, local
-// peaks/lows and a peak/floor history strip. Fed by the same FFT frames the
-// waterfall uses; no extra server traffic.
+// instantaneous levels, peak/low, local peaks/lows and a peak/floor history
+// strip. Fed by a per-client secondary FFT scoped to the demodulator
+// bandwidth; it does not alter or consume the main waterfall stream.
 
 import { Component, For, Show, createSignal, createEffect, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
-
-type SpanMode = 'bw' | '2x' | '5x' | '10x' | 'full';
-
-const SPAN_MODES: { id: SpanMode; label: string; title: string }[] = [
-  { id: 'bw', label: 'BW', title: 'Exactly the current filter bandwidth (1)' },
-  { id: '2x', label: '2×', title: 'Twice the filter bandwidth (2)' },
-  { id: '5x', label: '5×', title: 'Five times the filter bandwidth (3)' },
-  { id: '10x', label: '10×', title: 'Ten times the filter bandwidth (4)' },
-  { id: 'full', label: 'FULL', title: 'Full sampled bandwidth (5)' },
-];
+import type { AnalysisScopeFrame } from '~/shared';
 
 const TRACE_MODES: { id: TraceMode; label: string; title: string }[] = [
   { id: 'live', label: 'LIVE', title: 'Live trace' },
@@ -107,14 +98,20 @@ function sumLinearPower(frame: Float32Array, start: number, end: number): number
   return power;
 }
 
-function spanForMode(mode: SpanMode, bandwidth: number, sampleRate: number): number {
-  const base = Math.max(500, bandwidth || 1000);
-  const wanted = mode === 'bw' ? base
-    : mode === '2x' ? base * 2
-    : mode === '5x' ? base * 5
-    : mode === '10x' ? base * 10
-    : sampleRate;
-  return Math.max(1, Math.min(sampleRate || wanted, wanted));
+/** Absolute-Hz coverage of a secondary-FFT frame. */
+interface FrameCoverage {
+  lowHz: number;
+  spanHz: number;
+}
+
+/** Convert a u8 secondary-scope frame to dB bins. */
+function scopeToFloat(frame: AnalysisScopeFrame): Float32Array {
+  const out = new Float32Array(frame.bins.length);
+  const range = frame.maxDb - frame.minDb;
+  for (let i = 0; i < frame.bins.length; i++) {
+    out[i] = frame.minDb + (frame.bins[i] / 255) * range;
+  }
+  return out;
 }
 
 function fmtFreq(hz: number): string {
@@ -173,14 +170,28 @@ function accentColor(): string {
   return getComputedStyle(document.documentElement).getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
 }
 
-function analyse(frame: Float32Array, cfg: AnalysisConfig, spanHz: number): AnalysisStats | null {
+function analyse(
+  frame: Float32Array,
+  cfg: AnalysisConfig,
+  spanHz: number,
+  coverage?: FrameCoverage | null,
+): AnalysisStats | null {
   const frameLen = frame.length;
-  if (frameLen === 0 || cfg.sampleRate <= 0) return null;
+  if (frameLen === 0) return null;
+  if (!coverage && cfg.sampleRate <= 0) return null;
 
-  const hzPerBin = cfg.sampleRate / frameLen;
-  const frameLow = cfg.centerHz - cfg.sampleRate / 2;
-  const wantedLow = cfg.tuneHz - spanHz / 2;
-  const wantedHigh = cfg.tuneHz + spanHz / 2;
+  const hzPerBin = coverage && coverage.spanHz > 0
+    ? coverage.spanHz / frameLen
+    : cfg.sampleRate / frameLen;
+  const frameLow = coverage
+    ? coverage.lowHz
+    : cfg.centerHz - cfg.sampleRate / 2;
+  // A secondary frame defines the exact demodulator passband (one-sided for
+  // USB/LSB). Without one, fall back to a symmetric window around the tune.
+  const wantedLow = coverage ? coverage.lowHz : cfg.tuneHz - spanHz / 2;
+  const wantedHigh = coverage
+    ? coverage.lowHz + coverage.spanHz
+    : cfg.tuneHz + spanHz / 2;
   const start = clamp(Math.floor((wantedLow - frameLow) / hzPerBin), 0, frameLen - 1);
   const end = clamp(Math.ceil((wantedHigh - frameLow) / hzPerBin), start + 1, frameLen);
   const lowHz = frameLow + start * hzPerBin;
@@ -406,7 +417,6 @@ const SignalAnalysis: Component = () => {
   let levelRef: HTMLCanvasElement | undefined;
   let driftRef: HTMLCanvasElement | undefined;
 
-  const [spanMode, setSpanMode] = createSignal<SpanMode>('bw');
   const [traceMode, setTraceMode] = createSignal<TraceMode>('max');
   const [frozen, setFrozen] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
@@ -430,7 +440,10 @@ const SignalAnalysis: Component = () => {
   let levelHistory: LevelPoint[] = [];
   let traceData: Float32Array | null = null;
   let lastFrame: Float32Array | null = null;
+  let lastCoverage: FrameCoverage | null = null;
+  let lastScopeFrame: AnalysisScopeFrame | null = null;
   let lastKey = '';
+  let waterfallKey = '';
   let viewMin = store.waterfallMin();
   let viewMax = store.waterfallMax();
   let wfMin = store.waterfallMin();
@@ -440,7 +453,6 @@ const SignalAnalysis: Component = () => {
   let presenceHistory: boolean[] = [];
   let lastPresence = false;
   let dragging: 'a' | 'b' | null = null;
-  let loadedSpanKey = '';
 
   const config = (): AnalysisConfig => ({
     sampleRate: store.sampleRate(),
@@ -469,9 +481,12 @@ const SignalAnalysis: Component = () => {
     return { aDb, bDb, deltaHz: markerB() - markerA(), deltaDb: bDb - aDb };
   };
 
+  // The analysis window is the demodulator bandwidth. It is served by the
+  // per-client secondary FFT; there are no 2x/5x/10x/full multipliers.
   const spanHz = (): number => {
     const cfg = config();
-    return spanForMode(spanMode(), cfg.bandwidth, cfg.sampleRate);
+    const bw = Math.max(500, cfg.bandwidth || 1000);
+    return Math.max(1, Math.min(cfg.sampleRate || bw, bw));
   };
 
   const resetAnalysis = () => {
@@ -480,6 +495,7 @@ const SignalAnalysis: Component = () => {
     traceData = null;
     lastFrame = null;
     lastKey = '';
+    waterfallKey = '';
     driftHistory = [];
     driftReference = null;
     presenceHistory = [];
@@ -782,66 +798,87 @@ const SignalAnalysis: Component = () => {
     ctx.lineWidth = 1;
   };
 
-  const drawWaterfall = (s: AnalysisStats) => {
+  const drawWaterfall = (s: AnalysisStats, advance: boolean) => {
     const canvas = waterfallRef;
     if (!canvas) return;
     const setup = setupCanvas(canvas);
     if (!setup) return;
-    const { ctx, w, h } = setup;
-    ctx.fillStyle = '#05070b';
-    ctx.fillRect(0, 0, w, h);
     if (history.length === 0 || s.bins.length === 0) return;
 
+    // canvas.width/height are device pixels; drawing is done in that space so
+    // the 1-row scroll step is exact on HiDPI displays too.
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx || cw < 1 || ch < 1) return;
+    const key = `${s.winLowHz.toFixed(2)}|${s.spanHz.toFixed(2)}|${cw}|${ch}|${wfMin}|${wfMax}`;
     const bins = s.bins.length;
-    const frames = history.length;
-    const img = ctx.createImageData(w, h);
-    const data = img.data;
+
     const range = Math.max(1, wfMax - wfMin);
-    for (let y = 0; y < h; y++) {
-      // Stretch the available history over the full pane so the first few
-      // seconds already look like a waterfall instead of a thin top strip.
-      const frameIndex = frames - 1 - Math.min(frames - 1, Math.floor((y / h) * frames));
-      const frame = history[frameIndex];
-      if (frame.length <= s.end) continue;
-      const row = y * w * 4;
-      for (let x = 0; x < w; x++) {
-        const idx = s.start + Math.min(bins - 1, Math.floor((x / w) * bins));
-        const db = frame[idx];
-        const t = clamp((db - wfMin) / range, 0, 1);
-        const v = Math.round(255 * Math.pow(t, 0.8));
-        const p = row + x * 4;
-        data[p] = Math.round(v * 0.06);
-        data[p + 1] = Math.round(45 + v * 0.60);
-        data[p + 2] = Math.round(85 + v * 0.65);
+    const lut = new Uint8Array(256 * 3);
+    for (let v = 0; v < 256; v++) {
+      const t = Math.pow(v / 255, 0.8);
+      lut[v * 3] = Math.round(255 * t * 0.06);
+      lut[v * 3 + 1] = Math.round(45 + 255 * t * 0.60);
+      lut[v * 3 + 2] = Math.round(85 + 255 * t * 0.65);
+    }
+    const level = (db: number) =>
+      Math.max(0, Math.min(255, Math.round((clamp((db - wfMin) / range, 0, 1)) * 255)));
+
+    if (key !== waterfallKey) {
+      // Full rebuild: new coverage, size or display range. Also used for the
+      // initial prefill so the pane is not blank while history accumulates.
+      const frames = history.length;
+      const img = ctx.createImageData(cw, ch);
+      const data = img.data;
+      for (let y = 0; y < ch; y++) {
+        const frameIndex = frames - 1 - Math.min(frames - 1, Math.floor((y / ch) * frames));
+        const frame = history[frameIndex];
+        if (!frame || frame.length < s.end) continue;
+        const row = y * cw * 4;
+        for (let x = 0; x < cw; x++) {
+          const idx = s.start + Math.min(bins - 1, Math.floor((x / cw) * bins));
+          const v = level(frame[idx]);
+          const p = row + x * 4;
+          data[p] = lut[v * 3];
+          data[p + 1] = lut[v * 3 + 1];
+          data[p + 2] = lut[v * 3 + 2];
+          data[p + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      waterfallKey = key;
+      return;
+    }
+
+    // Only advance on genuinely new frames. Marker/measurement redraws call
+    // this with advance=false and must not clear or scroll the pane.
+    if (!advance) return;
+
+    // Smooth scroll: move the existing image down by one CSS pixel, then draw
+    // just the newest line at the top. No full repaint, so no flicker or black
+    // seams between frames.
+    const step = Math.max(1, Math.round(window.devicePixelRatio || 1));
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(canvas, 0, step);
+    ctx.restore();
+
+    const row = ctx.createImageData(cw, step);
+    const data = row.data;
+    for (let y = 0; y < step; y++) {
+      const off = y * cw * 4;
+      for (let x = 0; x < cw; x++) {
+        const idx = s.start + Math.min(bins - 1, Math.floor((x / cw) * bins));
+        const v = level(s.bins[idx]);
+        const p = off + x * 4;
+        data[p] = lut[v * 3];
+        data[p + 1] = lut[v * 3 + 1];
+        data[p + 2] = lut[v * 3 + 2];
         data[p + 3] = 255;
       }
     }
-    ctx.putImageData(img, 0, 0);
-
-    // Centre + filter edges over the zoomed waterfall.
-    const xForHz = (hz: number) => ((hz - s.winLowHz) / Math.max(1, s.spanHz)) * w;
-    const tuneHz = store.tunedFrequency();
-    if (tuneHz > s.winLowHz && tuneHz < s.winHighHz) {
-      ctx.strokeStyle = 'rgba(255,252,98,0.55)';
-      ctx.beginPath();
-      ctx.moveTo(xForHz(tuneHz), 0);
-      ctx.lineTo(xForHz(tuneHz), h);
-      ctx.stroke();
-    }
-    const bw = store.bandwidth();
-    if (bw > 0) {
-      for (const edgeHz of [tuneHz - bw / 2, tuneHz + bw / 2]) {
-        if (edgeHz <= s.winLowHz || edgeHz >= s.winHighHz) continue;
-        const x = xForHz(edgeHz);
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, h);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
+    ctx.putImageData(row, 0, 0);
   };
 
   const drawLevelHistory = () => {
@@ -943,7 +980,11 @@ const SignalAnalysis: Component = () => {
     ctx.stroke();
   };
 
-  const renderFrame = (frame: Float32Array, pushHistory: boolean) => {
+  const renderFrame = (
+    frame: Float32Array,
+    pushHistory: boolean,
+    coverage: FrameCoverage | null = null,
+  ) => {
     if (history.length && history[0].length !== frame.length) {
       history = [];
       levelHistory = [];
@@ -958,7 +999,7 @@ const SignalAnalysis: Component = () => {
     }
 
     const cfg = config();
-    const s = analyse(frame, cfg, spanHz());
+    const s = analyse(frame, cfg, spanHz(), coverage);
     if (!s) return;
     setStats(s);
     setSyncLock(engine.getSyncLock());
@@ -973,7 +1014,7 @@ const SignalAnalysis: Component = () => {
     updateWaterfallRange(s);
     if (pushHistory) updateTrace(frame);
     drawSpectrum(s, cfg);
-    drawWaterfall(s);
+    drawWaterfall(s, pushHistory);
     drawLevelHistory();
     drawDriftHistory();
   };
@@ -1178,13 +1219,6 @@ const SignalAnalysis: Component = () => {
     download(`signal-analysis-${Date.now()}.png`, out.toDataURL('image/png'));
   };
 
-  const selectSpan = (mode: SpanMode) => {
-    setSpanMode(mode);
-    try {
-      localStorage.setItem(`node-sdr:analysis.span.${store.activeProfileId() || store.mode()}`, mode);
-    } catch { /* ignore */ }
-  };
-
   const cycleTrace = () => {
     const modes: TraceMode[] = ['live', 'avg', 'min', 'max'];
     const next = modes[(modes.indexOf(traceMode()) + 1) % modes.length];
@@ -1203,19 +1237,48 @@ const SignalAnalysis: Component = () => {
     if (history.length === 0) return;
     const offset = clamp(historyOffset(), 0, history.length - 1);
     const frame = history[history.length - 1 - offset];
-    if (frame) renderFrame(frame, false);
+    if (frame) renderFrame(frame, false, lastCoverage);
   };
 
   onMount(() => {
     setMarkerA(-store.bandwidth() / 2);
     setMarkerB(store.bandwidth() / 2);
+    // Subscribe to the per-client secondary FFT, scoped to the demodulator
+    // bandwidth. It is independent of the main waterfall and decoder scope.
+    engine.setAnalysisScopeEnabled(true);
 
-    const timer = window.setInterval(() => {
+    let timer = 0;
+    const schedule = () => {
+      const fps = Math.max(1, Math.min(24, store.secondaryFftFps()));
+      timer = window.setTimeout(poll, Math.max(1, Math.round(1000 / fps)));
+    };
+    const poll = () => {
+      schedule();
       if (frozen()) return;
-      const frame = engine.getLatestFftFrame();
-      if (!frame || frame === lastFrame) return;
+      const scopes = engine.getAnalysisScopeFrames();
+      const scope = scopes.length ? scopes[scopes.length - 1] : null;
+      let frame: Float32Array;
+      let coverage: FrameCoverage | null;
+      if (scope) {
+        if (scope === lastScopeFrame) return;
+        lastScopeFrame = scope;
+        frame = scopeToFloat(scope);
+        coverage = {
+          lowHz: scope.startHz,
+          spanHz: scope.bins.length * scope.hzPerBin,
+        };
+      } else {
+        const main = engine.getLatestFftFrame();
+        if (!main || main === lastFrame) return;
+        frame = main;
+        coverage = null;
+      }
       lastFrame = frame;
-      const key = `${store.tunedFrequency()}|${store.centerFrequency()}|${store.sampleRate()}|${frame.length}`;
+      lastCoverage = coverage;
+      const geo = coverage
+        ? `${coverage.lowHz.toFixed(2)}|${coverage.spanHz.toFixed(2)}`
+        : 'main';
+      const key = `${store.tunedFrequency()}|${store.centerFrequency()}|${store.sampleRate()}|${frame.length}|${geo}`;
       if (lastKey && key !== lastKey) {
         history = [];
         levelHistory = [];
@@ -1224,17 +1287,17 @@ const SignalAnalysis: Component = () => {
         driftReference = null;
         presenceHistory = [];
         lastPresence = false;
+        waterfallKey = '';
       }
       lastKey = key;
-      renderFrame(frame, true);
-    }, 100);
+      renderFrame(frame, true, coverage);
+    };
+    schedule();
 
     const onKeyDown = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       const key = event.key.toLowerCase();
-      const byKey: Record<string, SpanMode> = { '1': 'bw', '2': '2x', '3': '5x', '4': '10x', '5': 'full' };
-      if (byKey[key]) { selectSpan(byKey[key]); event.preventDefault(); return; }
       if (key === 'f') { setFrozen((v) => !v); event.preventDefault(); }
       else if (key === 'r') { resetAnalysis(); event.preventDefault(); }
       else if (key === 'c') { copyReport(); event.preventDefault(); }
@@ -1246,26 +1309,16 @@ const SignalAnalysis: Component = () => {
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('mouseup', onMouseUp);
     onCleanup(() => {
-      clearInterval(timer);
+      engine.setAnalysisScopeEnabled(false);
+      clearTimeout(timer);
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('mouseup', onMouseUp);
     });
   });
 
-  // Restore the analysis span for the current mode/profile.
-  createEffect(() => {
-    const key = `${store.activeProfileId() || store.mode()}`;
-    if (loadedSpanKey === key) return;
-    loadedSpanKey = key;
-    let saved: string | null = null;
-    try { saved = localStorage.getItem(`node-sdr:analysis.span.${key}`); } catch { /* ignore */ }
-    setSpanMode(saved && SPAN_MODES.some((m) => m.id === saved) ? (saved as SpanMode) : 'bw');
-  });
-
-  // Re-render the last frame when the operator changes the zoom, markers,
+  // Re-render the last frame when the operator changes the markers,
   // measurement window or display range without waiting for the next FFT.
   createEffect(() => {
-    spanMode();
     traceMode();
     markerA();
     markerB();
@@ -1280,7 +1333,7 @@ const SignalAnalysis: Component = () => {
     store.waterfallMin();
     store.waterfallMax();
     if (isFrozen && history.length > 0) renderHistory();
-    else if (lastFrame) renderFrame(lastFrame, false);
+    else if (lastFrame) renderFrame(lastFrame, false, lastCoverage);
   });
 
   return (
@@ -1289,20 +1342,10 @@ const SignalAnalysis: Component = () => {
       <div class="flex flex-col gap-1 px-2 py-1 border-b border-border/40 shrink-0">
         <div class="flex flex-wrap items-center gap-1.5">
           <span class="text-[9px] uppercase tracking-wider text-text-dim">Signal Analysis</span>
-          <span class="text-[9px] text-text-muted uppercase ml-2">Span</span>
-          <div class="flex items-center gap-1">
-            <For each={SPAN_MODES}>
-              {(mode) => (
-                <button
-                  onClick={() => selectSpan(mode.id)}
-                  title={mode.title}
-                  class={`mil-btn text-[9px] px-1.5 py-0.5 ${spanMode() === mode.id ? 'active border-cyan text-cyan' : ''}`}
-                >
-                  {mode.label}
-                </button>
-              )}
-            </For>
-          </div>
+          <span class="text-[9px] text-text-muted uppercase ml-2">BW</span>
+          <span class="text-[9px] text-cyan tabular-nums" title="Analysis span = demodulator bandwidth">
+            {fmtSpan(stats()?.spanHz ?? spanHz())}
+          </span>
           <span class="text-[9px] text-text-muted uppercase ml-2">Trace</span>
           <div class="flex items-center gap-1">
             <For each={TRACE_MODES}>

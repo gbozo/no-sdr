@@ -92,9 +92,17 @@ const DecoderScope: Component<{ fullWidth?: boolean }> = (props) => {
   const info = (): DecoderWindowInfo => store.decoderWindow() ?? fallbackWindow();
 
   const display = (w: DecoderWindowInfo): { start: number; end: number } => {
-    const d = w.display;
-    const start = Number.isFinite(d?.startHz) ? d.startHz : w.window.startHz - 1_000;
-    const end = Number.isFinite(d?.endHz) ? d.endHz : w.window.endHz + 1_000;
+    // The secondary FFT is scoped to the decoder's actual bandwidth. Once a
+    // frame has arrived, use its explicit absolute-Hz coverage rather than the
+    // wider display hint, so the axis and the bins can never drift apart.
+    const frames = engine.getDecoderScopeFrames();
+    const latest = frames[frames.length - 1];
+    if (latest) {
+      const start = latest.startHz;
+      return { start, end: start + latest.bins.length * latest.hzPerBin };
+    }
+    const start = w.window.startHz;
+    const end = w.window.endHz;
     return { start, end: Math.max(start + 1, end) };
   };
 

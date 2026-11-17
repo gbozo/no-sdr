@@ -222,6 +222,9 @@ struct ClientPipeline {
     /// Current demod mode — decides whether the extractor bandwidth is a full
     /// channel width (DSB) or a one-sided passband (USB/LSB).
     mode: String,
+    /// Current tuning offset from the dongle centre, used to place the
+    /// signal-analysis secondary FFT.
+    tune_offset: i32,
     nb_enabled: bool,
     nb_threshold: f32,
     /// FM de-emphasis time constant (µs), re-applied when an Opus pipeline is
@@ -247,6 +250,18 @@ struct ClientPipeline {
     scope_enabled: bool,
     #[cfg(feature = "decoders")]
     scope_fps: u32,
+    /// Opt-in zoomed spectrum for the signal-analysis workspace. Scoped to the
+    /// demodulator bandwidth and independent of the decoder scope above.
+    #[cfg(feature = "decoders")]
+    analysis_scope: Option<crate::decoders::scope::ScopeProcessor>,
+    #[cfg(feature = "decoders")]
+    analysis_scope_enabled: bool,
+    #[cfg(feature = "decoders")]
+    analysis_scope_fps: u32,
+    #[cfg(feature = "decoders")]
+    analysis_center: f64,
+    #[cfg(feature = "decoders")]
+    analysis_rate: u32,
     #[cfg(feature = "decoders")]
     foreground_mode: String,
     /// Bounded remember-set for rolling snapshots (VDL2/HFDL/ISM), so a
@@ -1769,7 +1784,7 @@ impl Manager {
                         let tapped = cp
                             .foreground
                             .as_mut()
-                            .map(|channel| channel.set_scope(&window.display, scope_fps))
+                            .map(|channel| channel.set_scope(&window.window, scope_fps))
                             .unwrap_or(false);
                         cp.scope = if tapped {
                             None
@@ -1777,8 +1792,9 @@ impl Manager {
                             crate::decoders::scope::ScopeProcessor::new(
                                 center_hz as f64,
                                 sample_rate,
-                                &window.display,
+                                &window.window,
                                 scope_fps,
+                                false,
                             )
                             .map_err(|e| {
                                 warn!(client = %client_id, error = %e, "decoder scope unavailable");
@@ -1827,13 +1843,24 @@ impl Manager {
                 }
             }
 
-            if let Some(frame) = cp.foreground.as_mut().and_then(|channel| channel.take_scope()) {
+            if let Some(frame) = cp
+                .foreground
+                .as_mut()
+                .and_then(|channel| channel.take_scope())
+            {
                 self.ws.send_to(client_id, frame);
             }
             if let Some(scope) = cp.scope.as_mut() {
                 if let Some(frame) = scope.process(chunk) {
                     self.ws.send_to(client_id, frame);
                 }
+            }
+        }
+
+        #[cfg(feature = "decoders")]
+        if let Some(scope) = cp.analysis_scope.as_mut() {
+            if let Some(frame) = scope.process(chunk) {
+                self.ws.send_to(client_id, frame);
             }
         }
 
@@ -2006,15 +2033,16 @@ impl Manager {
             let tapped = foreground
                 .as_mut()
                 .zip(foreground_window.as_ref())
-                .map(|(channel, window)| channel.set_scope(&window.display, scope_fps))
+                .map(|(channel, window)| channel.set_scope(&window.window, scope_fps))
                 .unwrap_or(false);
             if !tapped {
                 if let Some(window) = foreground_window.as_ref().filter(|w| w.scope) {
                     match crate::decoders::scope::ScopeProcessor::new(
                         center_hz as f64,
                         input_rate as u32,
-                        &window.display,
+                        &window.window,
                         scope_fps,
+                        false,
                     ) {
                         Ok(processor) => {
                             debug!(client = %client_id, "decoder fallback scope enabled");
@@ -2056,6 +2084,7 @@ impl Manager {
             iq_codec: iq_codec.clone(),
             dongle_id: dongle_id.clone(),
             mode: mode.clone(),
+            tune_offset,
             nb_enabled: false,
             nb_threshold: 10.0,
             deemphasis_us: 75.0,
@@ -2073,6 +2102,16 @@ impl Manager {
             scope_enabled,
             #[cfg(feature = "decoders")]
             scope_fps,
+            #[cfg(feature = "decoders")]
+            analysis_scope: None,
+            #[cfg(feature = "decoders")]
+            analysis_scope_enabled: client.analysis_scope(),
+            #[cfg(feature = "decoders")]
+            analysis_scope_fps: client.analysis_scope_fps(),
+            #[cfg(feature = "decoders")]
+            analysis_center: center_hz as f64,
+            #[cfg(feature = "decoders")]
+            analysis_rate: input_rate as u32,
             #[cfg(feature = "decoders")]
             foreground_mode: decoder_mode,
             #[cfg(feature = "decoders")]
@@ -2118,6 +2157,8 @@ impl Manager {
             }
         };
         cp.set_bandwidth(bandwidth);
+        #[cfg(feature = "decoders")]
+        Self::rebuild_analysis_scope(client_id, &mut cp);
 
         let mut fallback_status: Option<CodecStatus> = None;
         if is_opus_codec(&iq_codec) {
@@ -2231,6 +2272,37 @@ impl Manager {
         self.broadcast_user_locations(dongle_id);
     }
 
+    /// (Re)build the signal-analysis secondary FFT for the client's current
+    /// tune point, mode and demodulator bandwidth. No-op when the client has
+    /// not subscribed to that stream.
+    #[cfg(feature = "decoders")]
+    fn rebuild_analysis_scope(client_id: &str, cp: &mut ClientPipeline) {
+        if !cp.analysis_scope_enabled {
+            cp.analysis_scope = None;
+            return;
+        }
+        let range = crate::decoders::scope::analysis_range(
+            cp.analysis_center,
+            cp.analysis_rate,
+            cp.tune_offset,
+            &cp.mode,
+            cp.extractor.bandwidth(),
+        );
+        cp.analysis_scope = match crate::decoders::scope::ScopeProcessor::new(
+            cp.analysis_center,
+            cp.analysis_rate,
+            &range,
+            cp.analysis_scope_fps,
+            true,
+        ) {
+            Ok(processor) => Some(processor),
+            Err(e) => {
+                warn!(client = %client_id, error = %e, "analysis scope unavailable");
+                None
+            }
+        };
+    }
+
     fn update_chunk_size(cp: &mut ClientPipeline, rate: i32) {
         let size = (rate as f64 * 2.0 * 0.020) as usize;
         if size > 0 && size != cp.chunk_size {
@@ -2260,6 +2332,7 @@ impl Manager {
             "audio_enabled" => self.handle_audio_enabled(client_id, cmd),
             "decoder" => self.handle_decoder(client_id),
             "decoder_scope" => self.handle_decoder_scope(client_id, cmd),
+            "analysis_scope" => self.handle_analysis_scope(client_id, cmd),
             "tune" => self.handle_tune(client_id, cmd),
             "bandwidth" => self.handle_bandwidth(client_id, cmd),
             "mode" => self.handle_mode(client_id, cmd),
@@ -2284,6 +2357,10 @@ impl Manager {
                 self.handle_set_pre_filter_nb_threshold(client_id, cmd)
             }
             "ribbon_hidden" => {}
+            // App-level heartbeat. WebSocket control frames can be dropped by
+            // reverse proxies and the desktop browser tunnel, so the client
+            // sends a normal text command to refresh last_seen.
+            "ping" => {}
             "mute" | "volume" => {}
             other => debug!(client = %client_id, cmd = other, "unhandled command"),
         }
@@ -2485,7 +2562,19 @@ impl Manager {
                     .get_client(client_id)
                     .map(|c| !c.decoder().is_empty())
                     .unwrap_or(false);
-                if !decoder_active {
+                #[cfg(feature = "decoders")]
+                let scope_active = self
+                    .client_pipelines
+                    .lock()
+                    .get(client_id)
+                    .map(|cp| {
+                        let cp = cp.lock();
+                        cp.scope_enabled || cp.analysis_scope_enabled
+                    })
+                    .unwrap_or(false);
+                #[cfg(not(feature = "decoders"))]
+                let scope_active = false;
+                if !decoder_active && !scope_active {
                     self.destroy_client_pipeline(client_id);
                 }
             }
@@ -2504,7 +2593,7 @@ impl Manager {
         #[cfg(feature = "decoders")]
         {
             let enabled = cmd.enabled.unwrap_or(false);
-            let fps = cmd.fps.unwrap_or(10).clamp(2, 20);
+            let fps = cmd.fps.unwrap_or(16).clamp(1, 24);
             if let Some(client) = self.ws.get_client(client_id) {
                 client.set_decoder_scope(enabled, fps);
             }
@@ -2530,7 +2619,7 @@ impl Manager {
                 let tapped = cp
                     .foreground
                     .as_mut()
-                    .map(|channel| channel.set_scope(&window.display, fps))
+                    .map(|channel| channel.set_scope(&window.window, fps))
                     .unwrap_or(false);
                 cp.scope = if tapped {
                     None
@@ -2538,8 +2627,9 @@ impl Manager {
                     crate::decoders::scope::ScopeProcessor::new(
                         cp.foreground_center as f64,
                         cp.foreground_rate,
-                        &window.display,
+                        &window.window,
                         fps,
+                        false,
                     )
                     .map_err(|e| {
                         warn!(client = %client_id, error = %e, "decoder scope unavailable");
@@ -2557,10 +2647,47 @@ impl Manager {
         }
     }
 
+    fn handle_analysis_scope(&self, client_id: &str, cmd: &ClientCommand) {
+        #[cfg(not(feature = "decoders"))]
+        let _ = (client_id, cmd);
+        #[cfg(feature = "decoders")]
+        {
+            let enabled = cmd.enabled.unwrap_or(false);
+            let fps = cmd.fps.unwrap_or(16).clamp(1, 24);
+            if let Some(client) = self.ws.get_client(client_id) {
+                client.set_analysis_scope(enabled, fps);
+            }
+            // A client can open the analysis workspace while audio is off and
+            // no decoder is running; the pipeline carries the secondary FFT.
+            if enabled && !self.client_pipelines.lock().contains_key(client_id) {
+                self.create_client_pipeline(client_id);
+            }
+            let cp = match self.client_pipelines.lock().get(client_id).cloned() {
+                Some(cp) => cp,
+                None => return,
+            };
+            let keep_pipeline = {
+                let mut cp = cp.lock();
+                cp.analysis_scope_enabled = enabled;
+                cp.analysis_scope_fps = fps;
+                if enabled {
+                    Self::rebuild_analysis_scope(client_id, &mut cp);
+                } else {
+                    cp.analysis_scope = None;
+                }
+                cp.audio_enabled || cp.scope_enabled || !cp.foreground_mode.is_empty()
+            };
+            if !enabled && !keep_pipeline {
+                self.destroy_client_pipeline(client_id);
+            }
+        }
+    }
+
     fn handle_tune(&self, client_id: &str, cmd: &ClientCommand) {
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
             cp.extractor.set_tune_offset(cmd.offset as i32);
+            cp.tune_offset = cmd.offset as i32;
             cp.extractor.reset();
             cp.accum_pos = 0;
             cp.adpcm_enc.reset();
@@ -2571,6 +2698,7 @@ impl Manager {
                 cp.foreground = None;
                 cp.foreground_window = None;
                 cp.scope = None;
+                Self::rebuild_analysis_scope(client_id, &mut cp);
             }
         }
         if let Some(client) = self.ws.get_client(client_id) {
@@ -2595,6 +2723,8 @@ impl Manager {
             if let Some(opus) = cp.opus_pipeline.as_mut() {
                 opus.set_bandwidth(bandwidth);
             }
+            #[cfg(feature = "decoders")]
+            Self::rebuild_analysis_scope(client_id, &mut cp);
         }
         if let Some(client) = self.ws.get_client(client_id) {
             let dongle_id = client.subscribed_to();
@@ -2632,6 +2762,8 @@ impl Manager {
         }
         cp.accum_pos = 0;
         cp.adpcm_enc.reset();
+        #[cfg(feature = "decoders")]
+        Self::rebuild_analysis_scope(client_id, &mut cp);
         if let Some(client) = self.ws.get_client(client_id) {
             let dongle_id = client.subscribed_to();
             if !dongle_id.is_empty() {
@@ -3229,13 +3361,25 @@ impl Manager {
                 .map(|(id, cp)| (id.clone(), cp.clone()))
                 .collect()
         };
-        for (_, cp) in pipelines {
+        for (client_key, cp) in pipelines {
+            #[cfg(not(feature = "decoders"))]
+            let _ = &client_key;
             let mut cp = cp.lock();
             let rate = output_rate_for_mode_bandwidth(&mode, default_bw as i32);
             cp.extractor.set_output_sample_rate(rate);
             cp.mode = mode.clone();
+            cp.tune_offset = 0;
             cp.set_bandwidth(default_bandwidth_for_mode(&mode));
             cp.extractor.set_tune_offset(0);
+            #[cfg(feature = "decoders")]
+            {
+                cp.analysis_center =
+                    (profile.center_frequency + profile.oscillator_offset as i64) as f64;
+                cp.analysis_rate = sample_rate.max(1) as u32;
+                cp.foreground_offset = 0;
+                cp.foreground_center = profile.center_frequency + profile.oscillator_offset as i64;
+                cp.foreground_rate = sample_rate.max(1) as u32;
+            }
             cp.extractor
                 .set_dc_offset_removal(profile.dc_offset_removal_enabled());
             // Pre-filter noise blanker is profile-scoped too. Without this a
@@ -3263,6 +3407,8 @@ impl Manager {
             }
             cp.accum_pos = 0;
             cp.adpcm_enc.reset();
+            #[cfg(feature = "decoders")]
+            Self::rebuild_analysis_scope(&client_key, &mut cp);
         }
 
         info!(

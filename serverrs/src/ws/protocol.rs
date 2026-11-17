@@ -25,6 +25,10 @@ pub const MSG_FFT_HISTORY: u8 = 0x0D; // Waterfall history burst
 /// A foreground decoder's zoomed spectrum. Sent only after the client asks
 /// for it with `{"cmd":"decoder_scope","enabled":true}`.
 pub const MSG_DECODER_SCOPE: u8 = 0x0E; // [version][flags][reserved][startHz][bins][hzPerBin][minDb][maxDb][u8 bins]
+/// A per-client zoomed spectrum for the signal-analysis workspace, scoped to
+/// the demodulator bandwidth. Independent of the decoder scope and of the
+/// main waterfall FFT. Subscribed with `{"cmd":"analysis_scope"}`.
+pub const MSG_ANALYSIS_SCOPE: u8 = 0x0F; // same body as MSG_DECODER_SCOPE
 
 /// One connected listener's tuning position for the users ribbon.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -136,8 +140,8 @@ pub struct ClientCommand {
     /// FM de-emphasis in microseconds (50 or 75).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deemphasis: Option<f64>,
-    /// Foreground decoder scope frame rate (2–20 fps). Only meaningful for
-    /// `cmd: "decoder_scope"`.
+    /// Zoomed secondary-spectrum frame rate (2–20 fps). Used by
+    /// `cmd: "decoder_scope"` and `cmd: "analysis_scope"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<u32>,
     /// Hide a helper connection from the public users ribbon.
@@ -208,8 +212,46 @@ pub fn pack_decoder_scope(
     max_db: f32,
     bins: &[u8],
 ) -> Vec<u8> {
+    pack_scope(
+        MSG_DECODER_SCOPE,
+        start_hz,
+        hz_per_bin,
+        min_db,
+        max_db,
+        bins,
+    )
+}
+
+/// Pack a signal-analysis zoomed spectrum. The body is identical to
+/// [`pack_decoder_scope`]; only the leading message type differs so the client
+/// can keep the two subscriptions independent.
+pub fn pack_analysis_scope(
+    start_hz: f64,
+    hz_per_bin: f32,
+    min_db: f32,
+    max_db: f32,
+    bins: &[u8],
+) -> Vec<u8> {
+    pack_scope(
+        MSG_ANALYSIS_SCOPE,
+        start_hz,
+        hz_per_bin,
+        min_db,
+        max_db,
+        bins,
+    )
+}
+
+fn pack_scope(
+    msg_type: u8,
+    start_hz: f64,
+    hz_per_bin: f32,
+    min_db: f32,
+    max_db: f32,
+    bins: &[u8],
+) -> Vec<u8> {
     let mut buf = Vec::with_capacity(24 + bins.len());
-    buf.push(MSG_DECODER_SCOPE);
+    buf.push(msg_type);
     buf.push(1); // version
     buf.push(0); // flags
     buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
@@ -543,6 +585,16 @@ mod tests {
         assert_eq!(i16::from_le_bytes(msg[21..23].try_into().unwrap()), -130);
         assert_eq!(i16::from_le_bytes(msg[23..25].try_into().unwrap()), 0);
         assert_eq!(&msg[25..], &[0, 128, 255]);
+    }
+
+    #[test]
+    fn analysis_scope_frame_shape() {
+        let msg = pack_analysis_scope(7_074_000.0, 6.25, -130.0, 0.0, &[10, 20, 30]);
+        assert_eq!(msg[0], MSG_ANALYSIS_SCOPE);
+        assert_eq!(msg[1], 1);
+        assert_eq!(u32::from_le_bytes(msg[13..17].try_into().unwrap()), 3);
+        assert_eq!(f32::from_le_bytes(msg[17..21].try_into().unwrap()), 6.25);
+        assert_eq!(&msg[25..], &[10, 20, 30]);
     }
 
     #[test]

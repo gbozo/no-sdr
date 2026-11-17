@@ -1358,6 +1358,9 @@ const ProfileEditor: Component<{
               <option value="4096">4096</option>
               <option value="8192">8192</option>
               <option value="16384">16384</option>
+              <option value="32768">32768</option>
+              <option value="65536">65536</option>
+              <option value="131072">131072</option>
             </select>
           </FieldGroup>
           <FieldGroup label="FFT FPS">
