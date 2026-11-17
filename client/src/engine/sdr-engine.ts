@@ -667,6 +667,29 @@ export class SdrEngine {
     };
   }
 
+  /** App-level keepalive. Some proxies/browser tunnels do not forward
+   *  WebSocket Ping/Pong control frames, so the server would see an idle
+   *  client and close the socket. A normal text command is always forwarded.
+   *
+   *  This timer is only the fallback: the primary keepalive is driven by the
+   *  server's 2s `server_stats` broadcast (see handleMetaMessage), because
+   *  background-tab timer throttling can stretch this interval past the
+   *  server's 60s idle cutoff. */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = window.setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) this.send({ cmd: 'ping' });
+    }, 10_000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+
   private scheduleReconnect(): void {
     if (this.destroyed) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -1416,6 +1439,13 @@ export class SdrEngine {
           history.push(meta.wsBytesPerSec);
           store.setServerWsBytesHistory(history);
         }
+        // Data-driven keepalive. The server broadcasts this every 2s, so
+        // answering it keeps `last_seen` fresh on the server without relying
+        // on a JS timer. Background/occluded tabs throttle the 10s heartbeat
+        // interval (to a minute or more, or stop it entirely when frozen),
+        // which races the server's 60s idle cutoff; inbound frames are not
+        // throttled, so this always fires while the socket is delivering data.
+        this.send({ cmd: 'ping' });
         break;
 
       // ---- Config push notifications (Phase 13: reactive state from WS) ----
