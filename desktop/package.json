@@ -1,6 +1,6 @@
 {
   "name": "@node-sdr/desktop",
-  "version": "2.21.1",
+  "version": "2.22.0",
   "private": true,
   "description": "NO-SDR desktop application",
   "author": "no-sdr contributors",
