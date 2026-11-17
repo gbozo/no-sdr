@@ -23,7 +23,7 @@ pub use dc_block::DcBlocker;
 pub use decimate::DecimateBlock;
 pub use fanout::{FanOut, FanOutReader};
 pub use fft::Fft;
-pub use fft_processor::{fold_frame, FftProcessor, FftProcessorConfig};
+pub use fft_processor::{FftProcessor, FftProcessorConfig};
 pub use filter::ButterworthBlock;
 pub use interp::Interpolator;
 pub use iq_correct::IqCorrect;

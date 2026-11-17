@@ -12,30 +12,6 @@ const ALL_IQ_CODECS = ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'];
 
 const GeneralSection: Component = () => {
   const cfg = () => adminStore.serverConfig();
-  // Manual `waterfall_refresh` trigger: tells every open client to drop its
-  // tiled state and re-request a viewport from the server's current geometry.
-  const [refreshMsg, setRefreshMsg] = createSignal('');
-  const [refreshing, setRefreshing] = createSignal(false);
-  const refreshClients = async () => {
-    setRefreshing(true);
-    try {
-      const res = await fetch('/api/admin/waterfall/refresh', {
-        method: 'POST',
-        credentials: 'same-origin',
-      });
-      const data = await res.json().catch(() => ({}));
-      setRefreshMsg(
-        res.ok
-          ? `Refresh event sent to ${data.clients ?? 0} client${data.clients === 1 ? '' : 's'}`
-          : data.error || 'Refresh failed',
-      );
-    } catch {
-      setRefreshMsg('Refresh failed');
-    } finally {
-      setRefreshing(false);
-      setTimeout(() => setRefreshMsg(''), 4000);
-    }
-  };
 
   return (
     <div class="max-w-2xl">
@@ -140,88 +116,6 @@ const GeneralSection: Component = () => {
                 placeholder="Enter new password"
               />
             </FieldRow>
-          </SettingsGroup>
-
-          {/* Tiered waterfall */}
-          <SettingsGroup
-            title="Waterfall (Tiered)"
-            description="Segmented waterfall: only the tiles in view are streamed, folded to match the display width"
-          >
-            <FieldRow
-              label="Tile Width"
-              help="Bins per tile. Must be a power of two; the effective width is clamped to fftSize/8 per profile."
-            >
-              <SelectInput
-                value={String(cfg().waterfallTileBins)}
-                onChange={(v) => adminStore.updateServerConfigField('waterfallTileBins', parseInt(v))}
-                options={[
-                  { value: '256', label: '256 bins' },
-                  { value: '512', label: '512 bins' },
-                  { value: '1024', label: '1024 bins — default' },
-                  { value: '2048', label: '2048 bins' },
-                  { value: '4096', label: '4096 bins' },
-                ]}
-              />
-            </FieldRow>
-            <FieldRow
-              label="Fold Tiers"
-              help="Resolution levels. Each tier halves the bins; auto stops when the coarsest tier is one whole tile (4 at 8192 bins, 5 at 16384, 7 at 65536)."
-            >
-              <SelectInput
-                value={String(cfg().waterfallTierCount)}
-                onChange={(v) => adminStore.updateServerConfigField('waterfallTierCount', parseInt(v))}
-                options={[
-                  { value: '0', label: 'Auto — as many as useful' },
-                  { value: '1', label: '1 tier (full bins only)' },
-                  { value: '2', label: '2 tiers' },
-                  { value: '3', label: '3 tiers' },
-                  { value: '4', label: '4 tiers' },
-                  { value: '5', label: '5 tiers' },
-                  { value: '6', label: '6 tiers' },
-                  { value: '7', label: '7 tiers' },
-                  { value: '8', label: '8 tiers — cap' },
-                ]}
-              />
-            </FieldRow>
-            <FieldRow
-              label="Tile History"
-              help="Frames of prefill history per active tile. Memory cost is frames × tile width × 4 bytes per tile."
-            >
-              <SelectInput
-                value={String(cfg().waterfallTileHistoryFrames)}
-                onChange={(v) => adminStore.updateServerConfigField('waterfallTileHistoryFrames', parseInt(v))}
-                options={[
-                  { value: '64', label: '64 frames' },
-                  { value: '128', label: '128 frames' },
-                  { value: '256', label: '256 frames — default' },
-                  { value: '512', label: '512 frames' },
-                  { value: '1024', label: '1024 frames' },
-                ]}
-              />
-            </FieldRow>
-            <FieldRow
-              label="Refresh Clients"
-              help="Send a waterfall_refresh event so every open client drops its tiled state and re-requests the current geometry."
-            >
-              <div class="flex items-center gap-3">
-                <button
-                  type="button"
-                  class="mil-btn text-[10px] px-3 py-1.5"
-                  disabled={refreshing()}
-                  onClick={refreshClients}
-                >
-                  {refreshing() ? 'Sending…' : 'Send Refresh'}
-                </button>
-                <Show when={refreshMsg()}>
-                  <span class="text-[10px] font-mono text-text-secondary">{refreshMsg()}</span>
-                </Show>
-              </div>
-            </FieldRow>
-            <div class="mt-2 px-3 py-2 bg-amber/5 border border-amber/20 rounded-sm">
-              <p class="text-[10px] font-mono text-amber uppercase tracking-wider">
-                Changes above apply immediately: the server rebuilds its tier ladder and open clients re-request their viewport
-              </p>
-            </div>
           </SettingsGroup>
 
           {/* DSP / History */}

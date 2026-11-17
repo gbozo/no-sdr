@@ -4,12 +4,6 @@
 // Circular buffer of recent decoded Float32 FFT frames.
 // Stored as Float32 (no re-quantization) for accurate replay.
 // Used for waterfall prefill on zoom/reset without a server round-trip.
-//
-// The `binCount` is not a fixed single-frame assumption: push() auto-resizes
-// when a frame's width changes. The segmented tiled waterfall reuses this for
-// per-(tier,tile) rings (binCount = effectiveTileBins) and for stitched visible
-// strips (binCount up to tileCount * effectiveTileBins); both flow through the
-// same resize path.
 // ============================================================
 
 export class FftFrameBuffer {

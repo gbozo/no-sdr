@@ -13,15 +13,6 @@ server:
   logLevel: info
   fftHistoryFftSize: 4096
   fftHistoryCompression: deflate
-  # Segmented (tiered) waterfall: bins per tile and per-tile history depth.
-  # Tile width must be a power of two; per-tile history costs
-  # waterfallTileHistoryFrames * effectiveTileBins * 4 bytes for each active tile.
-  waterfallTileBins: 1024
-  waterfallTileHistoryFrames: 256
-  # Fold tiers (resolution levels). 0 = auto: one octave per tier for as long
-  # as the coarsest tier keeps a whole tile (4 tiers at 8192 bins, 5 at 16384,
-  # 7 at 65536 with 1024-bin tiles). Explicit values are clamped to 1..=8.
-  waterfallTierCount: 0
   allowedFftCodecs:
   - none
   - adpcm

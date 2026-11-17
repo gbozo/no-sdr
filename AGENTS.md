@@ -74,8 +74,7 @@ pipelines.
 | File | What it does | Hot path? |
 |------|-------------|-----------|
 | `serverrs/src/dongle/manager.rs` | Dongle lifecycle, client pipelines, FFT broadcast | YES |
-| `serverrs/src/dsp/fft_processor.rs` | rustfft wrapper, windowing, rate cap, averaging, `fold_frame` | YES |
-| `serverrs/src/dongle/waterfall.rs` | tiered waterfall model: octave fold ladder, lazy tiles, target tier | Per view |
+| `serverrs/src/dsp/fft_processor.rs` | rustfft wrapper, windowing, rate cap, averaging | YES |
 | `serverrs/src/dsp/iq_extractor.rs` | Rust NCO + Butterworth + polyphase decimation | YES |
 | `serverrs/src/dsp/iq_correct.rs` | DC blocker + I/Q imbalance correction | YES (optional) |
 | `serverrs/src/dongle/rtlsdr/` | Native RTL2832U USB driver (nusb) + source, feature `rtlsdr` | Per dongle |
@@ -128,18 +127,12 @@ live under `serverrs/src/gpu/` behind a `gpu_vulkan` feature.
 | `0x07` | SIGNAL_LEVEL | Float32 dB value |
 | `0x0A` | RDS | UTF-8 JSON (RDS data: ps, rt, ptyName, pi, pty, synced, optional clock) |
 
-FFT messages (`0x01/0x04/0x08/0x0B/0x0D`) may instead be *tiled*: a
-`verFlags` byte (`0x11` = V1 + TILED) and a 6-byte tier/tile block
-(`tier`, reserved, `tileIndex u16`, `tileCount u16`) follow the type byte,
-then the normal body. `tier` indexes the dongle's octave fold ladder
-(`bins = fftSize >> tier`); clients request a viewport with
-`{"cmd":"waterfall_view","viewportPx","startFrac","endFrac"}` and only
-receive the overlapping tiles. The ladder length and tile width are
-advertised per profile (`waterfallTileBins`, `waterfallTierCount`) and a
-`waterfall_refresh` meta event tells clients to drop their tiled state and
-re-request (config change, dongle restart, admin trigger).
+FFT messages (`0x01/0x04/0x08/0x0B/0x0D`) are always full-span frames: every
+frame carries `fftSize` bins covering the dongle's whole sample rate. The
+client zooms by cropping/decimating that single bin set — there is no
+segmented/tiled waterfall mode.
 
-Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, `stereo_enabled`, `waterfall_view`, etc.)
+Client → Server: JSON text commands (`subscribe`, `tune`, `mode`, `bandwidth`, `codec`, `audio_enabled`, `stereo_enabled`, etc.)
 
 `META` (0x03) also carries `server_stats` every 2 s:
 `{cpuPercent, memMb, clients, wsBytesPerSec}` — `wsBytesPerSec` is the

@@ -177,12 +177,6 @@ export interface ServerConfig {
   usersRibbon: 'off' | 'users' | 'ip';
   fftHistoryFftSize: number;
   fftHistoryCompression: string;
-  /** Tiered waterfall: bins per tile (power of two). */
-  waterfallTileBins: number;
-  /** Tiered waterfall: frames of prefill history kept per tile. */
-  waterfallTileHistoryFrames: number;
-  /** Tiered waterfall: fold tiers, 0 = auto. */
-  waterfallTierCount: number;
   allowedFftCodecs: string[];
   allowedIqCodecs: string[];
   opusComplexity: number;
@@ -215,9 +209,6 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   usersRibbon: 'users',
   fftHistoryFftSize: 1024,
   fftHistoryCompression: 'deflate',
-  waterfallTileBins: 1024,
-  waterfallTileHistoryFrames: 256,
-  waterfallTierCount: 0,
   allowedFftCodecs: ['none', 'adpcm', 'deflate', 'deflate-floor'],
   allowedIqCodecs: ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'],
   opusComplexity: 5,
@@ -364,9 +355,6 @@ function createAdminStore() {
           usersRibbon: data.usersRibbon ?? 'users',
           fftHistoryFftSize: data.fftHistoryFftSize ?? DEFAULT_SERVER_CONFIG.fftHistoryFftSize,
           fftHistoryCompression: data.fftHistoryCompression ?? DEFAULT_SERVER_CONFIG.fftHistoryCompression,
-          waterfallTileBins: data.waterfallTileBins ?? DEFAULT_SERVER_CONFIG.waterfallTileBins,
-          waterfallTileHistoryFrames: data.waterfallTileHistoryFrames ?? DEFAULT_SERVER_CONFIG.waterfallTileHistoryFrames,
-          waterfallTierCount: data.waterfallTierCount ?? DEFAULT_SERVER_CONFIG.waterfallTierCount,
           allowedFftCodecs: data.allowedFftCodecs ?? DEFAULT_SERVER_CONFIG.allowedFftCodecs,
           allowedIqCodecs: data.allowedIqCodecs ?? DEFAULT_SERVER_CONFIG.allowedIqCodecs,
           opusComplexity: data.opusComplexity ?? DEFAULT_SERVER_CONFIG.opusComplexity,
