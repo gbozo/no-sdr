@@ -72,6 +72,13 @@ export const MSG_FFT_HISTORY = 0x0D;
  */
 export const MSG_DECODER_SCOPE = 0x0E;
 
+/**
+ * Signal-analysis zoom spectrum — demodulator-bandwidth bins for the analysis
+ * workspace. Same body as MSG_DECODER_SCOPE, independent subscription and
+ * stream so it never disturbs the main waterfall or the decoder scope.
+ */
+export const MSG_ANALYSIS_SCOPE = 0x0F;
+
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT data */
@@ -88,10 +95,12 @@ export type CodecType = FftCodecType | IqCodecType;
 export type ClientCommand =
   | { cmd: 'subscribe'; dongleId: string; profileId?: string }
   | { cmd: 'unsubscribe' }
+  | { cmd: 'ping' }
   | { cmd: 'tune'; offset: number } // frequency offset from center in Hz
   | { cmd: 'mode'; mode: string; bandwidth?: number }
   | { cmd: 'decoder'; mode: string }
   | { cmd: 'decoder_scope'; enabled: boolean; fps?: number }
+  | { cmd: 'analysis_scope'; enabled: boolean; fps?: number }
   | { cmd: 'bandwidth'; hz: number }
   | { cmd: 'squelch'; db: number | null }
   | { cmd: 'volume'; level: number }
@@ -248,11 +257,26 @@ export interface DecoderScopeFrame {
   at: number;
 }
 
+/** One zoomed signal-analysis spectrum frame. */
+export type AnalysisScopeFrame = DecoderScopeFrame;
+
 /**
  * Unpack a `MSG_DECODER_SCOPE` payload (the type byte has already been
  * stripped by `unpackBinaryMessage`).
  */
 export function unpackDecoderScope(payload: ArrayBuffer): DecoderScopeFrame | null {
+  return unpackScopeFrame(payload);
+}
+
+/**
+ * Unpack a `MSG_ANALYSIS_SCOPE` payload. The body is byte-identical to the
+ * decoder scope; only the leading WebSocket message type differs.
+ */
+export function unpackAnalysisScope(payload: ArrayBuffer): AnalysisScopeFrame | null {
+  return unpackScopeFrame(payload);
+}
+
+function unpackScopeFrame(payload: ArrayBuffer): DecoderScopeFrame | null {
   if (payload.byteLength < 24) return null;
   const view = new DataView(payload);
   if (view.getUint8(0) !== 1) return null;

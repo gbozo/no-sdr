@@ -175,11 +175,15 @@ pub struct ClientState {
     pub decoder: String,
     /// Whether this client wants the zoomed decoder spectrum stream.
     pub decoder_scope: bool,
+    /// Whether this client wants the signal-analysis secondary spectrum.
+    pub analysis_scope: bool,
     /// Temporary helper connections (the raw-IQ identifier probe) stay out
     /// of the public users ribbon.
     pub hidden_from_ribbon: bool,
     /// Requested decoder scope frame rate, clamped to 2–20 fps.
     pub decoder_scope_fps: u32,
+    /// Requested signal-analysis scope frame rate, clamped to 2–20 fps.
+    pub analysis_scope_fps: u32,
     pub tune_offset: i64,
     pub bandwidth: i64,
     /// True after a successful `admin_auth` on this connection.
@@ -192,7 +196,8 @@ impl ClientState {
     fn new() -> Self {
         Self {
             stereo_enabled: true,
-            decoder_scope_fps: 10,
+            decoder_scope_fps: 16,
+            analysis_scope_fps: 16,
             ..Default::default()
         }
     }
@@ -271,8 +276,23 @@ impl Client {
         self.last_seen.lock().elapsed()
     }
 
-    /// Enqueue a binary message. Never blocks; drops the oldest entry when full.
+    /// Enqueue a binary message. Never blocks.
+    ///
+    /// Live FFT frames are droppable: when a slow link (or a suspended remote
+    /// browser tab) starts backing up, keeping every frame only fills the queue
+    /// and eventually triggers the stale-client watchdog. Skipping a few FFT
+    /// frames lets the queue drain and the newest frames still arrive.
     pub fn send(&self, msg: Vec<u8>) {
+        let droppable = msg.first().is_some_and(|t| {
+            matches!(t, 0x01 | 0x04 | 0x08 | 0x0B)
+        });
+        if droppable {
+            // Keep only a small live backlog. At 24 fps this is ~0.5 s; old
+            // frames are worthless for a live waterfall.
+            if self.queue.len() >= 12 {
+                return;
+            }
+        }
         self.queue.push(Outgoing::binary(msg));
     }
 
@@ -365,7 +385,21 @@ impl Client {
     pub fn set_decoder_scope(&self, enabled: bool, fps: u32) {
         let mut st = self.state.lock();
         st.decoder_scope = enabled;
-        st.decoder_scope_fps = fps.clamp(2, 20);
+        st.decoder_scope_fps = fps.clamp(1, 24);
+    }
+
+    pub fn analysis_scope(&self) -> bool {
+        self.state.lock().analysis_scope
+    }
+
+    pub fn analysis_scope_fps(&self) -> u32 {
+        self.state.lock().analysis_scope_fps
+    }
+
+    pub fn set_analysis_scope(&self, enabled: bool, fps: u32) {
+        let mut st = self.state.lock();
+        st.analysis_scope = enabled;
+        st.analysis_scope_fps = fps.clamp(1, 24);
     }
 
     pub fn tune_offset(&self) -> i64 {
@@ -446,6 +480,7 @@ impl Client {
                     st.mode.clear();
                     st.decoder.clear();
                     st.decoder_scope = false;
+                    st.analysis_scope = false;
                     st.tune_offset = 0;
                     st.bandwidth = 0;
                 }
@@ -478,7 +513,14 @@ impl Client {
             "decoder_scope" => {
                 st.decoder_scope = cmd.enabled.unwrap_or(false);
                 if let Some(fps) = cmd.fps {
-                    st.decoder_scope_fps = fps.clamp(2, 20);
+                    st.decoder_scope_fps = fps.clamp(1, 24);
+                }
+                None
+            }
+            "analysis_scope" => {
+                st.analysis_scope = cmd.enabled.unwrap_or(false);
+                if let Some(fps) = cmd.fps {
+                    st.analysis_scope_fps = fps.clamp(1, 24);
                 }
                 None
             }

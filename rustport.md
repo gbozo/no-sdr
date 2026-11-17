@@ -182,6 +182,19 @@ npm helpers: `npm run test:rust`, `build:rust`, `build:rust:opus`,
 
 ## Status log
 
+- 2026-11-17: Per-client secondary FFT subscriptions. `decoder_scope` now
+  scopes its frame to the decoder's actual bandwidth (instead of the wider
+  display hint) and trims the tap to that span. New `analysis_scope`
+  subscription feeds Signal Analysis from a separate FFT scoped to the
+  demodulator bandwidth; the 2×/5×/10×/FULL span multipliers were removed.
+  Decoder and analysis scopes are independent of each other and of the main
+  full-span waterfall. New wire message `0x0F` (ANALYSIS_SCOPE, same body as
+  `0x0E`). The secondary frame rate is a persisted client setting (1–24 fps,
+  default 16) and the zoomed waterfall scrolls by one row per frame instead of
+  repainting, removing black seams/flicker. Admin profile FFT-size choices now
+  include 32768, 65536 and 131072 (the config validator already accepted
+  131072).
+
 - 2026-11-17: Reverted the tiered (segmented) waterfall introduced in
   v2.21.0 back to the legacy single full-span FFT frame. The tiled path lost
   spectrum/tuning/waterfall alignment when zoomed and did not expose which

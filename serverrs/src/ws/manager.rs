@@ -552,9 +552,10 @@ impl WsManager {
                     }
                 }
                 _ = ping.tick() => {
-                    // Go uses conn.Ping with a 10s timeout; approximate the
-                    // same behaviour by requiring a frame within 25 seconds.
-                    if client.last_seen_elapsed() > Duration::from_secs(25) {
+                    // Allow enough slack for a backgrounded tab or a proxy
+                    // that coalesces control frames. The client also sends an
+                    // app-level `ping` command every 10s.
+                    if client.last_seen_elapsed() > Duration::from_secs(60) {
                         tracing::debug!(id = %client.id, "ping timeout, disconnecting client");
                         client.close();
                         break;

@@ -19,10 +19,13 @@ import {
   MSG_META,
   MSG_DECODER,
   MSG_DECODER_SCOPE,
+  MSG_ANALYSIS_SCOPE,
   MSG_SIGNAL_LEVEL,
   MSG_RDS,
   unpackDecoderScope,
+  unpackAnalysisScope,
   type DecoderScopeFrame,
+  type AnalysisScopeFrame,
   DEMOD_MODES,
   ImaAdpcmDecoder,
   decodeFftAdpcm,
@@ -167,6 +170,7 @@ export class SdrEngine {
   private audio: AudioEngine;
   private demodulator: Demodulator;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 20;
   private destroyed = false;
@@ -198,6 +202,10 @@ export class SdrEngine {
   // Zoomed spectra for the foreground decoder pane. Each frame is ~537 B,
   // so 240 frames is ~130 KB; the pane only ever draws the newest ~160.
   private decoderScopeFrames: DecoderScopeFrame[] = [];
+
+  // Per-client secondary FFT for the signal-analysis workspace. Independent of
+  // the decoder scope and of the main waterfall frame stream.
+  private analysisScopeFrames: AnalysisScopeFrame[] = [];
 
   // Pending waterfall prefill: rAF handle for deferred zoom/pan redraws.
   // Multiple zoom wheel events within one frame collapse into a single redraw.
@@ -632,6 +640,7 @@ export class SdrEngine {
         this.audio.resume();
       }
       console.log('[SDR] WebSocket connected');
+      this.startHeartbeat();
       // state_sync from server provides the full dongle list — no REST fallback needed
       // Fetch public bookmarks (admin-configured) for bookmark ribbon display
       this.fetchAdminBookmarks();
@@ -652,6 +661,7 @@ export class SdrEngine {
     };
 
     this.ws.onclose = () => {
+      this.stopHeartbeat();
       store.setConnected(false);
       store.setConnectionState('disconnected');
       this.reconnecting = true;
@@ -665,6 +675,23 @@ export class SdrEngine {
     this.ws.onerror = (err) => {
       console.error('[SDR] WebSocket error:', err);
     };
+  }
+
+  /** App-level keepalive. Some proxies/browser tunnels do not forward
+   *  WebSocket Ping/Pong control frames, so the server would see an idle
+   *  client and close the socket. A normal text command is always forwarded. */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = window.setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) this.send({ cmd: 'ping' });
+    }, 10_000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   private scheduleReconnect(): void {
@@ -916,13 +943,21 @@ export class SdrEngine {
             }
 
             // Defer FFT buffer population in batches to keep the main thread
-            // responsive during connect. Processing hundreds of frames with
-            // interpolation can block for 135-180ms; batching at ~20 frames
-            // per tick keeps each chunk under ~8ms.
+            // responsive during connect. At 16384 live bins, expanding all
+            // 1024 history frames would be ~16M fills and allocate ~64MB in
+            // the renderer — enough to kill a remote/in-app browser tab. Cap
+            // the work to the newest frames within a fixed float budget; the
+            // waterfall worker still receives the full history separately.
             const BATCH_SIZE = 20;
             const liveBinCount = store.fftSize();
+            const HISTORY_FLOAT_BUDGET = 4_000_000;
+            const maxBufferFrames = Math.max(
+              1,
+              Math.floor(HISTORY_FLOAT_BUDGET / Math.max(1, liveBinCount)),
+            );
+            const firstFrame = Math.max(0, frameCount - Math.min(frameCount, maxBufferFrames));
             this.fftBuffer.reset();
-            let batchIdx = 0;
+            let batchIdx = firstFrame;
             const processBatch = () => {
               const end = Math.min(batchIdx + BATCH_SIZE, frameCount);
               for (; batchIdx < end; batchIdx++) {
@@ -974,6 +1009,14 @@ export class SdrEngine {
         this.decoderScopeFrames.push(frame);
         if (this.decoderScopeFrames.length > 240) this.decoderScopeFrames.shift();
         store.setDecoderScopeSeq(store.decoderScopeSeq() + 1);
+        break;
+      }
+
+      case MSG_ANALYSIS_SCOPE: {
+        const frame = unpackAnalysisScope(payload);
+        if (!frame) break;
+        this.analysisScopeFrames.push(frame);
+        if (this.analysisScopeFrames.length > 240) this.analysisScopeFrames.shift();
         break;
       }
 
@@ -1703,8 +1746,11 @@ export class SdrEngine {
       this.send({
         cmd: 'decoder_scope',
         enabled: store.decoderPanelOpen(),
-        fps: 10,
+        fps: store.secondaryFftFps(),
       });
+    }
+    if (store.analysisPanelOpen()) {
+      this.send({ cmd: 'analysis_scope', enabled: true, fps: store.secondaryFftFps() });
     }
   }
 
@@ -1732,6 +1778,7 @@ export class SdrEngine {
     this.audio.resetBuffer();
     // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
     this.squelchBypassUntil = performance.now() + 500;
+    this.clearAnalysisScope();
     this.send({ cmd: 'tune', offset: offsetHz });
     this.updateMediaSession();
     // Arm the identify cooldown for ADPCM/none — the client ring buffer was just
@@ -1771,6 +1818,7 @@ export class SdrEngine {
     this.rumbleFilter.reset();
     this.autoNotch.reset();
     this.hiBlend.reset();
+    this.clearAnalysisScope();
     // Reset soft-mute gain — avoid inheriting a suppressed gain value across modes
     this.softMuteGain = 1.0;
     // Reset noise reduction state for new mode
@@ -1821,18 +1869,35 @@ export class SdrEngine {
     this.send({ cmd: 'decoder', mode: next });
     // The scope is opt-in: it costs one extra decimator + FFT per client, so
     // only ask for it while the decoder workspace is actually visible.
-    this.send({ cmd: 'decoder_scope', enabled: !!next, fps: 10 });
+    this.send({ cmd: 'decoder_scope', enabled: !!next, fps: store.secondaryFftFps() });
   }
 
   /** Turn the zoomed decoder spectrum on or off without changing the decoder. */
   setDecoderScopeEnabled(enabled: boolean): void {
-    this.send({ cmd: 'decoder_scope', enabled: enabled && !!store.decoderMode(), fps: 10 });
+    this.send({
+      cmd: 'decoder_scope',
+      enabled: enabled && !!store.decoderMode(),
+      fps: store.secondaryFftFps(),
+    });
     if (!enabled) this.clearDecoderScope();
+  }
+
+  /** Secondary FFT frame rate, shared by the decoder and analysis scopes. */
+  setSecondaryFftFps(fps: number): void {
+    const value = Math.max(1, Math.min(24, Math.round(fps)));
+    store.setSecondaryFftFps(value);
+    if (store.decoderMode() && store.decoderPanelOpen()) {
+      this.send({ cmd: 'decoder_scope', enabled: true, fps: value });
+    }
+    if (store.analysisPanelOpen()) {
+      this.send({ cmd: 'analysis_scope', enabled: true, fps: value });
+    }
   }
 
   setBandwidth(hz: number): void {
     store.setBandwidth(hz);
     this.demodulator.setBandwidth(hz);
+    this.clearAnalysisScope();
     this.send({ cmd: 'bandwidth', hz });
   }
 
@@ -2315,6 +2380,21 @@ export class SdrEngine {
     store.setDecoderScopeSeq(0);
   }
 
+  /** Turn the signal-analysis secondary spectrum on or off. */
+  setAnalysisScopeEnabled(enabled: boolean): void {
+    this.send({ cmd: 'analysis_scope', enabled, fps: store.secondaryFftFps() });
+    if (!enabled) this.clearAnalysisScope();
+  }
+
+  /** Zoomed signal-analysis spectra, oldest first. */
+  getAnalysisScopeFrames(): AnalysisScopeFrame[] {
+    return this.analysisScopeFrames;
+  }
+
+  clearAnalysisScope(): void {
+    this.analysisScopeFrames = [];
+  }
+
   /** Begin a short raw-IQ capture for client-side signal identification. */
   startIqCapture(durationMs: number): void {
     this.iqCaptureChunks = [];
@@ -2682,6 +2762,7 @@ export class SdrEngine {
   destroy(): void {
     this.destroyed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.stopHeartbeat();
     this.ws?.close();
     this.audio.destroy();
     this.fftDecodeWorker.terminate();

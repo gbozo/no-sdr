@@ -339,6 +339,8 @@ function createStore() {
   const [waterfallGamma, setWaterfallGamma] = persist<number>('waterfallGamma', 1.0);
   const [waterfallSpeed, setWaterfallSpeed] = createSignal(30); // fps
   const [fftSize, setFftSize] = createSignal(2048);
+  // Per-client secondary FFT (decoder + signal analysis) frame rate.
+  const [secondaryFftFps, setSecondaryFftFps] = persist<number>('secondaryFftFps', 16);
 
   // ---- Audio Start State ----
   // Persisted so HMR/reconnect can restore audio without another user gesture.
@@ -1327,6 +1329,7 @@ function createStore() {
     waterfallGamma, setWaterfallGamma,
     waterfallSpeed, setWaterfallSpeed,
     fftSize, setFftSize,
+    secondaryFftFps, setSecondaryFftFps,
 
     // UI State
     audioStarted, setAudioStarted,
