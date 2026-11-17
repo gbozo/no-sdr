@@ -253,12 +253,60 @@ npm run start:demo                 # Same but demo mode (simulated signals)
   workflow builds amd64 and arm64 on native runners with per-architecture
   GHA layer caches, then merges the digests into one manifest.
 
+## Releases & Versioning
+
+The version is `MAJOR.MINOR.PATCH` and lives in **six hand-maintained places**
+(nothing links them — `npm version` alone is not enough, and
+`desktop/scripts/sync-version.cjs` only rewrites `desktop/package.json`
+during Electron builds):
+
+| File | What to change |
+|------|----------------|
+| `package.json` | `"version"` |
+| `package-lock.json` | 4 occurrences: root, `client`, `desktop` workspace entries |
+| `client/package.json` | `"version"` |
+| `desktop/package.json` | `"version"` (also used for artifact names) |
+| `serverrs/Cargo.toml` | `version` (this is what the binary/META report) |
+| `serverrs/Cargo.lock` | the `name = "serverrs"` package entry only |
+
+```bash
+OLD=$(sed -n 's/^version = "\(.*\)"/\1/p' serverrs/Cargo.toml)
+V=2.23.0
+sed -i "s/\"version\": \"$OLD\"/\"version\": \"$V\"/" \
+  package.json client/package.json desktop/package.json package-lock.json
+sed -i "s/^version = \"$OLD\"/version = \"$V\"/" serverrs/Cargo.toml
+sed -i "/^name = \"serverrs\"$/{n;s/^version = \".*\"$/version = \"$V\"/}" serverrs/Cargo.lock
+# verify
+grep -n "\"version\": \"$V\"" package.json client/package.json desktop/package.json
+grep -n "^version = \"$V\"" serverrs/Cargo.toml
+sed -n '/name = "serverrs"/,+1p' serverrs/Cargo.lock
+```
+
+Semver: **patch** = fixes/chores, **minor** = new features or wire-protocol
+additions (client and server must stay compatible within a minor), **major** =
+breaking config or protocol changes.
+
+Release procedure:
+
+1. Commit the code change first (`fix(...)` / `feat(...)`), separate from the bump.
+2. Bump the six files and commit `chore(release): X.Y.Z`.
+3. `git push origin main`.
+4. `gh release create vX.Y.Z --target main --title "vX.Y.Z" --generate-notes`.
+
+The tag is always `vX.Y.Z` on `main` and matches the bumped version. Publishing
+a release fires `.github/workflows/rust-binaries.yml` (portable archives +
+Electron packages) and `docker-publish.yml` (multi-arch images); both attach or
+publish their own artifacts — never upload release assets by hand and never
+move or reuse a released tag. A plain push to `main` only refreshes the
+non-release `latest`/`main` builds.
+
 ## Git Rules
 
 1. **Never commit or push** unless explicitly instructed in that message (e.g. "commit", "commit and push"). Working on code does NOT imply permission to commit.
-2. **"Wrap up"** is the only shorthand: update TODO.md with changes → `git commit` → `git push`. No release.
-3. **Never create a GitHub release** unless separately instructed.
-4. Commit format: `<type>(<scope>): <summary>` (feat/fix/refactor/chore/docs/test/perf)
+2. **"Wrap up"** shorthand: update TODO.md with changes → `git commit` → `git push`. No release.
+3. **"Ship it"** shorthand: full release — bump the version in all six files → `git commit` (`chore(release): X.Y.Z`) → `git push origin main` → `gh release create`. No need to ask again. Leave unrelated working-tree edits (local `config/config.yaml` tweaks, stray build artifacts) uncommitted.
+4. **Never create a GitHub release** unless the user asks for one (explicitly or via "ship it").
+5. Commit format: `<type>(<scope>): <summary>` (feat/fix/refactor/chore/docs/test/perf)
 
 ## Active Work
 
