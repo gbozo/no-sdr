@@ -30,10 +30,6 @@ export class WaterfallRenderer {
   // Reusable ImageData for one row to avoid GC pressure
   private rowImageData: ImageData | null = null;
 
-  // Frame rate limiting — waterfall doesn't need >30fps
-  private lastDrawTime = 0;
-  private readonly minFrameInterval = 33; // ~30fps
-
   constructor(
     private canvas: HTMLCanvasElement,
     theme: WaterfallColorTheme = 'turbo',
@@ -54,11 +50,6 @@ export class WaterfallRenderer {
    */
   drawRow(fftData: Float32Array): void {
     if (fftData.length === 0 || this.w < 1 || this.h < 2) return;
-
-    // Throttle to ~30fps
-    const now = performance.now();
-    if (now - this.lastDrawTime < this.minFrameInterval) return;
-    this.lastDrawTime = now;
 
     const w = this.w;
     const h = this.h;
@@ -284,7 +275,6 @@ export class WaterfallRenderer {
     }
 
     this.ctx.putImageData(imgData, 0, 0);
-    this.lastDrawTime = performance.now() - this.minFrameInterval;
   }
 
   /**
@@ -362,8 +352,6 @@ export class WaterfallRenderer {
 
     // Draw history block at top; live frames will scroll it down naturally
     this.ctx.putImageData(imgData, 0, 0);
-    // Ensure next live frame isn't skipped by the throttle
-    this.lastDrawTime = performance.now() - this.minFrameInterval;
   }
 
   /**

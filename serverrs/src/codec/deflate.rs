@@ -3,6 +3,8 @@
 //! Ported from the original Go backend.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use flate2::write::DeflateEncoder;
@@ -10,11 +12,52 @@ use flate2::Compression;
 
 use super::fft::{compress_fft_into, delta_encode};
 
-const NOISE_FLOOR_PERCENTILE: usize = 5;
+pub const NOISE_FLOOR_PERCENTILE: usize = 5;
 const NOISE_FLOOR_EMA_ALPHA: f64 = 0.05;
 
+/// `deflate-smooth` clamps at the frame median plus this margin.
+pub const SMOOTH_PERCENTILE: usize = 50;
+
+static CONFIG_DEFLATE_LEVEL: AtomicU32 = AtomicU32::new(2);
+/// f32 bits for the default 2.0 dB smooth margin.
+static SMOOTH_MARGIN_BITS: AtomicU32 = AtomicU32::new(0x4000_0000);
+
+/// Deflate level for FFT frames.
+///
+/// Benchmarks on real 32768-bin FM frames: levels 2-8 are within 0.5 % of each
+/// other in size, level 1 is ~60 % larger, and level 9 is ~4 % larger and 2x
+/// slower (zlib-rs). Level 2 is the fastest point on that plateau. The admin
+/// UI sets the level; `FFT_DEFLATE_LEVEL` (1-9) overrides it for experiments.
+pub fn deflate_level() -> u32 {
+    fn env_level() -> Option<u32> {
+        static ENV: OnceLock<Option<u32>> = OnceLock::new();
+        *ENV.get_or_init(|| {
+            std::env::var("FFT_DEFLATE_LEVEL")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|l| (1..=9).contains(l))
+        })
+    }
+    env_level().unwrap_or_else(|| CONFIG_DEFLATE_LEVEL.load(Ordering::Relaxed).clamp(1, 9))
+}
+
+pub fn set_deflate_level(level: i32) {
+    CONFIG_DEFLATE_LEVEL.store(level.clamp(1, 9) as u32, Ordering::Relaxed);
+}
+
+/// dB clamp margin above the frame median for the `deflate-smooth` codec.
+pub fn smooth_margin_db() -> f32 {
+    f32::from_bits(SMOOTH_MARGIN_BITS.load(Ordering::Relaxed)).clamp(0.0, 20.0)
+}
+
+pub fn set_smooth_margin_db(db: f32) {
+    if db.is_finite() {
+        SMOOTH_MARGIN_BITS.store(db.clamp(0.0, 20.0).to_bits(), Ordering::Relaxed);
+    }
+}
+
 fn deflate(data: &[u8]) -> Result<Vec<u8>> {
-    let mut enc = DeflateEncoder::new(Vec::new(), Compression::new(6));
+    let mut enc = DeflateEncoder::new(Vec::new(), Compression::new(deflate_level()));
     enc.write_all(data).context("flate write")?;
     enc.finish().context("flate close")
 }
@@ -58,6 +101,36 @@ pub struct FftDeflateEncoder {
     noise_floor_set: bool,
 }
 
+/// Code value at `percentile` from a byte histogram.
+fn hist_percentile(hist: &[usize; 256], n: usize, percentile: usize) -> u8 {
+    let target = (n * percentile).div_ceil(100);
+    let mut cumulative = 0usize;
+    for (b, &count) in hist.iter().enumerate() {
+        cumulative += count;
+        if cumulative >= target {
+            return b as u8;
+        }
+    }
+    0
+}
+
+/// Clamp every code below the `percentile` (+ `margin_codes`) to the floor.
+/// Returns the clamp code. Used by the FFT history burst, which has no EMA
+/// state of its own.
+pub fn clamp_percentile(frame: &mut [u8], percentile: usize, margin_codes: usize) -> u8 {
+    let mut hist = [0usize; 256];
+    for &b in frame.iter() {
+        hist[b as usize] += 1;
+    }
+    let floor = (hist_percentile(&hist, frame.len(), percentile) as usize + margin_codes).min(255) as u8;
+    for b in frame.iter_mut() {
+        if *b < floor {
+            *b = floor;
+        }
+    }
+    floor
+}
+
 impl FftDeflateEncoder {
     pub fn new(max_bins: usize) -> Self {
         Self {
@@ -80,29 +153,27 @@ impl FftDeflateEncoder {
         &self.scratch[..n]
     }
 
-    fn update_noise_floor(&mut self, quantized: &[u8]) -> u8 {
+    /// Percentile clamp threshold from the u8 quantized frame, with an
+    /// optional extra margin in codes, smoothed by an EMA.
+    fn update_clamp_floor(
+        &mut self,
+        quantized: &[u8],
+        percentile: usize,
+        margin_codes: usize,
+    ) -> u8 {
         let n = quantized.len();
         let mut hist = [0usize; 256];
         for &b in quantized {
             hist[b as usize] += 1;
         }
-        let target = (n * NOISE_FLOOR_PERCENTILE).div_ceil(100);
-        let mut cumulative = 0usize;
-        let mut percentile_idx = 0u8;
-        for (b, &count) in hist.iter().enumerate() {
-            cumulative += count;
-            if cumulative >= target {
-                percentile_idx = b as u8;
-                break;
-            }
-        }
+        let idx = (hist_percentile(&hist, n, percentile) as usize + margin_codes).min(255) as u8;
 
         if !self.noise_floor_set {
-            self.noise_floor_ema = percentile_idx as f64;
+            self.noise_floor_ema = idx as f64;
             self.noise_floor_set = true;
         } else {
             self.noise_floor_ema +=
-                NOISE_FLOOR_EMA_ALPHA * (percentile_idx as f64 - self.noise_floor_ema);
+                NOISE_FLOOR_EMA_ALPHA * (idx as f64 - self.noise_floor_ema);
         }
         let idx = (self.noise_floor_ema + 0.5) as i32;
         idx.clamp(0, 255) as u8
@@ -161,11 +232,54 @@ impl FftDeflateEncoder {
         Ok(msg)
     }
 
+    /// Median-clamped variant used by the `deflate-smooth` codec.
+    pub fn encode_payload_smooth(
+        &mut self,
+        fft: &[f32],
+        min_db: f32,
+        max_db: f32,
+    ) -> Result<Vec<u8>> {
+        let body = self.encode_smooth_body(fft, min_db, max_db)?;
+        Ok(pack_header(fft.len(), min_db, max_db, &body))
+    }
+
+    /// Median-clamped full wire message.
+    pub fn encode_message_smooth(
+        &mut self,
+        msg_type: u8,
+        fft: &[f32],
+        min_db: f32,
+        max_db: f32,
+    ) -> Result<Vec<u8>> {
+        let body = self.encode_smooth_body(fft, min_db, max_db)?;
+        let mut msg = Vec::with_capacity(1 + 8 + body.len());
+        msg.push(msg_type);
+        msg.extend_from_slice(&pack_header(fft.len(), min_db, max_db, &body));
+        Ok(msg)
+    }
+
     fn encode_floor_body(&mut self, fft: &[f32], min_db: f32, max_db: f32) -> Result<Vec<u8>> {
+        self.encode_clamped_body(fft, min_db, max_db, NOISE_FLOOR_PERCENTILE, 0.0)
+    }
+
+    fn encode_smooth_body(&mut self, fft: &[f32], min_db: f32, max_db: f32) -> Result<Vec<u8>> {
+        self.encode_clamped_body(fft, min_db, max_db, SMOOTH_PERCENTILE, smooth_margin_db())
+    }
+
+    fn encode_clamped_body(
+        &mut self,
+        fft: &[f32],
+        min_db: f32,
+        max_db: f32,
+        percentile: usize,
+        margin_db: f32,
+    ) -> Result<Vec<u8>> {
         let n = fft.len();
         let mut scratch = vec![0u8; n];
         compress_fft_into(fft, min_db, max_db, &mut scratch);
-        let floor = self.update_noise_floor(&scratch);
+        let range = (max_db - min_db).max(0.001);
+        let margin_codes = ((margin_db / range) * 255.0).round().max(0.0) as usize;
+        let floor = self.update_clamp_floor(&scratch, percentile, margin_codes);
         // Clamp + delta encode in place (mirrors Go's in-place pass).
         for b in scratch.iter_mut() {
             if *b < floor {
@@ -215,5 +329,29 @@ mod tests {
         dec.read_to_end(&mut raw).unwrap();
         let bins = super::super::fft::delta_decode(&raw);
         assert!(bins[0] > 0);
+    }
+
+    #[test]
+    fn smooth_clamps_above_floor() {
+        let fft = vec![-110.0f32; 64];
+        let mut floor_enc = FftDeflateEncoder::new(64);
+        let mut smooth_enc = FftDeflateEncoder::new(64);
+        let floor = floor_enc.encode_payload_floor(&fft, -120.0, -10.0).unwrap();
+        let smooth = smooth_enc.encode_payload_smooth(&fft, -120.0, -10.0).unwrap();
+
+        let decode = |payload: &[u8]| {
+            let mut dec = DeflateDecoder::new(&payload[8..]);
+            let mut raw = Vec::new();
+            dec.read_to_end(&mut raw).unwrap();
+            super::super::fft::delta_decode(&raw)
+        };
+        let floor_bins = decode(&floor);
+        let smooth_bins = decode(&smooth);
+        assert!(
+            smooth_bins[0] > floor_bins[0],
+            "smooth {} should clamp above floor {}",
+            smooth_bins[0],
+            floor_bins[0]
+        );
     }
 }

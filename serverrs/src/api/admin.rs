@@ -876,6 +876,9 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "usersRibbon": cfg.server.users_ribbon,
             "fftHistoryFftSize": cfg.server.fft_history_fft_size,
             "fftHistoryCompression": cfg.server.fft_history_compression,
+            "fftHistorySmoothMarginDb": cfg.server.fft_history_smooth_margin_db,
+            "fftDeflateLevel": cfg.server.fft_deflate_level,
+            "fftSmoothMarginDb": cfg.server.fft_smooth_margin_db,
             "allowedFftCodecs": cfg.server.allowed_fft_codecs,
             "allowedIqCodecs": cfg.server.allowed_iq_codecs,
             "opusComplexity": cfg.server.opus_complexity,
@@ -916,6 +919,7 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
 
     let mut codecs_changed = false;
     let mut real_ip_changed = false;
+    let mut deflate_changed = false;
 
     {
         let mut cfg = state.cfg.write();
@@ -955,6 +959,9 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         set_string!("host", host);
         set_string!("adminPassword", admin_password);
         set_string!("fftHistoryCompression", fft_history_compression);
+        if let Some(v) = map.get("fftHistorySmoothMarginDb").and_then(|v| v.as_f64()) {
+            s.fft_history_smooth_margin_db = (v as f32).clamp(0.0, 20.0);
+        }
         set_string!("auddApiKey", audd_api_key);
         set_string!("acrcloudHost", acrcloud_host);
         set_string!("acrcloudAccessKey", acrcloud_access_key);
@@ -962,6 +969,14 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         set_string!("openWeatherMapApiKey", open_weather_map_api_key);
         set_i32!("port", port);
         set_i32!("fftHistoryFftSize", fft_history_fft_size);
+        if let Some(v) = map.get("fftDeflateLevel").and_then(|v| v.as_i64()) {
+            s.fft_deflate_level = (v as i32).clamp(1, 9);
+            deflate_changed = true;
+        }
+        if let Some(v) = map.get("fftSmoothMarginDb").and_then(|v| v.as_f64()) {
+            s.fft_smooth_margin_db = (v as f32).clamp(0.0, 20.0);
+            deflate_changed = true;
+        }
         set_bool!("demoMode", demo_mode);
         set_bool!("identifyEnabled", identify_enabled);
         set_string!("usersRibbon", users_ribbon);
@@ -1016,6 +1031,11 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
     if real_ip_changed {
         let header = state.cfg.read().server.real_ip_header.clone();
         state.ws.set_real_ip_header(&header);
+    }
+    if deflate_changed {
+        let cfg = state.cfg.read();
+        crate::codec::deflate::set_deflate_level(cfg.server.fft_deflate_level);
+        crate::codec::deflate::set_smooth_margin_db(cfg.server.fft_smooth_margin_db);
     }
     {
         let password = state.cfg.read().server.admin_password.clone();

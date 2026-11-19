@@ -15,10 +15,6 @@ export class SpectrumRenderer {
   private gridColor: string;
   private ready = false;
 
-  // Throttle rendering to ~30fps (same as waterfall)
-  private lastDrawTime = 0;
-  private readonly minFrameInterval = 16; // ms (~30fps)
-
   // Peak hold
   private peakHoldEnabled = false;
   private _peakDb: Float32Array | null = null;
@@ -81,11 +77,6 @@ export class SpectrumRenderer {
    */
   draw(fftData: Float32Array): boolean {
     if (fftData.length === 0 || !this.ready) return false;
-
-    // Throttle to ~30fps
-    const now = performance.now();
-    if (now - this.lastDrawTime < this.minFrameInterval) return false;
-    this.lastDrawTime = now;
 
     // Pause: freeze on the last frame, stop updating
     if (this.paused) {

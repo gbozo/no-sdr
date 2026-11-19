@@ -7,8 +7,18 @@ import { adminStore } from '../admin-store';
 import ReceiverLocationMap from './ReceiverLocationMap';
 
 // All available codecs for checkboxes
-const ALL_FFT_CODECS = ['none', 'adpcm', 'deflate', 'deflate-floor'];
+const ALL_FFT_CODECS = ['none', 'adpcm', 'deflate-smooth', 'range'];
 const ALL_IQ_CODECS = ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'];
+const FFT_CODEC_META: Record<string, { label: string; title: string }> = {
+  none: { label: 'None', title: 'Uncompressed uint8 bins' },
+  adpcm: { label: 'ADPCM', title: 'IMA ADPCM — 4 bits per bin' },
+  'deflate-smooth': { label: 'DF-SM', title: 'Deflate Smooth — delta + median clamp with adjustable margin' },
+  range: { label: 'RC', title: 'Range Coder — adaptive zero-run entropy coding (smallest frames)' },
+};
+const DEFLATE_LEVEL_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+  value: String(n),
+  label: n === 2 ? '2 — Default' : String(n),
+}));
 
 const GeneralSection: Component = () => {
   const cfg = () => adminStore.serverConfig();
@@ -133,15 +143,31 @@ const GeneralSection: Component = () => {
                 ]}
               />
             </FieldRow>
-            <FieldRow label="History Compression" help="Codec for FFT history storage">
+            <FieldRow
+              label="History Compression"
+              help="Codec for the waterfall history burst. DF-SM and RC apply the median clamp below; encoding is per-frame for RC and whole-burst for DF-SM."
+            >
               <SelectInput
                 value={cfg().fftHistoryCompression}
                 onChange={(v) => adminStore.updateServerConfigField('fftHistoryCompression', v)}
                 options={[
                   { value: 'none', label: 'None' },
-                  { value: 'deflate', label: 'Deflate' },
                   { value: 'adpcm', label: 'ADPCM' },
+                  { value: 'deflate-smooth', label: 'DF-SM' },
+                  { value: 'range', label: 'RC' },
                 ]}
+              />
+            </FieldRow>
+            <FieldRow
+              label="History Smooth Margin (dB)"
+              help="Clamp margin above the median for the DF-SM and RC history codecs. Independent from the live waterfall margin in FFT Encoding."
+            >
+              <FloatInput
+                value={cfg().fftHistorySmoothMarginDb}
+                onChange={(v) => adminStore.updateServerConfigField('fftHistorySmoothMarginDb', v)}
+                min={0}
+                max={12}
+                step={0.5}
               />
             </FieldRow>
             <FieldRow label="Opus Complexity" help="Encoder CPU vs quality trade-off (0=fastest, 10=best). Default 5 is transparent for radio audio at ≤64kbps.">
@@ -206,6 +232,7 @@ const GeneralSection: Component = () => {
                 </label>
                 <CodecCheckboxes
                   all={ALL_FFT_CODECS}
+                  meta={FFT_CODEC_META}
                   selected={cfg().allowedFftCodecs}
                   onChange={(v) => adminStore.updateServerConfigField('allowedFftCodecs', v)}
                 />
@@ -221,6 +248,35 @@ const GeneralSection: Component = () => {
                 />
               </div>
             </div>
+          </SettingsGroup>
+
+          {/* FFT Encoding */}
+          <SettingsGroup
+            title="FFT Encoding"
+            description="Compression level and noise-floor clamp applied to the live waterfall stream"
+          >
+            <FieldRow
+              label="Deflate Level"
+              help="1-9. On real FFT frames levels 2-8 are within 0.5% of each other; level 2 is the fastest and level 9 is larger and ~2x slower."
+            >
+              <SelectInput
+                value={String(cfg().fftDeflateLevel)}
+                onChange={(v) => adminStore.updateServerConfigField('fftDeflateLevel', parseInt(v))}
+                options={DEFLATE_LEVEL_OPTIONS}
+              />
+            </FieldRow>
+            <FieldRow
+              label="Smooth Margin (dB)"
+              help="Median clamp margin for DF-SM and RC. 2 dB preserves a +3 dB carrier; 4-6 dB saves much more bandwidth but lifts weak carriers."
+            >
+              <FloatInput
+                value={cfg().fftSmoothMarginDb}
+                onChange={(v) => adminStore.updateServerConfigField('fftSmoothMarginDb', v)}
+                min={0}
+                max={12}
+                step={0.5}
+              />
+            </FieldRow>
           </SettingsGroup>
         </div>
       </Show>
@@ -305,6 +361,23 @@ const NumberInput: Component<{ value: number; onChange: (v: number) => void; min
   />
 );
 
+const FloatInput: Component<{ value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number }> = (props) => (
+  <input
+    type="number"
+    value={props.value}
+    step={props.step ?? 0.5}
+    onInput={(e) => {
+      const v = parseFloat(e.currentTarget.value);
+      if (!isNaN(v)) props.onChange(v);
+    }}
+    min={props.min}
+    max={props.max}
+    class="w-32 px-3 py-1.5 bg-sdr-base border border-border rounded-sm
+           text-xs font-mono text-text-primary
+           focus:outline-none focus:border-cyan transition-colors"
+  />
+);
+
 const SelectInput: Component<{ value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }> = (props) => (
   <select
     onChange={(e) => props.onChange(e.currentTarget.value)}
@@ -338,7 +411,7 @@ const ToggleInput: Component<{ value: boolean; onChange: (v: boolean) => void }>
   </button>
 );
 
-const CodecCheckboxes: Component<{ all: string[]; selected: string[]; onChange: (v: string[]) => void }> = (props) => {
+const CodecCheckboxes: Component<{ all: string[]; meta?: Record<string, { label: string; title: string }>; selected: string[]; onChange: (v: string[]) => void }> = (props) => {
   const toggle = (codec: string) => {
     const current = props.selected;
     const next = current.includes(codec)
@@ -352,17 +425,20 @@ const CodecCheckboxes: Component<{ all: string[]; selected: string[]; onChange: 
       <For each={props.all}>
         {(codec) => {
           const checked = createMemo(() => props.selected.includes(codec));
+          const label = () => props.meta?.[codec]?.label ?? codec;
+          const title = () => props.meta?.[codec]?.title ?? codec;
           return (
             <button
               type="button"
               onClick={() => toggle(codec)}
+              title={title()}
               class={`px-3 py-1 text-[11px] font-mono uppercase tracking-wider rounded-sm border transition-colors ${
                 checked()
                   ? 'border-cyan text-cyan bg-cyan/10'
                   : 'border-border text-text-dim hover:text-text-secondary hover:border-border'
               }`}
             >
-              {codec}
+              {label()}
             </button>
           );
         }}

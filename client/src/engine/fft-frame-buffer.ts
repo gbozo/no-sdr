@@ -11,13 +11,18 @@ export class FftFrameBuffer {
   private head = 0;
   private _count = 0;
   binCount: number;
+  private readonly maxSlots: number;
+  private readonly maxBytes: number;
 
-  constructor(readonly capacity: number, binCount: number) {
+  constructor(capacity: number, binCount: number, maxBytes = 64 * 1024 * 1024) {
+    this.maxSlots = Math.max(1, capacity);
+    this.maxBytes = Math.max(4, maxBytes);
     this.binCount = binCount;
-    this.slots = Array.from({ length: capacity }, () => new Float32Array(binCount));
+    this.slots = this.allocate(binCount);
   }
 
   get count(): number { return this._count; }
+  get capacity(): number { return this.slots.length; }
 
   push(frame: Float32Array): void {
     if (frame.length !== this.binCount) {
@@ -47,8 +52,21 @@ export class FftFrameBuffer {
 
   resize(newBinCount: number): void {
     this.binCount = newBinCount;
-    this.slots = Array.from({ length: this.capacity }, () => new Float32Array(newBinCount));
+    this.slots = this.allocate(newBinCount);
     this.head = 0;
     this._count = 0;
+  }
+
+  /**
+   * Allocate the ring, capping the slot count so a wide FFT (e.g. 131072
+   * bins) does not reserve hundreds of megabytes. The byte budget keeps the
+   * prefill buffer at a few seconds of history regardless of bin count.
+   */
+  private allocate(binCount: number): Float32Array[] {
+    let slots = this.maxSlots;
+    if (binCount > 0) {
+      slots = Math.min(slots, Math.max(1, Math.floor(this.maxBytes / (binCount * 4))));
+    }
+    return Array.from({ length: slots }, () => new Float32Array(binCount));
   }
 }

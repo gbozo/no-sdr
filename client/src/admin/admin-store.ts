@@ -177,6 +177,12 @@ export interface ServerConfig {
   usersRibbon: 'off' | 'users' | 'ip';
   fftHistoryFftSize: number;
   fftHistoryCompression: string;
+  /** `deflate-smooth` clamp margin for the history burst, dB. */
+  fftHistorySmoothMarginDb: number;
+  /** Deflate level for FFT frames (1-9). */
+  fftDeflateLevel: number;
+  /** `deflate-smooth` clamp margin above the median, dB. */
+  fftSmoothMarginDb: number;
   allowedFftCodecs: string[];
   allowedIqCodecs: string[];
   opusComplexity: number;
@@ -208,8 +214,11 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {
   identifyEnabled: true,
   usersRibbon: 'users',
   fftHistoryFftSize: 1024,
-  fftHistoryCompression: 'deflate',
-  allowedFftCodecs: ['none', 'adpcm', 'deflate', 'deflate-floor'],
+  fftHistoryCompression: 'deflate-smooth',
+  fftHistorySmoothMarginDb: 2.0,
+  fftDeflateLevel: 2,
+  fftSmoothMarginDb: 2.0,
+  allowedFftCodecs: ['none', 'adpcm', 'deflate-smooth', 'range'],
   allowedIqCodecs: ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'],
   opusComplexity: 5,
   realIPHeader: '',
@@ -355,6 +364,9 @@ function createAdminStore() {
           usersRibbon: data.usersRibbon ?? 'users',
           fftHistoryFftSize: data.fftHistoryFftSize ?? DEFAULT_SERVER_CONFIG.fftHistoryFftSize,
           fftHistoryCompression: data.fftHistoryCompression ?? DEFAULT_SERVER_CONFIG.fftHistoryCompression,
+          fftHistorySmoothMarginDb: data.fftHistorySmoothMarginDb ?? DEFAULT_SERVER_CONFIG.fftHistorySmoothMarginDb,
+          fftDeflateLevel: data.fftDeflateLevel ?? DEFAULT_SERVER_CONFIG.fftDeflateLevel,
+          fftSmoothMarginDb: data.fftSmoothMarginDb ?? DEFAULT_SERVER_CONFIG.fftSmoothMarginDb,
           allowedFftCodecs: data.allowedFftCodecs ?? DEFAULT_SERVER_CONFIG.allowedFftCodecs,
           allowedIqCodecs: data.allowedIqCodecs ?? DEFAULT_SERVER_CONFIG.allowedIqCodecs,
           opusComplexity: data.opusComplexity ?? DEFAULT_SERVER_CONFIG.opusComplexity,

@@ -112,8 +112,8 @@ impl WriteQueue {
             if !msg.binary || msg.data.is_empty() {
                 return true;
             }
-            // MSG_FFT, MSG_FFT_COMPRESSED, MSG_FFT_ADPCM, MSG_FFT_DEFLATE
-            !matches!(msg.data[0], 0x01 | 0x04 | 0x08 | 0x0B)
+            // MSG_FFT, MSG_FFT_COMPRESSED, MSG_FFT_ADPCM, MSG_FFT_DEFLATE, MSG_FFT_RANGE
+            !matches!(msg.data[0], 0x01 | 0x04 | 0x08 | 0x0B | 0x10)
         });
     }
 
@@ -284,7 +284,7 @@ impl Client {
     /// frames lets the queue drain and the newest frames still arrive.
     pub fn send(&self, msg: Vec<u8>) {
         let droppable = msg.first().is_some_and(|t| {
-            matches!(t, 0x01 | 0x04 | 0x08 | 0x0B)
+            matches!(t, 0x01 | 0x04 | 0x08 | 0x0B | 0x10)
         });
         if droppable {
             // Keep only a small live backlog. At 24 fps this is ~0.5 s; old

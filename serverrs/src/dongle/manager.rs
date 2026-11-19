@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::codec::adpcm::encode_fft_adpcm;
 use crate::codec::fft::compress_fft;
-use crate::codec::{FftDeflateEncoder, ImaAdpcmEncoder};
+use crate::codec::{FftDeflateEncoder, FftRangeEncoder, ImaAdpcmEncoder};
 use crate::config::{Config, DongleConfig, DongleProfile};
 use crate::dsp::{FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
 use crate::history::FftBuffer;
@@ -200,8 +200,8 @@ struct ActiveDongle {
     sample_rate: AtomicI32,
     command: Option<CommandHandle>,
     fft_proc: Mutex<FftProcessor>,
-    deflate_enc: Mutex<FftDeflateEncoder>,
-    deflate_floor_enc: Mutex<FftDeflateEncoder>,
+    deflate_smooth_enc: Mutex<FftDeflateEncoder>,
+    range_enc: Mutex<FftRangeEncoder>,
     history: FftBuffer,
     iq_correct: Mutex<Option<IqCorrect>>,
     cancel: watch::Sender<bool>,
@@ -703,7 +703,7 @@ impl Manager {
         // 1024-frame waterfall history (32 MB at 8192 bins) is CPU/allocation
         // heavy. Keep it off the async workers so an admin-triggered reinit
         // cannot stall HTTP/WebSocket service while the dongle restarts.
-        let (fft_proc, deflate_enc, deflate_floor_enc, history) =
+        let (fft_proc, deflate_smooth_enc, range_enc, history) =
             tokio::task::spawn_blocking(move || -> Result<_> {
                 let fft_proc = FftProcessor::new(FftProcessorConfig {
                     fft_size,
@@ -713,11 +713,11 @@ impl Manager {
                     averaging_taps: 0,
                     target_fps: fft_fps,
                 })?;
-                let deflate_enc = FftDeflateEncoder::new(fft_size);
-                let deflate_floor_enc = FftDeflateEncoder::new(fft_size);
+                let deflate_smooth_enc = FftDeflateEncoder::new(fft_size);
+                let range_enc = FftRangeEncoder::new(fft_size);
                 let history = FftBuffer::new(1024);
                 history.init_frames(fft_size);
-                Ok((fft_proc, deflate_enc, deflate_floor_enc, history))
+                Ok((fft_proc, deflate_smooth_enc, range_enc, history))
             })
             .await
             .map_err(|e| anyhow!("dongle DSP init task failed: {e}"))??;
@@ -738,8 +738,8 @@ impl Manager {
             sample_rate: AtomicI32::new(sample_rate),
             command,
             fft_proc: Mutex::new(fft_proc),
-            deflate_enc: Mutex::new(deflate_enc),
-            deflate_floor_enc: Mutex::new(deflate_floor_enc),
+            deflate_smooth_enc: Mutex::new(deflate_smooth_enc),
+            range_enc: Mutex::new(range_enc),
             history,
             iq_correct: Mutex::new(if dcfg.iq_correction {
                 Some(IqCorrect::new(sample_rate as f64, 10.0, true))
@@ -1655,15 +1655,20 @@ impl Manager {
             let msg = cache
                 .entry(key.clone())
                 .or_insert_with(|| match key.as_str() {
-                    "deflate" => ad
-                        .deflate_enc
+                    "deflate-smooth" => ad
+                        .deflate_smooth_enc
                         .lock()
-                        .encode_message(crate::ws::MSG_FFT_DEFLATE, frame, MIN_DB, MAX_DB)
+                        .encode_message_smooth(crate::ws::MSG_FFT_DEFLATE, frame, MIN_DB, MAX_DB)
                         .map_err(|e| e.to_string()),
-                    "deflate-floor" => ad
-                        .deflate_floor_enc
+                    "range" => ad
+                        .range_enc
                         .lock()
-                        .encode_message_floor(crate::ws::MSG_FFT_DEFLATE, frame, MIN_DB, MAX_DB)
+                        .encode_message(
+                            crate::codec::range::MSG_FFT_RANGE,
+                            frame,
+                            MIN_DB,
+                            MAX_DB,
+                        )
                         .map_err(|e| e.to_string()),
                     "adpcm" => Ok(pack_fft_adpcm_message(&encode_fft_adpcm(
                         frame, MIN_DB, MAX_DB,
@@ -3038,17 +3043,28 @@ impl Manager {
             return;
         }
 
-        let compression = {
-            let c = self.cfg.read().server.fft_history_compression.clone();
-            if c.is_empty() {
-                "deflate".to_string()
+        let (compression, history_margin_db) = {
+            let cfg = self.cfg.read();
+            let c = &cfg.server.fft_history_compression;
+            let comp = if c.is_empty() {
+                "deflate-smooth".to_string()
             } else {
-                c
-            }
+                c.clone()
+            };
+            (comp, cfg.server.fft_history_smooth_margin_db)
         };
 
         let (codec_byte, payload): (u8, Vec<u8>) = match compression.as_str() {
-            "deflate" => {
+            "deflate-smooth" => {
+                let margin_codes =
+                    ((history_margin_db / range) * 255.0).round().max(0.0) as usize;
+                for chunk in quantized.chunks_mut(history_bins) {
+                    crate::codec::deflate::clamp_percentile(
+                        chunk,
+                        crate::codec::deflate::SMOOTH_PERCENTILE,
+                        margin_codes,
+                    );
+                }
                 let mut delta = Vec::with_capacity(quantized.len());
                 if let Some(first) = quantized.first() {
                     delta.push(*first);
@@ -3056,8 +3072,10 @@ impl Manager {
                         delta.push(quantized[i].wrapping_sub(quantized[i - 1]));
                     }
                 }
-                let mut enc =
-                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(6));
+                let mut enc = flate2::write::DeflateEncoder::new(
+                    Vec::new(),
+                    flate2::Compression::new(crate::codec::deflate::deflate_level()),
+                );
                 use std::io::Write;
                 if enc.write_all(&delta).is_err() {
                     return;
@@ -3066,6 +3084,21 @@ impl Manager {
                     Ok(b) => (1, b),
                     Err(_) => return,
                 }
+            }
+            "range" => {
+                let margin_codes =
+                    ((history_margin_db / range) * 255.0).round().max(0.0) as usize;
+                for chunk in quantized.chunks_mut(history_bins) {
+                    crate::codec::deflate::clamp_percentile(
+                        chunk,
+                        crate::codec::deflate::SMOOTH_PERCENTILE,
+                        margin_codes,
+                    );
+                }
+                (
+                    3,
+                    crate::codec::range::encode_history(&quantized, history_bins),
+                )
             }
             "adpcm" => {
                 let mut float_db = Vec::with_capacity(quantized.len());
@@ -3317,8 +3350,8 @@ impl Manager {
             })
             .map_err(|e| anyhow!("rebuild FFT processor: {e}"))?;
             *ad.fft_proc.lock() = fft_proc;
-            *ad.deflate_enc.lock() = FftDeflateEncoder::new(fft_size);
-            *ad.deflate_floor_enc.lock() = FftDeflateEncoder::new(fft_size);
+            *ad.deflate_smooth_enc.lock() = FftDeflateEncoder::new(fft_size);
+            *ad.range_enc.lock() = FftRangeEncoder::new(fft_size);
         }
 
         *ad.profile.write() = profile.clone();

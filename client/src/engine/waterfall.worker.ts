@@ -209,9 +209,8 @@ let rowImageData: ImageData | null = null;
 // Pan snapshot — preserves full-view waterfall during pan for stale display
 let panSnapshot: OffscreenCanvas | null = null;
 
-// Throttle: ~30fps
-let lastDrawTime = 0;
-const MIN_FRAME_INTERVAL = 16;
+// No render throttle: every frame is drawn. The server's frame rate is the
+// only limit; dropping rows here would compress the waterfall time axis.
 
 // Buffer history until we have real canvas dimensions (w > 0, h > 0).
 // Happens when prefill-history arrives before the first resize message.
@@ -226,10 +225,6 @@ let pendingHistory: {
 
 function drawRow(fftData: Float32Array): void {
   if (!ctx || fftData.length === 0 || w < 1 || h < 2) return;
-
-  const now = performance.now();
-  if (now - lastDrawTime < MIN_FRAME_INTERVAL) return;
-  lastDrawTime = now;
 
   const range = maxDb - minDb;
   if (range === 0) return;
@@ -323,7 +318,6 @@ function prefillFromBuffer(frames: Float32Array[]): void {
   }
 
   ctx.putImageData(imgData, 0, 0);
-  lastDrawTime = performance.now() - MIN_FRAME_INTERVAL;
 }
 
 function prefillHistory(
@@ -376,7 +370,6 @@ function prefillHistory(
   }
 
   ctx.putImageData(imgData, 0, 0);
-  lastDrawTime = performance.now() - MIN_FRAME_INTERVAL;
 }
 
 function clear(): void {

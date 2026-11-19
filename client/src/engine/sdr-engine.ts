@@ -11,6 +11,7 @@ import {
   MSG_FFT_COMPRESSED,
   MSG_FFT_ADPCM,
   MSG_FFT_DEFLATE,
+  MSG_FFT_RANGE,
   MSG_FFT_HISTORY,
   MSG_IQ,
   MSG_IQ_ADPCM,
@@ -32,6 +33,8 @@ import {
   FFT_HISTORY_CODEC_NONE,
   FFT_HISTORY_CODEC_DEFLATE,
   FFT_HISTORY_CODEC_ADPCM,
+  FFT_HISTORY_CODEC_RANGE,
+  decodeRangeHistory,
   type ServerMeta,
   type ClientCommand,
   type CodecType,
@@ -731,7 +734,8 @@ export class SdrEngine {
       case MSG_FFT:
       case MSG_FFT_COMPRESSED:
       case MSG_FFT_ADPCM:
-      case MSG_FFT_DEFLATE: {
+      case MSG_FFT_DEFLATE:
+      case MSG_FFT_RANGE: {
         this.bwFftFrames++;
         this.bwFftWireBytes += payload.byteLength;
 
@@ -923,6 +927,10 @@ export class SdrEngine {
                 const n = (float32[i] - minDb) / serverRange;
                 allFrames[i] = n < 0 ? 0 : n > 1 ? 255 : Math.round(n * 255);
               }
+
+            } else if (codec === FFT_HISTORY_CODEC_RANGE) {
+              // Range-coded frames: per-frame delta, model spans the burst.
+              allFrames = decodeRangeHistory(new Uint8Array(payload, 11), frameCount, binCount);
 
             } else {
               // none — raw Uint8 frames starting at offset 11
@@ -1267,8 +1275,16 @@ export class SdrEngine {
           store.setConnIndex(meta.connIndex);
         }
         // Update available codecs from server capabilities
-        store.setAvailableFftCodecs(meta.allowedFftCodecs ?? ALL_FFT_CODECS);
+        const allowedFft = meta.allowedFftCodecs ?? ALL_FFT_CODECS;
+        store.setAvailableFftCodecs(allowedFft);
         store.setAvailableIqCodecs(meta.allowedIqCodecs ?? ALL_IQ_CODECS);
+        // Persisted selections may name a codec this server no longer offers
+        // (e.g. the retired `deflate-floor`). Fall back to the best available.
+        if (!allowedFft.includes(store.fftCodec())) {
+          const preferred: FftCodecType[] = ['range', 'deflate-smooth', 'adpcm', 'none'];
+          const fallback = preferred.find((c) => allowedFft.includes(c)) ?? allowedFft[0] ?? 'none';
+          store.setFftCodec(fallback);
+        }
         break;
 
       case 'subscribed': {

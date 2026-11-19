@@ -101,6 +101,9 @@ async fn async_main() -> Result<()> {
         tracing::warn!("opus not compiled in - opus/opus-hq/opus-lo removed from allowed IQ codecs");
     }
 
+    serverrs::codec::deflate::set_deflate_level(cfg.server.fft_deflate_level);
+    serverrs::codec::deflate::set_smooth_margin_db(cfg.server.fft_smooth_margin_db);
+
     tracing::info!(
         fft = ?cfg.server.allowed_fft_codecs,
         iq = ?cfg.server.allowed_iq_codecs,

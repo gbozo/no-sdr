@@ -2371,11 +2371,11 @@ const SMeter: Component = () => {
 
 // ---- Codec Settings ----
 const CodecSettings: Component = () => {
-  const allFftCodecs: { value: FftCodecType; label: string }[] = [
-    { value: 'none', label: 'None' },
-    { value: 'adpcm', label: 'ADPCM' },
-    { value: 'deflate', label: 'Deflate' },
-    { value: 'deflate-floor', label: 'DeflateFl' },
+  const allFftCodecs: { value: FftCodecType; label: string; title: string }[] = [
+    { value: 'none', label: 'None', title: 'Uncompressed uint8 bins' },
+    { value: 'adpcm', label: 'ADPCM', title: 'IMA ADPCM — 4 bits per bin' },
+    { value: 'deflate-smooth', label: 'DF-SM', title: 'Deflate Smooth — delta + median clamp with adjustable margin' },
+    { value: 'range', label: 'RC', title: 'Range Coder — adaptive zero-run entropy coding (smallest frames)' },
   ];
 
   const allIqCodecs: { value: IqCodecType; label: string }[] = [
@@ -2458,11 +2458,12 @@ const CodecSettings: Component = () => {
               <span class="text-neon">{formatRate(store.fftWireBytes())}</span>
             </span>
           </div>
-          <div class="flex gap-2">
+          <div class="grid grid-cols-3 gap-2">
             <For each={fftCodecs()}>
               {(c) => (
                 <button
-                  class={`mil-btn flex-1 ${store.fftCodec() === c.value ? 'active' : ''}`}
+                  class={`mil-btn whitespace-nowrap ${store.fftCodec() === c.value ? 'active' : ''}`}
+                  title={c.title}
                   onClick={() => engine.setFftCodec(c.value)}
                 >
                   {c.label}
@@ -2483,11 +2484,11 @@ const CodecSettings: Component = () => {
               <span class="text-neon">{formatRate(store.iqWireBytes())}</span>
             </span>
           </div>
-          <div class="flex gap-2">
+          <div class="grid grid-cols-3 gap-2">
             <For each={iqCodecs()}>
               {(c) => (
                 <button
-                  class={`mil-btn flex-1 ${store.iqCodec() === c.value ? 'active' : ''}`}
+                  class={`mil-btn whitespace-nowrap ${store.iqCodec() === c.value ? 'active' : ''}`}
                   onClick={() => engine.setIqCodec(c.value)}
                 >
                   {c.label}

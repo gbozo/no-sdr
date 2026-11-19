@@ -45,6 +45,9 @@ export const MSG_IQ_ADPCM = 0x09;
 
 /** Deflate-compressed FFT — delta-encoded Uint8 dB values compressed with raw deflate */
 export const MSG_FFT_DEFLATE = 0x0B;
+
+/** Range-coded FFT — adaptive entropy coding over the delta residual */
+export const MSG_FFT_RANGE = 0x10;
 export const MSG_AUDIO_OPUS = 0x0C;
 
 /**
@@ -82,7 +85,7 @@ export const MSG_ANALYSIS_SCOPE = 0x0F;
 // ---- Codec Types ----
 
 /** Available compression codecs for FFT data */
-export type FftCodecType = 'none' | 'adpcm' | 'deflate' | 'deflate-floor';
+export type FftCodecType = 'none' | 'adpcm' | 'deflate' | 'deflate-floor' | 'deflate-smooth' | 'range';
 
 /** Available codecs for IQ/audio data */
 export type IqCodecType = 'none' | 'adpcm' | 'opus-lo' | 'opus' | 'opus-hq';
@@ -428,6 +431,7 @@ export function packAudioOpusMessage(opusPacket: Uint8Array, sampleCount: number
 export const FFT_HISTORY_CODEC_NONE    = 0; // raw Uint8 quantized frames
 export const FFT_HISTORY_CODEC_DEFLATE = 1; // delta + zlib deflateRaw over all frames
 export const FFT_HISTORY_CODEC_ADPCM   = 2; // IMA-ADPCM over Int16 dB×100 values
+export const FFT_HISTORY_CODEC_RANGE   = 3; // range-coded, per-frame delta
 
 /**
  * Pack a waterfall history burst — raw Uint8 frames (no compression).

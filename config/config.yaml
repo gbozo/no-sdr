@@ -12,12 +12,15 @@ server:
   usersRibbon: users
   logLevel: info
   fftHistoryFftSize: 4096
-  fftHistoryCompression: deflate
+  fftHistoryCompression: deflate-smooth
+  fftDeflateLevel: 2
+  fftSmoothMarginDb: 2.0
+  fftHistorySmoothMarginDb: 2.0
   allowedFftCodecs:
   - none
   - adpcm
-  - deflate
-  - deflate-floor
+  - deflate-smooth
+  - range
   allowedIqCodecs:
   - none
   - adpcm

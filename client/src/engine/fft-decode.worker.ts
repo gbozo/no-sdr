@@ -15,19 +15,21 @@
 // ============================================================
 
 import { inflateSync } from 'fflate';
-import { decodeFftAdpcm } from '~/shared';
+import { decodeFftAdpcm, decodeRangeFft } from '~/shared';
 
 // Keep numeric constants local — avoids importing the full shared bundle
 const MSG_FFT           = 0x01;
 const MSG_FFT_COMPRESSED = 0x04;
 const MSG_FFT_ADPCM     = 0x08;
 const MSG_FFT_DEFLATE   = 0x0B;
+const MSG_FFT_RANGE     = 0x10;
 
 export type FftMsgType =
   | typeof MSG_FFT
   | typeof MSG_FFT_COMPRESSED
   | typeof MSG_FFT_ADPCM
-  | typeof MSG_FFT_DEFLATE;
+  | typeof MSG_FFT_DEFLATE
+  | typeof MSG_FFT_RANGE;
 
 export interface FftDecodeRequest {
   id: number;
@@ -39,6 +41,7 @@ export interface FftDecodeResult {
   id: number;
   fftData: Float32Array;
   wireBytes: number;
+  /** u8-equivalent raw size: one byte per bin (the pre-compression format). */
   rawBytes: number;
 }
 
@@ -100,11 +103,24 @@ self.onmessage = (e: MessageEvent<FftDecodeRequest>) => {
         break;
       }
 
+      case MSG_FFT_RANGE: {
+        // 8-byte header [Int16 minDb LE, Int16 maxDb LE, Uint32 binCount LE] + range-coded
+        const hv = new DataView(payload);
+        const minDb = hv.getInt16(0, true);
+        const maxDb = hv.getInt16(2, true);
+        const binCount = hv.getUint32(4, true);
+        fftData = decodeRangeFft(new Uint8Array(payload, 8), binCount, minDb, maxDb);
+        break;
+      }
+
       default:
         return; // unknown type — drop silently
     }
 
-    const rawBytes = fftData.length * 4;
+    // Uncompressed equivalent is the uint8-quantized bin stream (one byte per
+    // bin), not the Float32Array the renderer consumes. Comparing against
+    // f32 (x4) overstated the compression ratio.
+    const rawBytes = fftData.length;
     const result: FftDecodeResult = { id, fftData, wireBytes, rawBytes };
     self.postMessage(result, { transfer: [fftData.buffer] });
 

@@ -2,7 +2,7 @@
 //!
 //! Ported from the original Go backend.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 use num_complex::Complex32;
@@ -75,9 +75,23 @@ pub struct FftProcessor {
     ring: Vec<u8>,
     ring_fill: usize,
     samples_need: usize,
+    /// Requested output rate (0 = unlimited); kept so `resize` can recompute
+    /// the window hop.
+    target_fps: i32,
+    /// Samples advanced between successive windows. Equal to `samples_need`
+    /// for non-overlapping windows; smaller when the requested rate is higher
+    /// than `sample_rate / fft_size`.
+    hop_bytes: usize,
+    /// True when frames are emitted on the sample clock (one per window or
+    /// hop) instead of through the wall-clock rate gate. Set whenever the
+    /// requested rate is at or above `sample_rate / fft_size`.
+    data_driven: bool,
 
     min_interval: Duration,
-    last_emit: Option<Instant>,
+    /// Input bytes between emitted frames (0 = no rate cap).
+    emit_bytes: usize,
+    /// Input bytes consumed since the last emit.
+    since_emit: usize,
     pending_buf: Vec<f32>,
     pending_n: u32,
     /// Blocks skipped between FFTs once the output rate is capped. A waterfall
@@ -95,6 +109,12 @@ pub struct FftProcessor {
 /// 16 frames the waterfall keeps ~12 dB of noise reduction while the FFT rate
 /// drops by roughly an order of magnitude.
 const FFT_BURST_FRAMES: f64 = 16.0;
+
+/// Maximum window overlap factor when a profile requests more frames per
+/// second than `sample_rate / fft_size`. The hop is clamped to at least
+/// `fft_size / MAX_OVERLAP`, so a misconfigured rate cannot spend unbounded
+/// CPU on redundant transforms.
+const MAX_OVERLAP: usize = 16;
 
 impl FftProcessor {
     pub fn new(cfg: FftProcessorConfig) -> Result<Self> {
@@ -132,8 +152,12 @@ impl FftProcessor {
             ring: Vec::with_capacity(cfg.fft_size * 2 * 4),
             ring_fill: 0,
             samples_need: cfg.fft_size * 2,
+            target_fps: cfg.target_fps,
+            hop_bytes: cfg.fft_size * 2,
+            data_driven: false,
             min_interval: Duration::ZERO,
-            last_emit: None,
+            emit_bytes: 0,
+            since_emit: 0,
             pending_buf: vec![0.0; cfg.fft_size],
             pending_n: 0,
             blocks_per_fft: 1.0,
@@ -163,7 +187,49 @@ impl FftProcessor {
             }
         }
         p.block_accum = p.blocks_per_fft;
+        p.recompute_hop();
         Ok(p)
+    }
+
+    /// Natural maximum frame rate: one non-overlapping window per `fft_size`
+    /// input samples.
+    fn natural_max_fps(&self) -> f64 {
+        if self.sample_rate > 0 {
+            self.sample_rate as f64 / self.fft_size as f64
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    /// Recompute the emission clock for the current target rate.
+    ///
+    /// `emit_bytes` is the input distance between emitted frames, so the rate
+    /// is sample-clocked and exact at any target (a wall-clock gate quantized
+    /// 12 fps down to 10.5 because the interval was compared against 73 fps
+    /// window arrivals). At or above `sample_rate / fft_size` the window hop
+    /// also shrinks so windows overlap; below it, windows are processed at the
+    /// normal stride and several are averaged into each emitted frame.
+    fn recompute_hop(&mut self) {
+        self.data_driven = false;
+        self.hop_bytes = self.samples_need;
+        self.emit_bytes = 0;
+        self.since_emit = 0;
+        if self.target_fps <= 0 || self.sample_rate <= 0 {
+            return;
+        }
+        let requested = self.target_fps as f64;
+        let emit_samples = (self.sample_rate as f64 / requested).round().max(1.0) as usize;
+        self.emit_bytes = emit_samples * 2;
+        // Emit the first available window immediately, then on the sample clock.
+        self.since_emit = self.emit_bytes;
+
+        if requested + 1.0 < self.natural_max_fps() {
+            return;
+        }
+        let min_hop = (self.fft_size / MAX_OVERLAP).max(1);
+        let hop = emit_samples.clamp(min_hop, self.fft_size);
+        self.data_driven = true;
+        self.hop_bytes = hop * 2;
     }
 
     /// Feeds raw uint8 IQ (interleaved I,Q) and returns emitted dB frames.
@@ -172,51 +238,67 @@ impl FftProcessor {
         self.ring_fill += data.len();
 
         let mut emitted = Vec::new();
-        let now = Instant::now();
         let mut consumed = 0usize;
 
         while self.ring_fill - consumed >= self.samples_need {
-            // Rate cap: most blocks exist only to keep the ring fed. Spend a
-            // transform on one in every `blocks_per_fft` and let the existing
-            // pending average smooth the emitted frame.
-            if !self.min_interval.is_zero() && self.blocks_per_fft > 1.0 {
-                self.block_accum += 1.0;
-                if self.block_accum < self.blocks_per_fft {
-                    consumed += self.samples_need;
-                    continue;
-                }
-                self.block_accum -= self.blocks_per_fft;
-            }
-
-            self.process_one_frame(consumed);
-            consumed += self.samples_need;
-
-            if self.min_interval.is_zero() {
+            // Sample-clocked emission: the hop defines the rate, so every
+            // window is emitted and no wall-clock gate is involved.
+            if self.data_driven {
+                self.process_one_frame(consumed);
+                consumed += self.hop_bytes;
                 emitted.push(self.mag_buf.clone());
                 continue;
             }
 
-            if self.pending_n == 0 {
-                self.pending_buf.copy_from_slice(&self.mag_buf);
-                self.pending_n = 1;
-            } else {
-                self.pending_n += 1;
-                let inv_n = 1.0 / self.pending_n as f32;
-                let pending = &mut self.pending_buf;
-                let mag = &self.mag_buf;
-                for i in 0..self.fft_size {
-                    pending[i] += (mag[i] - pending[i]) * inv_n;
+            // Rate cap: most blocks exist only to keep the ring fed. Spend a
+            // transform on one in every `blocks_per_fft` and let the pending
+            // average smooth the emitted frame. Skipped blocks still advance
+            // the emission clock so the output rate stays exact.
+            let mut transformed = true;
+            if self.blocks_per_fft > 1.0 {
+                self.block_accum += 1.0;
+                if self.block_accum < self.blocks_per_fft {
+                    transformed = false;
+                } else {
+                    self.block_accum -= self.blocks_per_fft;
                 }
             }
 
-            let elapsed = match self.last_emit {
-                Some(t) => now.duration_since(t),
-                None => self.min_interval,
-            };
-            if elapsed >= self.min_interval {
-                emitted.push(self.pending_buf.clone());
-                self.pending_n = 0;
-                self.last_emit = Some(now);
+            if transformed {
+                self.process_one_frame(consumed);
+                if self.emit_bytes == 0 {
+                    emitted.push(self.mag_buf.clone());
+                    consumed += self.samples_need;
+                    continue;
+                }
+                if self.pending_n == 0 {
+                    self.pending_buf.copy_from_slice(&self.mag_buf);
+                    self.pending_n = 1;
+                } else {
+                    self.pending_n += 1;
+                    let inv_n = 1.0 / self.pending_n as f32;
+                    let pending = &mut self.pending_buf;
+                    let mag = &self.mag_buf;
+                    for i in 0..self.fft_size {
+                        pending[i] += (mag[i] - pending[i]) * inv_n;
+                    }
+                }
+            }
+
+            consumed += self.samples_need;
+            self.since_emit += self.samples_need;
+            if self.emit_bytes > 0 && self.since_emit >= self.emit_bytes {
+                if self.pending_n > 0 {
+                    emitted.push(self.pending_buf.clone());
+                    self.pending_n = 0;
+                    // Keep the remainder so fractional windows per emit do not
+                    // drift the average rate.
+                    self.since_emit -= self.emit_bytes;
+                } else if self.since_emit >= self.emit_bytes * 2 {
+                    // No transform landed in this interval; keep one interval
+                    // of credit instead of accumulating a burst.
+                    self.since_emit = self.emit_bytes;
+                }
             }
         }
 
@@ -328,6 +410,7 @@ impl FftProcessor {
         self.window = window;
         self.window_sum = window_sum;
         self.samples_need = new_size * 2;
+        self.recompute_hop();
         self.norm_db = self.compute_normalization();
         self.blocks_per_fft = if self.min_interval.is_zero() {
             1.0
@@ -366,7 +449,7 @@ impl FftProcessor {
         self.ring_fill = 0;
         self.ring.clear();
         self.pending_n = 0;
-        self.last_emit = None;
+        self.since_emit = self.emit_bytes;
         self.block_accum = self.blocks_per_fft;
         self.avg_init = false;
         self.avg_buf.fill(0.0);
@@ -505,6 +588,76 @@ mod tests {
         })
         .unwrap();
         assert_eq!(uncapped.blocks_per_fft, 1.0);
+    }
+
+    #[test]
+    fn overlapping_windows_exceed_natural_rate() {
+        let cfg = FftProcessorConfig {
+            fft_size: 1024,
+            sample_rate: 48_000,
+            target_fps: 200, // natural max = 46.9 fps
+            averaging: 0.0,
+            ..Default::default()
+        };
+        let mut p = FftProcessor::new(cfg).unwrap();
+        assert!(p.data_driven, "expected sample-clock emission");
+        assert_eq!(p.hop_bytes, ((48_000f64 / 200f64).round() as usize) * 2);
+
+        // One second of IQ should yield ~200 windows, not ~47.
+        let frames = p.process_iq_data(&vec![128u8; 48_000 * 2]);
+        assert!(
+            (190..=200).contains(&frames.len()),
+            "got {} frames",
+            frames.len()
+        );
+        assert_eq!(frames[0].len(), 1024);
+    }
+
+    #[test]
+    fn sample_clocked_rate_is_exact() {
+        // 48 kHz, 1024 bins, 12 fps: windows arrive at 46.875/s.
+        let cfg = FftProcessorConfig {
+            fft_size: 1024,
+            sample_rate: 48_000,
+            target_fps: 12,
+            averaging: 0.0,
+            ..Default::default()
+        };
+        let mut p = FftProcessor::new(cfg).unwrap();
+        let frames = p.process_iq_data(&vec![128u8; 48_000 * 2]); // 1 s
+        assert!((11..=13).contains(&frames.len()), "got {}", frames.len());
+    }
+
+    #[test]
+    fn natural_rate_emits_every_window() {
+        let cfg = FftProcessorConfig {
+            fft_size: 1024,
+            sample_rate: 48_000, // natural = 46.875 fps
+            target_fps: 46,      // integer floor of the natural rate
+            averaging: 0.0,
+            ..Default::default()
+        };
+        let mut p = FftProcessor::new(cfg).unwrap();
+        assert!(p.data_driven);
+        assert_eq!(p.hop_bytes, p.samples_need);
+
+        let frames = p.process_iq_data(&vec![128u8; 48_000 * 2]);
+        // One frame per window; the old wall-clock gate produced ~23 here.
+        assert_eq!(frames.len(), 46);
+    }
+
+    #[test]
+    fn no_overlap_below_natural_rate() {
+        let cfg = FftProcessorConfig {
+            fft_size: 1024,
+            sample_rate: 48_000,
+            target_fps: 20,
+            averaging: 0.0,
+            ..Default::default()
+        };
+        let p = FftProcessor::new(cfg).unwrap();
+        assert!(!p.data_driven);
+        assert_eq!(p.hop_bytes, p.samples_need);
     }
 
     #[test]

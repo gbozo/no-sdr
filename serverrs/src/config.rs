@@ -26,7 +26,7 @@ pub const VALID_MODES: [&str; 9] = [
     "sam",
 ];
 
-pub const DEFAULT_FFT_CODECS: [&str; 4] = ["none", "adpcm", "deflate", "deflate-floor"];
+pub const DEFAULT_FFT_CODECS: [&str; 4] = ["none", "adpcm", "deflate-smooth", "range"];
 pub const DEFAULT_IQ_CODECS: [&str; 5] = ["none", "adpcm", "opus-lo", "opus", "opus-hq"];
 
 /// Tracks the in-memory config revision number for optimistic concurrency.
@@ -201,6 +201,17 @@ pub struct ServerConfig {
     pub fft_history_fft_size: i32,
     #[serde(default)]
     pub fft_history_compression: String,
+    /// `deflate-smooth` clamp margin for the FFT history burst, independent of
+    /// the live waterfall codec's margin.
+    #[serde(default = "default_fft_smooth_margin_db")]
+    pub fft_history_smooth_margin_db: f32,
+    /// Deflate level for FFT frames (1-9). Benchmarks: levels 2-8 are within
+    /// 0.5 % of each other; level 2 is the fastest.
+    #[serde(default = "default_fft_deflate_level")]
+    pub fft_deflate_level: i32,
+    /// `deflate-smooth` clamp margin above the frame median, in dB.
+    #[serde(default = "default_fft_smooth_margin_db")]
+    pub fft_smooth_margin_db: f32,
     #[serde(default)]
     pub allowed_fft_codecs: Vec<String>,
     #[serde(default)]
@@ -243,6 +254,9 @@ impl Default for ServerConfig {
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
+            fft_history_smooth_margin_db: default_fft_smooth_margin_db(),
+            fft_deflate_level: default_fft_deflate_level(),
+            fft_smooth_margin_db: default_fft_smooth_margin_db(),
             allowed_fft_codecs: Vec::new(),
             allowed_iq_codecs: Vec::new(),
             opus_complexity: 0,
@@ -456,11 +470,32 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.host.is_empty() {
         cfg.server.host = "0.0.0.0".to_string();
     }
+    // Retired live codecs must not be exposed by an old config.
+    cfg.server
+        .allowed_fft_codecs
+        .retain(|c| DEFAULT_FFT_CODECS.contains(&c.as_str()));
     if cfg.server.allowed_fft_codecs.is_empty() {
         cfg.server.allowed_fft_codecs = DEFAULT_FFT_CODECS.iter().map(|s| s.to_string()).collect();
     }
+    // Retired history codecs migrate to the current default.
+    let history_compression = cfg.server.fft_history_compression.trim().to_string();
+    cfg.server.fft_history_compression = match history_compression.as_str() {
+        "none" | "adpcm" | "deflate-smooth" | "range" => history_compression,
+        _ => "deflate-smooth".to_string(),
+    };
     if cfg.server.allowed_iq_codecs.is_empty() {
         cfg.server.allowed_iq_codecs = DEFAULT_IQ_CODECS.iter().map(|s| s.to_string()).collect();
+    }
+    cfg.server.fft_deflate_level = if (1..=9).contains(&cfg.server.fft_deflate_level) {
+        cfg.server.fft_deflate_level
+    } else {
+        default_fft_deflate_level()
+    };
+    if !(0.0..=20.0).contains(&cfg.server.fft_smooth_margin_db) {
+        cfg.server.fft_smooth_margin_db = default_fft_smooth_margin_db();
+    }
+    if !(0.0..=20.0).contains(&cfg.server.fft_history_smooth_margin_db) {
+        cfg.server.fft_history_smooth_margin_db = default_fft_smooth_margin_db();
     }
     if cfg.server.opus_complexity < 0 {
         cfg.server.opus_complexity = 5;
@@ -625,6 +660,14 @@ fn default_true() -> bool {
 
 fn default_users_ribbon() -> String {
     "users".to_string()
+}
+
+fn default_fft_deflate_level() -> i32 {
+    2
+}
+
+fn default_fft_smooth_margin_db() -> f32 {
+    2.0
 }
 
 /// Default bookmarks directory: `<dir of config>/../bookmarks`.

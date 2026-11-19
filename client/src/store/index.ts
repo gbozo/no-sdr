@@ -56,7 +56,7 @@ import type {
 } from '~/shared';
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
-const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate', 'deflate-floor'];
+const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate-smooth', 'range'];
 const ALL_IQ_CODECS: IqCodecType[] = ['none', 'adpcm', 'opus-lo', 'opus', 'opus-hq'];
 
 // ---- Bookmark type (client localStorage) ----
@@ -383,7 +383,7 @@ function createStore() {
   const [adminBookmarks, setAdminBookmarks] = createSignal<AdminBookmark[]>([]);
 
   // ---- Codec Preferences (localStorage-persisted) ----
-  const [fftCodec, setFftCodec] = persist<FftCodecType>('codec.fft', 'deflate-floor');
+  const [fftCodec, setFftCodec] = persist<FftCodecType>('codec.fft', 'range');
   const [iqCodec, setIqCodec] = persist<IqCodecType>('codec.iq', 'opus');
 
   // ---- Available Codecs (from server 'welcome' message) ----
@@ -407,7 +407,7 @@ function createStore() {
 
   // ---- Codec Performance Stats (bytes/sec) ----
   const [fftWireBytes, setFftWireBytes] = createSignal(0);   // FFT wire bytes/sec (compressed)
-  const [fftRawBytes, setFftRawBytes] = createSignal(0);     // FFT equivalent raw bytes/sec
+  const [fftRawBytes, setFftRawBytes] = createSignal(0);     // FFT u8-equivalent bytes/sec (1 byte/bin)
   const [iqWireBytes, setIqWireBytes] = createSignal(0);     // IQ wire bytes/sec (compressed)
   const [iqRawBytes, setIqRawBytes] = createSignal(0);       // IQ equivalent raw bytes/sec
 
