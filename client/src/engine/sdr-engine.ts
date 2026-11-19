@@ -943,21 +943,13 @@ export class SdrEngine {
             }
 
             // Defer FFT buffer population in batches to keep the main thread
-            // responsive during connect. At 16384 live bins, expanding all
-            // 1024 history frames would be ~16M fills and allocate ~64MB in
-            // the renderer — enough to kill a remote/in-app browser tab. Cap
-            // the work to the newest frames within a fixed float budget; the
-            // waterfall worker still receives the full history separately.
+            // responsive during connect. Processing hundreds of frames with
+            // interpolation can block for 135-180ms; batching at ~20 frames
+            // per tick keeps each chunk under ~8ms.
             const BATCH_SIZE = 20;
             const liveBinCount = store.fftSize();
-            const HISTORY_FLOAT_BUDGET = 4_000_000;
-            const maxBufferFrames = Math.max(
-              1,
-              Math.floor(HISTORY_FLOAT_BUDGET / Math.max(1, liveBinCount)),
-            );
-            const firstFrame = Math.max(0, frameCount - Math.min(frameCount, maxBufferFrames));
             this.fftBuffer.reset();
-            let batchIdx = firstFrame;
+            let batchIdx = 0;
             const processBatch = () => {
               const end = Math.min(batchIdx + BATCH_SIZE, frameCount);
               for (; batchIdx < end; batchIdx++) {
