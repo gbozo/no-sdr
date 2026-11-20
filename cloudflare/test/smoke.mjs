@@ -19,7 +19,7 @@ ingest.on('message', (d) => { console.log('ingest msg', d.toString().slice(0, 20
 ingest.on('error', (e) => console.error('ingest err', e.message));
 
 setTimeout(() => {
-  const viewer = new WebSocket(`${base}/v1/test/d1/fft`);
+  const viewer = new WebSocket(`${base}/v1/test/d1/fft?history=1`);
   viewer.binaryType = 'arraybuffer';
   viewer.on('open', () => { console.log('viewer open'); setTimeout(() => ingest.send(frame), 100); });
   viewer.on('message', (data) => {

@@ -112,8 +112,9 @@ impl WriteQueue {
             if !msg.binary || msg.data.is_empty() {
                 return true;
             }
-            // MSG_FFT, MSG_FFT_COMPRESSED, MSG_FFT_ADPCM, MSG_FFT_DEFLATE, MSG_FFT_RANGE
-            !matches!(msg.data[0], 0x01 | 0x04 | 0x08 | 0x0B | 0x10)
+            // MSG_FFT, MSG_FFT_COMPRESSED, MSG_FFT_ADPCM, MSG_FFT_DEFLATE,
+            // MSG_FFT_RANGE, MSG_FFT_HISTORY
+            !matches!(msg.data[0], 0x01 | 0x04 | 0x08 | 0x0B | 0x0D | 0x10)
         });
     }
 
@@ -170,9 +171,10 @@ pub struct ClientState {
     pub stereo_enabled: bool,
     pub fft_codec: String,
     pub iq_codec: String,
-    /// True when this client receives FFT from the Cloudflare edge instead of
-    /// the origin WebSocket. The origin still owns control/audio.
-    pub fft_via_edge: bool,
+    /// FFT transport for this client. 0 = off (radio-only/no spectrum),
+    /// 1 = origin WebSocket, 2 = Cloudflare edge. Off by default so the server
+    /// only sends FFT after the client explicitly declares a transport.
+    pub fft_transport: u8,
     pub mode: String,
     /// Foreground digital decoder (ft8/ft4/ft2); empty means audio only.
     pub decoder: String,
@@ -365,12 +367,18 @@ impl Client {
         self.state.lock().fft_codec.clone()
     }
 
-    pub fn fft_via_edge(&self) -> bool {
-        self.state.lock().fft_via_edge
+    pub fn fft_transport(&self) -> u8 {
+        self.state.lock().fft_transport
     }
 
-    pub fn set_fft_via_edge(&self, via_edge: bool) {
-        self.state.lock().fft_via_edge = via_edge;
+    /// True only when the client explicitly asked for origin FFT.
+    pub fn wants_origin_fft(&self) -> bool {
+        self.state.lock().fft_transport == 1
+    }
+
+    /// 0 = off, 1 = origin, 2 = edge.
+    pub fn set_fft_transport(&self, mode: u8) {
+        self.state.lock().fft_transport = mode;
     }
 
     pub fn iq_codec(&self) -> String {
@@ -708,6 +716,15 @@ mod tests {
         );
         let allowed = AllowedCodecs::default();
 
+        // Spectrum is opt-in: no FFT until the client declares a transport.
+        assert_eq!(c.fft_transport(), 0);
+        assert!(!c.wants_origin_fft());
+        c.set_fft_transport(1);
+        assert!(c.wants_origin_fft());
+        c.set_fft_transport(2);
+        assert!(!c.wants_origin_fft());
+        c.set_fft_transport(0);
+
         assert!(c.update_from_command(&cmd(r#"{"cmd":"subscribe","dongleId":"d1"}"#), &allowed).is_none());
         assert_eq!(c.subscribed_to(), "d1");
         c.update_from_command(&cmd(r#"{"cmd":"ribbon_hidden","hidden":true}"#), &allowed);
@@ -793,6 +810,7 @@ mod queue_tests {
         q.push(Outgoing::binary(vec![0x03, b'{', b'}']));
         q.push(Outgoing::binary(vec![0x0C, 1]));
         q.push(Outgoing::binary(vec![0x08, 1]));
+        q.push(Outgoing::binary(vec![0x0D, 1, 2]));
         q.push(Outgoing::text(b"{}".to_vec()));
 
         q.drop_fft();

@@ -111,7 +111,7 @@ export type ClientCommand =
   | { cmd: 'audio_enabled'; enabled: boolean }
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
   | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
-  | { cmd: 'fft_transport'; mode: 'origin' | 'edge' }
+  | { cmd: 'fft_transport'; mode: 'origin' | 'edge' | 'off' }
   | { cmd: 'stereo_enabled'; enabled: boolean }
   | { cmd: 'deemphasis'; deemphasis: number }
   | { cmd: 'request_history' }

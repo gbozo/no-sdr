@@ -1708,9 +1708,9 @@ impl Manager {
 
         let mut cache: HashMap<String, Result<Vec<u8>, String>> = HashMap::new();
         for client in clients {
-            // Clients receiving FFT from the Cloudflare edge must not also
-            // receive a duplicate copy over the origin WebSocket.
-            if client.fft_via_edge() {
+            // Clients receiving FFT from the Cloudflare edge, or radio-only
+            // clients that never requested spectrum, get no origin FFT.
+            if !client.wants_origin_fft() {
                 continue;
             }
 
@@ -2451,13 +2451,17 @@ impl Manager {
         } else {
             cmd.mode.as_str()
         };
-        let via_edge = requested.eq_ignore_ascii_case("edge");
-        client.set_fft_via_edge(via_edge);
+        let mode = match requested.to_ascii_lowercase().as_str() {
+            "edge" => 2u8,
+            "off" | "none" | "0" => 0u8,
+            _ => 1u8,
+        };
+        client.set_fft_transport(mode);
         client.drop_queued_fft();
 
         debug!(
             client = %client_id,
-            transport = if via_edge { "edge" } else { "origin" },
+            transport = match mode { 0 => "off", 1 => "origin", _ => "edge" },
             "FFT transport changed"
         );
     }
@@ -3075,6 +3079,11 @@ impl Manager {
             None => return,
         };
         let dongle_id = client.subscribed_to();
+        // History is part of the origin spectrum stream. Radio-only clients
+        // and edge clients (which get the DO ring) must not receive it here.
+        if client.fft_transport() != 1 {
+            return;
+        }
         let ad = match self.dongles.read().get(&dongle_id) {
             Some(d) => d.clone(),
             None => return,

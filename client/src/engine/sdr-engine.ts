@@ -174,6 +174,8 @@ export class SdrEngine {
   private edgeFirstFrameTimer: ReturnType<typeof setTimeout> | null = null;
   private edgeStaleTimer: ReturnType<typeof setTimeout> | null = null;
   private fftSource: 'origin' | 'edge' = 'origin';
+  private edgeInfoLoaded = false;
+  private originFftDongle = '';
   // Waterfall is now rendered by a dedicated Worker via OffscreenCanvas.
   // The main thread keeps a reference to the canvas element only.
   private waterfallWorker: Worker | null = null;
@@ -738,28 +740,37 @@ export class SdrEngine {
    * server; this is only the viewer URL/instance/codec.
    */
   private async fetchEdgeInfo(): Promise<void> {
+    this.edgeInfoLoaded = false;
     try {
       const res = await fetch('/api/edge', { credentials: 'same-origin' });
       if (!res.ok) {
         store.setEdgeInfo(null);
         store.setEdgeStatus('disabled');
+        this.edgeInfoLoaded = true;
+        this.enableOriginFft(store.activeDongleId());
         return;
       }
       const info = (await res.json()) as EdgeInfo;
       store.setEdgeInfo(info);
+      this.edgeInfoLoaded = true;
       if (!info.enabled) {
         store.setEdgeStatus('disabled');
+        this.enableOriginFft(store.activeDongleId());
         return;
       }
       // state_sync may arrive before this fetch completes; if a dongle is
       // already active, start the edge socket now.
-      const configured = store.fftTransportMode();
-      const mode = configured === 'auto' ? (info.defaultTransport ?? 'auto') : configured;
-      if (store.activeDongleId() && !this.edge && mode !== 'origin') {
-        this.maybeStartEdge(store.activeDongleId());
+      const dongle = store.activeDongleId();
+      if (dongle) {
+        const configured = store.fftTransportMode();
+        const mode = configured === 'auto' ? (info.defaultTransport ?? 'auto') : configured;
+        if (mode !== 'origin') this.maybeStartEdge(dongle);
+        else this.enableOriginFft(dongle);
       }
     } catch {
       store.setEdgeInfo(null);
+      this.edgeInfoLoaded = true;
+      this.enableOriginFft(store.activeDongleId());
     }
   }
 
@@ -780,6 +791,10 @@ export class SdrEngine {
       return;
     }
 
+    // We are leaving the origin stream; a later fallback must request origin
+    // history again even for the same dongle.
+    this.originFftDongle = '';
+
     let base = info.url.trim().replace(/\/+$/, '');
     if (!base) {
       store.setEdgeStatus('degraded');
@@ -790,17 +805,20 @@ export class SdrEngine {
       base = base.replace(/^ws:\/\//, 'wss://');
     }
 
-    const url = `${base}/v1/${encodeURIComponent(info.instanceId)}/${encodeURIComponent(dongleId)}/fft`;
+    const url = `${base}/v1/${encodeURIComponent(info.instanceId)}/${encodeURIComponent(dongleId)}/fft?history=1`;
+    let gotEdgeFrame = false;
     const client = new EdgeSpectrumClient(url, {
       onFrame: (data) => {
         if (this.edge !== client) return;
         this.clearEdgeTimers();
+        gotEdgeFrame = true;
         if (this.fftSource !== 'edge') {
+          // Normally we already told the origin to stop as soon as the edge
+          // attempt started; keep this as a guard for reordered callbacks.
           this.fftSource = 'edge';
-          store.setEdgeStatus('live');
-          store.setEdgeLastError('');
-          this.send({ cmd: 'fft_transport', mode: 'edge' });
         }
+        store.setEdgeStatus('live');
+        store.setEdgeLastError('');
         this.armEdgeStaleTimer();
         this.handleBinaryMessage(data, 'edge');
       },
@@ -809,7 +827,7 @@ export class SdrEngine {
         store.setEdgeStatus('connecting');
         store.setEdgeLastError('');
         this.edgeFirstFrameTimer = setTimeout(() => {
-          if (this.edge === client && this.fftSource !== 'edge') {
+          if (this.edge === client && !gotEdgeFrame) {
             this.fallbackToOrigin('edge first frame timeout');
           }
         }, 3000);
@@ -825,8 +843,30 @@ export class SdrEngine {
     });
 
     this.edge = client;
+    // Stop origin FFT before opening the edge socket. The DO may spend a few
+    // hundred ms sending history; waiting for the first edge frame leaves
+    // several full-size FFT frames queued/in-flight on the origin WebSocket.
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.fftSource = 'edge';
+      this.send({ cmd: 'fft_transport', mode: 'edge' });
+    }
     store.setEdgeStatus('connecting');
     client.connect();
+  }
+
+  /**
+   * Explicitly opt this connection into origin FFT and request history once
+   * per subscription. The server default is off, so a radio-only client can
+   * simply never call this.
+   */
+  private enableOriginFft(dongleId: string): void {
+    if (!dongleId || this.originFftDongle === dongleId) return;
+    this.originFftDongle = dongleId;
+    this.fftSource = 'origin';
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.send({ cmd: 'fft_transport', mode: 'origin' });
+      this.send({ cmd: 'request_history' });
+    }
   }
 
   private armEdgeStaleTimer(): void {
@@ -858,30 +898,25 @@ export class SdrEngine {
     const client = this.edge;
     this.edge = null;
     client?.close();
-    const wasEdge = this.fftSource === 'edge';
+    // Do not switch the server to origin here. The next subscription either
+    // sends `edge`, `origin`, or nothing (radio-only); sending origin briefly
+    // would let full-size frames slip through during the transition.
     this.fftSource = 'origin';
-    if (wasEdge && this.ws?.readyState === WebSocket.OPEN) {
-      this.send({ cmd: 'fft_transport', mode: 'origin' });
-    }
   }
 
   private fallbackToOrigin(reason: string): void {
-    const wasEdge = this.fftSource === 'edge';
     this.clearEdgeTimers();
 
     const client = this.edge;
     this.edge = null;
     client?.close();
     this.fftSource = 'origin';
+    this.originFftDongle = '';
 
     store.setEdgeStatus('degraded');
     store.setEdgeLastError(reason);
 
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.send({ cmd: 'fft_transport', mode: 'origin' });
-      if (wasEdge) this.send({ cmd: 'request_history' });
-    }
-
+    this.enableOriginFft(store.activeDongleId());
     this.scheduleEdgeRetry();
     console.warn('[SDR] edge fallback:', reason);
   }
@@ -1609,17 +1644,19 @@ export class SdrEngine {
            this.send({ cmd: 'audio_enabled', enabled: true });
          }
 
-        // Request waterfall history to prefill the display immediately. In
-        // edge mode the DO sends its own history on connect; requesting from
-        // the origin would duplicate the burst.
+        // The server starts with FFT off. Declare the transport explicitly:
+        // edge, origin, or neither for a future radio-only client. If the edge
+        // descriptor is still in flight, wait for fetchEdgeInfo() to decide.
         {
           const info = store.edgeInfo();
           const configured = store.fftTransportMode();
           const mode = configured === 'auto' ? (info?.defaultTransport ?? 'auto') : configured;
           if (info?.enabled && mode !== 'origin') {
             this.maybeStartEdge(meta.dongleId);
-          } else {
-            this.send({ cmd: 'request_history' });
+          } else if (info) {
+            this.enableOriginFft(meta.dongleId);
+          } else if (this.edgeInfoLoaded) {
+            this.enableOriginFft(meta.dongleId);
           }
         }
 
@@ -1990,6 +2027,7 @@ export class SdrEngine {
     // Switching dongles invalidates the edge socket; the new subscription will
     // start a fresh one after the origin confirms the profile.
     this.stopEdge();
+    this.originFftDongle = '';
     // A user-initiated subscribe (or automatic dongle switch while connected)
     // must use the new profile's defaults. Only a reconnect restores the
     // previous mode/bandwidth/tune offset.
@@ -2020,13 +2058,12 @@ export class SdrEngine {
     store.setFftTransportMode(mode);
     if (mode === 'origin') {
       this.stopEdge();
+      this.originFftDongle = '';
+      this.enableOriginFft(store.activeDongleId());
       store.setEdgeStatus('disabled');
       store.setEdgeLastError('');
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.send({ cmd: 'fft_transport', mode: 'origin' });
-        this.send({ cmd: 'request_history' });
-      }
     } else if (store.activeDongleId()) {
+      this.originFftDongle = '';
       this.maybeStartEdge(store.activeDongleId());
     }
   }

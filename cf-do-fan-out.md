@@ -96,12 +96,14 @@ KV is a poor fit for live history: 1,000 writes/day free, 1 write/sec/key, and u
 The existing binary protocol and JSON commands remain. Add one client command:
 
 ```json
-{ "cmd": "fft_transport", "mode": "edge" }   // or "origin"
+{ "cmd": "fft_transport", "mode": "off" | "origin" | "edge" }
 ```
 
 - `edge`: origin stops sending `0x0B`/`0x10` FFT frames to that client (`broadcast_fft_frame` skips it).
 - `origin`: origin resumes and the client requests history as today.
-- The flag is per connection and resets on disconnect.
+- `off`: no FFT at all (radio-only client). This is the default for a new connection; the bundled client explicitly requests `origin` or `edge`.
+
+The flag is per connection and resets on disconnect.
 
 ### 2.2 Browser ↔ DO (new)
 
@@ -110,7 +112,7 @@ Same binary frames the client already decodes:
 | Type | Use |
 |---|---|
 | `0x10` | Live range-coded FFT frame, forwarded verbatim |
-| `0x0D` | History burst, codec `4` (per-frame range), built by the DO from its ring |
+| `0x0D` | History burst, codec `4` (per-frame range), only when the viewer connects with `?history=1` |
 | text | `{"cmd":"ping"}`, `{"cmd":"status"}` |
 
 No new public message type. The DO forwards `0x10` live frames and never sends `0x10` as history.
@@ -252,7 +254,8 @@ main WS connected + subscribe
 Rules:
 
 - **Connect timeout** 2.5 s; **first-frame timeout** 3 s; **stale timeout** 5 s.
-- On `edge_live`, send `{"cmd":"fft_transport","mode":"edge"}`. Origin calls `drop_queued_fft()` for that client.
+- On `edge_connecting` (before the socket opens), send `{"cmd":"fft_transport","mode":"edge"}`. Origin calls `drop_queued_fft()` for that client, so no full-size FFT frames remain queued/in-flight while the DO sends history.
+- The server defaults to **FFT off**; a radio-only client simply never sends `fft_transport`.
 - On fallback, close the edge socket, send `origin`, request history, and mark `edge_degraded` with the reason.
 - While `edge_connecting`, ignore origin FFT frames if the user selected `edge`; for `auto`, render origin until the first edge frame arrives, then switch without clearing the waterfall.
 - Route incoming frames by source: `handleBinaryMessage(data, 'edge'|'origin')`; ignore frames from the inactive source. This is the duplicate-suppression boundary.
@@ -538,7 +541,7 @@ In `broadcast_fft_frame`:
    - If a local client uses the same codec, reuse the cached `Vec<u8>`.
    - Else encode once with the edge codec and cache it.
 4. Call `self.edge.publish(&ad.id, Arc::new(edge_bytes))` when enabled.
-5. Skip local clients whose `fft_transport == edge`.
+5. Send origin FFT only to clients whose `fft_transport == origin` (default is off).
 
 This keeps one encode per codec per frame. With `range` enforced for the edge, worst case is one extra encode per frame at 12 fps.
 
@@ -553,8 +556,8 @@ pub fft_transport: String,
 
 `ws/client.rs`:
 
-- Add `fft_transport: AtomicU8` (`0=origin`, `1=edge`).
-- `set_fft_transport`, `fft_transport`.
+- Add `fft_transport: u8` (`0=off`, `1=origin`, `2=edge`), default 0.
+- `set_fft_transport`, `fft_transport`, `wants_origin_fft`.
 - `drop_queued_fft` when switching either direction.
 
 `handle_command` in `dongle/manager.rs`:

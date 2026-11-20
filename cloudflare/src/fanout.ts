@@ -79,6 +79,8 @@ export class Fanout extends DurableObject<FanoutEnv> {
       return json({ error: "viewer limit reached", maxViewers: this.maxViewers }, 503);
     }
 
+    const wantsHistory = url.searchParams.get("history") === "1";
+
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
 
     // Hibernation API: the runtime owns the socket; use tags instead of an
@@ -100,7 +102,7 @@ export class Fanout extends DurableObject<FanoutEnv> {
       }
       this.lastFrameAt = 0;
       this.applyEnvLimits();
-    } else {
+    } else if (wantsHistory) {
       this.sendHistory(server);
     }
 

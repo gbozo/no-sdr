@@ -11,7 +11,7 @@ This is the P0 implementation of [`../cf-do-fan-out.md`](../cf-do-fan-out.md).
 | Route | Auth | Purpose |
 |---|---|---|
 | `wss://<edge>/ingest/<instance>/<dongle>` | `Authorization: Bearer <INGEST_TOKEN>` | origin ingest |
-| `wss://<edge>/v1/<instance>/<dongle>/fft` | public | browser FFT + history |
+| `wss://<edge>/v1/<instance>/<dongle>/fft?history=1` | public | browser FFT; `history=1` requests the DO history burst |
 | `https://<edge>/health` | public | liveness/version |
 | `https://<edge>/stats/<instance>/<dongle>` | bearer | DO stats for the origin admin API |
 
@@ -19,8 +19,9 @@ This is the P0 implementation of [`../cf-do-fan-out.md`](../cf-do-fan-out.md).
 
 - Live frames are the existing `0x10` (range) messages, byte-for-byte.
 - `0x0B` (deflate-smooth) is accepted as a fallback codec.
-- History is the existing `0x0D` message with codec `4` (per-frame
-  range-coded), built by the DO from a 2048-bin × 512-frame ring.
+- History is only sent when the viewer connects with `?history=1`; live-only
+  edge clients can omit it. It is the existing `0x0D` message with codec `4`
+  (per-frame range-coded), built by the DO from a 2048-bin × 512-frame ring.
 - The DO range-encodes each decimated history frame as it arrives
   (`encodeRangeFrame`); on connect it concatenates them with a `u32` length
   prefix. The client decodes each frame with `decodeRangeHistory(payload, 1,
