@@ -85,6 +85,18 @@ export interface AdminBookmark {
 }
 
 // ---- localStorage persistence helper ----
+export type EdgeStatus = 'disabled' | 'connecting' | 'live' | 'degraded';
+export type FftTransportMode = 'auto' | 'origin' | 'edge';
+
+export interface EdgeInfo {
+  enabled: boolean;
+  url: string;
+  instanceId: string;
+  codec: string;
+  defaultTransport: FftTransportMode;
+  historyBins: number;
+}
+
 const NS = 'node-sdr:';
 
 function persist<T>(key: string, defaultValue: T): [() => T, (v: T) => void] {
@@ -127,6 +139,12 @@ function createStore() {
   const [configVersion, setConfigVersion] = createSignal(0);
   // Connection state: 'connecting' | 'connected' | 'disconnected' | 'unconfigured'
   const [connectionState, setConnectionState] = createSignal<'connecting' | 'connected' | 'disconnected' | 'unconfigured'>('disconnected');
+
+  // ---- Cloudflare edge spectrum ----
+  const [edgeInfo, setEdgeInfo] = createSignal<EdgeInfo | null>(null);
+  const [edgeStatus, setEdgeStatus] = createSignal<EdgeStatus>('disabled');
+  const [edgeLastError, setEdgeLastError] = createSignal('');
+  const [fftTransportMode, setFftTransportMode] = persist<FftTransportMode>('fft.transport', 'auto');
   // Server version reported in the WELCOME META message.
   const [serverVersion, setServerVersion] = createSignal('');
   // Reconnect attempt counter (0 = not reconnecting, >0 = attempt N of max)
@@ -396,6 +414,8 @@ function createStore() {
   const [iqRate, setIqRate] = createSignal(0);           // IQ samples/sec
   const [wsBytes, setWsBytes] = createSignal(0);         // WebSocket bytes/sec (total inbound)
   const [wsBytesHistory, setWsBytesHistory] = createSignal<number[]>([]); // last 30 seconds
+  const [edgeBytes, setEdgeBytes] = createSignal(0);
+  const [edgeBytesHistory, setEdgeBytesHistory] = createSignal<number[]>([]);
   // Server-reported total outbound bandwidth (all clients); -1 = unknown.
   const [serverWsBytes, setServerWsBytes] = createSignal(-1);
   const [serverWsBytesHistory, setServerWsBytesHistory] = createSignal<number[]>([]);
@@ -463,6 +483,10 @@ function createStore() {
     usersRibbonVisible, setUsersRibbonVisible,
     configVersion, setConfigVersion,
     connectionState, setConnectionState,
+    edgeInfo, setEdgeInfo,
+    edgeStatus, setEdgeStatus,
+    edgeLastError, setEdgeLastError,
+    fftTransportMode, setFftTransportMode,
     serverVersion, setServerVersion,
     reconnectAttempt, setReconnectAttempt,
 
@@ -1366,6 +1390,8 @@ function createStore() {
     iqRate, setIqRate,
     wsBytes, setWsBytes,
     wsBytesHistory, setWsBytesHistory,
+    edgeBytes, setEdgeBytes,
+    edgeBytesHistory, setEdgeBytesHistory,
     serverWsBytes, setServerWsBytes,
     serverWsBytesHistory, setServerWsBytesHistory,
 

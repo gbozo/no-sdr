@@ -72,6 +72,9 @@ pub struct Config {
     /// Decoder result persistence.
     #[serde(default)]
     pub database: DatabaseConfig,
+    /// Optional Cloudflare Durable Object fan-out.
+    #[serde(default)]
+    pub edge: EdgeConfig,
 }
 
 /// Decoder result database settings.
@@ -97,6 +100,129 @@ pub struct DatabaseConfig {
 
 fn default_purge_interval_minutes() -> i64 {
     30
+}
+
+/// Cloudflare Durable Object fan-out settings.
+///
+/// The origin pushes one authenticated WebSocket per dongle to the Worker. The
+/// DO fans FFT frames out to browsers and keeps a small history ring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base URL, e.g. `wss://fft.example.com`. `ws://` is accepted only for
+    /// local development.
+    #[serde(default)]
+    pub url: String,
+    /// Stable instance name used in the edge topic path.
+    #[serde(default)]
+    pub instance_id: String,
+    /// Bearer token for the ingest route. Secret: never serialized to public
+    /// JSON.
+    #[serde(default)]
+    pub ingest_token: String,
+    /// Canonical edge FFT codec. v1 supports `deflate-smooth` because the DO
+    /// decodes it for history.
+    #[serde(default)]
+    pub codec: String,
+    /// Dongles to publish. Empty means every configured dongle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dongles: Vec<String>,
+    /// Viewer cap per DO. Also sent to the DO in the `hello` message.
+    #[serde(default)]
+    pub max_viewers: i32,
+    /// Client default when it has no local preference: auto|origin|edge.
+    #[serde(default)]
+    pub client_default_transport: String,
+    #[serde(default)]
+    pub fallback: EdgeFallbackConfig,
+    #[serde(default)]
+    pub history: EdgeHistoryConfig,
+    #[serde(default)]
+    pub reconnect: EdgeReconnectConfig,
+}
+
+impl Default for EdgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            instance_id: String::new(),
+            ingest_token: String::new(),
+            codec: "range".to_string(),
+            dongles: Vec::new(),
+            max_viewers: 200,
+            client_default_transport: "auto".to_string(),
+            fallback: EdgeFallbackConfig::default(),
+            history: EdgeHistoryConfig::default(),
+            reconnect: EdgeReconnectConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeFallbackConfig {
+    #[serde(default)]
+    pub connect_timeout_ms: i64,
+    #[serde(default)]
+    pub first_frame_timeout_ms: i64,
+    #[serde(default)]
+    pub stale_timeout_ms: i64,
+    #[serde(default)]
+    pub retry_ms: i64,
+}
+
+impl Default for EdgeFallbackConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout_ms: 2500,
+            first_frame_timeout_ms: 3000,
+            stale_timeout_ms: 5000,
+            retry_ms: 30_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeHistoryConfig {
+    /// do-ring | origin-snapshot | off
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub bins: i32,
+    #[serde(default)]
+    pub frames: i32,
+}
+
+impl Default for EdgeHistoryConfig {
+    fn default() -> Self {
+        Self {
+            mode: "do-ring".to_string(),
+            bins: 2048,
+            frames: 512,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeReconnectConfig {
+    #[serde(default)]
+    pub min_ms: i64,
+    #[serde(default)]
+    pub max_ms: i64,
+}
+
+impl Default for EdgeReconnectConfig {
+    fn default() -> Self {
+        Self {
+            min_ms: 500,
+            max_ms: 30_000,
+        }
+    }
 }
 
 impl Default for DatabaseConfig {
@@ -508,6 +634,44 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.users_ribbon.is_empty() {
         cfg.server.users_ribbon = default_users_ribbon();
     }
+
+    // Cloudflare DO fan-out defaults.
+    if cfg.edge.codec.trim().is_empty() {
+        cfg.edge.codec = "range".to_string();
+    }
+    if cfg.edge.max_viewers <= 0 {
+        cfg.edge.max_viewers = 200;
+    }
+    if cfg.edge.client_default_transport.trim().is_empty() {
+        cfg.edge.client_default_transport = "auto".to_string();
+    }
+    if cfg.edge.history.mode.trim().is_empty() {
+        cfg.edge.history.mode = "do-ring".to_string();
+    }
+    if cfg.edge.history.bins <= 0 {
+        cfg.edge.history.bins = 2048;
+    }
+    if cfg.edge.history.frames <= 0 {
+        cfg.edge.history.frames = 512;
+    }
+    if cfg.edge.fallback.connect_timeout_ms <= 0 {
+        cfg.edge.fallback.connect_timeout_ms = 2500;
+    }
+    if cfg.edge.fallback.first_frame_timeout_ms <= 0 {
+        cfg.edge.fallback.first_frame_timeout_ms = 3000;
+    }
+    if cfg.edge.fallback.stale_timeout_ms <= 0 {
+        cfg.edge.fallback.stale_timeout_ms = 5000;
+    }
+    if cfg.edge.fallback.retry_ms <= 0 {
+        cfg.edge.fallback.retry_ms = 30_000;
+    }
+    if cfg.edge.reconnect.min_ms <= 0 {
+        cfg.edge.reconnect.min_ms = 500;
+    }
+    if cfg.edge.reconnect.max_ms <= 0 {
+        cfg.edge.reconnect.max_ms = 30_000;
+    }
 }
 
 /// YAML `enabled`/`autoStart` default to true only when the keys are absent.
@@ -601,6 +765,66 @@ pub fn validate(cfg: &Config) -> Result<()> {
     if cfg.database.max_messages < 0 {
         bail!("config: database.maxMessages must be >= 0");
     }
+
+    if cfg.edge.enabled {
+        let url = cfg.edge.url.trim();
+        let local_ws = url.starts_with("ws://")
+            && (url.contains("127.0.0.1") || url.contains("localhost"));
+        if !url.starts_with("wss://") && !local_ws {
+            bail!("config: edge.url must use wss:// (ws:// is allowed only for localhost)");
+        }
+        if !valid_edge_name(&cfg.edge.instance_id) {
+            bail!(
+                "config: edge.instanceId must match [A-Za-z0-9_-]{{1,64}}, got {:?}",
+                cfg.edge.instance_id
+            );
+        }
+        if cfg.edge.ingest_token.trim().is_empty() {
+            bail!("config: edge.ingestToken is required when edge is enabled");
+        }
+        if !["range", "deflate-smooth"].contains(&cfg.edge.codec.as_str()) {
+            bail!(
+                "config: edge.codec must be \"range\" or \"deflate-smooth\" (got {:?})",
+                cfg.edge.codec
+            );
+        }
+        if !(1..=1000).contains(&cfg.edge.max_viewers) {
+            bail!(
+                "config: edge.maxViewers must be between 1 and 1000, got {}",
+                cfg.edge.max_viewers
+            );
+        }
+        if !["auto", "origin", "edge"].contains(&cfg.edge.client_default_transport.as_str()) {
+            bail!(
+                "config: edge.clientDefaultTransport must be auto|origin|edge, got {:?}",
+                cfg.edge.client_default_transport
+            );
+        }
+        if !["do-ring", "off"].contains(&cfg.edge.history.mode.as_str()) {
+            bail!(
+                "config: edge.history.mode must be do-ring|off (origin-snapshot is not implemented in v1), got {:?}",
+                cfg.edge.history.mode
+            );
+        }
+        if !is_power_of_two(cfg.edge.history.bins)
+            || !(256..=8192).contains(&cfg.edge.history.bins)
+        {
+            bail!(
+                "config: edge.history.bins must be a power of two in [256, 8192], got {}",
+                cfg.edge.history.bins
+            );
+        }
+        if !(32..=2048).contains(&cfg.edge.history.frames) {
+            bail!(
+                "config: edge.history.frames must be in [32, 2048], got {}",
+                cfg.edge.history.frames
+            );
+        }
+        if cfg.edge.reconnect.max_ms < cfg.edge.reconnect.min_ms {
+            bail!("config: edge.reconnect.maxMs must be >= minMs");
+        }
+    }
+
     for (i, d) in cfg.decoders.iter().enumerate() {
         if d.id.trim().is_empty() {
             bail!("config: decoders[{i}]: id is required");
@@ -652,6 +876,14 @@ pub fn validate(cfg: &Config) -> Result<()> {
 
 pub fn is_power_of_two(n: i32) -> bool {
     n > 0 && (n & (n - 1)) == 0
+}
+
+fn valid_edge_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn default_true() -> bool {
@@ -918,6 +1150,54 @@ mod tests {
         .unwrap();
         let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
         apply_profile_defaults(&mut cfg);
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn edge_config_defaults_and_round_trip() {
+        let cfg = parse(
+            "edge:\n  enabled: true\n  url: wss://fft.example.com\n  instanceId: home-berlin\n  ingestToken: secret\n",
+        );
+        assert!(cfg.edge.enabled);
+        assert_eq!(cfg.edge.codec, "range");
+        assert_eq!(cfg.edge.max_viewers, 200);
+        assert_eq!(cfg.edge.history.mode, "do-ring");
+        assert_eq!(cfg.edge.history.bins, 2048);
+        assert_eq!(cfg.edge.history.frames, 512);
+        assert_eq!(cfg.edge.client_default_transport, "auto");
+
+        let yaml = to_yaml_string(&cfg).unwrap();
+        assert!(yaml.contains("instanceId: home-berlin"));
+        assert!(yaml.contains("ingestToken: secret"));
+    }
+
+    #[test]
+    fn edge_rejects_insecure_url_when_enabled() {
+        let value: serde_yaml::Value = serde_yaml::from_str(
+            "edge:\n  enabled: true\n  url: ws://example.com\n  instanceId: x\n  ingestToken: t\n",
+        )
+        .unwrap();
+        let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+        apply_defaults(&mut cfg);
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn edge_accepts_range_codec() {
+        let cfg = parse(
+            "edge:\n  enabled: true\n  url: wss://example.com\n  instanceId: x\n  ingestToken: t\n  codec: range\n",
+        );
+        assert_eq!(cfg.edge.codec, "range");
+    }
+
+    #[test]
+    fn edge_rejects_unsupported_codec() {
+        let value: serde_yaml::Value = serde_yaml::from_str(
+            "edge:\n  enabled: true\n  url: wss://example.com\n  instanceId: x\n  ingestToken: t\n  codec: adpcm\n",
+        )
+        .unwrap();
+        let mut cfg: Config = serde_yaml::from_value(yaml_keys_to_json(value)).unwrap();
+        apply_defaults(&mut cfg);
         assert!(validate(&cfg).is_err());
     }
 }

@@ -261,6 +261,16 @@ const DongleEditor: Component<{
   const [actionError, setActionError] = createSignal('');
   const [scanning, setScanning] = createSignal(false);
   const [scanError, setScanError] = createSignal('');
+  const [selectedDevice, setSelectedDevice] = createSignal('');
+
+  function deviceKey(device: UsbDevice): string {
+    return [
+      device.serial || '',
+      device.index ?? '',
+      device.address || '',
+      device.label || device.name || '',
+    ].join('|');
+  }
 
   async function scanDevices(type: string) {
     setScanning(true);
@@ -270,6 +280,12 @@ const DongleEditor: Component<{
     if (adminStore.usbDevices().length === 0) {
       setScanError('No devices found. Check the USB cable, udev rules and vendor library/service.');
     }
+    // Keep the current pick if the device is still present; otherwise clear it
+    // so the select does not point at a vanished option.
+    const stillPresent = adminStore
+      .usbDevices()
+      .some((device) => device.source === type && deviceKey(device) === selectedDevice());
+    if (!stillPresent) setSelectedDevice('');
   }
 
   function applyDetectedDevice(device: UsbDevice) {
@@ -306,6 +322,7 @@ const DongleEditor: Component<{
     const d = dongle();
     if (d) {
       setLocalState({ ...d, source: { ...d.source } });
+      setSelectedDevice('');
       setEditing(true);
     }
   }
@@ -418,6 +435,11 @@ const DongleEditor: Component<{
       {(d) => {
         const current = () => editing() ? localState() as DongleConfig : d();
         const sourceType = () => current().source?.type || d().source?.type || 'rtl_tcp';
+        const detectedDevices = () => adminStore.usbDevices().filter((dev) => dev.source === sourceType());
+        const selectedDeviceLabel = () => {
+          const dev = detectedDevices().find((item) => deviceKey(item) === selectedDevice());
+          return dev ? (dev.label || dev.name || dev.serial || 'device') : '';
+        };
         return (
           <div class="space-y-6">
             {/* Header */}
@@ -498,6 +520,7 @@ const DongleEditor: Component<{
                     <select value={current().source?.type || 'rtl_tcp'} onChange={(e) => {
                         const type = e.currentTarget.value;
                         updateLocalSource('type', type);
+                        setSelectedDevice('');
                         const rates = sampleRatesFor(type, current().source?.settings);
                         if (!rates.includes(current().sampleRate || 0)) updateLocal('sampleRate', rates[0]);
                       }}
@@ -532,18 +555,18 @@ const DongleEditor: Component<{
                 <FieldGroup label="Detected Devices">
                   <div class="flex items-center gap-2">
                     <select
-                      value=""
+                      value={selectedDevice()}
                       onChange={(e) => {
-                        const rows = adminStore.usbDevices().filter((d) => d.source === sourceType());
-                        const dev = rows[e.currentTarget.selectedIndex - 1];
+                        const key = e.currentTarget.value;
+                        setSelectedDevice(key);
+                        const dev = detectedDevices().find((item) => deviceKey(item) === key);
                         if (dev) applyDetectedDevice(dev);
-                        e.currentTarget.selectedIndex = 0;
                       }}
                       class="admin-input flex-1"
                     >
                       <option value="">{scanning() ? 'Scanning…' : 'Select a detected device'}</option>
-                      <For each={adminStore.usbDevices().filter((d) => d.source === sourceType())}>
-                        {(dev) => <option value={dev.serial || dev.label || dev.name}>{dev.label || dev.name}{dev.detail ? ` — ${dev.detail}` : ''}</option>}
+                      <For each={detectedDevices()}>
+                        {(dev) => <option value={deviceKey(dev)}>{dev.label || dev.name}{dev.detail ? ` — ${dev.detail}` : ''}</option>}
                       </For>
                     </select>
                     <button type="button" onClick={() => scanDevices(sourceType())} disabled={scanning()}
@@ -551,6 +574,11 @@ const DongleEditor: Component<{
                       {scanning() ? 'Scanning…' : 'Scan'}
                     </button>
                   </div>
+                  <Show when={selectedDevice() && selectedDeviceLabel()}>
+                    <p class="text-[10px] font-mono text-cyan mt-1">
+                      Selected: {selectedDeviceLabel()}
+                    </p>
+                  </Show>
                   <Show when={scanError()}>
                     <p class="text-[10px] font-mono text-amber/80 mt-1">{scanError()}</p>
                   </Show>

@@ -10,5 +10,6 @@ pub mod decoders;
 pub mod demod;
 pub mod dongle;
 pub mod dsp;
+pub mod edge;
 pub mod history;
 pub mod ws;

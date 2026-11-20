@@ -147,6 +147,9 @@ pub struct ClientCommand {
     /// Hide a helper connection from the public users ribbon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    /// FFT transport for this client: `edge` or `origin`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fft_transport: String,
 }
 
 fn is_zero_i64(v: &i64) -> bool {

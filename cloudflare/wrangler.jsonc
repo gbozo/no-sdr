@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nosdr-edge",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-20",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "EDGE_VERSION": "1",
+    "MAX_VIEWERS": "200"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FANOUT",
+        "class_name": "Fanout"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Fanout"]
+    }
+  ],
+  // Set a custom domain/route in the dashboard or replace these values:
+  // "routes": [{ "pattern": "fft.example.com/*", "zone_name": "example.com" }]
+  //
+  // INGEST_TOKEN is a secret:
+  //   npx wrangler secret put INGEST_TOKEN
+}

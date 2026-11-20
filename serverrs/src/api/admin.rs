@@ -1059,6 +1059,257 @@ pub async fn recordings(State(state): State<AppState>) -> Response {
     )
 }
 
+// ------------------------------------------------------------------
+// Cloudflare edge
+// ------------------------------------------------------------------
+
+pub async fn get_edge_config(State(state): State<AppState>) -> Response {
+    let (edge, version) = {
+        let cfg = state.cfg.read();
+        (cfg.edge.clone(), state.cfg_version.get())
+    };
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "enabled": edge.enabled,
+            "url": edge.url,
+            "instanceId": edge.instance_id,
+            "hasIngestToken": !edge.ingest_token.is_empty(),
+            "codec": edge.codec,
+            "dongles": edge.dongles,
+            "maxViewers": edge.max_viewers,
+            "clientDefaultTransport": edge.client_default_transport,
+            "fallback": {
+                "connectTimeoutMs": edge.fallback.connect_timeout_ms,
+                "firstFrameTimeoutMs": edge.fallback.first_frame_timeout_ms,
+                "staleTimeoutMs": edge.fallback.stale_timeout_ms,
+                "retryMs": edge.fallback.retry_ms,
+            },
+            "history": {
+                "mode": edge.history.mode,
+                "bins": edge.history.bins,
+                "frames": edge.history.frames,
+            },
+            "reconnect": {
+                "minMs": edge.reconnect.min_ms,
+                "maxMs": edge.reconnect.max_ms,
+            },
+            "status": state.mgr.edge_status(),
+            "version": version,
+        }),
+        Some(version),
+    )
+}
+
+pub async fn update_edge_config(State(state): State<AppState>, body: Bytes) -> Response {
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid request body"}),
+                None,
+            )
+        }
+    };
+    let Some(map) = parsed.as_object() else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "invalid request body"}),
+            None,
+        );
+    };
+
+    let version = {
+        let mut cfg = state.cfg.write();
+        let old = cfg.edge.clone();
+        let e = &mut cfg.edge;
+
+        if let Some(v) = map.get("enabled").and_then(|v| v.as_bool()) {
+            e.enabled = v;
+        }
+        if let Some(v) = map.get("url").and_then(|v| v.as_str()) {
+            e.url = v.trim().to_string();
+        }
+        if let Some(v) = map.get("instanceId").and_then(|v| v.as_str()) {
+            e.instance_id = v.trim().to_string();
+        }
+        if let Some(v) = map.get("codec").and_then(|v| v.as_str()) {
+            e.codec = v.trim().to_string();
+        }
+        if let Some(v) = map.get("clientDefaultTransport").and_then(|v| v.as_str()) {
+            e.client_default_transport = v.trim().to_string();
+        }
+        if let Some(v) = map.get("maxViewers").and_then(|v| v.as_i64()) {
+            e.max_viewers = v as i32;
+        }
+        if let Some(arr) = map.get("dongles").and_then(|v| v.as_array()) {
+            e.dongles = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        // Empty/missing token keeps the existing secret. Use an explicit
+        // clearIngestToken flag to remove it.
+        if let Some(v) = map.get("ingestToken").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                e.ingest_token = v.trim().to_string();
+            }
+        }
+        if map
+            .get("clearIngestToken")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            e.ingest_token.clear();
+        }
+
+        if let Some(f) = map.get("fallback").and_then(|v| v.as_object()) {
+            if let Some(v) = f.get("connectTimeoutMs").and_then(|v| v.as_i64()) {
+                e.fallback.connect_timeout_ms = v;
+            }
+            if let Some(v) = f.get("firstFrameTimeoutMs").and_then(|v| v.as_i64()) {
+                e.fallback.first_frame_timeout_ms = v;
+            }
+            if let Some(v) = f.get("staleTimeoutMs").and_then(|v| v.as_i64()) {
+                e.fallback.stale_timeout_ms = v;
+            }
+            if let Some(v) = f.get("retryMs").and_then(|v| v.as_i64()) {
+                e.fallback.retry_ms = v;
+            }
+        }
+        if let Some(h) = map.get("history").and_then(|v| v.as_object()) {
+            if let Some(v) = h.get("mode").and_then(|v| v.as_str()) {
+                e.history.mode = v.trim().to_string();
+            }
+            if let Some(v) = h.get("bins").and_then(|v| v.as_i64()) {
+                e.history.bins = v as i32;
+            }
+            if let Some(v) = h.get("frames").and_then(|v| v.as_i64()) {
+                e.history.frames = v as i32;
+            }
+        }
+        if let Some(r) = map.get("reconnect").and_then(|v| v.as_object()) {
+            if let Some(v) = r.get("minMs").and_then(|v| v.as_i64()) {
+                e.reconnect.min_ms = v;
+            }
+            if let Some(v) = r.get("maxMs").and_then(|v| v.as_i64()) {
+                e.reconnect.max_ms = v;
+            }
+        }
+
+        config::apply_defaults(&mut cfg);
+        if let Err(err) = config::validate(&cfg) {
+            cfg.edge = old;
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": err.to_string()}),
+                None,
+            );
+        }
+
+        bump_version_locked(&state)
+    };
+
+    state.mgr.reload_edge();
+    json_response(
+        StatusCode::OK,
+        json!({"status": "ok", "version": version}),
+        Some(version),
+    )
+}
+
+pub async fn edge_status(State(state): State<AppState>) -> Response {
+    let version = state.cfg_version.get();
+    json_response(
+        StatusCode::OK,
+        json!({
+            "status": state.mgr.edge_status(),
+            "version": version,
+        }),
+        Some(version),
+    )
+}
+
+pub async fn test_edge(State(state): State<AppState>) -> Response {
+    let (url, enabled, token_present) = {
+        let cfg = state.cfg.read();
+        (
+            cfg.edge.url.clone(),
+            cfg.edge.enabled,
+            !cfg.edge.ingest_token.is_empty(),
+        )
+    };
+
+    if url.trim().is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "edge.url is empty"}),
+            None,
+        );
+    }
+    if !enabled {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "edge is disabled"}),
+            None,
+        );
+    }
+    if !token_present {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "edge.ingestToken is empty"}),
+            None,
+        );
+    }
+
+    let base = url
+        .trim()
+        .trim_end_matches('/')
+        .replace("wss://", "https://")
+        .replace("ws://", "http://");
+    let health = format!("{base}/health");
+
+    let started = Instant::now();
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+    {
+        Ok(c) => c,
+        Err(err) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": err.to_string()}),
+                None,
+            )
+        }
+    };
+
+    match client.get(&health).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+            json_response(
+                StatusCode::OK,
+                json!({
+                    "ok": status.is_success(),
+                    "status": status.as_u16(),
+                    "latencyMs": started.elapsed().as_millis() as u64,
+                    "worker": body,
+                }),
+                None,
+            )
+        }
+        Err(err) => json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({"ok": false, "error": err.to_string()}),
+            None,
+        ),
+    }
+}
+
 pub async fn record_start(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.mgr.start_recording(&id) {
         Ok(()) => json_response(

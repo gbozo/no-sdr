@@ -493,6 +493,29 @@ const DongleProfileSelector: Component = () => {
             )}
           </Show>
 
+          <Show when={store.edgeInfo()?.enabled}>
+            <span
+              class={`text-[8px] font-mono uppercase tracking-wider px-1 py-0.5 border rounded-sm shrink-0 ${
+                store.edgeStatus() === 'live'
+                  ? 'text-green border-green/30'
+                  : store.edgeStatus() === 'connecting'
+                  ? 'text-amber border-amber/30'
+                  : store.edgeStatus() === 'degraded'
+                  ? 'text-red border-red/30'
+                  : 'text-text-dim border-border/40'
+              }`}
+              title={store.edgeLastError() || `FFT via Cloudflare edge (${store.edgeStatus()})`}
+            >
+              {store.edgeStatus() === 'live'
+                ? 'Edge'
+                : store.edgeStatus() === 'connecting'
+                ? 'Edge…'
+                : store.edgeStatus() === 'degraded'
+                ? 'Origin'
+                : 'Edge'}
+            </span>
+          </Show>
+
           {/* Chevron */}
           <svg class={`w-3 h-3 text-text-muted shrink-0 transition-transform ${open() ? 'rotate-180' : ''}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 4.5L6 7.5L9 4.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -582,6 +605,21 @@ const DongleProfileSelector: Component = () => {
               </Show>
             );
           }}
+        </Show>
+
+        <Show when={store.edgeInfo()?.enabled}>
+          <div class="flex items-center gap-2 px-3 py-1.5 border-t border-border">
+            <span class="text-[9px] font-mono text-text-dim uppercase tracking-wider">Spectrum</span>
+            <select
+              class="ml-auto bg-transparent border border-border/60 px-1 py-0.5 text-[9px] font-mono text-text-secondary"
+              value={store.fftTransportMode()}
+              onChange={(e) => engine.setFftTransport(e.currentTarget.value as 'auto' | 'origin' | 'edge')}
+            >
+              <option value="auto">Auto</option>
+              <option value="edge">Edge</option>
+              <option value="origin">Origin</option>
+            </select>
+          </div>
         </Show>
       </div>
     </Show>

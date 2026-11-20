@@ -111,6 +111,7 @@ export type ClientCommand =
   | { cmd: 'audio_enabled'; enabled: boolean }
   | { cmd: 'waterfall_settings'; minDb: number; maxDb: number }
   | { cmd: 'codec'; fftCodec?: FftCodecType; iqCodec?: IqCodecType }
+  | { cmd: 'fft_transport'; mode: 'origin' | 'edge' }
   | { cmd: 'stereo_enabled'; enabled: boolean }
   | { cmd: 'deemphasis'; deemphasis: number }
   | { cmd: 'request_history' }
@@ -432,6 +433,7 @@ export const FFT_HISTORY_CODEC_NONE    = 0; // raw Uint8 quantized frames
 export const FFT_HISTORY_CODEC_DEFLATE = 1; // delta + zlib deflateRaw over all frames
 export const FFT_HISTORY_CODEC_ADPCM   = 2; // IMA-ADPCM over Int16 dB×100 values
 export const FFT_HISTORY_CODEC_RANGE   = 3; // range-coded, per-frame delta
+export const FFT_HISTORY_CODEC_RANGE_FRAME = 4; // per-frame range, length-prefixed
 
 /**
  * Pack a waterfall history burst — raw Uint8 frames (no compression).

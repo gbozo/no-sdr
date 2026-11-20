@@ -548,6 +548,11 @@ const App: Component = () => {
             </span>
           </Show>
 
+          {/* Cloudflare edge badge + client-side edge FFT throughput */}
+          <Show when={store.edgeInfo()?.enabled}>
+            <EdgeMeter />
+          </Show>
+
           {/* Bandwidth Meter with sparkline */}
           <BandwidthMeter />
 
@@ -641,9 +646,89 @@ const BandwidthMeter: Component = () => {
   );
 };
 
+// Cloudflare edge badge + client-side edge FFT throughput
+const EdgeMeter: Component = () => {
+  const formatRate = (bytes: number): string => {
+    if (bytes <= 0) return '—';
+    if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB/s`;
+    if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB/s`;
+    return `${bytes} B/s`;
+  };
+
+  const history = () => store.edgeBytesHistory();
+  const histMax = createMemo(() => {
+    const h = history();
+    if (h.length === 0) return 1;
+    return Math.max(...h, 1);
+  });
+
+  const barCount = 30;
+  const barWidth = 2;
+  const barGap = 1;
+  const sparkWidth = barCount * (barWidth + barGap) - barGap;
+  const sparkHeight = 14;
+
+  const badgeClass = () => {
+    switch (store.edgeStatus()) {
+      case 'live': return 'text-green border-green/40';
+      case 'connecting': return 'text-amber border-amber/40';
+      case 'degraded': return 'text-red border-red/40';
+      default: return 'text-text-dim border-border/40';
+    }
+  };
+
+  return (
+    <div class="flex items-center gap-2 border-l border-border pl-4">
+      <span
+        class={`text-[8px] font-mono uppercase tracking-wider px-1 py-0.5 border rounded-sm shrink-0 ${badgeClass()}`}
+        title={store.edgeLastError() || `Client FFT via Cloudflare edge (${store.edgeStatus()})`}
+      >
+        EDGE
+      </span>
+
+      <svg
+        width={sparkWidth}
+        height={sparkHeight}
+        class="opacity-70"
+        aria-label="Edge FFT bandwidth history"
+      >
+        <For each={history().slice(-barCount)}>
+          {(value, i) => {
+            const h = () => Math.max(1, (value / histMax()) * sparkHeight);
+            const x = () => i() * (barWidth + barGap);
+            const isLast = () => i() === history().slice(-barCount).length - 1;
+            return (
+              <rect
+                x={x()}
+                y={sparkHeight - h()}
+                width={barWidth}
+                height={h()}
+                rx={0.5}
+                fill={isLast() ? 'var(--sdr-accent, #4aa3ff)' : 'var(--color-text-dim, #6f7f94)'}
+                opacity={isLast() ? 1 : 0.6}
+              />
+            );
+          }}
+        </For>
+      </svg>
+
+      <div class="flex flex-col leading-[1.1]">
+        <span
+          class="text-text-secondary normal-case"
+          title="FFT bytes received from the Cloudflare edge by this client"
+        >
+          {formatRate(store.edgeBytes())}
+        </span>
+        <span class="text-text-muted text-[9px] normal-case">
+          EDGE FFT {store.fftRate()}/s
+        </span>
+      </div>
+    </div>
+  );
+};
+
 // Server process CPU + memory display
-const ServerStatsMeter: Component = () => {
-  const cpu = () => store.serverCpu();
+const ServerStatsMeter: Component = () => {  const cpu = () => store.serverCpu();
   const mem = () => store.serverMem();
 
   // Colour the CPU reading by load level

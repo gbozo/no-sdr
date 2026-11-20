@@ -47,6 +47,12 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/save-config", post(admin::save_config))
         .route(
+            "/edge",
+            get(admin::get_edge_config).put(admin::update_edge_config),
+        )
+        .route("/edge/status", get(admin::edge_status))
+        .route("/edge/test", post(admin::test_edge))
+        .route(
             "/server/config",
             get(admin::get_server_config).put(admin::update_server_config),
         )
@@ -84,6 +90,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/dongles", get(public_dongles))
         .route("/dongles/{id}/profiles", get(public_profiles))
         .route("/capabilities", get(capabilities))
+        .route("/edge", get(edge_info))
         .route("/bookmarks", get(public_bookmarks))
         .route("/bandplan", get(bandplan))
         .route("/identify", get(identify).post(identify))
@@ -220,6 +227,25 @@ async fn capabilities(State(state): State<AppState>) -> Response {
         json!({
             "allowedFftCodecs": cfg.server.allowed_fft_codecs,
             "allowedIqCodecs": cfg.server.allowed_iq_codecs,
+        }),
+        None,
+    )
+}
+
+/// Public edge descriptor for browser fallback. Never includes the ingest
+/// token; the edge is only advertised when it is enabled.
+async fn edge_info(State(state): State<AppState>) -> Response {
+    let cfg = state.cfg.read();
+    let edge = &cfg.edge;
+    admin::json_response(
+        StatusCode::OK,
+        json!({
+            "enabled": edge.enabled,
+            "url": edge.url,
+            "instanceId": edge.instance_id,
+            "codec": edge.codec,
+            "defaultTransport": edge.client_default_transport,
+            "historyBins": edge.history.bins,
         }),
         None,
     )

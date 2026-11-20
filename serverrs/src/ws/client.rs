@@ -170,6 +170,9 @@ pub struct ClientState {
     pub stereo_enabled: bool,
     pub fft_codec: String,
     pub iq_codec: String,
+    /// True when this client receives FFT from the Cloudflare edge instead of
+    /// the origin WebSocket. The origin still owns control/audio.
+    pub fft_via_edge: bool,
     pub mode: String,
     /// Foreground digital decoder (ft8/ft4/ft2); empty means audio only.
     pub decoder: String,
@@ -360,6 +363,14 @@ impl Client {
 
     pub fn fft_codec(&self) -> String {
         self.state.lock().fft_codec.clone()
+    }
+
+    pub fn fft_via_edge(&self) -> bool {
+        self.state.lock().fft_via_edge
+    }
+
+    pub fn set_fft_via_edge(&self, via_edge: bool) {
+        self.state.lock().fft_via_edge = via_edge;
     }
 
     pub fn iq_codec(&self) -> String {

@@ -295,6 +295,9 @@ impl ClientPipeline {
 pub struct Manager {
     pub cfg: Arc<RwLock<Config>>,
     pub ws: Arc<WsManager>,
+    /// Optional Cloudflare DO fan-out. Set after construction so the manager
+    /// can be created without an edge dependency.
+    edge: RwLock<Option<Arc<crate::edge::EdgeService>>>,
     dongles: RwLock<HashMap<String, Arc<ActiveDongle>>>,
     dongle_states: Mutex<HashMap<String, DongleState>>,
     /// Monotonic token per dongle start/reinit. A retry loop that has been
@@ -374,6 +377,7 @@ impl Manager {
         let mgr = Arc::new(Self {
             cfg,
             ws: ws.clone(),
+            edge: RwLock::new(None),
             dongles: RwLock::new(HashMap::new()),
             dongle_states: Mutex::new(states),
             start_generations: Mutex::new(HashMap::new()),
@@ -423,6 +427,27 @@ impl Manager {
         F: Fn(&str, &str, Vec<f32>) -> (String, String) + Send + Sync + 'static,
     {
         *self.identify_token_func.lock() = Some(Arc::new(f));
+    }
+
+    /// Attaches the optional edge publisher after construction.
+    pub fn set_edge(&self, edge: Arc<crate::edge::EdgeService>) {
+        *self.edge.write() = Some(edge);
+    }
+
+    /// Reload edge publishers after an admin config save.
+    pub fn reload_edge(&self) {
+        if let Some(edge) = self.edge.read().clone() {
+            edge.reload();
+        }
+    }
+
+    /// Status for the admin API. Empty/disabled when no edge service exists.
+    pub fn edge_status(&self) -> serde_json::Value {
+        self.edge
+            .read()
+            .as_ref()
+            .map(|edge| edge.status())
+            .unwrap_or_else(|| serde_json::json!({"enabled": false, "publishers": {}}))
     }
 
     pub fn current_version(&self) -> u64 {
@@ -1639,55 +1664,86 @@ impl Manager {
         const MIN_DB: f32 = -130.0;
         const MAX_DB: f32 = 0.0;
 
+        let edge = self.edge.read().clone();
+        let edge_enabled = edge
+            .as_ref()
+            .is_some_and(|service| service.is_enabled_for(&ad.id));
+
         let clients = self.ws.subscribed_clients(&ad.id);
-        if clients.is_empty() {
+        if clients.is_empty() && !edge_enabled {
             return;
         }
 
+        let encode = |codec: &str| -> Result<Vec<u8>, String> {
+            match codec {
+                "deflate-smooth" => ad
+                    .deflate_smooth_enc
+                    .lock()
+                    .encode_message_smooth(crate::ws::MSG_FFT_DEFLATE, frame, MIN_DB, MAX_DB)
+                    .map_err(|e| e.to_string()),
+                "range" => ad
+                    .range_enc
+                    .lock()
+                    .encode_message(
+                        crate::codec::range::MSG_FFT_RANGE,
+                        frame,
+                        MIN_DB,
+                        MAX_DB,
+                    )
+                    .map_err(|e| e.to_string()),
+                "adpcm" => Ok(pack_fft_adpcm_message(&encode_fft_adpcm(
+                    frame, MIN_DB, MAX_DB,
+                ))),
+                "none" | "" => {
+                    let bins = compress_fft(frame, MIN_DB, MAX_DB);
+                    Ok(pack_fft_compressed_message(
+                        &bins,
+                        MIN_DB.round() as i16,
+                        MAX_DB.round() as i16,
+                    ))
+                }
+                other => Err(format!("unknown FFT codec: {other}")),
+            }
+        };
+
         let mut cache: HashMap<String, Result<Vec<u8>, String>> = HashMap::new();
         for client in clients {
+            // Clients receiving FFT from the Cloudflare edge must not also
+            // receive a duplicate copy over the origin WebSocket.
+            if client.fft_via_edge() {
+                continue;
+            }
+
             let codec = client.fft_codec();
             let key = if codec.is_empty() {
                 "none".to_string()
             } else {
                 codec.clone()
             };
-            let msg = cache
-                .entry(key.clone())
-                .or_insert_with(|| match key.as_str() {
-                    "deflate-smooth" => ad
-                        .deflate_smooth_enc
-                        .lock()
-                        .encode_message_smooth(crate::ws::MSG_FFT_DEFLATE, frame, MIN_DB, MAX_DB)
-                        .map_err(|e| e.to_string()),
-                    "range" => ad
-                        .range_enc
-                        .lock()
-                        .encode_message(
-                            crate::codec::range::MSG_FFT_RANGE,
-                            frame,
-                            MIN_DB,
-                            MAX_DB,
-                        )
-                        .map_err(|e| e.to_string()),
-                    "adpcm" => Ok(pack_fft_adpcm_message(&encode_fft_adpcm(
-                        frame, MIN_DB, MAX_DB,
-                    ))),
-                    "none" | "" => {
-                        let bins = compress_fft(frame, MIN_DB, MAX_DB);
-                        Ok(pack_fft_compressed_message(
-                            &bins,
-                            MIN_DB.round() as i16,
-                            MAX_DB.round() as i16,
-                        ))
-                    }
-                    other => Err(format!("unknown FFT codec: {other}")),
-                });
+            let msg = cache.entry(key.clone()).or_insert_with(|| encode(&key));
 
             match msg {
                 Ok(bytes) => self.ws.send_to(&client.id, bytes.clone()),
                 Err(e) => {
                     warn!(client = %client.id, codec = %key, error = %e, "FFT encode failed");
+                }
+            }
+        }
+
+        if edge_enabled {
+            if let Some(service) = edge.as_ref() {
+                let codec = service.codec();
+                let key = if codec.is_empty() {
+                    "none".to_string()
+                } else {
+                    codec
+                };
+                let msg = cache.entry(key.clone()).or_insert_with(|| encode(&key));
+                match msg {
+                    Ok(bytes) => service.publish(&ad.id, Arc::new(bytes.clone())),
+                    Err(e) => {
+                        warn!(dongle = %ad.id, codec = %key, error = %e, "edge FFT encode failed");
+                    }
                 }
             }
         }
@@ -2213,8 +2269,17 @@ impl Manager {
     fn destroy_client_pipeline(&self, client_id: &str) {
         let removed = self.client_pipelines.lock().remove(client_id);
         if let Some(cp) = removed {
-            if let Some(mut opus) = cp.lock().opus_pipeline.take() {
+            let (dongle_id, opus) = {
+                let mut cp = cp.lock();
+                (cp.dongle_id.clone(), cp.opus_pipeline.take())
+            };
+            if let Some(mut opus) = opus {
                 opus.close();
+            }
+            // The WS client is already removed from the manager, so the ribbon
+            // must be refreshed from the pipeline's last dongle id.
+            if !dongle_id.is_empty() {
+                self.broadcast_user_locations(&dongle_id);
             }
         }
     }
@@ -2351,6 +2416,7 @@ impl Manager {
                 }
                 self.handle_codec_change(client_id, cmd);
             }
+            "fft_transport" => self.handle_fft_transport(client_id, cmd),
             "stereo_enabled" => self.handle_stereo_enabled(client_id, cmd),
             "deemphasis" => self.handle_set_deemphasis(client_id, cmd),
             "admin_set_profile" => self.handle_admin_set_profile(client_id, cmd),
@@ -2373,6 +2439,27 @@ impl Manager {
 
     fn send_meta(&self, client_id: &str, meta: ServerMeta) {
         self.ws.send_to(client_id, pack_meta_message(&meta));
+    }
+
+    fn handle_fft_transport(&self, client_id: &str, cmd: &ClientCommand) {
+        let Some(client) = self.ws.get_client(client_id) else {
+            return;
+        };
+
+        let requested = if !cmd.fft_transport.is_empty() {
+            cmd.fft_transport.as_str()
+        } else {
+            cmd.mode.as_str()
+        };
+        let via_edge = requested.eq_ignore_ascii_case("edge");
+        client.set_fft_via_edge(via_edge);
+        client.drop_queued_fft();
+
+        debug!(
+            client = %client_id,
+            transport = if via_edge { "edge" } else { "origin" },
+            "FFT transport changed"
+        );
     }
 
     fn send_error(&self, client_id: &str, message: String, code: &str) {
@@ -3781,10 +3868,16 @@ impl Manager {
     fn spawn_stats_loop(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         let ws = self.ws.clone();
+        let initial_edge_bytes = self
+            .edge
+            .read()
+            .as_ref()
+            .map(|edge| edge.total_bytes_sent())
+            .unwrap_or(0);
         tokio::spawn(async move {
             let mut last_cpu = process_cpu_seconds();
             let mut last_at = Instant::now();
-            let mut last_bytes = ws.total_bytes_written();
+            let mut last_bytes = ws.total_bytes_written() + initial_edge_bytes;
             let mut ticker = tokio::time::interval(Duration::from_secs(2));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -3808,7 +3901,13 @@ impl Manager {
                 last_cpu = cpu;
                 last_at = now;
 
-                let total_bytes = ws.total_bytes_written();
+                let edge_bytes = mgr
+                    .edge
+                    .read()
+                    .as_ref()
+                    .map(|edge| edge.total_bytes_sent())
+                    .unwrap_or(0);
+                let total_bytes = ws.total_bytes_written().saturating_add(edge_bytes);
                 let ws_bytes_per_sec = if elapsed > 0.0 {
                     ((total_bytes.saturating_sub(last_bytes)) as f64 / elapsed).round() as i64
                 } else {
@@ -3861,11 +3960,10 @@ impl Manager {
                     mgr.ws.broadcast_all(pack_meta_message(&meta));
                 }
 
-                // Keep the users ribbon fresh, including disconnects that do
-                // not emit a tune command.
-                for (id, _) in &current_counts {
-                    mgr.broadcast_user_locations(id);
-                }
+                // The users ribbon is event-driven now: subscribe, tune, mode,
+                // bandwidth and disconnect each broadcast it, with the tune
+                // path throttled. Do not republish it from this 2 s loop; that
+                // added ~10 KB/s of egress with ten listeners and no changes.
             }
         });
     }

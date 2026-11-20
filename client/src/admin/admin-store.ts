@@ -7,6 +7,7 @@ import { createSignal, createRoot } from 'solid-js';
 export type AdminSection =
   | 'general'
   | 'devices'
+  | 'edge'
   | 'bookmarks'
   | 'decoders'
   | 'features'
@@ -201,8 +202,81 @@ export interface ServerConfig {
   maxMessages: number;
 }
 
-const DEFAULT_SERVER_CONFIG: ServerConfig = {
-  port: 3000,
+// ---- Cloudflare edge config ----
+export interface EdgeFallbackConfig {
+  connectTimeoutMs: number;
+  firstFrameTimeoutMs: number;
+  staleTimeoutMs: number;
+  retryMs: number;
+}
+
+export interface EdgeHistoryConfig {
+  mode: 'do-ring' | 'origin-snapshot' | 'off';
+  bins: number;
+  frames: number;
+}
+
+export interface EdgeReconnectConfig {
+  minMs: number;
+  maxMs: number;
+}
+
+export interface EdgePublisherStatus {
+  connected: boolean;
+  framesSent: number;
+  dropped: number;
+  reconnects: number;
+  lastFrameAt: number;
+  lastError: string;
+}
+
+export interface EdgeStatusInfo {
+  enabled: boolean;
+  url?: string;
+  instanceId?: string;
+  codec?: string;
+  hasIngestToken?: boolean;
+  publishers?: Record<string, EdgePublisherStatus>;
+}
+
+export interface EdgeConfig {
+  enabled: boolean;
+  url: string;
+  instanceId: string;
+  /** Write-only: loaded empty, sent only when the admin types a new token. */
+  ingestToken: string;
+  hasIngestToken: boolean;
+  codec: string;
+  dongles: string[];
+  maxViewers: number;
+  clientDefaultTransport: 'auto' | 'origin' | 'edge';
+  fallback: EdgeFallbackConfig;
+  history: EdgeHistoryConfig;
+  reconnect: EdgeReconnectConfig;
+  status?: EdgeStatusInfo;
+}
+
+const DEFAULT_EDGE_CONFIG: EdgeConfig = {
+  enabled: false,
+  url: '',
+  instanceId: '',
+  ingestToken: '',
+  hasIngestToken: false,
+  codec: 'range',
+  dongles: [],
+  maxViewers: 200,
+  clientDefaultTransport: 'auto',
+  fallback: {
+    connectTimeoutMs: 2500,
+    firstFrameTimeoutMs: 3000,
+    staleTimeoutMs: 5000,
+    retryMs: 30000,
+  },
+  history: { mode: 'do-ring', bins: 2048, frames: 512 },
+  reconnect: { minMs: 500, maxMs: 30000 },
+};
+
+const DEFAULT_SERVER_CONFIG: ServerConfig = {  port: 3000,
   host: '0.0.0.0',
   adminPassword: '',
   callsign: '',
@@ -257,6 +331,13 @@ function createAdminStore() {
   const [serverConfig, setServerConfig] = createSignal<ServerConfig>({ ...DEFAULT_SERVER_CONFIG });
   const [serverConfigLoading, setServerConfigLoading] = createSignal(false);
 
+  // Cloudflare edge config + live status
+  const [edgeConfig, setEdgeConfig] = createSignal<EdgeConfig>({ ...DEFAULT_EDGE_CONFIG });
+  const [edgeLoading, setEdgeLoading] = createSignal(false);
+  const [edgeTesting, setEdgeTesting] = createSignal(false);
+  const [edgeTestResult, setEdgeTestResult] = createSignal<Record<string, unknown> | null>(null);
+  const [edgeStatus, setEdgeStatus] = createSignal<EdgeStatusInfo | null>(null);
+
   // ---- Dongles & Profiles ----
   const [dongles, setDongles] = createSignal<DongleConfig[]>([]);
   const [donglesLoading, setDonglesLoading] = createSignal(false);
@@ -295,6 +376,7 @@ function createAdminStore() {
       if (ok) {
         // Auto-load server config and dongles on session check success
         loadServerConfig();
+        loadEdgeConfig();
         loadDongles();
         loadBookmarks();
         loadDecoders();
@@ -321,6 +403,7 @@ function createAdminStore() {
         setAuthenticated(true);
         // Load config and dongles on login
         loadServerConfig();
+        loadEdgeConfig();
         loadDongles();
         loadBookmarks();
         loadDecoders();
@@ -415,6 +498,143 @@ function createAdminStore() {
   function updateServerConfigField<K extends keyof ServerConfig>(key: K, value: ServerConfig[K]) {
     setServerConfig(prev => ({ ...prev, [key]: value }));
     markDirty();
+  }
+
+  // ---- Cloudflare edge ----
+
+  async function loadEdgeConfig(): Promise<void> {
+    setEdgeLoading(true);
+    try {
+      const res = await fetch('/api/admin/edge', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setEdgeConfig({
+        enabled: !!data.enabled,
+        url: data.url ?? '',
+        instanceId: data.instanceId ?? '',
+        ingestToken: '',
+        hasIngestToken: !!data.hasIngestToken,
+        codec: data.codec ?? 'range',
+        dongles: Array.isArray(data.dongles) ? data.dongles : [],
+        maxViewers: data.maxViewers ?? 200,
+        clientDefaultTransport: data.clientDefaultTransport ?? 'auto',
+        fallback: {
+          connectTimeoutMs: data.fallback?.connectTimeoutMs ?? 2500,
+          firstFrameTimeoutMs: data.fallback?.firstFrameTimeoutMs ?? 3000,
+          staleTimeoutMs: data.fallback?.staleTimeoutMs ?? 5000,
+          retryMs: data.fallback?.retryMs ?? 30000,
+        },
+        history: {
+          mode: data.history?.mode ?? 'do-ring',
+          bins: data.history?.bins ?? 2048,
+          frames: data.history?.frames ?? 512,
+        },
+        reconnect: {
+          minMs: data.reconnect?.minMs ?? 500,
+          maxMs: data.reconnect?.maxMs ?? 30000,
+        },
+        status: data.status,
+      });
+      setEdgeStatus(data.status ?? null);
+    } catch {
+      // leave defaults
+    } finally {
+      setEdgeLoading(false);
+    }
+  }
+
+  function updateEdgeField<K extends keyof EdgeConfig>(key: K, value: EdgeConfig[K]) {
+    setEdgeConfig(prev => ({ ...prev, [key]: value }));
+    markDirty();
+  }
+
+  function updateEdgeFallback<K extends keyof EdgeFallbackConfig>(key: K, value: number) {
+    setEdgeConfig(prev => ({ ...prev, fallback: { ...prev.fallback, [key]: value } }));
+    markDirty();
+  }
+
+  function updateEdgeHistory<K extends keyof EdgeHistoryConfig>(key: K, value: EdgeHistoryConfig[K]) {
+    setEdgeConfig(prev => ({ ...prev, history: { ...prev.history, [key]: value } }));
+    markDirty();
+  }
+
+  function updateEdgeReconnect<K extends keyof EdgeReconnectConfig>(key: K, value: number) {
+    setEdgeConfig(prev => ({ ...prev, reconnect: { ...prev.reconnect, [key]: value } }));
+    markDirty();
+  }
+
+  async function testEdge(): Promise<void> {
+    setEdgeTesting(true);
+    setEdgeTestResult(null);
+    try {
+      const res = await fetch('/api/admin/edge/test', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: 'invalid response' }));
+      setEdgeTestResult(data);
+    } catch (err) {
+      setEdgeTestResult({ ok: false, error: String(err) });
+    } finally {
+      setEdgeTesting(false);
+    }
+  }
+
+  async function fetchEdgeStatus(): Promise<void> {
+    try {
+      const res = await fetch('/api/admin/edge/status', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setEdgeStatus(data.status ?? null);
+      if (data.status) {
+        setEdgeConfig(prev => ({ ...prev, status: data.status }));
+      }
+    } catch {
+      // keep the last status
+    }
+  }
+
+  async function saveEdgeConfig(): Promise<boolean> {
+    const cfg = edgeConfig();
+    const payload: Record<string, unknown> = {
+      enabled: cfg.enabled,
+      url: cfg.url,
+      instanceId: cfg.instanceId,
+      codec: cfg.codec,
+      dongles: cfg.dongles,
+      maxViewers: cfg.maxViewers,
+      clientDefaultTransport: cfg.clientDefaultTransport,
+      fallback: cfg.fallback,
+      history: cfg.history,
+      reconnect: cfg.reconnect,
+    };
+    if (cfg.ingestToken.trim()) payload.ingestToken = cfg.ingestToken.trim();
+
+    try {
+      const res = await fetch('/api/admin/edge', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'failed to update edge config' }));
+        setSaveError(data.error || 'Failed to update edge config');
+        return false;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data.version) setConfigVersion(data.version);
+      // Clear the write-only token and reflect the configured state.
+      setEdgeConfig(prev => ({
+        ...prev,
+        ingestToken: '',
+        hasIngestToken: prev.hasIngestToken || !!cfg.ingestToken.trim(),
+      }));
+      return true;
+    } catch {
+      setSaveError('Failed to update edge config');
+      return false;
+    }
   }
 
   // ---- Dongle CRUD ----
@@ -883,6 +1103,12 @@ function createAdminStore() {
     setSaveError('');
     setSaveSuccess(false);
     try {
+      // Push edge settings first. This updates the in-memory edge config and
+      // restarts publishers; the YAML write happens below.
+      if (!(await saveEdgeConfig())) {
+        return false;
+      }
+
       // First, push current server config to backend (in-memory)
       const cfgRes = await fetch('/api/admin/server/config', {
         method: 'PUT',
@@ -964,6 +1190,11 @@ function createAdminStore() {
     serverConfig, setServerConfig,
     serverConfigLoading,
     loadServerConfig, updateServerConfig, updateServerConfigField,
+
+    // Cloudflare edge
+    edgeConfig, edgeLoading, edgeTesting, edgeTestResult, edgeStatus,
+    loadEdgeConfig, updateEdgeField, updateEdgeFallback, updateEdgeHistory, updateEdgeReconnect,
+    testEdge, fetchEdgeStatus, saveEdgeConfig,
 
     // Dongles
     dongles, donglesLoading,

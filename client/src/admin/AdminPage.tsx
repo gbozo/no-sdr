@@ -7,6 +7,7 @@ import { useNavigate } from '@solidjs/router';
 import { adminStore, type AdminSection } from './admin-store';
 import GeneralSection from './sections/GeneralSection';
 import DevicesSection from './sections/DevicesSection';
+import EdgeSection from './sections/EdgeSection';
 import BookmarksSection from './sections/BookmarksSection';
 import DecodersSection from './sections/DecodersSection';
 import FeaturesSection from './sections/FeaturesSection';
@@ -16,6 +17,7 @@ import IdentifySection from './sections/IdentifySection';
 const NAV_ITEMS: { id: AdminSection; label: string; icon: string }[] = [
   { id: 'general', label: 'General', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
   { id: 'devices', label: 'SDR Devices', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
+  { id: 'edge', label: 'Cloudflare Edge', icon: 'M3 15a4 4 0 004 4h9a5 5 0 001-9.9A6 6 0 006.3 8.2 4 4 0 003 15z' },
   { id: 'bookmarks', label: 'Bookmarks', icon: 'M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z' },
   { id: 'decoders', label: 'Decoders', icon: 'M12 20v-6M8 14h8M9 14l-3-9M15 14l3-9M6 5h12M12 8a2 2 0 100-4 2 2 0 000 4z' },
   { id: 'features', label: 'Features', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z' },
@@ -213,6 +215,7 @@ const SectionContent: Component = () => {
         switch (section()) {
           case 'general': return <GeneralSection />;
           case 'devices': return <DevicesSection />;
+          case 'edge': return <EdgeSection />;
           case 'bookmarks': return <BookmarksSection />;
           case 'decoders': return <DecodersSection />;
           case 'identify': return <IdentifySection />;

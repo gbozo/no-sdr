@@ -150,6 +150,10 @@ async fn async_main() -> Result<()> {
         move |conn_id, persistent_id, pcm| id.issue(conn_id, persistent_id, pcm)
     });
 
+    let edge = serverrs::edge::EdgeService::new(cfg.clone());
+    mgr.set_edge(edge.clone());
+    edge.start();
+
     let bandplan = BandPlanService::new();
     bandplan.start_scheduler();
 
@@ -200,6 +204,7 @@ async fn async_main() -> Result<()> {
 
     let shutdown_mgr = mgr.clone();
     let shutdown_ws = ws.clone();
+    let shutdown_edge = edge.clone();
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -208,6 +213,7 @@ async fn async_main() -> Result<()> {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down gracefully...");
 
+        shutdown_edge.shutdown();
         shutdown_mgr.stop();
         for rec in shutdown_mgr.recording_status() {
             let _ = shutdown_mgr.stop_recording(&rec.dongle_id);
