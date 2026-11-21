@@ -4,7 +4,7 @@
 //! owns running dongles, their FFT/IQ processing loops, and per-client
 //! pipelines (sub-band extraction, ADPCM or server-side Opus encoding).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -328,6 +328,56 @@ impl ClientPipeline {
     }
 }
 
+/// Minimum interval between user-ribbon broadcasts while a VFO is moving.
+const RIBBON_THROTTLE: Duration = Duration::from_millis(250);
+
+/// Coalesces rapid ribbon updates per dongle. `pending` tracks dongles whose
+/// latest update was suppressed by the throttle; the flush loop publishes them
+/// once the window has elapsed.
+#[derive(Default)]
+struct RibbonThrottle {
+    last: HashMap<String, Instant>,
+    pending: HashSet<String>,
+}
+
+impl RibbonThrottle {
+    /// Returns `true` when the caller should publish immediately. A suppressed
+    /// update is recorded as pending for the flush loop.
+    fn register(&mut self, dongle_id: &str, now: Instant) -> bool {
+        if self
+            .last
+            .get(dongle_id)
+            .is_some_and(|at| now.duration_since(*at) < RIBBON_THROTTLE)
+        {
+            self.pending.insert(dongle_id.to_string());
+            false
+        } else {
+            self.last.insert(dongle_id.to_string(), now);
+            self.pending.remove(dongle_id);
+            true
+        }
+    }
+
+    /// Removes and returns the dongles whose pending update is now due.
+    fn take_due(&mut self, now: Instant) -> Vec<String> {
+        let due: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|id| {
+                self.last
+                    .get(*id)
+                    .is_none_or(|at| now.duration_since(*at) >= RIBBON_THROTTLE)
+            })
+            .cloned()
+            .collect();
+        for id in &due {
+            self.pending.remove(id);
+            self.last.insert(id.clone(), now);
+        }
+        due
+    }
+}
+
 /// Shared dongle manager.
 pub struct Manager {
     pub cfg: Arc<RwLock<Config>>,
@@ -356,8 +406,10 @@ pub struct Manager {
     /// Last per-dongle subscribed-client counts, used to broadcast
     /// `dongle_status` only when a count actually changes.
     last_client_counts: Mutex<HashMap<String, usize>>,
-    /// Throttle user-ribbon broadcasts while a client drags the VFO.
-    last_user_broadcast: Mutex<HashMap<String, Instant>>,
+    /// Throttle user-ribbon broadcasts while a client drags the VFO. A
+    /// suppressed update is remembered as pending so the final position is
+    /// always published (see `spawn_ribbon_flush_loop`).
+    ribbon_throttle: Mutex<RibbonThrottle>,
     recorder: Recorder,
     get_version: Mutex<Option<Arc<dyn Fn() -> u64 + Send + Sync>>>,
     identify_token_func:
@@ -447,7 +499,7 @@ impl Manager {
             #[cfg(feature = "analytics")]
             user_store,
             last_client_counts: Mutex::new(HashMap::new()),
-            last_user_broadcast: Mutex::new(HashMap::new()),
+            ribbon_throttle: Mutex::new(RibbonThrottle::default()),
             recorder: Recorder::new("recordings"),
             get_version: Mutex::new(None),
             identify_token_func: Mutex::new(None),
@@ -603,6 +655,7 @@ impl Manager {
                 }
             }
             mgr.spawn_stats_loop();
+            mgr.spawn_ribbon_flush_loop();
             #[cfg(feature = "decoders")]
             mgr.spawn_decoder_maintenance();
             #[cfg(feature = "analytics")]
@@ -2457,18 +2510,20 @@ impl Manager {
     }
 
     fn broadcast_user_locations_throttled(&self, dongle_id: &str) {
-        let now = Instant::now();
-        {
-            let mut last = self.last_user_broadcast.lock();
-            if last
-                .get(dongle_id)
-                .is_some_and(|at| now.duration_since(*at) < Duration::from_millis(250))
-            {
-                return;
-            }
-            last.insert(dongle_id.to_string(), now);
+        let should_broadcast = self.ribbon_throttle.lock().register(dongle_id, Instant::now());
+        if should_broadcast {
+            self.broadcast_user_locations(dongle_id);
         }
-        self.broadcast_user_locations(dongle_id);
+    }
+
+    /// Publishes ribbon updates that were coalesced by the throttle. This is
+    /// what makes the last tune in a burst (for example a bookmark recall that
+    /// sends mode, bandwidth and tune together) reach the ribbon.
+    fn flush_pending_user_broadcasts(&self) {
+        let due = self.ribbon_throttle.lock().take_due(Instant::now());
+        for dongle_id in due {
+            self.broadcast_user_locations(&dongle_id);
+        }
     }
 
     /// (Re)build the signal-analysis secondary FFT for the client's current
@@ -4040,6 +4095,19 @@ impl Manager {
         });
     }
 
+    fn spawn_ribbon_flush_loop(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_millis(100));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let Some(mgr) = weak.upgrade() else { return };
+                mgr.flush_pending_user_broadcasts();
+            }
+        });
+    }
+
     fn spawn_stats_loop(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         let ws = self.ws.clone();
@@ -4233,6 +4301,26 @@ fn process_mem_mb() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ribbon_throttle_keeps_the_final_update_pending() {
+        let mut throttle = RibbonThrottle::default();
+        let t0 = Instant::now();
+
+        assert!(throttle.register("d1", t0));
+        // A bookmark recall sends mode, bandwidth and tune back-to-back. Only
+        // the first update goes out immediately; the tune must stay pending.
+        assert!(!throttle.register("d1", t0 + Duration::from_millis(10)));
+        assert!(!throttle.register("d1", t0 + Duration::from_millis(20)));
+        assert!(throttle.take_due(t0 + Duration::from_millis(100)).is_empty());
+        assert_eq!(
+            throttle.take_due(t0 + RIBBON_THROTTLE),
+            vec!["d1".to_string()]
+        );
+        assert!(throttle.take_due(t0 + RIBBON_THROTTLE).is_empty());
+        // The flushed update resets the window for the next burst.
+        assert!(!throttle.register("d1", t0 + RIBBON_THROTTLE + Duration::from_millis(10)));
+    }
 
     #[test]
     fn mode_tables_match_go() {
