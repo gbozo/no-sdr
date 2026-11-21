@@ -13,6 +13,7 @@ import {
   fetchDecoderHistory,
   isEntityMode,
 } from '../engine/decoder-history.js';
+import { formatGridCenter, extractGridFromText } from '~/shared';
 
 type Range = '1h' | '24h' | '7d' | 'all';
 
@@ -42,8 +43,13 @@ function formatHz(hz: number): string {
   return `${hz.toFixed(0)} Hz`;
 }
 
-function entityDetail(payload: Record<string, unknown>): string {
-  const keys = ['callsign', 'name', 'flight', 'sog_kt', 'altitude_ft', 'lat', 'lon'];
+function gridOf(message: DecoderHistoryMessage): string {
+  const fromServer = message.payload?.grid;
+  if (typeof fromServer === 'string' && fromServer) return fromServer.toUpperCase();
+  return extractGridFromText(message.mode, message.text);
+}
+
+function entityDetail(payload: Record<string, unknown>): string {  const keys = ['callsign', 'name', 'flight', 'sog_kt', 'altitude_ft', 'lat', 'lon'];
   const parts: string[] = [];
   for (const key of keys) {
     const value = payload[key];
@@ -256,6 +262,7 @@ const DecoderHistoryPanel: Component<{ mode: string; onClose: () => void }> = (p
                   <th class="text-left px-2 py-1">TIME</th>
                   <th class="text-left px-2 py-1">DECODER</th>
                   <th class="text-left px-2 py-1">MESSAGE</th>
+                  <th class="text-left px-2 py-1">GRID</th>
                   <th class="text-right px-2 py-1">RF</th>
                   <th class="text-right px-2 py-1">SNR</th>
                   <th class="text-right px-2 py-1">DT</th>
@@ -273,6 +280,12 @@ const DecoderHistoryPanel: Component<{ mode: string; onClose: () => void }> = (p
                       </td>
                       <td class="px-2 py-1 text-text-primary break-all">
                         {message.text}
+                      </td>
+                      <td
+                        class="px-2 py-1 text-text-secondary whitespace-nowrap uppercase"
+                        title={formatGridCenter(gridOf(message)) || undefined}
+                      >
+                        {gridOf(message)}
                       </td>
                       <td class="px-2 py-1 text-right text-text-secondary whitespace-nowrap">
                         {formatHz(message.frequencyHz)}

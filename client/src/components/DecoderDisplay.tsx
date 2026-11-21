@@ -9,6 +9,7 @@ import { Component, For, Show, createEffect, createSignal, onMount, onCleanup } 
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
 import { fetchDecoderHistory, type DecoderHistoryMessage } from '../engine/decoder-history.js';
+import { formatGridCenter, extractGridFromText } from '~/shared';
 import AdsbDisplay from './AdsbDisplay.js';
 import AcarsDisplay from './AcarsDisplay.js';
 import AisDisplay from './AisDisplay.js';
@@ -206,6 +207,12 @@ const DecoderDisplay: Component = () => {
       .slice(0, MAX_ROWS);
   };
 
+  const gridOf = (message: TableRow): string => {
+    const fromServer = message.data.grid;
+    if (typeof fromServer === 'string' && fromServer) return fromServer.toUpperCase();
+    return extractGridFromText(message.decoderType, String(message.data.text ?? ''));
+  };
+
   onMount(() => {
     // The decoder pane is mounted only while visible, so this is also the
     // natural place to opt in/out of the zoom-spectrum stream.
@@ -338,6 +345,7 @@ const DecoderDisplay: Component = () => {
               <tr>
                 <th class="text-left px-2 py-1">TIME</th>
                 <th class="text-left px-2 py-1">MESSAGE</th>
+                <th class="text-left px-2 py-1">GRID</th>
                 <th class="text-right px-2 py-1">FREQ</th>
                 <th class="text-right px-2 py-1">SNR</th>
                 <th class="text-right px-2 py-1">CONF</th>
@@ -360,6 +368,12 @@ const DecoderDisplay: Component = () => {
                     </td>
                     <td class="px-2 py-1 text-text-primary break-all">
                       {String(message.data.text ?? '')}
+                    </td>
+                    <td
+                      class="px-2 py-1 text-text-secondary whitespace-nowrap uppercase"
+                      title={formatGridCenter(gridOf(message)) || undefined}
+                    >
+                      {gridOf(message)}
                     </td>
                     <td class="px-2 py-1 text-right text-text-secondary whitespace-nowrap">
                       {formatHz(message.data.rfHz)}

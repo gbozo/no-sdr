@@ -7,6 +7,7 @@ import { useNavigate } from '@solidjs/router';
 import { store } from './store/index.js';
 import { engine } from './engine/sdr-engine.js';
 import type { DecoderSlot, DecoderStatus, DecoderWindowInfo } from '~/shared';
+import { gridFromLatLon } from '~/shared';
 import WaterfallDisplay from './components/WaterfallDisplay.js';
 import DecoderDisplay from './components/DecoderDisplay.js';
 import SignalAnalysis from './components/SignalAnalysis.js';
@@ -25,8 +26,14 @@ const App: Component = () => {
   const station = () => store.pushServerConfig();
   const stationCallsign = () => station()?.callsign?.trim() ?? '';
   const stationLocation = () => station()?.location?.trim() ?? '';
+  const stationGrid = () =>
+    gridFromLatLon(
+      station()?.receiverLatitude ?? 0,
+      station()?.receiverLongitude ?? 0,
+    );
   const stationDescription = () => station()?.description?.trim() ?? '';
-  const hasStationInfo = () => !!(stationCallsign() || stationLocation() || stationDescription());
+  const hasStationInfo = () =>
+    !!(stationCallsign() || stationLocation() || stationGrid() || stationDescription());
   const identifyEnabled = () => station()?.identifyEnabled !== false;
 
   createEffect(() => {
@@ -353,6 +360,14 @@ const App: Component = () => {
               <Show when={stationCallsign()}>
                 <span class="text-[11px] font-mono font-bold tracking-[0.12em] text-cyan uppercase whitespace-nowrap">
                   {stationCallsign()}
+                </span>
+              </Show>
+              <Show when={stationGrid()}>
+                <span
+                  class="text-[9px] font-mono uppercase tracking-wider text-cyan/80 border border-cyan/30 rounded px-1 whitespace-nowrap"
+                  title="Receiver Maidenhead grid"
+                >
+                  {stationGrid()}
                 </span>
               </Show>
               <Show when={stationLocation()}>

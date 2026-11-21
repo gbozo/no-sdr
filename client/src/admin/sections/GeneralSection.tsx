@@ -5,6 +5,7 @@
 import { Component, Show, For, createMemo, createSignal } from 'solid-js';
 import { adminStore } from '../admin-store';
 import ReceiverLocationMap from './ReceiverLocationMap';
+import { gridFromLatLon } from '~/shared';
 
 // All available codecs for checkboxes
 const ALL_FFT_CODECS = ['none', 'adpcm', 'deflate-smooth', 'range'];
@@ -22,6 +23,8 @@ const DEFLATE_LEVEL_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
 
 const GeneralSection: Component = () => {
   const cfg = () => adminStore.serverConfig();
+  const receiverGrid = () =>
+    gridFromLatLon(cfg().receiverLatitude, cfg().receiverLongitude);
 
   return (
     <div class="max-w-2xl">
@@ -68,6 +71,12 @@ const GeneralSection: Component = () => {
                 adminStore.updateServerConfigField('receiverLongitude', longitude);
               }}
             />
+            <Show when={receiverGrid()}>
+              <div class="mt-2 text-[10px] font-mono text-text-secondary">
+                Maidenhead grid{' '}
+                <span class="text-cyan uppercase tracking-wider">{receiverGrid()}</span>
+              </div>
+            </Show>
           </SettingsGroup>
 
           {/* Weather overlay */}

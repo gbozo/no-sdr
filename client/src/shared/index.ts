@@ -5,3 +5,4 @@ export * from './decoder-info';
 export * from './adpcm';
 export * from './range-decoder';
 export * from './profile-presets';
+export * from './grid';
