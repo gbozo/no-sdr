@@ -764,7 +764,7 @@ pub(crate) struct LinearResampler {
 impl LinearResampler {
     pub(crate) fn new(source_rate: f64, target_rate: f64) -> Self {
         Self {
-            step: if target_rate > 0.0 {
+            step: if source_rate > 0.0 && target_rate > 0.0 {
                 source_rate / target_rate
             } else {
                 1.0
@@ -2312,6 +2312,13 @@ mod tests {
             (measured_hz - 1500.0).abs() < 5.0,
             "measured {measured_hz:.1} Hz"
         );
+
+        // A zero/unknown source rate must not produce a zero step (which
+        // would spin forever in the while loop). It falls back to 1:1.
+        let mut degenerate = LinearResampler::new(0.0, 12_000.0);
+        let mut out = Vec::new();
+        degenerate.process(&[0.5f32; 8], &mut out);
+        assert_eq!(out.len(), 8);
     }
 
     fn run_synthetic_ft8_path(input_rate: u32) {

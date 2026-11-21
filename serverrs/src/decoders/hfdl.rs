@@ -31,7 +31,7 @@ struct ComplexResampler {
 impl ComplexResampler {
     fn new(source_rate: f64, target_rate: f64) -> Self {
         Self {
-            step: if target_rate > 0.0 {
+            step: if source_rate > 0.0 && target_rate > 0.0 {
                 source_rate / target_rate
             } else {
                 1.0
