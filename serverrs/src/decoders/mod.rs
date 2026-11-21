@@ -490,10 +490,63 @@ pub(crate) fn pack_window_message(
     crate::ws::pack_decoder_message(mode, window.to_json(id, mode, suggest_tune_hz))
 }
 
+/// Pull a Maidenhead locator out of a decoded message's text.
+///
+/// WSJT-family messages put the grid in the exchange field, which is the last
+/// token for FT8/FT4/FT2/FST4/Q65/JT65/JT9 and `CQ [DX] CALL GRID`. WSPR is
+/// `CALL GRID POWER`, so its grid is the second token. `RR73` is syntactically
+/// a locator (RR73 is a real square) but in a decode it is an acknowledgment,
+/// so it is never treated as a grid.
+pub(crate) fn extract_grid(mode: &str, text: &str) -> Option<String> {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    if mode.trim().eq_ignore_ascii_case("wspr") {
+        return tokens.get(1).and_then(|t| maidenhead(t));
+    }
+    if tokens[0].eq_ignore_ascii_case("CQ") {
+        if tokens.len() < 3 {
+            return None;
+        }
+        // "CQ DX CALL" has no grid; the token before the candidate must be a
+        // callsign (contains a digit), which "DX"/"TEST"/"NA" do not.
+        let previous = tokens[tokens.len() - 2];
+        if !previous.chars().any(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        return maidenhead(tokens[tokens.len() - 1]);
+    }
+    if tokens.len() < 3 {
+        return None;
+    }
+    maidenhead(tokens[tokens.len() - 1])
+}
+
+fn maidenhead(token: &str) -> Option<String> {
+    let upper = token.trim().to_ascii_uppercase();
+    let b = upper.as_bytes();
+    if b.len() != 4 && b.len() != 6 {
+        return None;
+    }
+    if !(b'A'..=b'R').contains(&b[0]) || !(b'A'..=b'R').contains(&b[1]) {
+        return None;
+    }
+    if !b[2].is_ascii_digit() || !b[3].is_ascii_digit() {
+        return None;
+    }
+    if b.len() == 6 && (!(b'A'..=b'X').contains(&b[4]) || !(b'A'..=b'X').contains(&b[5])) {
+        return None;
+    }
+    if upper == "RR73" {
+        return None;
+    }
+    Some(upper)
+}
+
 /// Approximate on-air width of one decoded signal, used to size the marker in
 /// the decoder scope. These are display widths, not decoder bandwidths.
-pub(crate) fn signal_bw_hz(mode: &str) -> f64 {
-    match mode.trim().to_ascii_lowercase().as_str() {
+pub(crate) fn signal_bw_hz(mode: &str) -> f64 {    match mode.trim().to_ascii_lowercase().as_str() {
         "ft8" => 50.0,
         "ft4" => 83.0,
         "ft2" => 167.0,
@@ -701,6 +754,8 @@ pub(crate) struct MfskChannel {
 /// Small linear resampler for the extractor's actual output rate, which is
 /// `input_rate / integer_factor` and therefore not always exactly 12 kHz.
 pub(crate) struct LinearResampler {
+    /// Input samples per output sample (`source / target`). Values above 1
+    /// downsample; the output count is `input_len / step`.
     step: f64,
     pos: f64,
     previous: Option<f32>,
@@ -709,7 +764,11 @@ pub(crate) struct LinearResampler {
 impl LinearResampler {
     pub(crate) fn new(source_rate: f64, target_rate: f64) -> Self {
         Self {
-            step: target_rate / source_rate,
+            step: if target_rate > 0.0 {
+                source_rate / target_rate
+            } else {
+                1.0
+            },
             pos: 0.0,
             previous: None,
         }
@@ -723,7 +782,7 @@ impl LinearResampler {
         }
         for &sample in input {
             if let Some(previous) = self.previous {
-                while self.pos <= 1.0 {
+                while self.pos < 1.0 {
                     out.push(previous + (sample - previous) * self.pos as f32);
                     self.pos += self.step;
                 }
@@ -1684,29 +1743,35 @@ fn decode_worker(
                     } else {
                         (1.0 - hard as f32 / 40.0).clamp(0.0, 0.99)
                     };
-                    out.push(json!({
-                        "kind": "decode",
-                        "id": cfg.id,
-                        "mode": cfg.mode,
-                        "text": decoded.text,
-                        "audioHz": decoded.freq_hz,
-                        "rfHz": cfg.frequency_hz as f64 + decoded.freq_hz as f64,
-                        "snrDb": decoded.snr_db,
-                        "dtSec": decoded.dt_sec,
-                        "period": job.slot,
-                        "dialHz": cfg.frequency_hz,
-                        "signalBwHz": signal_bw_hz(&cfg.mode),
-                        "stats": {
-                            "crcOk": true,
-                            "fecCorrected": detail.hard_errors,
-                            "hardErrors": detail.hard_errors,
-                            "syncScore": detail.sync_score,
-                            "syncCv": detail.sync_cv,
-                            "confidence": confidence,
-                            "pass": detail.pass,
-                            "hashResolved": detail.hash_resolved,
-                        },
-                    }));
+                    out.push({
+                        let mut value = json!({
+                            "kind": "decode",
+                            "id": cfg.id,
+                            "mode": cfg.mode,
+                            "text": decoded.text,
+                            "audioHz": decoded.freq_hz,
+                            "rfHz": cfg.frequency_hz as f64 + decoded.freq_hz as f64,
+                            "snrDb": decoded.snr_db,
+                            "dtSec": decoded.dt_sec,
+                            "period": job.slot,
+                            "dialHz": cfg.frequency_hz,
+                            "signalBwHz": signal_bw_hz(&cfg.mode),
+                            "stats": {
+                                "crcOk": true,
+                                "fecCorrected": detail.hard_errors,
+                                "hardErrors": detail.hard_errors,
+                                "syncScore": detail.sync_score,
+                                "syncCv": detail.sync_cv,
+                                "confidence": confidence,
+                                "pass": detail.pass,
+                                "hashResolved": detail.hash_resolved,
+                            },
+                        });
+                        if let Some(grid) = extract_grid(&cfg.mode, &decoded.text) {
+                            value["grid"] = json!(grid);
+                        }
+                        value
+                    });
                 }
             }
             DecoderKind::Ft2 => {
@@ -1720,28 +1785,34 @@ fn decode_worker(
                     } else {
                         (1.0 - hard as f32 / 40.0).clamp(0.0, 0.99)
                     };
-                    out.push(json!({
-                        "kind": "decode",
-                        "id": cfg.id,
-                        "mode": cfg.mode,
-                        "text": text,
-                        "audioHz": result.freq_hz,
-                        "rfHz": cfg.frequency_hz as f64 + result.freq_hz as f64,
-                        "snrDb": result.snr_db,
-                        "dtSec": result.dt_sec,
-                        "period": job.slot,
-                        "dialHz": cfg.frequency_hz,
-                        "signalBwHz": signal_bw_hz(&cfg.mode),
-                        "stats": {
-                            "crcOk": true,
-                            "fecCorrected": hard,
-                            "hardErrors": hard,
-                            "syncScore": result.sync_score,
-                            "syncCv": result.sync_cv,
-                            "confidence": confidence,
-                            "pass": result.pass,
-                        },
-                    }));
+                    out.push({
+                        let mut value = json!({
+                            "kind": "decode",
+                            "id": cfg.id,
+                            "mode": cfg.mode,
+                            "text": text,
+                            "audioHz": result.freq_hz,
+                            "rfHz": cfg.frequency_hz as f64 + result.freq_hz as f64,
+                            "snrDb": result.snr_db,
+                            "dtSec": result.dt_sec,
+                            "period": job.slot,
+                            "dialHz": cfg.frequency_hz,
+                            "signalBwHz": signal_bw_hz(&cfg.mode),
+                            "stats": {
+                                "crcOk": true,
+                                "fecCorrected": hard,
+                                "hardErrors": hard,
+                                "syncScore": result.sync_score,
+                                "syncCv": result.sync_cv,
+                                "confidence": confidence,
+                                "pass": result.pass,
+                            },
+                        });
+                        if let Some(grid) = extract_grid(&cfg.mode, &text) {
+                            value["grid"] = json!(grid);
+                        }
+                        value
+                    });
                 }
             }
             #[cfg(feature = "pi4")]
@@ -1752,28 +1823,34 @@ fn decode_worker(
                     .map(|sample| *sample as f32 / 32768.0)
                     .collect();
                 for result in pi4::decode::decode_window(&audio, AUDIO_RATE, 0) {
-                    out.push(json!({
-                        "kind": "decode",
-                        "id": cfg.id,
-                        "mode": cfg.mode,
-                        "text": result.text,
-                        "audioHz": result.tone0_hz,
-                        "rfHz": cfg.frequency_hz as f64 + result.tone0_hz as f64,
-                        "snrDb": result.snr_db,
-                        "dtSec": result.dt_sec,
-                        "period": job.slot,
-                        "dialHz": cfg.frequency_hz,
-                        "signalBwHz": signal_bw_hz(&cfg.mode),
-                        "variant": result.variant.label(),
-                        "fit": result.fit,
-                        "hardErrors": result.hard_errors,
-                        "stats": {
-                            "crcOk": true,
-                            "fecCorrected": result.hard_errors,
+                    out.push({
+                        let mut value = json!({
+                            "kind": "decode",
+                            "id": cfg.id,
+                            "mode": cfg.mode,
+                            "text": result.text,
+                            "audioHz": result.tone0_hz,
+                            "rfHz": cfg.frequency_hz as f64 + result.tone0_hz as f64,
+                            "snrDb": result.snr_db,
+                            "dtSec": result.dt_sec,
+                            "period": job.slot,
+                            "dialHz": cfg.frequency_hz,
+                            "signalBwHz": signal_bw_hz(&cfg.mode),
+                            "variant": result.variant.label(),
+                            "fit": result.fit,
                             "hardErrors": result.hard_errors,
-                            "confidence": result.fit.clamp(0.0, 1.0),
-                        },
-                    }));
+                            "stats": {
+                                "crcOk": true,
+                                "fecCorrected": result.hard_errors,
+                                "hardErrors": result.hard_errors,
+                                "confidence": result.fit.clamp(0.0, 1.0),
+                            },
+                        });
+                        if let Some(grid) = extract_grid(&cfg.mode, &result.text) {
+                            value["grid"] = json!(grid);
+                        }
+                        value
+                    });
                 }
             }
         }
@@ -2200,13 +2277,47 @@ mod tests {
     }
 
     #[test]
-    fn full_mfsk_channel_decodes_a_synthetic_ft8_slot() {
+    fn linear_resampler_output_rate_matches_target() {
+        // The slotted decoders ask the extractor for 12.2 kHz and then
+        // resample to exactly 12 kHz. At a 2.4 MSPS dongle rate the integer
+        // decimator lands on 12_182.74 Hz, so this is the production ratio.
+        let source = 12_182.74f64;
+        let target = 12_000.0f64;
+        let mut resampler = LinearResampler::new(source, target);
+        let input = vec![0.25f32; 500_000];
+        let mut out = Vec::new();
+        resampler.process(&input, &mut out);
+
+        let expected = (input.len() - 1) as f64 * target / source;
+        assert!(
+            (out.len() as f64 - expected).abs() <= 2.0,
+            "resampled {} samples, expected {expected:.1}",
+            out.len()
+        );
+
+        // A tone at 1.5 kHz must keep its absolute frequency: the resampler
+        // corrects the time base, it does not shift the audio.
+        let mut resampler = LinearResampler::new(source, target);
+        let tone: Vec<f32> = (0..source as usize)
+            .map(|i| (2.0 * std::f64::consts::PI * 1500.0 * i as f64 / source).sin() as f32)
+            .collect();
+        let mut out = Vec::new();
+        resampler.process(&tone, &mut out);
+        let zero_crossings = out
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
+        let measured_hz = zero_crossings as f64 / 2.0 * target / out.len() as f64;
+        assert!(
+            (measured_hz - 1500.0).abs() < 5.0,
+            "measured {measured_hz:.1} Hz"
+        );
+    }
+
+    fn run_synthetic_ft8_path(input_rate: u32) {
         use mfsk_core::prelude::{encode, TxAudio};
         use std::time::{Duration, Instant};
 
-        // 48 kHz keeps the test quick while still exercising the extractor,
-        // USB demodulator, resampler, slot buffer and slot worker.
-        let input_rate = 48_000u32;
         let cfg = DecoderConfig {
             id: "ft8-path-test".into(),
             enabled: true,
@@ -2221,7 +2332,7 @@ mod tests {
 
         let tx = encode(MfskMode::Ft8, "CQ N0CALL").expect("encode FT8");
         let frame = tx.synthesize(&TxAudio::new(12_000, 1_500.0));
-        // Place the frame 0.5 s into a 15 s slot, then upsample 12 k -> 48 k.
+        // Place the frame 0.5 s into a 15 s slot.
         let slot_12k = 180_000usize;
         // Two slots so the first boundary has a full slot plus the startup
         // latency allowance. The frame is in the first slot.
@@ -2235,29 +2346,38 @@ mod tests {
         }
         let frame_at = 6_000;
         audio_12k[frame_at..frame_at + frame.len()].copy_from_slice(&frame);
-        let mut iq = Vec::with_capacity(audio_12k.len() * 4 * 2);
-        let mut previous = 0.0f32;
-        for &sample in &audio_12k {
-            for i in 0..4 {
-                let value = previous + (sample - previous) * (i as f32 / 4.0);
-                let v = value.clamp(-1.0, 1.0);
-                iq.push(((v * 127.5 + 127.5) as u8).min(255));
-                iq.push(127); // Q = 0: the extractor/USB demod recovers the real audio.
-            }
-            previous = sample;
+
+        // Upsample the 12 kHz fixture to the radio rate with linear
+        // interpolation. Unlike a fixed 12k -> 48k step this also covers
+        // rates whose ratio is not an integer.
+        let ratio = input_rate as f64 / 12_000.0;
+        let n_out = (audio_12k.len() as f64 * ratio).round() as usize;
+        let mut iq = Vec::with_capacity(n_out * 2);
+        for i in 0..n_out {
+            let t = i as f64 / ratio;
+            let idx = (t.floor() as usize).min(audio_12k.len() - 1);
+            let next = (idx + 1).min(audio_12k.len() - 1);
+            let frac = (t - idx as f64) as f32;
+            let value = audio_12k[idx] + (audio_12k[next] - audio_12k[idx]) * frac;
+            let v = value.clamp(-1.0, 1.0);
+            iq.push(((v * 127.5 + 127.5) as u8).min(255));
+            iq.push(127); // Q = 0: the extractor/USB demod recovers the real audio.
         }
 
         // Confirm the synthetic frame is decodable before it goes through the
         // channel, so a failure points at the DSP path rather than the fixture.
         let mut direct = AnyDecoder::new(MfskMode::Ft8, DecodeParams::for_band((100.0, 3000.0)));
-        let direct_result = direct.decode(&mfsk_core::prelude::SlotInput::f32(
-            &audio_12k[..slot_12k],
-        ));
-        assert!(!direct_result.rows.is_empty(), "synthetic fixture is invalid");
+        let direct_result =
+            direct.decode(&mfsk_core::prelude::SlotInput::f32(&audio_12k[..slot_12k]));
+        assert!(
+            !direct_result.rows.is_empty(),
+            "synthetic fixture is invalid"
+        );
 
         // Start exactly on a slot boundary and feed one full slot plus a little.
         let slot_ns = 15_000_000_000i64;
-        let chunk_samples = 4_800usize; // 0.1 s at 48 kHz
+        let chunk_samples = (input_rate / 10) as usize; // 0.1 s
+        assert!(chunk_samples > 0);
         let mut now = slot_ns * 10;
         let mut offset = 0usize;
         while offset < iq.len() {
@@ -2284,7 +2404,61 @@ mod tests {
         }
         assert!(
             found.contains("N0CALL"),
-            "full FT8 channel path did not decode: {found:?}"
+            "full FT8 channel path at {input_rate} Hz did not decode: {found:?}"
+        );
+    }
+
+    #[test]
+    fn full_mfsk_channel_decodes_a_synthetic_ft8_slot() {
+        run_synthetic_ft8_path(48_000);
+    }
+
+    #[test]
+    fn full_mfsk_channel_decodes_with_non_integer_resampling() {
+        // 44.1 kHz -> extractor factor 4 -> 11.025 kHz, then the linear
+        // resampler to 12 kHz. This is the (upsampling) sibling of the
+        // production 2.4 MSPS path; the old `target / source` step inverted
+        // the ratio and broke every slotted decoder on a dongle rate where
+        // the integer decimator does not land exactly on 12 kHz.
+        run_synthetic_ft8_path(44_100);
+    }
+
+    /// Production-rate regression check. The normal test suite stays at
+    /// 44.1/48 kHz to keep memory and runtime down; run this manually after
+    /// touching the extractor or resampler:
+    ///
+    /// `cargo test --release --lib full_mfsk_channel_decodes_at_2m4 -- --ignored`
+    #[test]
+    #[ignore = "allocates a synthetic 2.4 MSPS slot"]
+    fn full_mfsk_channel_decodes_at_2m4() {
+        run_synthetic_ft8_path(2_400_000);
+    }
+
+    #[test]
+    fn decodes_extract_a_maidenhead_grid() {
+        // Standard exchanges: the grid is the last field.
+        assert_eq!(
+            extract_grid("ft8", "CQ N0CALL FN42"),
+            Some("FN42".to_string())
+        );
+        assert_eq!(
+            extract_grid("ft8", "CQ DX N0CALL FN42AB"),
+            Some("FN42AB".to_string())
+        );
+        assert_eq!(
+            extract_grid("ft8", "N0CALL K1ABC EM73"),
+            Some("EM73".to_string())
+        );
+        // Reports and acknowledgements are not grids, and RR73 is a legal
+        // square name that must not be mistaken for one.
+        assert_eq!(extract_grid("ft8", "N0CALL K1ABC R-05"), None);
+        assert_eq!(extract_grid("ft8", "N0CALL K1ABC RR73"), None);
+        assert_eq!(extract_grid("ft8", "CQ DX N0CALL"), None);
+        assert_eq!(extract_grid("ft8", "161EE200 R-05"), None);
+        // WSPR is CALL GRID POWER, not a trailing exchange.
+        assert_eq!(
+            extract_grid("wspr", "N0CALL FN42 37"),
+            Some("FN42".to_string())
         );
     }
 

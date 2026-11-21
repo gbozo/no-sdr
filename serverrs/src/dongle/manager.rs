@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
+use num_complex::Complex32;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -21,6 +22,7 @@ use crate::codec::adpcm::encode_fft_adpcm;
 use crate::codec::fft::compress_fft;
 use crate::codec::{FftDeflateEncoder, FftRangeEncoder, ImaAdpcmEncoder};
 use crate::config::{Config, DongleConfig, DongleProfile};
+use crate::dsp::fft_processor::INV_U8_SCALE;
 use crate::dsp::{FftProcessor, FftProcessorConfig, IqCorrect, IqExtractor, IqExtractorConfig};
 use crate::history::FftBuffer;
 use crate::ws::{
@@ -88,6 +90,39 @@ fn effective_sample_rate(dongle_rate: i32, profile_rate: i32) -> i32 {
         (Some(dongle), None) => dongle,
         (None, Some(profile)) => profile,
         (None, None) => DEFAULT_SAMPLE_RATE,
+    }
+}
+
+/// Whether the manager should run its own front-end corrector. HackRF and
+/// LimeSDR apply `iqCorrection` inside their drivers; running both would
+/// correct twice.
+fn manager_iq_correction(dcfg: &DongleConfig) -> bool {
+    dcfg.iq_correction && !matches!(dcfg.source.kind.as_str(), "hackrf" | "lime")
+}
+
+/// Applies the front-end DC/imbalance corrector to one raw Cu8 I/Q chunk in
+/// place. The samples are converted to ±1.0 complex, corrected, and rounded
+/// back to offset-binary bytes.
+fn correct_raw_iq(chunk: &mut [u8], corrector: &mut IqCorrect, scratch: &mut Vec<Complex32>) {
+    if chunk.len() < 2 {
+        return;
+    }
+    scratch.clear();
+    scratch.reserve(chunk.len() / 2);
+    for pair in chunk.chunks_exact(2) {
+        scratch.push(Complex32::new(
+            (pair[0] as f32 - 127.5) * INV_U8_SCALE,
+            (pair[1] as f32 - 127.5) * INV_U8_SCALE,
+        ));
+    }
+    corrector.process(scratch);
+    for (pair, sample) in chunk.chunks_exact_mut(2).zip(scratch.iter()) {
+        pair[0] = ((sample.re / INV_U8_SCALE) + 127.5)
+            .clamp(0.0, 255.0)
+            .round() as u8;
+        pair[1] = ((sample.im / INV_U8_SCALE) + 127.5)
+            .clamp(0.0, 255.0)
+            .round() as u8;
     }
 }
 
@@ -204,6 +239,8 @@ struct ActiveDongle {
     range_enc: Mutex<FftRangeEncoder>,
     history: FftBuffer,
     iq_correct: Mutex<Option<IqCorrect>>,
+    /// Scratch complex buffer reused for `iq_correct` on each raw chunk.
+    iq_scratch: Mutex<Vec<Complex32>>,
     cancel: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -766,11 +803,12 @@ impl Manager {
             deflate_smooth_enc: Mutex::new(deflate_smooth_enc),
             range_enc: Mutex::new(range_enc),
             history,
-            iq_correct: Mutex::new(if dcfg.iq_correction {
+            iq_correct: Mutex::new(if manager_iq_correction(&dcfg) {
                 Some(IqCorrect::new(sample_rate as f64, 10.0, true))
             } else {
                 None
             }),
+            iq_scratch: Mutex::new(Vec::new()),
             cancel,
             task: Mutex::new(None),
         });
@@ -1649,6 +1687,19 @@ impl Manager {
         );
         #[cfg(not(feature = "decoders"))]
         let _ = center_hz;
+
+        // Front-end DC/imbalance correction for the recording, client and FFT
+        // paths. The decoder hub keeps the raw stream above: DCF77 and ALS162
+        // sit on the carrier at DC and deliberately disable DC removal, and
+        // each decoder has its own per-channel DC policy. `iqCorrection` used
+        // to create the corrector but never run it, so the setting was inert.
+        {
+            let mut correct = ad.iq_correct.lock();
+            if let Some(corrector) = correct.as_mut() {
+                let mut scratch = ad.iq_scratch.lock();
+                correct_raw_iq(&mut chunk, corrector, &mut scratch);
+            }
+        }
 
         self.recorder.write_iq(&ad.id, &chunk);
         self.process_client_iq(ad, &chunk);
@@ -3451,8 +3502,9 @@ impl Manager {
         }
 
         *ad.profile.write() = profile.clone();
-        if dcfg.iq_correction {
-            *ad.iq_correct.lock() = Some(IqCorrect::new(sample_rate as f64, 10.0, true));
+        if manager_iq_correction(&dcfg) {
+            let rate = ad.sample_rate.load(Ordering::Relaxed).max(1);
+            *ad.iq_correct.lock() = Some(IqCorrect::new(rate as f64, 10.0, true));
         } else {
             *ad.iq_correct.lock() = None;
         }
@@ -4098,6 +4150,50 @@ mod tests {
         assert_eq!(effective_sample_rate(0, 1_024_000), 1_024_000);
         assert_eq!(effective_sample_rate(0, 0), 1_000_000);
         assert_eq!(effective_sample_rate(240, 480), 240);
+    }
+
+    #[test]
+    fn raw_iq_correction_removes_a_dc_offset() {
+        // DC offset plus a small tone, as offset-binary Cu8.
+        let n = 200_000usize;
+        let mut chunk = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let phase = 2.0 * std::f32::consts::PI * 1_000.0 * i as f32 / 2_400_000.0;
+            let i_val = ((0.5 + 0.1 * phase.cos()) * 127.5 + 127.5).clamp(0.0, 255.0);
+            let q_val = ((0.3 + 0.1 * phase.sin()) * 127.5 + 127.5).clamp(0.0, 255.0);
+            chunk.push(i_val.round() as u8);
+            chunk.push(q_val.round() as u8);
+        }
+
+        let mut corrector = IqCorrect::new(2_400_000.0, 10.0, true);
+        let mut scratch = Vec::new();
+        correct_raw_iq(&mut chunk, &mut corrector, &mut scratch);
+
+        // The corrector's 10 Hz high-pass has several time constants in the
+        // tail, so both channels should sit at the zero level (127.5).
+        let tail = &chunk[chunk.len() / 2..];
+        let mean = tail.iter().map(|&b| b as f64).sum::<f64>() / tail.len() as f64;
+        assert!(
+            (mean - 127.5).abs() < 2.5,
+            "residual DC after correction: {mean}"
+        );
+    }
+
+    #[test]
+    fn manager_correction_skips_driver_side_correction() {
+        let mut dcfg = DongleConfig {
+            iq_correction: true,
+            ..DongleConfig::default()
+        };
+        dcfg.source.kind = "local".into();
+        assert!(manager_iq_correction(&dcfg));
+        dcfg.source.kind = "hackrf".into();
+        assert!(!manager_iq_correction(&dcfg));
+        dcfg.source.kind = "lime".into();
+        assert!(!manager_iq_correction(&dcfg));
+        dcfg.iq_correction = false;
+        dcfg.source.kind = "local".into();
+        assert!(!manager_iq_correction(&dcfg));
     }
 
     #[test]

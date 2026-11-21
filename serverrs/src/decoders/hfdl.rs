@@ -22,6 +22,7 @@ const UNAVAILABLE_INTERVAL_MS: i64 = 500;
 /// Complex linear resampler from the extractor's rounded rate to the exact
 /// 24 kHz the HFDL decoder was validated at.
 struct ComplexResampler {
+    /// Input samples per output sample (`source / target`).
     step: f64,
     pos: f64,
     previous: Option<Complex32>,
@@ -30,7 +31,11 @@ struct ComplexResampler {
 impl ComplexResampler {
     fn new(source_rate: f64, target_rate: f64) -> Self {
         Self {
-            step: target_rate / source_rate,
+            step: if target_rate > 0.0 {
+                source_rate / target_rate
+            } else {
+                1.0
+            },
             pos: 0.0,
             previous: None,
         }
@@ -44,7 +49,7 @@ impl ComplexResampler {
         }
         for &sample in input {
             if let Some(previous) = self.previous {
-                while self.pos <= 1.0 {
+                while self.pos < 1.0 {
                     let t = self.pos as f32;
                     out.push(previous + (sample - previous) * t);
                     self.pos += self.step;
