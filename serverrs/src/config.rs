@@ -75,6 +75,46 @@ pub struct Config {
     /// Optional Cloudflare Durable Object fan-out.
     #[serde(default)]
     pub edge: EdgeConfig,
+    /// Offline IP geolocation. DB-IP City Lite MMDB is downloaded and
+    /// refreshed in the background; lookups never leave the process.
+    #[serde(default)]
+    pub geoip: GeoIpConfig,
+}
+
+/// Offline IP geolocation settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoIpConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// MMDB path. Relative paths resolve against the config file's directory.
+    #[serde(default = "default_geoip_database_path")]
+    pub database_path: String,
+    /// Download a new monthly DB-IP City Lite release automatically.
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+    /// How often the updater checks for a new monthly release.
+    #[serde(default = "default_geoip_update_interval_hours")]
+    pub update_interval_hours: u64,
+}
+
+impl Default for GeoIpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            database_path: default_geoip_database_path(),
+            auto_update: true,
+            update_interval_hours: default_geoip_update_interval_hours(),
+        }
+    }
+}
+
+fn default_geoip_database_path() -> String {
+    "../data/dbip-city-lite.mmdb".to_string()
+}
+
+fn default_geoip_update_interval_hours() -> u64 {
+    24
 }
 
 /// Decoder result database settings.
@@ -96,10 +136,32 @@ pub struct DatabaseConfig {
     /// oldest rows are removed at the next purge.
     #[serde(default)]
     pub max_messages: i64,
+    /// Delete closed user sessions older than this many days. 0 keeps them
+    /// forever; the default is one quarter.
+    #[serde(default = "default_user_retention_days")]
+    pub user_retention_days: i64,
+    /// How often the user-session maintenance purge runs. 0 disables it.
+    #[serde(default = "default_user_purge_interval_minutes")]
+    pub user_purge_interval_minutes: i64,
+    /// How long disconnected users remain on the live admin map.
+    #[serde(default = "default_user_map_recent_minutes")]
+    pub user_map_recent_minutes: i64,
 }
 
 fn default_purge_interval_minutes() -> i64 {
     30
+}
+
+fn default_user_retention_days() -> i64 {
+    90
+}
+
+fn default_user_purge_interval_minutes() -> i64 {
+    360
+}
+
+fn default_user_map_recent_minutes() -> i64 {
+    60
 }
 
 /// Cloudflare Durable Object fan-out settings.
@@ -232,6 +294,9 @@ impl Default for DatabaseConfig {
             retention_days: 0,
             purge_interval_minutes: default_purge_interval_minutes(),
             max_messages: 0,
+            user_retention_days: default_user_retention_days(),
+            user_purge_interval_minutes: default_user_purge_interval_minutes(),
+            user_map_recent_minutes: default_user_map_recent_minutes(),
         }
     }
 }
@@ -759,6 +824,21 @@ pub fn validate(cfg: &Config) -> Result<()> {
             cfg.server.users_ribbon
         );
     }
+    if cfg.geoip.enabled && cfg.geoip.database_path.trim().is_empty() {
+        bail!("config: geoip.databasePath cannot be empty when geoip.enabled is true");
+    }
+    if cfg.geoip.auto_update && cfg.geoip.update_interval_hours == 0 {
+        bail!("config: geoip.updateIntervalHours must be at least 1");
+    }
+    if cfg.database.user_retention_days < 0 {
+        bail!("config: database.userRetentionDays cannot be negative");
+    }
+    if cfg.database.user_purge_interval_minutes < 0 {
+        bail!("config: database.userPurgeIntervalMinutes cannot be negative");
+    }
+    if cfg.database.user_map_recent_minutes < 0 {
+        bail!("config: database.userMapRecentMinutes cannot be negative");
+    }
     if !cfg.server.receiver_latitude.is_finite()
         || !(-90.0..=90.0).contains(&cfg.server.receiver_latitude)
     {
@@ -1035,6 +1115,26 @@ mod tests {
         let cfg = parse("server:\n  bandplanRegion: r9\n");
         assert_eq!(cfg.server.bandplan_region, "");
         assert_eq!(cfg.server.bookmark_regions, None);
+    }
+
+    #[test]
+    fn geoip_defaults_and_parse() {
+        let cfg = parse("");
+        assert!(cfg.geoip.enabled);
+        assert_eq!(cfg.geoip.database_path, "../data/dbip-city-lite.mmdb");
+        assert!(cfg.geoip.auto_update);
+        assert_eq!(cfg.geoip.update_interval_hours, 24);
+
+        let cfg = parse(
+            "geoip:\n  enabled: false\n  databasePath: /tmp/test.mmdb\n  autoUpdate: false\n  updateIntervalHours: 6\n",
+        );
+        assert!(!cfg.geoip.enabled);
+        assert_eq!(cfg.geoip.database_path, "/tmp/test.mmdb");
+        assert!(!cfg.geoip.auto_update);
+        assert_eq!(cfg.geoip.update_interval_hours, 6);
+        assert_eq!(cfg.database.user_retention_days, 90);
+        assert_eq!(cfg.database.user_purge_interval_minutes, 360);
+        assert_eq!(cfg.database.user_map_recent_minutes, 60);
     }
 
     #[test]

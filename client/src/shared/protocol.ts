@@ -196,6 +196,14 @@ export interface UserLocation {
   frequencyHz: number;
   mode: string;
   bandwidth: number;
+  /** Country ISO-3166 alpha-2, when the server has an offline GeoIP DB. */
+  countryCode?: string;
+  /** English country name. */
+  country?: string;
+  /** Administrative subdivision name. */
+  region?: string;
+  /** Administrative subdivision code. */
+  regionCode?: string;
 }
 
 export type ServerMeta =

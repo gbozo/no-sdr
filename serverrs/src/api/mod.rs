@@ -42,4 +42,6 @@ pub struct AppState {
     pub start_time: Instant,
     #[cfg(feature = "decoders")]
     pub decoder_store: Arc<crate::decoders::store::DecoderStore>,
+    #[cfg(feature = "geoip")]
+    pub geoip: Option<Arc<crate::geoip::GeoIpService>>,
 }

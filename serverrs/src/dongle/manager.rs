@@ -350,6 +350,9 @@ pub struct Manager {
     /// Persisted decoder results, shared with the REST query layer.
     #[cfg(feature = "decoders")]
     decoder_store: Arc<crate::decoders::store::DecoderStore>,
+    /// User connection/session analytics, shared with the admin map.
+    #[cfg(feature = "analytics")]
+    user_store: Arc<crate::analytics::UserStore>,
     /// Last per-dongle subscribed-client counts, used to broadcast
     /// `dongle_status` only when a count actually changes.
     last_client_counts: Mutex<HashMap<String, usize>>,
@@ -366,8 +369,10 @@ impl Manager {
     pub fn new(
         cfg: Arc<RwLock<Config>>,
         ws: Arc<WsManager>,
-        _cfg_path: &std::path::Path,
+        cfg_path: &std::path::Path,
     ) -> Arc<Self> {
+        #[cfg(not(any(feature = "decoders", feature = "analytics")))]
+        let _ = cfg_path;
         let mut states = HashMap::new();
         {
             let cfg = cfg.read();
@@ -380,7 +385,7 @@ impl Manager {
         let (decoder_store, decoders) = {
             let cfg = cfg.read();
             let db_path = if cfg.database.decoder_path.trim().is_empty() {
-                crate::decoders::store::default_path(_cfg_path)
+                crate::decoders::store::default_path(cfg_path)
             } else {
                 std::path::PathBuf::from(cfg.database.decoder_path.trim())
             };
@@ -411,6 +416,22 @@ impl Manager {
             (decoder_store, decoders)
         };
 
+        #[cfg(feature = "analytics")]
+        let user_store = {
+            let cfg_r = cfg.read();
+            let db_path = if cfg_r.database.decoder_path.trim().is_empty() {
+                cfg_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("decoders.sqlite")
+            } else {
+                std::path::PathBuf::from(cfg_r.database.decoder_path.trim())
+            };
+            let store = crate::analytics::UserStore::open(db_path);
+            store.purge(cfg_r.database.user_retention_days);
+            store
+        };
+
         let mgr = Arc::new(Self {
             cfg,
             ws: ws.clone(),
@@ -423,6 +444,8 @@ impl Manager {
             decoders: RwLock::new(decoders),
             #[cfg(feature = "decoders")]
             decoder_store,
+            #[cfg(feature = "analytics")]
+            user_store,
             last_client_counts: Mutex::new(HashMap::new()),
             last_user_broadcast: Mutex::new(HashMap::new()),
             recorder: Recorder::new("recordings"),
@@ -440,12 +463,16 @@ impl Manager {
         ws.set_disconnect_handler(move |client_id| {
             if let Some(m) = weak.upgrade() {
                 m.destroy_client_pipeline(client_id);
+                #[cfg(feature = "analytics")]
+                m.user_store.close_session(client_id);
             }
         });
         let weak = Arc::downgrade(&mgr);
         ws.set_connect_handler(move |client_id| {
             if let Some(m) = weak.upgrade() {
                 m.send_state_sync(client_id);
+                #[cfg(feature = "analytics")]
+                m.open_user_session(client_id);
             }
         });
 
@@ -494,6 +521,21 @@ impl Manager {
     #[cfg(feature = "decoders")]
     pub fn decoder_store(&self) -> Arc<crate::decoders::store::DecoderStore> {
         Arc::clone(&self.decoder_store)
+    }
+
+    #[cfg(feature = "analytics")]
+    pub fn user_store(&self) -> Arc<crate::analytics::UserStore> {
+        Arc::clone(&self.user_store)
+    }
+
+    #[cfg(feature = "analytics")]
+    fn open_user_session(&self, client_id: &str) {
+        let Some(client) = self.ws.get_client(client_id) else {
+            return;
+        };
+        let info = crate::ws::ClientInfo::from_client(&client);
+        self.user_store
+            .start_session(&crate::analytics::SessionInfo::from_client(&info));
     }
 
     /// Rebuild every background decoder worker from the current config.
@@ -563,6 +605,8 @@ impl Manager {
             mgr.spawn_stats_loop();
             #[cfg(feature = "decoders")]
             mgr.spawn_decoder_maintenance();
+            #[cfg(feature = "analytics")]
+            mgr.spawn_user_maintenance();
         });
     }
 
@@ -2340,9 +2384,6 @@ impl Manager {
     /// sends frequencies and modes without addresses.
     fn broadcast_user_locations(&self, dongle_id: &str) {
         let mode = self.cfg.read().server.users_ribbon.clone();
-        if mode == "off" {
-            return;
-        }
         let profile = match self.dongles.read().get(dongle_id) {
             Some(ad) => ad.profile.read().clone(),
             None => return,
@@ -2354,6 +2395,36 @@ impl Manager {
             .filter(|client| !client.hidden_from_ribbon())
             .map(|client| {
                 let state = client.snapshot();
+                let country_code = state
+                    .geo
+                    .as_ref()
+                    .map(|geo| geo.country_code.clone())
+                    .unwrap_or_default();
+                let country = state
+                    .geo
+                    .as_ref()
+                    .map(|geo| geo.country.clone())
+                    .unwrap_or_default();
+                let region = state
+                    .geo
+                    .as_ref()
+                    .map(|geo| geo.region.clone())
+                    .unwrap_or_default();
+                let region_code = state
+                    .geo
+                    .as_ref()
+                    .map(|geo| geo.region_code.clone())
+                    .unwrap_or_default();
+                let frequency_hz = profile.center_frequency + state.tune_offset;
+                #[cfg(feature = "analytics")]
+                self.user_store.touch_session(
+                    &client.id,
+                    dongle_id,
+                    &state.profile_id,
+                    frequency_hz,
+                    &state.mode,
+                    state.bandwidth,
+                );
                 UserLocation {
                     client_id: client.persistent_id.clone(),
                     conn_index: client.conn_index,
@@ -2363,12 +2434,19 @@ impl Manager {
                     } else {
                         None
                     },
-                    frequency_hz: profile.center_frequency + state.tune_offset,
+                    frequency_hz,
                     mode: state.mode,
                     bandwidth: state.bandwidth,
+                    country_code,
+                    country,
+                    region,
+                    region_code,
                 }
             })
             .collect();
+        if mode == "off" {
+            return;
+        }
         let meta = ServerMeta {
             msg_type: "user_locations".to_string(),
             dongle_id: Some(dongle_id.to_string()),
@@ -3920,6 +3998,42 @@ impl Manager {
                         messages = result.messages,
                         entities = result.entities,
                         "decoder database maintenance purge complete"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Periodic user-session retention. Closed sessions older than the
+    /// configured window are deleted; open sessions are never touched.
+    #[cfg(feature = "analytics")]
+    fn spawn_user_maintenance(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut last_purge = Instant::now();
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let Some(mgr) = weak.upgrade() else { return };
+                let (interval_minutes, retention_days) = {
+                    let cfg = mgr.cfg.read();
+                    (
+                        cfg.database.user_purge_interval_minutes,
+                        cfg.database.user_retention_days,
+                    )
+                };
+                if interval_minutes <= 0 || retention_days <= 0 {
+                    continue;
+                }
+                let interval = Duration::from_secs((interval_minutes as u64).saturating_mul(60));
+                if last_purge.elapsed() < interval {
+                    continue;
+                }
+                last_purge = Instant::now();
+                let deleted = mgr.user_store.purge(retention_days);
+                if deleted > 0 {
+                    info!(
+                        deleted,
+                        retention_days, "user analytics maintenance purge complete"
                     );
                 }
             }

@@ -24,6 +24,20 @@ interface UserGroup {
 
 const fmtMHz = (hz: number, digits = 4) => `${(hz / 1e6).toFixed(digits)} MHz`;
 
+const countryFlag = (code?: string): string => {
+  const cc = (code ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return '';
+  return String.fromCodePoint(...cc.split('').map((c) => 127397 + c.charCodeAt(0)));
+};
+
+const geoLabel = (user: UserLocation): string => {
+  if (!user.countryCode) return '';
+  const flag = countryFlag(user.countryCode);
+  const region = user.regionCode || user.region || '';
+  const compact = region.length > 12 ? `${region.slice(0, 11)}…` : region;
+  return [flag, user.countryCode, compact].filter(Boolean).join(' ');
+};
+
 const UserRibbon: Component = () => {
   let barRef: HTMLDivElement | undefined;
   const [barWidth, setBarWidth] = createSignal(0);
@@ -100,7 +114,8 @@ const UserRibbon: Component = () => {
       : mode() === 'ip' && user.ip
         ? user.ip
         : 'USER';
-    return `${who} · ${fmtMHz(user.frequencyHz)}`;
+    const geo = geoLabel(user);
+    return `${who}${geo ? ` · ${geo}` : ''} · ${fmtMHz(user.frequencyHz)}`;
   };
 
   const groupLabel = (group: UserGroup) =>
@@ -121,6 +136,9 @@ const UserRibbon: Component = () => {
     ];
     if (isSelf(user)) parts.push('you');
     else if (mode() === 'ip' && user.ip) parts.push(user.ip);
+    if (user.country) {
+      parts.push(user.region ? `${user.country} · ${user.region}` : user.country);
+    }
     parts.push('click to tune');
     return parts.join(' · ');
   };

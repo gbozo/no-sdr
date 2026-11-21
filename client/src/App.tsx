@@ -576,6 +576,18 @@ const App: Component = () => {
             <ServerStatsMeter />
           </div>
 
+          <Show when={store.userLocations().some((user) => !!user.countryCode)}>
+            <a
+              href="https://db-ip.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-[8px] text-text-dim/70 hover:text-cyan normal-case tracking-normal"
+              title="IP Geolocation by DB-IP"
+            >
+              GeoIP by DB-IP
+            </a>
+          </Show>
+
           {/* Theme Selector */}
           <div class="flex items-center gap-1 ml-2">
             <ThemeButton theme="default" label="LCD" />

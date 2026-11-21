@@ -135,6 +135,14 @@ async fn async_main() -> Result<()> {
     }
     ws.set_max_fft_fps(max_fps);
 
+    #[cfg(feature = "geoip")]
+    let geoip = {
+        let service = serverrs::geoip::GeoIpService::new(&cfg.geoip, &cfg_path);
+        service.start();
+        ws.set_geoip(service.clone());
+        Some(service)
+    };
+
     let cfg = Arc::new(RwLock::new(cfg));
     let cfg_version = Arc::new(ConfigVersion::new());
 
@@ -189,6 +197,8 @@ async fn async_main() -> Result<()> {
         start_time: Instant::now(),
         #[cfg(feature = "decoders")]
         decoder_store: mgr.decoder_store(),
+        #[cfg(feature = "geoip")]
+        geoip: geoip.clone(),
     };
 
     // Start dongles + stats loop (non-fatal).

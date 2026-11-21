@@ -24,6 +24,8 @@ use super::client::{
 use super::protocol::{
     pack_codec_status_message, pack_meta_message, parse_client_command, ClientCommand, ServerMeta,
 };
+#[cfg(feature = "geoip")]
+use crate::geoip::GeoIpService;
 use super::ratelimit::RateLimiter;
 
 /// Server version advertised in the welcome message.
@@ -51,6 +53,8 @@ pub struct WsManager {
     max_fft_fps: AtomicUsize,
     stale_started: AtomicBool,
     total_bytes: Arc<AtomicU64>,
+    #[cfg(feature = "geoip")]
+    geoip: RwLock<Option<Arc<GeoIpService>>>,
 }
 
 impl Default for WsManager {
@@ -72,7 +76,15 @@ impl WsManager {
             max_fft_fps: AtomicUsize::new(30),
             stale_started: AtomicBool::new(false),
             total_bytes: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "geoip")]
+            geoip: RwLock::new(None),
         }
+    }
+
+    /// Attach the offline geolocation service used at connection time.
+    #[cfg(feature = "geoip")]
+    pub fn set_geoip(&self, service: Arc<GeoIpService>) {
+        *self.geoip.write() = Some(service);
     }
 
     /// Maximum FFT frame rate across all active profiles; controls the
@@ -415,6 +427,15 @@ impl WsManager {
         let persistent_id = self.resolve_client_id(provided_id.as_deref().unwrap_or(""));
         let conn_index = self.next_conn_index(&persistent_id);
 
+        #[cfg(feature = "geoip")]
+        let geo = self
+            .geoip
+            .read()
+            .as_ref()
+            .and_then(|service| service.lookup_str(&client_ip));
+        #[cfg(not(feature = "geoip"))]
+        let geo: Option<crate::geo::GeoInfo> = None;
+
         let client = Arc::new(
             Client::new(
                 conn_id.clone(),
@@ -426,6 +447,7 @@ impl WsManager {
             )
             .with_traffic(self.total_bytes.clone()),
         );
+        client.set_geo(geo);
 
         self.add_client(client.clone());
         tracing::info!(

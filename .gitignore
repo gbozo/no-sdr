@@ -30,6 +30,11 @@ logs/
 *.sqlite-wal
 *.sqlite-shm
 
+# Offline GeoIP databases (DB-IP City Lite, downloaded at runtime)
+data/
+*.mmdb
+*.mmdb.gz
+
 # Build caches
 .cache/
 .parcel-cache/

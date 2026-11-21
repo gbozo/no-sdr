@@ -124,6 +124,10 @@ pub fn clients(state: &AppState) -> Vec<Value> {
             entry["realIp"] = json!(info.real_ip);
         }
 
+        if let Some(geo) = &info.geo {
+            entry["geo"] = serde_json::to_value(geo).unwrap_or(Value::Null);
+        }
+
         if !info.dongle_id.is_empty() {
             if let Some(d) = cfg.dongles.iter().find(|d| d.id == info.dongle_id) {
                 entry["dongleName"] = json!(d.name);

@@ -3,6 +3,7 @@
 // ============================================================
 
 import { Component, createSignal, onMount, onCleanup, For, Show } from 'solid-js';
+import UserInsights from './UserInsights';
 
 interface ClientInfo {
   id: string;
@@ -23,6 +24,31 @@ interface ClientInfo {
   audioEnabled: boolean;
   stereoEnabled?: boolean;
   connectedAt: string;
+  geo?: GeoInfo;
+}
+
+interface GeoInfo {
+  countryCode?: string;
+  country?: string;
+  region?: string;
+  regionCode?: string;
+  city?: string;
+  latitude?: number;
+  longitude?: number;
+  continent?: string;
+  continentCode?: string;
+}
+
+interface GeoIpStatus {
+  enabled: boolean;
+  loaded: boolean;
+  databasePath?: string;
+  databaseType?: string;
+  buildEpoch?: number;
+  release?: string;
+  updatedAt?: number;
+  lastError?: string;
+  source?: string;
 }
 
 interface SystemStats {
@@ -55,6 +81,12 @@ function formatFrequency(hz: number): string {
   if (hz >= 1_000_000) return `${(hz / 1_000_000).toFixed(3)} MHz`;
   if (hz >= 1_000) return `${(hz / 1_000).toFixed(1)} kHz`;
   return `${hz} Hz`;
+}
+
+function countryFlag(code?: string): string {
+  const cc = (code ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return '';
+  return String.fromCodePoint(...cc.split('').map((c) => 127397 + c.charCodeAt(0)));
 }
 
 // ---- Sub-components ----
@@ -99,6 +131,23 @@ const ClientRow: Component<{ client: ClientInfo }> = (props) => {
           <div class="text-[11px] font-mono text-text-primary break-all leading-tight">{displayIp()}</div>
           <Show when={tcpIp()}>
             <div class="text-[9px] font-mono text-text-dim/50 break-all leading-tight" title="TCP address">{tcpIp()}</div>
+          </Show>
+          <Show when={props.client.geo}>
+            {(geo) => (
+              <>
+                <div class="text-[9px] font-mono text-text-secondary leading-tight break-words">
+                  {countryFlag(geo().countryCode)} {geo().country || geo().countryCode}
+                  <Show when={geo().region}> · {geo().region}</Show>
+                  <Show when={geo().city}> · {geo().city}</Show>
+                </div>
+                <Show when={geo().latitude != null && geo().longitude != null}>
+                  <div class="text-[8px] font-mono text-text-dim/60 leading-tight">
+                    {geo().latitude!.toFixed(4)}, {geo().longitude!.toFixed(4)}
+                    <Show when={geo().continent}> · {geo().continent}</Show>
+                  </div>
+                </Show>
+              </>
+            )}
           </Show>
         </div>
 
@@ -188,16 +237,20 @@ const ClientRow: Component<{ client: ClientInfo }> = (props) => {
 
 // ---- Main Section ----
 const MonitorSection: Component = () => {
+  const [view, setView] = createSignal<'overview' | 'users'>('overview');
   const [clients, setClients] = createSignal<ClientInfo[]>([]);
   const [stats, setStats] = createSignal<SystemStats | null>(null);
+  const [geoip, setGeoip] = createSignal<GeoIpStatus | null>(null);
+  const [geoipBusy, setGeoipBusy] = createSignal(false);
   const [loading, setLoading] = createSignal(true);
   let pollInterval: ReturnType<typeof setInterval>;
 
   async function fetchData() {
     try {
-      const [clientsRes, infoRes] = await Promise.all([
+      const [clientsRes, infoRes, geoRes] = await Promise.all([
         fetch('/api/admin/clients', { credentials: 'same-origin' }),
         fetch('/api/admin/system-info', { credentials: 'same-origin' }),
+        fetch('/api/admin/geoip', { credentials: 'same-origin' }),
       ]);
       if (clientsRes.ok) {
         const data = await clientsRes.json();
@@ -214,8 +267,24 @@ const MonitorSection: Component = () => {
           runtime: data.runtime,
         });
       }
+      if (geoRes.ok) {
+        setGeoip(await geoRes.json());
+      }
     } catch {}
     setLoading(false);
+  }
+
+  async function updateGeoip() {
+    if (geoipBusy()) return;
+    setGeoipBusy(true);
+    try {
+      const res = await fetch('/api/admin/geoip/update', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (res.ok) setGeoip(await res.json());
+    } catch {}
+    setGeoipBusy(false);
   }
 
   onMount(() => {
@@ -236,14 +305,31 @@ const MonitorSection: Component = () => {
             Active clients, resource usage, and streaming stats — auto-refreshes every 5s
           </p>
         </div>
-        <button
-          class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors"
-          onClick={fetchData}
-        >
-          Refresh
-        </button>
+        <div class="flex items-center gap-1">
+          <div class="flex rounded border border-border/40 overflow-hidden">
+            <button
+              onClick={() => setView('overview')}
+              class={`px-2 py-0.5 text-[10px] font-mono uppercase ${view() === 'overview' ? 'bg-cyan/15 text-cyan' : 'text-text-dim hover:text-text-primary'}`}
+            >
+              Overview
+            </button>
+            <button
+              onClick={() => setView('users')}
+              class={`px-2 py-0.5 text-[10px] font-mono uppercase border-l border-border/40 ${view() === 'users' ? 'bg-cyan/15 text-cyan' : 'text-text-dim hover:text-text-primary'}`}
+            >
+              Users
+            </button>
+          </div>
+          <button
+            class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors"
+            onClick={fetchData}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
+      <Show when={view() === 'overview'}>
       {/* Loading */}
       <Show when={loading()}>
         <div class="flex items-center justify-center h-32">
@@ -264,6 +350,50 @@ const MonitorSection: Component = () => {
                 value={formatDuration(s().uptime)}
                 sub={s().runtime === 'rust' ? undefined : `${s().numGC} GCs`}
               />
+            </div>
+          )}
+        </Show>
+
+        {/* Offline GeoIP database status */}
+        <Show when={geoip()}>
+          {(g) => (
+            <div class="flex flex-wrap items-center gap-2 mb-3 px-2 py-1.5 border border-border/20 rounded bg-sdr-base/30 text-[9px] font-mono">
+              <span class="uppercase tracking-wider text-text-dim">GeoIP</span>
+              <Show
+                when={g().enabled}
+                fallback={<span class="text-text-muted uppercase">disabled</span>}
+              >
+                <span class={g().loaded ? 'text-cyan' : 'text-amber'}>
+                  {g().loaded
+                    ? `${g().source ?? 'DB-IP'} ${g().release ?? ''}`.trim()
+                    : 'not loaded'}
+                </span>
+                <Show when={g().updatedAt}>
+                  <span class="text-text-dim/60">
+                    updated {new Date(g().updatedAt! * 1000).toLocaleDateString()}
+                  </span>
+                </Show>
+                <Show when={g().lastError}>
+                  <span class="text-red-400 truncate max-w-xs" title={g().lastError}>
+                    {g().lastError}
+                  </span>
+                </Show>
+                <button
+                  onClick={updateGeoip}
+                  disabled={geoipBusy()}
+                  class="ml-auto px-1.5 py-0.5 rounded border border-border/40 text-text-dim hover:text-cyan hover:border-cyan/40 disabled:opacity-50"
+                >
+                  {geoipBusy() ? 'Updating…' : 'Update now'}
+                </button>
+                <a
+                  href="https://db-ip.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-text-dim/60 hover:text-cyan"
+                >
+                  DB-IP
+                </a>
+              </Show>
             </div>
           )}
         </Show>
@@ -302,6 +432,11 @@ const MonitorSection: Component = () => {
             {(client) => <ClientRow client={client} />}
           </For>
         </div>
+      </Show>
+      </Show>
+
+      <Show when={view() === 'users'}>
+        <UserInsights />
       </Show>
     </div>
   );

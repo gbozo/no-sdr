@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Notify};
 
 use super::protocol::{ClientCommand, CodecStatus};
+use crate::geo::GeoInfo;
 
 /// Default buffered write-queue capacity.
 pub const DEFAULT_WRITE_CH_SIZE: usize = 128;
@@ -195,6 +196,9 @@ pub struct ClientState {
     pub admin: bool,
     /// Consecutive failed admin password attempts (simple brute-force guard).
     pub auth_failures: u32,
+    /// Offline geolocation for the resolved client IP. Set once at connect;
+    /// public clients only see country/region through `UserLocation`.
+    pub geo: Option<GeoInfo>,
 }
 
 impl ClientState {
@@ -457,6 +461,11 @@ impl Client {
         self.state.lock().clone()
     }
 
+    /// Attach the connect-time geolocation result.
+    pub fn set_geo(&self, geo: Option<GeoInfo>) {
+        self.state.lock().geo = geo;
+    }
+
     /// Clear the client's dongle subscription.
     pub fn unsubscribe(&self) {
         let mut st = self.state.lock();
@@ -616,6 +625,9 @@ pub struct ClientInfo {
     pub audio_enabled: bool,
     pub stereo_enabled: bool,
     pub connected_at: DateTime<Utc>,
+    /// Full geolocation record (city/coordinates included) for the admin view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geo: Option<GeoInfo>,
 }
 
 impl ClientInfo {
@@ -637,6 +649,7 @@ impl ClientInfo {
             audio_enabled: st.audio_enabled,
             stereo_enabled: st.stereo_enabled,
             connected_at: c.connected_at,
+            geo: st.geo,
         }
     }
 }

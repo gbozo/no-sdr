@@ -77,11 +77,17 @@ sdroxide-ism = { git = "https://github.com/dividebysandwich/sdroxide", rev = "6f
 mfsk-core = { version = "0.14.0", default-features = false, features = ["std", "ft8", "ft4", "fst4", "q65", "jt65", "jt9", "wspr", "msk144", "parallel", "fft-rustfft"], optional = true }
 rayon = { version = "1", optional = true }
 rusqlite = { version = "0.42", features = ["bundled"], optional = true }
+# Offline IP geolocation (DB-IP City Lite MMDB).
+maxminddb = { version = "0.33", features = ["mmap"], optional = true }
+memmap2 = { version = "0.9", optional = true }
+arc-swap = { version = "1", optional = true }
 
 [features]
 # The default build enables every feature we ship.
-default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb", "ais", "vdl2", "hfdl", "aprs", "navtex", "ism", "packet", "wefax", "sstv", "hell", "text", "meteor", "wspr", "pi4", "js8", "time"]
+default = ["opus", "rtlsdr", "bias-t", "hackrf", "airspy", "airspyhf", "hydrasdr", "elad", "rx888", "pluto", "sdrplay", "lime", "fobos", "decoders", "adsb", "ais", "vdl2", "hfdl", "aprs", "navtex", "ism", "packet", "wefax", "sstv", "hell", "text", "meteor", "wspr", "pi4", "js8", "time", "geoip", "analytics"]
 opus = ["dep:opus"]
+# Offline IP geolocation: DB-IP City Lite MMDB with a monthly updater.
+geoip = ["dep:maxminddb", "dep:arc-swap", "dep:memmap2"]
 rtlsdr = ["dep:nusb"]
 hackrf = ["dep:sdroxide-hackrf", "dep:sdroxide-types"]
 airspy = ["dep:sdroxide-airspy", "dep:sdroxide-types"]
@@ -94,6 +100,9 @@ sdrplay = ["dep:sdroxide-sdrplay", "dep:sdroxide-types"]
 lime = ["dep:sdroxide-lime", "dep:sdroxide-types"]
 fobos = ["dep:sdroxide-fobos"]
 decoders = ["dep:mfsk-core", "dep:rayon", "dep:rusqlite"]
+# User presence/session analytics in SQLite. Independent of the decoders so a
+# build can keep the admin history without the digital-mode workers.
+analytics = ["dep:rusqlite"]
 # Raw-IQ ADS-B/Mode S decoding. Independent of the slotted mfsk decoders,
 # but hosted by the same worker/transport layer.
 adsb = ["decoders", "dep:sdroxide-adsb", "dep:sdroxide-types"]

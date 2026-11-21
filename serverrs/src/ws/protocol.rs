@@ -43,6 +43,18 @@ pub struct UserLocation {
     pub frequency_hz: i64,
     pub mode: String,
     pub bandwidth: i64,
+    /// Country ISO-3166 alpha-2, e.g. `GR`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub country_code: String,
+    /// English country name.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub country: String,
+    /// Administrative subdivision name (state/province).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub region: String,
+    /// Administrative subdivision code, e.g. `A` or `CA`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub region_code: String,
 }
 
 /// Metadata sent to a connected client.
@@ -613,6 +625,10 @@ mod tests {
                 frequency_hz: 14_074_000,
                 mode: "usb".into(),
                 bandwidth: 2_400,
+                country_code: "GR".into(),
+                country: "Greece".into(),
+                region: "Attica".into(),
+                region_code: "A".into(),
             }]),
             ..Default::default()
         });
@@ -625,6 +641,8 @@ mod tests {
         assert_eq!(v["users"][0]["frequencyHz"], 14_074_000);
         assert_eq!(v["users"][0]["ip"], "192.0.2.5");
         assert_eq!(v["users"][0]["mode"], "usb");
+        assert_eq!(v["users"][0]["countryCode"], "GR");
+        assert_eq!(v["users"][0]["regionCode"], "A");
     }
 
     #[test]

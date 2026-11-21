@@ -10,6 +10,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use parking_lot::Mutex;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 
@@ -1112,6 +1113,141 @@ pub async fn recordings(State(state): State<AppState>) -> Response {
     json_response(
         StatusCode::OK,
         serde_json::to_value(state.mgr.recording_status()).unwrap_or_else(|_| json!([])),
+        None,
+    )
+}
+
+// ------------------------------------------------------------------
+// Offline IP geolocation (DB-IP City Lite)
+// ------------------------------------------------------------------
+
+#[cfg(feature = "geoip")]
+pub async fn geoip_status(State(state): State<AppState>) -> Response {
+    match state.geoip.as_ref() {
+        Some(service) => json_response(
+            StatusCode::OK,
+            serde_json::to_value(service.status()).unwrap_or_else(|_| json!({"enabled": false})),
+            None,
+        ),
+        None => json_response(
+            StatusCode::OK,
+            json!({"enabled": false, "loaded": false}),
+            None,
+        ),
+    }
+}
+
+#[cfg(feature = "geoip")]
+pub async fn geoip_update(State(state): State<AppState>) -> Response {
+    let Some(service) = state.geoip.as_ref() else {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "geoip is not available in this build"}),
+            None,
+        );
+    };
+    match service.force_update().await {
+        Ok(status) => json_response(
+            StatusCode::OK,
+            serde_json::to_value(status).unwrap_or(Value::Null),
+            None,
+        ),
+        Err(error) => json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({"error": error.to_string()}),
+            None,
+        ),
+    }
+}
+
+// ------------------------------------------------------------------
+// User presence and analytics
+// ------------------------------------------------------------------
+
+#[cfg(feature = "analytics")]
+#[derive(Debug, Deserialize, Default)]
+pub struct UserAnalyticsQuery {
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
+#[cfg(feature = "analytics")]
+#[derive(Debug, Deserialize, Default)]
+pub struct UserPurgeRequest {
+    #[serde(default)]
+    pub all: bool,
+    pub days: Option<i64>,
+}
+
+#[cfg(feature = "analytics")]
+pub async fn users_map(State(state): State<AppState>) -> Response {
+    let recent_minutes = state.cfg.read().database.user_map_recent_minutes;
+    let users = state.mgr.user_store().live_map(recent_minutes);
+    json_response(
+        StatusCode::OK,
+        json!({
+            "generatedAtMs": crate::analytics::now_ms(),
+            "recentMinutes": recent_minutes,
+            "users": users,
+        }),
+        None,
+    )
+}
+
+#[cfg(feature = "analytics")]
+pub async fn users_analytics(
+    State(state): State<AppState>,
+    Query(query): Query<UserAnalyticsQuery>,
+) -> Response {
+    let now = crate::analytics::now_ms();
+    let until = query.until.unwrap_or(now).min(now + 60_000);
+    let since = query
+        .since
+        .unwrap_or(until - 24 * 60 * 60 * 1000)
+        .max(until - 366 * 24 * 60 * 60 * 1000);
+    if since >= until {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "since must be before until"}),
+            None,
+        );
+    }
+    let mut value = state.mgr.user_store().analytics(since, until);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("generatedAtMs".into(), json!(now));
+    }
+    json_response(StatusCode::OK, value, None)
+}
+
+#[cfg(feature = "analytics")]
+pub async fn users_purge(
+    State(state): State<AppState>,
+    Json(request): Json<UserPurgeRequest>,
+) -> Response {
+    let store = state.mgr.user_store();
+    if request.all {
+        let deleted = store.clear_all();
+        return json_response(
+            StatusCode::OK,
+            json!({"deleted": deleted, "all": true, "days": Value::Null}),
+            None,
+        );
+    }
+    let days = request
+        .days
+        .unwrap_or_else(|| state.cfg.read().database.user_retention_days)
+        .max(0);
+    if days == 0 {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "days must be positive, or pass all=true"}),
+            None,
+        );
+    }
+    let deleted = store.purge(days);
+    json_response(
+        StatusCode::OK,
+        json!({"deleted": deleted, "all": false, "days": days}),
         None,
     )
 }

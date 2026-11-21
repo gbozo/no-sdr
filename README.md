@@ -321,6 +321,44 @@ Profiles can be created, updated, and deleted at runtime via the admin REST API.
 | `NODE_SDR_DEMO` | — | Set to `1` to enable demo mode (overrides per-dongle source) |
 | `LOG_LEVEL` | config `server.logLevel` | Override server log level |
 
+### Offline IP Geolocation
+
+Connected listeners can be labelled with their country/region without sending addresses to a third-party API. The server uses the free **DB-IP City Lite** MMDB (`maxminddb` reader) and updates it monthly.
+
+```yaml
+geoip:
+  enabled: true
+  databasePath: ../data/dbip-city-lite.mmdb   # relative to the config file
+  autoUpdate: true
+  updateIntervalHours: 24
+```
+
+- On first start the current monthly release is downloaded in the background to `databasePath` (about 121 MB on disk); a new release is installed by atomic rename and hot-swapped without dropping lookups.
+- The public users ribbon shows **country + region only**. The admin **Monitor** page shows city, coordinates and continent, plus the loaded release, any last error, and an **Update now** button.
+- Admin API: `GET /api/admin/geoip` and `POST /api/admin/geoip/update`.
+- DB-IP City Lite is licensed **CC BY 4.0**; the client renders the required “IP Geolocation by DB-IP” link when results are shown. The MMDB is gitignored, and lookups never leave the process.
+
+### User Presence & Analytics
+
+Every WebSocket connection is recorded in `user_sessions` in the same SQLite database as the decoder history (`database.decoderPath`, default `decoders.sqlite` beside the config). The admin **System Monitor → Users** tab has:
+
+- a live OpenStreetMap with current listeners plus anyone who disconnected within the configured window, with popups for country/region/city, tuned frequency, demod mode, bandwidth, IP and receiver/profile;
+- a history map with region bubbles sized and coloured by user count;
+- session/user/country/region/peak-concurrency stats, a started-session timeline, and top-mode/top-frequency lists;
+- **Purge old** and **Clear history** controls (current connections stay live).
+
+```yaml
+database:
+  userRetentionDays: 90          # closed sessions older than this are deleted
+  userPurgeIntervalMinutes: 360  # maintenance cadence; 0 disables
+  userMapRecentMinutes: 60       # disconnected users stay on the live map
+```
+
+- Auto-purge runs every six hours by default and removes only **closed** sessions; open sessions are never deleted.
+- Admin API: `GET /api/admin/users/map`, `GET /api/admin/users/analytics?since=<ms>&until=<ms>`, `POST /api/admin/users/purge` (`{}` for the retention purge, `{"all":true}` to clear).
+- Stored fields include connection start/end, IP/real IP, country/region/city/coordinates, continent, receiver/profile, tuned frequency, mode and bandwidth.
+- This is personal data. The public users ribbon only receives country/region; IP, city and coordinates are admin-only. Keep the SQLite file on a trusted volume and apply your local privacy policy.
+
 ## Demodulation Modes
 
 ### Analog (client-side, pure TypeScript)

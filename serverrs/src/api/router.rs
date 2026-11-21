@@ -74,6 +74,15 @@ pub fn build_router(state: AppState) -> Router {
             "/decoders/{id}",
             put(super::decoders::admin_update).delete(super::decoders::admin_delete),
         );
+    #[cfg(feature = "geoip")]
+    let protected = protected
+        .route("/geoip", get(admin::geoip_status))
+        .route("/geoip/update", post(admin::geoip_update));
+    #[cfg(feature = "analytics")]
+    let protected = protected
+        .route("/users/map", get(admin::users_map))
+        .route("/users/analytics", get(admin::users_analytics))
+        .route("/users/purge", post(admin::users_purge));
     let protected = protected.route_layer(axum::middleware::from_fn_with_state(
         state.clone(),
         admin::require_auth,
