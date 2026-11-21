@@ -319,6 +319,16 @@ pub struct ServerConfig {
     /// (frequency and resolved client IP).
     #[serde(default = "default_users_ribbon")]
     pub users_ribbon: String,
+    /// Bookmark region/country folders served to clients. `None` means every
+    /// folder in the bookmarks directory; `Some([])` serves only the shared
+    /// root-level files; `Some(["r1", "se"])` serves those folders plus the
+    /// root-level files when `"global"` is also selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bookmark_regions: Option<Vec<String>>,
+    /// Default band plan region served by `GET /api/bandplan`: empty (world),
+    /// `r1`, `r2` or `r3`.
+    #[serde(default)]
+    pub bandplan_region: String,
     /// Tracing/log level: trace, debug, info, warn, error (or off).
     /// `LOG_LEVEL` in the environment overrides this.
     #[serde(default)]
@@ -377,6 +387,8 @@ impl Default for ServerConfig {
             demo_mode: false,
             identify_enabled: true,
             users_ribbon: default_users_ribbon(),
+            bookmark_regions: None,
+            bandplan_region: String::new(),
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
@@ -603,6 +615,13 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.allowed_fft_codecs.is_empty() {
         cfg.server.allowed_fft_codecs = DEFAULT_FFT_CODECS.iter().map(|s| s.to_string()).collect();
     }
+    // Only the embedded band plan regions are valid; anything else falls back
+    // to the worldwide plan.
+    let bandplan_region = cfg.server.bandplan_region.trim().to_ascii_lowercase();
+    cfg.server.bandplan_region = match bandplan_region.as_str() {
+        "r1" | "r2" | "r3" => bandplan_region,
+        _ => String::new(),
+    };
     // Retired history codecs migrate to the current default.
     let history_compression = cfg.server.fft_history_compression.trim().to_string();
     cfg.server.fft_history_compression = match history_compression.as_str() {
@@ -999,6 +1018,23 @@ mod tests {
         assert!(p.dc_offset_removal_enabled());
         assert!(cfg.dongles[0].enabled);
         assert!(cfg.dongles[0].auto_start);
+    }
+
+    #[test]
+    fn bookmark_regions_and_bandplan_region_parse() {
+        let cfg = parse(
+            "server:\n  bookmarkRegions: [r1, se, global]\n  bandplanRegion: R2\n",
+        );
+        assert_eq!(
+            cfg.server.bookmark_regions,
+            Some(vec!["r1".to_string(), "se".to_string(), "global".to_string()])
+        );
+        assert_eq!(cfg.server.bandplan_region, "r2");
+
+        // Unknown band plan regions fall back to worldwide.
+        let cfg = parse("server:\n  bandplanRegion: r9\n");
+        assert_eq!(cfg.server.bandplan_region, "");
+        assert_eq!(cfg.server.bookmark_regions, None);
     }
 
     #[test]

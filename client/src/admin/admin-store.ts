@@ -107,6 +107,14 @@ export interface Bookmark {
   description?: string;
 }
 
+/** Selectable bookmark folder exposed by `/api/admin/bookmarks/regions`. */
+export interface BookmarkRegion {
+  id: string;
+  label: string;
+  files: number;
+  bookmarks: number;
+}
+
 // ---- Background Decoder Types ----
 
 export interface DecoderConfig {
@@ -176,6 +184,10 @@ export interface ServerConfig {
   demoMode: boolean;
   identifyEnabled: boolean;
   usersRibbon: 'off' | 'users' | 'ip';
+  /** Region/country bookmark folders; null = serve every folder. */
+  bookmarkRegions: string[] | null;
+  /** Default band plan region: '', 'r1', 'r2' or 'r3'. */
+  bandplanRegion: string;
   fftHistoryFftSize: number;
   fftHistoryCompression: string;
   /** `deflate-smooth` clamp margin for the history burst, dB. */
@@ -287,6 +299,8 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {  port: 3000,
   demoMode: false,
   identifyEnabled: true,
   usersRibbon: 'users',
+  bookmarkRegions: null,
+  bandplanRegion: '',
   fftHistoryFftSize: 1024,
   fftHistoryCompression: 'deflate-smooth',
   fftHistorySmoothMarginDb: 2.0,
@@ -348,6 +362,8 @@ function createAdminStore() {
   // ---- Bookmarks ----
   const [bookmarks, setBookmarks] = createSignal<Bookmark[]>([]);
   const [bookmarksLoading, setBookmarksLoading] = createSignal(false);
+  const [bookmarkRegionOptions, setBookmarkRegionOptions] = createSignal<BookmarkRegion[]>([]);
+  const [bookmarkRegionsLoading, setBookmarkRegionsLoading] = createSignal(false);
 
   // ---- Background Decoders ----
   const [decoders, setDecoders] = createSignal<DecoderConfig[]>([]);
@@ -379,6 +395,7 @@ function createAdminStore() {
         loadEdgeConfig();
         loadDongles();
         loadBookmarks();
+        loadBookmarkRegions();
         loadDecoders();
       }
       return ok;
@@ -406,6 +423,7 @@ function createAdminStore() {
         loadEdgeConfig();
         loadDongles();
         loadBookmarks();
+        loadBookmarkRegions();
         loadDecoders();
         return true;
       }
@@ -445,6 +463,8 @@ function createAdminStore() {
           demoMode: data.demoMode ?? false,
           identifyEnabled: data.identifyEnabled ?? true,
           usersRibbon: data.usersRibbon ?? 'users',
+          bookmarkRegions: Array.isArray(data.bookmarkRegions) ? data.bookmarkRegions : null,
+          bandplanRegion: data.bandplanRegion ?? '',
           fftHistoryFftSize: data.fftHistoryFftSize ?? DEFAULT_SERVER_CONFIG.fftHistoryFftSize,
           fftHistoryCompression: data.fftHistoryCompression ?? DEFAULT_SERVER_CONFIG.fftHistoryCompression,
           fftHistorySmoothMarginDb: data.fftHistorySmoothMarginDb ?? DEFAULT_SERVER_CONFIG.fftHistorySmoothMarginDb,
@@ -871,6 +891,19 @@ function createAdminStore() {
     setBookmarksLoading(false);
   }
 
+  /** Loads the region/country folders available in the bookmarks directory. */
+  async function loadBookmarkRegions(): Promise<void> {
+    setBookmarkRegionsLoading(true);
+    try {
+      const res = await fetch('/api/admin/bookmarks/regions', { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setBookmarkRegionOptions(Array.isArray(data.regions) ? data.regions : []);
+      }
+    } catch {}
+    setBookmarkRegionsLoading(false);
+  }
+
   async function createBookmark(bm: Bookmark): Promise<boolean> {
     try {
       const res = await fetch('/api/admin/bookmarks', {
@@ -1213,7 +1246,8 @@ function createAdminStore() {
 
     // Bookmarks
     bookmarks, bookmarksLoading,
-    loadBookmarks, createBookmark, updateBookmark, deleteBookmark,
+    bookmarkRegionOptions, bookmarkRegionsLoading,
+    loadBookmarks, loadBookmarkRegions, createBookmark, updateBookmark, deleteBookmark,
 
     // Background decoders
     decoders, decoderModes, decoderSummary, decodersLoading, decodersError,

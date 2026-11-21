@@ -7,6 +7,19 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Bookmark;
 
+/// Synthetic region id for the shared bookmark files in the bookmarks root.
+pub const GLOBAL_REGION: &str = "global";
+
+/// One selectable bookmark region/country folder, for the admin UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkRegion {
+    pub id: String,
+    pub label: String,
+    pub files: usize,
+    pub bookmarks: usize,
+}
+
 /// Response shape for `GET /api/bookmarks`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,13 +157,145 @@ pub fn from_config(bookmarks: &[Bookmark]) -> Vec<PublicBookmark> {
 }
 
 /// Walks `dir` recursively and loads every `.json` bookmark list.
-pub fn load_file_bookmarks(dir: &str) -> Vec<PublicBookmark> {
+///
+/// `regions` is the server's configured selection. `None` includes everything;
+/// `Some` includes the shared root-level files only when it contains
+/// [`GLOBAL_REGION`], plus any top-level folder listed in the selection.
+pub fn load_file_bookmarks(dir: &str, regions: Option<&[String]>) -> Vec<PublicBookmark> {
     let mut result = Vec::new();
-    walk(Path::new(dir), Path::new(dir), &mut result);
+    walk(Path::new(dir), Path::new(dir), regions, &mut result);
     result
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<PublicBookmark>) {
+/// Lists the top-level bookmark folders plus the shared root-level files.
+pub fn scan_regions(dir: &str) -> Vec<BookmarkRegion> {
+    let root = Path::new(dir);
+    let mut out = Vec::new();
+
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    paths.sort();
+
+    let (mut global_files, mut global_bookmarks) = (0usize, 0usize);
+    for path in &paths {
+        if path.is_file() && is_json(path) {
+            let (files, bookmarks) = count_file(path);
+            global_files += files;
+            global_bookmarks += bookmarks;
+        }
+    }
+    if global_files > 0 {
+        out.push(BookmarkRegion {
+            id: GLOBAL_REGION.to_string(),
+            label: region_label(GLOBAL_REGION),
+            files: global_files,
+            bookmarks: global_bookmarks,
+        });
+    }
+
+    for path in &paths {
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(id) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
+        let mut files = 0usize;
+        let mut bookmarks = 0usize;
+        count_tree(path, &mut files, &mut bookmarks);
+        if files == 0 {
+            continue;
+        }
+        out.push(BookmarkRegion {
+            label: region_label(&id),
+            id,
+            files,
+            bookmarks,
+        });
+    }
+
+    // Shared files first, then ITU regions, then country folders.
+    out.sort_by_key(|r| match r.id.as_str() {
+        GLOBAL_REGION => (0, String::new()),
+        "r1" => (1, String::new()),
+        "r2" => (2, String::new()),
+        "r3" => (3, String::new()),
+        _ => (4, r.id.clone()),
+    });
+    out
+}
+
+/// Human-readable label for a bookmark region folder.
+pub fn region_label(id: &str) -> String {
+    match id {
+        GLOBAL_REGION => "Shared / global".to_string(),
+        "r1" => "ITU Region 1 — Europe, Africa, Middle East".to_string(),
+        "r2" => "ITU Region 2 — Americas".to_string(),
+        "r3" => "ITU Region 3 — Asia-Pacific".to_string(),
+        "br" => "Brazil".to_string(),
+        "cn" => "China".to_string(),
+        "de" => "Germany".to_string(),
+        "no" => "Norway".to_string(),
+        "se" => "Sweden".to_string(),
+        "us" => "United States".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+fn is_json(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().eq_ignore_ascii_case("json"))
+        .unwrap_or(false)
+}
+
+/// Counts JSON files and bookmarks in a single file.
+fn count_file(path: &Path) -> (usize, usize) {
+    let Ok(data) = std::fs::read(path) else {
+        return (0, 0);
+    };
+    let Ok(raw) = serde_json::from_slice::<Vec<FileBookmarkRaw>>(&data) else {
+        return (0, 0);
+    };
+    (1, raw.iter().filter(|r| !r.name.is_empty() && r.frequency > 0).count())
+}
+
+/// Counts JSON files and bookmarks recursively below `dir`.
+fn count_tree(dir: &Path, files: &mut usize, bookmarks: &mut usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            count_tree(&path, files, bookmarks);
+        } else if is_json(&path) {
+            let (f, b) = count_file(&path);
+            *files += f;
+            *bookmarks += b;
+        }
+    }
+}
+
+/// Returns the top-level bookmark group a path belongs to.
+fn group_id(root: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let mut components = rel.components();
+    match components.next() {
+        Some(std::path::Component::Normal(first)) if components.next().is_some() => {
+            first.to_string_lossy().to_string()
+        }
+        _ => GLOBAL_REGION.to_string(),
+    }
+}
+
+fn walk(
+    root: &Path,
+    dir: &Path,
+    regions: Option<&[String]>,
+    out: &mut Vec<PublicBookmark>,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -160,15 +305,18 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PublicBookmark>) {
 
     for path in paths {
         if path.is_dir() {
-            walk(root, &path, out);
+            walk(root, &path, regions, out);
             continue;
         }
-        let is_json = path
-            .extension()
-            .map(|e| e.to_string_lossy().eq_ignore_ascii_case("json"))
-            .unwrap_or(false);
-        if !is_json {
+        if !is_json(&path) {
             continue;
+        }
+
+        let relative = group_id(root, &path);
+        if let Some(selected) = regions {
+            if !selected.iter().any(|r| r == &relative) {
+                continue;
+            }
         }
 
         let data = match std::fs::read(&path) {
@@ -220,13 +368,83 @@ mod tests {
         )
         .unwrap();
 
-        let bms = load_file_bookmarks(dir.path().to_str().unwrap());
+        let bms = load_file_bookmarks(dir.path().to_str().unwrap(), None);
         assert_eq!(bms.len(), 1);
         assert_eq!(bms[0].name, "Test");
         assert_eq!(bms[0].mode, "wfm");
         assert!(bms[0].implemented);
         assert_eq!(bms[0].source, "file");
         assert!(bms[0].id.starts_with("file-"));
+    }
+
+    #[test]
+    fn region_selection_filters_folders_and_global_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("r1")).unwrap();
+        std::fs::create_dir_all(root.join("us")).unwrap();
+        std::fs::write(
+            root.join("shared.json"),
+            r#"[{"name":"Shared","frequency":1000000,"modulation":"FM"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("r1").join("a.json"),
+            r#"[{"name":"Region","frequency":2000000,"modulation":"NFM"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("us").join("b.json"),
+            r#"[{"name":"Country","frequency":3000000,"modulation":"NFM"}]"#,
+        )
+        .unwrap();
+
+        let all = load_file_bookmarks(root.to_str().unwrap(), None);
+        assert_eq!(all.len(), 3);
+
+        let only_region = load_file_bookmarks(
+            root.to_str().unwrap(),
+            Some(&["r1".to_string()]),
+        );
+        assert_eq!(only_region.len(), 1);
+        assert_eq!(only_region[0].name, "Region");
+
+        let global_and_country = load_file_bookmarks(
+            root.to_str().unwrap(),
+            Some(&[GLOBAL_REGION.to_string(), "us".to_string()]),
+        );
+        let mut names: Vec<_> = global_and_country.iter().map(|b| b.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["Country", "Shared"]);
+
+        let none = load_file_bookmarks(root.to_str().unwrap(), Some(&[]));
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn scan_regions_lists_global_and_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("r1")).unwrap();
+        std::fs::create_dir_all(root.join("us")).unwrap();
+        std::fs::write(
+            root.join("shared.json"),
+            r#"[{"name":"Shared","frequency":1000000,"modulation":"FM"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("r1").join("a.json"),
+            r#"[{"name":"Region","frequency":2000000,"modulation":"NFM"}]"#,
+        )
+        .unwrap();
+
+        let regions = scan_regions(root.to_str().unwrap());
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].id, GLOBAL_REGION);
+        assert_eq!(regions[0].bookmarks, 1);
+        assert_eq!(regions[1].id, "r1");
+        assert_eq!(regions[1].bookmarks, 1);
+        assert_eq!(regions[1].label, region_label("r1"));
     }
 
     #[test]

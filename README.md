@@ -429,6 +429,7 @@ server {
 | `POST` | `/api/admin/dongles/:id/profiles` | Admin | Create new profile (body: profile object) |
 | `PUT` | `/api/admin/dongles/:id/profiles/:pid` | Admin | Update profile (body: partial profile) |
 | `DELETE` | `/api/admin/dongles/:id/profiles/:pid` | Admin | Delete profile |
+| `GET` | `/api/admin/bookmarks/regions` | Admin | List bookmark region/country folders and the current selection |
 | `POST` | `/api/admin/save-config` | Admin | Persist current config to disk |
 | `GET` | `/api/admin/status` | Admin | Full status with memory usage |
 

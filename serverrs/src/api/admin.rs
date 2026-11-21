@@ -694,6 +694,32 @@ pub async fn admin_bookmarks(State(state): State<AppState>) -> Response {
     )
 }
 
+/// Lists the available bookmark region/country folders and the current
+/// selection, for the admin region picker.
+pub async fn bookmark_regions(State(state): State<AppState>) -> Response {
+    let (selected, bandplan_region) = {
+        let cfg = state.cfg.read();
+        (
+            cfg.server.bookmark_regions.clone(),
+            cfg.server.bandplan_region.clone(),
+        )
+    };
+    let regions = if state.bookmarks_dir.is_empty() {
+        Vec::new()
+    } else {
+        super::bookmarks::scan_regions(&state.bookmarks_dir)
+    };
+    json_response(
+        StatusCode::OK,
+        json!({
+            "regions": regions,
+            "selected": selected,
+            "bandplanRegion": bandplan_region,
+        }),
+        None,
+    )
+}
+
 pub async fn create_bookmark(State(state): State<AppState>, body: Bytes) -> Response {
     let bm: Bookmark = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -874,6 +900,8 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "demoMode": cfg.server.demo_mode,
             "identifyEnabled": cfg.server.identify_enabled,
             "usersRibbon": cfg.server.users_ribbon,
+            "bookmarkRegions": cfg.server.bookmark_regions,
+            "bandplanRegion": cfg.server.bandplan_region,
             "fftHistoryFftSize": cfg.server.fft_history_fft_size,
             "fftHistoryCompression": cfg.server.fft_history_compression,
             "fftHistorySmoothMarginDb": cfg.server.fft_history_smooth_margin_db,
@@ -981,6 +1009,35 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         set_bool!("identifyEnabled", identify_enabled);
         set_string!("usersRibbon", users_ribbon);
         s.users_ribbon = s.users_ribbon.trim().to_ascii_lowercase();
+
+        // Bookmark region/country selection. `null` means "all regions".
+        if let Some(v) = map.get("bookmarkRegions") {
+            if v.is_null() {
+                s.bookmark_regions = None;
+            } else if let Some(arr) = v.as_array() {
+                let selected: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| {
+                        !v.is_empty()
+                            && v != "."
+                            && v != ".."
+                            && !v.contains('/')
+                            && !v.contains('\\')
+                    })
+                    .collect();
+                s.bookmark_regions = Some(selected);
+            }
+        }
+        if let Some(v) = map.get("bandplanRegion").and_then(|v| v.as_str()) {
+            s.bandplan_region = match v.trim().to_ascii_lowercase().as_str() {
+                "r1" => "r1".to_string(),
+                "r2" => "r2".to_string(),
+                "r3" => "r3".to_string(),
+                _ => String::new(),
+            };
+        }
 
         if let Some(v) = map.get("opusComplexity").and_then(|v| v.as_i64()) {
             s.opus_complexity = v.clamp(0, 10) as i32;

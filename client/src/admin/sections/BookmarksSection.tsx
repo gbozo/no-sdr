@@ -2,7 +2,7 @@
 // Bookmarks Section — Frequency bookmarks CRUD
 // ============================================================
 
-import { Component, createSignal, For, Show } from 'solid-js';
+import { Component, createSignal, For, onMount, Show } from 'solid-js';
 import { adminStore, Bookmark } from '../admin-store';
 import { DEMOD_MODES, DECODER_MODE_IDS, DIGITAL_MODES } from '../../shared/modes';
 import { formatFrequency } from '../../shared/modes';
@@ -249,10 +249,126 @@ const BookmarkForm: Component<{
   );
 };
 
+// ---- Region / Country Selection ----
+const RegionPanel: Component = () => {
+  const cfg = () => adminStore.serverConfig();
+  const selected = () => cfg().bookmarkRegions;
+  const allIds = () => adminStore.bookmarkRegionOptions().map((r) => r.id);
+
+  const isChecked = (id: string) => {
+    const sel = selected();
+    return sel === null || sel.includes(id);
+  };
+
+  const toggle = (id: string) => {
+    const base = selected() ?? allIds();
+    const next = base.includes(id) ? base.filter((r) => r !== id) : [...base, id];
+    adminStore.updateServerConfigField('bookmarkRegions', next);
+  };
+
+  const selectedCount = () => {
+    const sel = selected();
+    return sel === null ? adminStore.bookmarkRegionOptions().length : sel.length;
+  };
+
+  return (
+    <div class="mb-5 p-3 border border-border/30 rounded-md bg-sdr-surface/40">
+      <div class="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 class="text-[10px] font-mono uppercase tracking-wider text-accent">Regions &amp; Countries</h3>
+          <p class="text-[10px] font-mono text-text-dim mt-1 leading-relaxed">
+            Choose which bookmark folders are served to clients. Shared bookmark files in
+            the bookmarks root are controlled by the "Shared / global" entry.
+          </p>
+        </div>
+        <div class="flex gap-1 shrink-0">
+          <button
+            class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors"
+            onClick={() => adminStore.updateServerConfigField('bookmarkRegions', null)}
+            title="Serve every region (including folders added later)"
+          >
+            All
+          </button>
+          <button
+            class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors"
+            onClick={() => adminStore.updateServerConfigField('bookmarkRegions', [])}
+            title="Serve no bookmark files (config bookmarks only)"
+          >
+            None
+          </button>
+        </div>
+      </div>
+
+      <Show when={adminStore.bookmarkRegionsLoading()}>
+        <div class="text-[10px] font-mono text-text-dim uppercase animate-pulse py-2">
+          Scanning bookmark folders...
+        </div>
+      </Show>
+
+      <Show when={!adminStore.bookmarkRegionsLoading() && adminStore.bookmarkRegionOptions().length === 0}>
+        <div class="text-[10px] font-mono text-text-dim py-2">
+          No bookmark folders found in the bookmarks directory.
+        </div>
+      </Show>
+
+      <Show when={!adminStore.bookmarkRegionsLoading() && adminStore.bookmarkRegionOptions().length > 0}>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          <For each={adminStore.bookmarkRegionOptions()}>
+            {(region) => (
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded border border-border/30 bg-sdr-base/40 hover:bg-sdr-base/70 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  class="accent-cyan"
+                  checked={isChecked(region.id)}
+                  onChange={() => toggle(region.id)}
+                />
+                <span class="flex-1 min-w-0">
+                  <span class="text-[11px] font-mono text-text-primary truncate block">{region.label}</span>
+                  <span class="text-[9px] font-mono text-text-dim/70 uppercase">
+                    {region.id} · {region.bookmarks} bookmark{region.bookmarks !== 1 ? 's' : ''}
+                  </span>
+                </span>
+              </label>
+            )}
+          </For>
+        </div>
+        <div class="mt-2 text-[9px] font-mono text-text-dim/60 uppercase text-right">
+          {selectedCount()} of {adminStore.bookmarkRegionOptions().length} groups served
+          {selected() === null ? ' (all, including future folders)' : ''}
+        </div>
+      </Show>
+
+      {/* Band plan region */}
+      <div class="mt-4 pt-3 border-t border-border/30 flex flex-col sm:flex-row sm:items-center gap-2">
+        <div class="flex-1">
+          <label class="text-[10px] font-mono uppercase tracking-wider text-text-dim">Band plan region</label>
+          <p class="text-[9px] font-mono text-text-dim/60 mt-0.5">
+            Default band overlay served to clients by /api/bandplan.
+          </p>
+        </div>
+        <select
+          class="admin-input sm:w-64"
+          value={cfg().bandplanRegion}
+          onChange={(e) => adminStore.updateServerConfigField('bandplanRegion', e.currentTarget.value)}
+        >
+          <option value="">Worldwide (default)</option>
+          <option value="r1">ITU Region 1 — Europe, Africa, Middle East</option>
+          <option value="r2">ITU Region 2 — Americas</option>
+          <option value="r3">ITU Region 3 — Asia-Pacific</option>
+        </select>
+      </div>
+    </div>
+  );
+};
+
 // ---- Main Section ----
 const BookmarksSection: Component = () => {
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [adding, setAdding] = createSignal(false);
+
+  onMount(() => {
+    if (adminStore.bookmarkRegionOptions().length === 0) adminStore.loadBookmarkRegions();
+  });
 
   const handleAdd = async (bm: Bookmark) => {
     const ok = await adminStore.createBookmark(bm);
@@ -286,6 +402,8 @@ const BookmarksSection: Component = () => {
           </button>
         </Show>
       </div>
+
+      <RegionPanel />
 
       {/* Add Form */}
       <Show when={adding()}>

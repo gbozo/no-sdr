@@ -16,7 +16,7 @@ use crate::ws::UpgradeQuery;
 
 use super::admin;
 use super::bandplan::BandPlanQuery;
-use super::bookmarks::{self as bookmark_loader, PublicBookmark};
+use super::bookmarks::{self as bookmark_loader};
 use super::identify::IdentifyService;
 use super::recognizer::{self, RecognizerConfig};
 use super::AppState;
@@ -41,6 +41,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/dongles/{id}/profiles-order", put(admin::reorder_profiles))
         .route("/bookmarks", get(admin::admin_bookmarks).post(admin::create_bookmark))
+        .route("/bookmarks/regions", get(admin::bookmark_regions))
         .route(
             "/bookmarks/{id}",
             put(admin::update_bookmark).delete(admin::delete_bookmark),
@@ -252,12 +253,19 @@ async fn edge_info(State(state): State<AppState>) -> Response {
 }
 
 async fn public_bookmarks(State(state): State<AppState>) -> Response {
-    let mut result: Vec<PublicBookmark> = {
+    let (config_bookmarks, regions) = {
         let cfg = state.cfg.read();
-        bookmark_loader::from_config(&cfg.bookmarks)
+        (
+            bookmark_loader::from_config(&cfg.bookmarks),
+            cfg.server.bookmark_regions.clone(),
+        )
     };
+    let mut result = config_bookmarks;
     if !state.bookmarks_dir.is_empty() {
-        result.extend(bookmark_loader::load_file_bookmarks(&state.bookmarks_dir));
+        result.extend(bookmark_loader::load_file_bookmarks(
+            &state.bookmarks_dir,
+            regions.as_deref(),
+        ));
     }
     admin::json_response(
         StatusCode::OK,
@@ -268,8 +276,15 @@ async fn public_bookmarks(State(state): State<AppState>) -> Response {
 
 async fn bandplan(
     State(state): State<AppState>,
-    Query(q): Query<BandPlanQuery>,
+    Query(mut q): Query<BandPlanQuery>,
 ) -> Json<serde_json::Value> {
+    // No explicit client region: use the admin-configured default.
+    if q.region.as_deref().unwrap_or("").is_empty() {
+        let configured = state.cfg.read().server.bandplan_region.clone();
+        if !configured.is_empty() {
+            q.region = Some(configured);
+        }
+    }
     state.bandplan.clone().handler(Query(q))
 }
 
