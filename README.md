@@ -5,7 +5,12 @@
 <h1 align="center">no-sdr</h1>
 
 <p align="center">
-  <strong>No SDR hardware on your desk? No problem.<br/>Multi-user web receiver with real-time waterfall, stereo FM, and digital mode decoding — all served from a Rust backend to your browser.</strong>
+  <strong>A multi-user WebSDR with native SDR drivers, a live spectrum and waterfall,
+  server-side digital decoding, an operations map, and an analytics/admin console — all
+  from one Rust backend.</strong>
+</p>
+
+<p align="center">
   <strong>**** Next Major Release 3.0.0 will add Vulkan support for CPU offloading ****</strong>
 </p>
 
@@ -23,7 +28,7 @@
   <img src="https://img.shields.io/badge/node-%3E%3D26-brightgreen" alt="Node.js 26+" />
   <img src="https://img.shields.io/badge/typescript-5-blue" alt="TypeScript 5" />
   <a href="https://github.com/gbozo/no-sdr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gbozo/no-sdr?color=green" alt="GPL-3.0-or-later License" /></a>
-  <img src="https://img.shields.io/badge/RTL--SDR-supported-orange" alt="RTL-SDR" />
+  <img src="https://img.shields.io/badge/native%20decoders-31-orange" alt="31 native decoders" />
   <a href="https://github.com/gbozo/no-sdr/issues"><img src="https://img.shields.io/github/issues/gbozo/no-sdr" alt="Open Issues" /></a>
   <a href="https://github.com/gbozo/no-sdr/pulls"><img src="https://img.shields.io/github/issues-pr/gbozo/no-sdr" alt="Pull Requests" /></a>
   <img src="https://img.shields.io/github/last-commit/gbozo/no-sdr" alt="Last Commit" />
@@ -33,7 +38,8 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#features">Features</a> &bull;
-  <a href="#demo-mode">Demo Mode</a> &bull;
+  <a href="#native-decoder-suite">Decoders</a> &bull;
+  <a href="#live-operations-map">Map</a> &bull;
   <a href="#configuration">Configuration</a> &bull;
   <a href="#deployment">Deployment</a> &bull;
   <a href="SPEC.md">Technical Spec</a>
@@ -49,113 +55,170 @@
   <img src="screenshots/no(sdr).jpeg" alt="no-sdr interface — waterfall, spectrum analyzer, and stereo FM with RDS" width="100%" />
 </p>
 
-**no-sdr** turns cheap RTL-SDR USB dongles into a full-featured web-based radio receiver. Multiple users connect through their browser and independently tune, demodulate, and listen to signals — all sharing the same hardware. No plugins, no installs, just open a URL.
+**no-sdr** turns cheap SDR hardware into a complete browser-based radio station.
+Multiple users connect at once and independently tune, demodulate and listen inside
+the dongle's live bandwidth. There are no browser plugins and no client install:
+open a URL and the receiver is there.
 
-Think of it as your own private, open [WebSDR](http://websdr.org) that you can run at your home pc or on a docker container (compose). Works in Raspberry Pi too. 
-
-This project aims High Fidelity, weak signals processing, near lossless quality, low bandwidth consumption and aims every feature to be run also on arm architecture (RPi/MAC). For x86 four binaries are included and you CPU capability level is detected on container start, processors with streaming extensions (SSE/AVX etc.) have superior performance and each client cosnumes less CPU cycles. All of this open, no closed source. 
-
-There is also an Identify Song button, you can identify the currently song you listen too (you need some API keys for Audd)
+It is built as an open alternative to closed WebSDR services, with a strong focus on
+weak-signal performance, low bandwidth, ARM compatibility and native decoding — the
+decoders are part of the Rust server, not a pile of external binaries.
 
 *Made with ❤️ and patience, your friend George*
 
-### Codec Performance
+## At a glance
 
-<table>
-<tr>
-<td width="50%"><img src="screenshots/no-sdr-compression.jpeg" alt="no-sdr compression stats" width="100%" /></td>
-<td valign="top">
-
-**Waterfall (FFT)**
-| Codec | Ratio | Type |
-|-------|-------|------|
-| **Deflate** | 7.5–10:1 | Lossless (default) |
-| ADPCM | ~8:1 | Lossy |
-
-**Audio (IQ / Opus)**
-| Codec | Bandwidth | Type |
-|-------|-----------|------|
-| ADPCM | ~48 KB/s (default) | Lossy 4:1 on IQ |
-| **Opus** | ~4 KB/s | VBR 32kbps mono / 64kbps stereo |
-| **Opus HQ** | ~16 KB/s | VBR 128kbps mono / 192kbps stereo |
-
-Opus codecs use server-side demodulation with full stereo FM and C-QUAM support. Clients independently select their preferred codec — no restart needed.
-A typical HF / AM Profile with sampling rate of 2.4 MBPS , fft size of 4096 buckets with 8 frames per second and deflate compression 8-10 KB/s, with opus mono audio compression ~4 KB/s.
-So a total of around 12-13 KB/s per client of bandwidht required with full audio and waterfall, spectrum.
-There is also opus lite with almost identical quality of ADPCM at around 2.1KB/s but as always there is a drawback, opus has nasty artifact at this rate (and some nasty robotic hiss).
-
-</td>
-</tr>
-</table>
+| Area | What you get |
+|------|--------------|
+| **SDR sources** | RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, HydraSDR, ELAD, RX-888, PlutoSDR, SDRplay, LimeSDR, Fobos, `rtl_tcp`/`airspy_tcp`/`hfp_tcp`/`rsp_tcp`, demo simulator |
+| **Analog modes** | WFM stereo + RDS, NFM, AM, C-QUAM AM stereo, SAM, USB, LSB, CW, Raw IQ |
+| **Digital decoders** | 31 native decoders: weak-signal, aircraft, marine, APRS/packet, image/text and time signals |
+| **Map** | Live ADS-B, AIS, APRS/HFDL and FT8/FT4/FT2/WSPR grid spots; station marker; Maidenhead grid; weather; trails |
+| **Admin** | Dongle/profile management, device scanning, bookmarks, decoder workers, feature flags, monitoring, music ID |
+| **Analytics** | User sessions, live/history maps, country/region stats, top modes/frequencies, retention and purge |
+| **Compression** | Per-client FFT codecs and IQ codecs, including server-side Opus and stereo FM |
+| **Platforms** | Linux, Docker, Raspberry Pi ARM64, Windows/macOS/Linux desktop builds |
 
 ## Features
 
-### Radio
+### Receiver and DSP
 
-- **8 analog demodulation modes** — WFM (stereo, RDS), NFM, AM (stereo), USB, LSB, CW, Raw IQ
-- **Stereo FM** — PLL-based 19kHz pilot detection, L-R DSB-SC demodulation with SNR-proportional stereo blend
-- **RDS** — client-side FM RDS decoder extracts station name (PS), radio text (RT), programme type, PI code, and clock time with overlay on waterfall
-- **AM Stereo (C-QUAM) [EXPERIMENTAL]** — auto-detected in AM mode via two-stage verification (25Hz Goertzel pilot + PLL lock confirmation). When a C-QUAM station is detected, stereo decoding activates automatically. *This feature needs testers with access to C-QUAM AM stereo broadcasts — please report results via GitHub issues!*
-- PLANNED -> **9 digital decoders** — ADS-B, ACARS, VDL2, AIS, APRS, POCSAG, FT8, FT4, WSPR (via external binaries)
-- **Multi-user** — everyone shares the same waterfall; each user tunes independently within the dongle's bandwidth
-- **Multi-dongle** — configure multiple RTL-SDR or HackRF devices, each with its own frequency profiles
-- **Many dongle source types** — native USB, vendor-library drivers, remote TCP, or the demo simulator
-- **Profile system** — admins define presets (FM broadcast, aviation, 2m ham, ADS-B, marine) per dongle; switching a profile changes it for all connected users
-- **Profile CRUD** — create, update, and delete profiles at runtime via REST API; changes persist to disk
+- **Multi-user operation** — everyone sees the same waterfall; every client tunes independently inside the active profile.
+- **Shared FFT, per-client IQ** — one FFT per dongle is broadcast to all clients, while each client gets its own NCO-shifted, filtered and decimated IQ stream.
+- **9 analog modes** — WFM (stereo + RDS), NFM, AM, AM stereo (C-QUAM), SAM, USB, LSB, CW and Raw IQ.
+- **Stereo FM** — 19 kHz pilot PLL, L−R DSB-SC demodulation, SNR-proportional stereo blend and RDS (PS/RT/PTY/PI/clock).
+- **C-QUAM AM stereo** — automatic pilot detection and PLL confirmation; experimental and always looking for field reports.
+- **Synchronous AM** — carrier PLL for fading or weak AM signals.
+- **Fast tuning** — spectrum/waterfall click-to-tune, fine-tune drag, scroll tuning, zoom, pan and range selection.
+- **USB/LSB sideband-aware tuning indicator** — dial at the passband edge, bandwidth extending left or right.
+- **Waterfall history and rewind** — scroll back through recent spectrum history.
+- **Signal analysis** — secondary FFT, signal level/SNR analysis and a client-side signal identifier that ranks likely decoder modes.
+- **Music identification** — identify the currently tuned song with AudD or ACRCloud from the admin-configured provider.
 
-### Display
+### Native SDR drivers
 
-- **Live waterfall** — Canvas 2D with 5 color themes (turbo, viridis, classic, grayscale, hot)
-- **Auto-range** — automatic dB scaling based on signal statistics, or manual min/max control
-- **Spectrum analyzer** — real-time power spectral density with tuning indicator and bandwidth overlay
-- **Frequency display** — LCD-style readout with scroll-to-tune digit groups
-- **S-meter** — bar or classic analog needle meter with warm backlit face, dual scale (S-units + dB), red needle with peak hold indicator
-- **Bandwidth meter** — real-time SVG sparkline showing WebSocket throughput + FFT frame rate
-- **3 UI themes** — LCD (cyan), CRT (phosphor green), VFD (amber)
+| Driver family | Sources |
+|---------------|---------|
+| Native USB | RTL-SDR (RTL2832U/R82xx), HackRF One/Pro, Airspy R2/Mini, Airspy HF+, HydraSDR RFOne, ELAD FDM, RX-888 Mk2, PlutoSDR |
+| Vendor libraries | SDRplay RSP, LimeSDR, Fobos SDR (loaded at runtime with `dlopen`; no SDK required to build) |
+| Network | `rtl_tcp`, `airspy_tcp`, `hfp_tcp`, `rsp_tcp` |
+| Simulator | Built-in demo signal generator; no hardware required |
 
-### Audio
+Native USB drivers use `nusb` — no librtlsdr, libusb, libhackrf, libairspy, libhydrasdr or libiio dependency. Hardware options include direct sampling, bias-T, digital AGC, offset tuning, IQ correction, PPM correction, gain stages and per-source settings exposed in the admin UI.
 
-- **Client-side DSP** — demodulation runs entirely in the browser via pure TypeScript
-- **Stereo output** — stereo FM with SNR-proportional blend, auto-detected C-QUAM AM stereo (experimental)
-- **Noise reduction** — spectral subtraction (Wiener filter) + impulse noise blanker with adjustable strength
-- **AudioWorklet** — low-latency audio playback with adaptive jitter buffer (150ms min, 200ms target, ±1 sample/frame rate control)
-- **5-band parametric EQ** — LOW 80Hz, L-MID 500Hz, MID 1.5kHz, H-MID 4kHz, HIGH 12kHz (all ±12dB)
-- **Balance** — stereo pan control (-100% left to +100% right)
-- **Loudness** — dynamic compression with pre-boost for quiet signals
-- **Squelch** — adjustable noise gate based on signal level, with 500ms bypass after tune changes
+### Native decoder suite
 
-### Infrastructure
+All 31 decoders below are implemented in Rust and run inside the server. No `jt9`, `wsprd`, `dump1090`, `dumpvdl2` or other external decoder process is required.
 
-- **Multi-codec compression** — per-client codec negotiation for both FFT and IQ streams
-  - **FFT**: None (Uint8, 4:1), ADPCM (~8:1), Delta+Deflate (7.5–10:1 lossless, default)
-  - **IQ**: None (raw Int16), ADPCM (4:1, default), Opus VBR (server-side demod, 32kbps mono / 64kbps stereo), Opus HQ (128kbps mono / 192kbps stereo)
-- **Server-side Opus audio** — full WFM stereo PLL and C-QUAM demod on server with dynamic mono↔stereo encoder switching (libopus)
-- **Server-side FFT rate cap** — configurable fps per profile (default 30) with inter-frame averaging
-- **IQ chunk accumulation** — server buffers IQ into fixed 20ms chunks for consistent WebSocket messages
-- **Client-side resampler** — linear interpolation upsamples SSB (24kHz) and CW (12kHz) to 48kHz
-- **WebSocket backpressure** — bufferedAmount-based frame skipping prevents server memory bloat
-- **Audio-gated IQ** — server only sends per-user IQ data after client enables audio playback
-- **Native SDR drivers** — RTL-SDR, HackRF One/Pro, Airspy R2/Mini, Airspy HF+, HydraSDR RFOne, ELAD FDM, RX-888 Mk2 and PlutoSDR with no librtlsdr/libusb/libhackrf/libairspy/libhydrasdr/libiio dependency; SDRplay RSP, LimeSDR and Fobos SDR through their vendor libraries, loaded at runtime
-- **Foreground and background decoders** — FT8/FT4/FT2, FST4/Q65/JT65/JT9, WSPR/PI4, MSK144/FSK441, ADS-B, ACARS, AIS, VDL2, HFDL, APRS, NAVTEX, ISM, AX.25 PACKET, WEFAX, SSTV, Hellschreiber, Olivia/THOR/FSQ, PSK31/RTTY, JS8, DCF77 and ALS162; per-client foreground plus OpenWebRX-style per-dongle background workers, persisted to SQLite and broadcast as `MSG_DECODER`. See `docs/decoders.md`.
-- **Dongle hardware options** — directSampling, biasT, digitalAgc, offsetTuning, ifGain, tunerBandwidth; HackRF LNA/VGA/amp/filter via the admin page
-- **Demo mode** — built-in signal simulator for development and demos, no hardware needed
-- **rtl_tcp support** — connect to remote RTL-SDR dongles over TCP (Docker sidecars, remote antennas)
-- **Docker ready** — multi-stage Dockerfile with USB passthrough for RTL-SDR, auto-publish to GHCR on release
-- **Raspberry Pi compatible** — runs on ARM64, tested on Pi 4/5
-- **Admin panel** — start/stop dongles, switch profiles, CRUD profiles, monitor status via REST API + UI
-- **YAML config** — validated at startup by the Rust config layer, persisted on admin changes
-- **Per-client IQ extraction** — server-side NCO frequency shift + 4th-order Butterworth anti-alias filter + decimation
-- **Compression stats** — live wire bytes, raw equivalent, ratio, and savings displayed in UI
+| Category | Decoders |
+|----------|----------|
+| **Weak signal / HF** | FT8, FT4, FT2, FST4, Q65, JT65, JT9, JS8, WSPR, PI4, MSK144, FSK441 |
+| **Aircraft** | ADS-B (1090 MHz), ACARS, VDL2, HFDL |
+| **Marine** | AIS, NAVTEX |
+| **Terrestrial / utility** | APRS, AX.25 packet, ISM |
+| **Image / text** | WEFAX, SSTV, Hellschreiber, Olivia, THOR, FSQ, PSK31, RTTY |
+| **Time signals** | DCF77, ALS162 |
+
+Each decoder supports:
+
+- **Foreground operation** for the tuned client (FT8-family, vocal/data modes and raw-IQ modes)
+- **Background operation** per dongle, independent of what the current listener is doing
+- **Persistent history** in SQLite with retention, message search and statistics
+- **Live decoder workspace** with slots, SNR/DT/confidence, FEC information, secondary waterfall and mode-specific details
+- **Decoder calling-frequency catalogue** — server-owned and periodically refreshed, used by hints, quick-tune links and the bookmark ribbon
+- **Signal-aware tuning overlays** showing the exact decoder passband and dial position
+- **Map spotting** for grid-bearing modes and position reports
+
+### Live operations map
+
+The full-screen `/map` page uses OpenStreetMap and a separate WebSocket (`/ws/map`), so map traffic never competes with audio or FFT traffic.
+
+Layers include:
+
+- **Aircraft** — ADS-B positions, callsigns, altitude, speed, track, vertical rate, squawk, emergency state, last seen.
+- **Vessels** — AIS positions, MMSI, type, callsign, speed/course/heading, destination, ETA.
+- **Grid decodes** — FT8/FT4/FT2/WSPR and other grid-bearing modes plotted at their Maidenhead grid centre.
+- **Position reports** — APRS and HFDL latitude/longitude fixes.
+- **Maidenhead grid** — field, 4-character square and 6-character subsquare overlay.
+- **Cloud cover** — server-proxied OpenWeatherMap cloud tiles.
+
+Map details:
+
+- Station marker with receiver callsign, grid, location, client count and decoder capabilities.
+- Blue → cyan → green trails through all stored positions, with black position dots.
+- Neon-green dashed predicted trajectory using speed and heading.
+- Altitude-dependent aircraft shadows; white cel-shaded aircraft/vessel icons.
+- Live/dead reckoning between reports, stale-target greying after one minute, removal after five minutes.
+- Popups with altitude/speed histograms, last-seen data, and external links to Flightradar24, ADS-B Exchange, MarineTraffic and VesselFinder.
+- Map styles: dark, OSM, light, satellite and terrain.
+- Layer selection and map style persist in the browser.
+
+### Admin console
+
+The `/admin` interface covers:
+
+- **General** — station identity, callsign/location/coordinates, codec allow-lists, server behaviour and configuration persistence.
+- **SDR Devices** — add/edit dongles, scan for attached hardware, save the selected device index/serial, start/stop dongles, switch active profiles, CRUD profiles and tune hardware settings.
+- **Bookmarks** — region/country folder selection, band-plan region, read-only decoder calling-frequency catalogue, and admin bookmark CRUD.
+- **Decoders** — create/edit/delete background decoder workers, set frequencies/bandwidths/dongle assignments, inspect decoder stats/history and purge data.
+- **Monitor** — server health, connected clients, decoder activity, database statistics, user sessions and analytics maps.
+- **Music ID** — AudD/ACRCloud provider configuration.
+- **Features** — runtime feature switches.
+- **Cloudflare Edge** — optional edge transport settings.
+
+### Presence and analytics
+
+Every WebSocket connection is recorded in the shared SQLite database.
+
+- Live OpenStreetMap of current listeners and recently disconnected users.
+- Country/region/city, receiver/profile, tuned frequency, demod mode and bandwidth.
+- Historical map with region bubbles sized by user count.
+- Session counts, peak concurrency, country/region rankings, top modes and top frequencies.
+- Configurable retention and purge intervals.
+- Offline IP geolocation via DB-IP City Lite, updated automatically; public ribbon exposes only country/region, while city/coordinates remain admin-only.
+- Admin APIs for maps, analytics, purge, and geolocation status/update.
+
+### Bookmarks and band plans
+
+- User bookmarks with one-click recall, mode/bandwidth restoration and optional decoder activation.
+- Admin bookmarks from `config.yaml` and regional bookmark folders.
+- Multi-select bookmark regions with a `global` root group.
+- Configurable ITU region band plan (`r1`, `r2`, `r3`) plus worldwide.
+- Generated, read-only decoder calling frequencies exposed as `source: "decoder"` bookmarks and shown on the spectrum ribbon.
+
+### Compression and networking
+
+| Stream | Codecs |
+|--------|--------|
+| **FFT / waterfall** | Range, deflate (lossless), ADPCM, or uncompressed |
+| **IQ / audio** | Opus HQ, Opus, Opus Lo, ADPCM, or uncompressed |
+
+- Per-client codec negotiation; no restart needed when switching.
+- Server-side Opus path with server-side demodulation for WFM stereo/C-QUAM.
+- FFT rate caps and inter-frame averaging per profile.
+- IQ chunk accumulation (fixed 20 ms chunks) for consistent WebSocket traffic.
+- Backpressure handling, audio-gated IQ and client-side resampling.
+- Live compression statistics: wire bytes, raw equivalent, ratio and savings.
+
+A typical 2.4 MSPS HF profile with deflate FFT and Opus mono audio uses roughly 12–15 KB/s per client for waterfall, spectrum and audio together.
+
+### Desktop and packaging
+
+- Electron desktop builds for Windows, macOS and Linux, bundling the Rust server and web client.
+- Portable Linux/Windows/macOS archives from GitHub Actions.
+- Multi-arch Docker images (amd64/arm64), with CPU-feature variants on x86.
+- Raspberry Pi 4/5 ARM64 support.
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Rust 1.85+** and **Node.js 26+** (LTS recommended)
-- **RTL-SDR dongle** (native USB support is built in; on Windows bind it to WinUSB with Zadig), a remote `rtl_tcp` server, or just use demo mode
-- Optional vendor libraries for SDRplay, LimeSDR and Fobos SDR. They are loaded at runtime; install the vendor package/service only if you use that hardware.
+- **Rust 1.85+**
+- **Node.js 26+**
+- An SDR dongle, a remote `rtl_tcp` source, or demo mode
+- Optional vendor libraries for SDRplay, LimeSDR and Fobos SDR
 
-### Install & Run
+### Install and run
 
 ```bash
 git clone https://github.com/gbozo/no-sdr.git
@@ -165,275 +228,246 @@ npm run build
 npm start
 ```
 
-Open `http://localhost:3000` in your browser.
+Open `http://localhost:3000`.
 
-### Desktop App
+### Demo mode
 
-Release downloads also include an Electron desktop build for Windows, macOS
-and Linux. It bundles the Rust server and web client, creates a per-user config
-on first launch, and opens the receiver in a native window. See
-[`desktop/README.md`](desktop/README.md) for local packaging and target details.
-
-```bash
-npm run build:client
-cd serverrs && cargo build --release --all-features --bin serverrs && cd ..
-npm run dist:linux --workspace=desktop  # or dist:mac / dist:win
-```
-
-### Demo Mode (No Hardware)
-
-Don't have an RTL-SDR? No problem — demo mode simulates realistic radio signals:
+No hardware? Use the simulator:
 
 ```bash
 npm run dev:demo
 ```
 
-This starts the server with a signal simulator that generates FM stations, aviation communications, and ham radio signals. The waterfall, spectrum, and demodulation all work exactly as they would with real hardware.
+The waterfall, spectrum, tuning and demodulation all work exactly as with real hardware.
+
+### Desktop
+
+Release downloads include Electron packages. To build locally:
+
+```bash
+npm run build:client
+cd serverrs && cargo build --release --all-features --bin serverrs && cd ..
+npm run dist:linux --workspace=desktop   # or dist:mac / dist:win
+```
+
+See [`desktop/README.md`](desktop/README.md).
 
 ## Architecture
 
-```
-RTL-SDR Dongle ──► rtl_sdr / rtl_tcp / simulator ──► IQ samples
-                                                         │
-                    ┌────────────────────────────────────┘
-                    ▼
-             Server (Rust)
-             ├─ FFT (shared) ──────────────► WebSocket ──► All clients (waterfall)
-             └─ IQ sub-band (per user) ─┐
-                NCO shift + Butterworth ├──► WebSocket ──► One client
-                + decimate ─────────────┘                     │
-                                                    Browser (SolidJS)
-                                                    ├─ Waterfall (Canvas 2D)
-                                                    ├─ Spectrum (Canvas 2D)
-                                                    ├─ Demodulator (TS DSP)
-                                                    │   └─ Stereo FM (PLL)
-                                                    └─ Audio (AudioWorklet)
-                                                        ├─ 5-band EQ
-                                                        ├─ Balance
-                                                        ├─ Loudness
-                                                        └─ Squelch gate
+```text
+SDR source (native USB / vendor library / TCP / demo)
+  │
+  ▼
+Rust server
+  ├─ FFT processor (one per dongle) ──► shared WebSocket FFT frames
+  ├─ Background decoders (per dongle) ─► SQLite history + decoder broadcasts
+  ├─ Per-client IQ extractor (NCO + Butterworth + decimation)
+  │    ├─ ADPCM/raw IQ ──► WebSocket ──► browser demodulator
+  │    └─ server-side demod + Opus ──► WebSocket ──► browser audio
+  ├─ User sessions / analytics ──► SQLite ──► admin monitor
+  └─ Map feed (checkpoint + /ws/map) ──► map page
 ```
 
-**Hybrid DSP model**: The server computes FFT and broadcasts it to all clients (shared waterfall). Per-user IQ sub-bands are extracted using a numerically-controlled oscillator (NCO) for frequency shifting, a 4th-order Butterworth anti-aliasing filter, and integer decimation. Each client receives its own narrowband IQ stream and performs demodulation locally. Server CPU cost scales with user count only for IQ extraction — demodulation is entirely client-side with no codec and ADPCM.
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Runtime | Rust 1.85+ (tokio) |
-| Backend | axum HTTP/WebSocket server |
-| Frontend | [SolidJS](https://www.solidjs.com) |
-| Desktop | [Electron](https://www.electronjs.org/) + electron-builder |
-| Build | [Vite 6](https://vite.dev) |
-| Styling | [Tailwind CSS v4](https://tailwindcss.com) |
-| FFT | [rustfft](https://github.com/ejmahler/RustFFT) |
-| Opus | libopus via `audiopus_sys` |
-| Deflate | zlib-rs (server) + [fflate](https://github.com/101arrowz/fflate) (client) |
-| Config | YAML via `serde_yaml` + validation |
-| Logging | `tracing` |
-| Language | Rust / TypeScript 5 (strict) |
+The browser owns the main analog demodulation path unless Opus is selected. It also owns the waterfall/spectrum renderers, RDS, audio worklet, equaliser, noise reduction, decoder workspace and map UI.
 
 ## Configuration
 
-All configuration lives in `config/config.yaml`. The file is validated at startup by the Rust config layer — invalid configs fail fast with clear error messages.
+Configuration is YAML (`config/config.yaml`), validated at startup and persisted when changed through the admin UI.
 
 ```yaml
 server:
   host: "0.0.0.0"
   port: 3000
-  adminPassword: "changeme"
+  adminPassword: "change-me"
+  callsign: "MYCALL"
+  location: "Athens, Greece"
+  receiverLatitude: 37.98
+  receiverLongitude: 23.72
+  bookmarkRegions: [global, r1]
+  bandplanRegion: r1
+  decoderBookmarksEnabled: true
+  decoderCatalogUrl: "https://raw.githubusercontent.com/gbozo/no-sdr/main/serverrs/decoder-catalog.json"
 
 dongles:
-  # Local USB dongle
   - id: dongle-0
-    deviceIndex: 0
     name: "RTL-SDR #0"
-    source:
-      type: local              # native USB RTL-SDR driver
+    enabled: true
     autoStart: true
+    source:
+      type: local
+      deviceIndex: 0
+      serial: ""
+    sampleRate: 2400000
+    gain: 0.0
+    ppmCorrection: 0
+    directSampling: 0
+    biasT: false
+    iqCorrection: true
     profiles:
       - id: fm-broadcast
         name: "FM Broadcast"
         centerFrequency: 100000000
         sampleRate: 2400000
-        fftSize: 2048
         defaultMode: wfm
         defaultBandwidth: 200000
+        fftSize: 32768
+        fftFps: 24
+        gain: 12.0
+        tuningStep: 1000
+        description: "FM broadcast with stereo and RDS"
 
-  # Remote dongle via rtl_tcp
-  - id: dongle-remote
-    name: "Remote Antenna"
-    source:
-      type: rtl_tcp
-      host: "192.168.1.100"
-      port: 1234
-    autoStart: true
-    profiles:
-      - id: aviation
-        name: "Aviation VHF"
-        centerFrequency: 125000000
-        sampleRate: 2400000
-        fftSize: 2048
-        defaultMode: am
-        defaultBandwidth: 8330
-        gain: 40
-
-  # Demo dongle (no hardware)
-  - id: dongle-demo
-    name: "Simulator"
-    source:
-      type: demo
-    profiles:
-      - id: fm-demo
-        name: "FM Demo"
-        centerFrequency: 100000000
-        sampleRate: 2400000
-        fftSize: 2048
-        defaultMode: wfm
+decoders:
+  - id: ft8-20m
+    enabled: true
+    dongleId: dongle-0
+    mode: ft8
+    frequencyHz: 14074000
+    bandwidthHz: 3000
 ```
 
-### Source Types
+### Source types
 
 | Type | Description | Config |
 |------|-------------|--------|
-| `local` | Native USB RTL-SDR (nusb; no librtlsdr) | `deviceIndex` / `serial` |
+| `local` | Native USB RTL-SDR | `deviceIndex` / `serial` |
 | `hackrf`, `airspy`, `airspyhf`, `hydrasdr`, `elad`, `rx888` | Native USB drivers | `serial` + source `settings` |
 | `pluto` | PlutoSDR over IIOD | `host`, `port` |
-| `sdrplay`, `lime`, `fobos` | Vendor-library drivers (`dlopen` at runtime) | `serial`/device string + source `settings` |
-| `rtl_tcp`, `airspy_tcp`, `hfp_tcp`, `rsp_tcp` | TCP clients to remote servers | `host`, `port` |
-| `demo` | Built-in signal simulator, no hardware | No extra config needed |
+| `sdrplay`, `lime`, `fobos` | Vendor-library drivers loaded at runtime | serial/device string + `settings` |
+| `rtl_tcp`, `airspy_tcp`, `hfp_tcp`, `rsp_tcp` | Remote TCP sources | `host`, `port` |
+| `demo` | Built-in simulator | none |
 
-### Profile System
+### Profiles
 
-Each dongle has multiple profiles. When an admin switches the active profile, **all connected clients viewing that dongle are switched automatically** — center frequency, sample rate, demodulation mode, and bandwidth all update in real time.
+Each dongle has one or more profiles. Switching the active profile updates every connected client on that dongle: centre frequency, sample rate, mode, bandwidth and FFT settings. Profiles can be created, updated and deleted from the admin UI or the REST API.
 
-Profiles can be created, updated, and deleted at runtime via the admin REST API. Changes are automatically persisted back to the YAML config file on disk.
+### Optional integrations
 
-### Environment Variables
+- **OpenWeatherMap** — set `server.openWeatherMapApiKey` to enable the map cloud-cover layer.
+- **AudD / ACRCloud** — set the provider credentials to enable the Music ID button.
+- **DB-IP City Lite** — optional offline geolocation for user analytics.
+
+### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CONFIG_PATH` | `../config/config.yaml` | Path to config file |
+| `CONFIG_PATH` | `../config/config.yaml` | Config file path |
 | `STATIC_DIR` | `../client/dist` | Built client assets |
 | `BOOKMARKS_DIR` | `../bookmarks` | Bookmark JSON directory |
-| `HOST` | config `server.host` | Override bind host (Electron uses `127.0.0.1`) |
-| `PORT` | config `server.port` | Override bind port |
-| `NODE_SDR_DEMO` | — | Set to `1` to enable demo mode (overrides per-dongle source) |
-| `LOG_LEVEL` | config `server.logLevel` | Override server log level |
+| `HOST` | config `server.host` | Bind host override |
+| `PORT` | config `server.port` | Bind port override |
+| `NODE_SDR_DEMO` | — | `1` forces demo mode |
+| `LOG_LEVEL` | config `server.logLevel` | Log level override |
 
-### Offline IP Geolocation
+### Offline IP geolocation
 
-Connected listeners can be labelled with their country/region without sending addresses to a third-party API. The server uses the free **DB-IP City Lite** MMDB (`maxminddb` reader) and updates it monthly.
+Connected listeners can be mapped to country/region without sending addresses to a third party:
 
 ```yaml
 geoip:
   enabled: true
-  databasePath: ../data/dbip-city-lite.mmdb   # relative to the config file
+  databasePath: ../data/dbip-city-lite.mmdb
   autoUpdate: true
   updateIntervalHours: 24
 ```
 
-- On first start the current monthly release is downloaded in the background to `databasePath` (about 121 MB on disk); a new release is installed by atomic rename and hot-swapped without dropping lookups.
-- The public users ribbon shows **country + region only**. The admin **Monitor** page shows city, coordinates and continent, plus the loaded release, any last error, and an **Update now** button.
-- Admin API: `GET /api/admin/geoip` and `POST /api/admin/geoip/update`.
-- DB-IP City Lite is licensed **CC BY 4.0**; the client renders the required “IP Geolocation by DB-IP” link when results are shown. The MMDB is gitignored, and lookups never leave the process.
+DB-IP City Lite updates monthly, is hot-swapped without dropping lookups, and stays inside the server process. Public ribbons show country/region only; admin monitor data includes city/coordinates. Admin APIs: `GET /api/admin/geoip`, `POST /api/admin/geoip/update`.
 
-### User Presence & Analytics
+## API
 
-Every WebSocket connection is recorded in `user_sessions` in the same SQLite database as the decoder history (`database.decoderPath`, default `decoders.sqlite` beside the config). The admin **System Monitor → Users** tab has:
+### Public
 
-- a live OpenStreetMap with current listeners plus anyone who disconnected within the configured window, with popups for country/region/city, tuned frequency, demod mode, bandwidth, IP and receiver/profile;
-- a history map with region bubbles sized and coloured by user count;
-- session/user/country/region/peak-concurrency stats, a started-session timeline, and top-mode/top-frequency lists;
-- **Purge old** and **Clear history** controls (current connections stay live).
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/status` | Status, uptime, client count |
+| `GET` | `/api/dongles` | Configured dongles and runtime state |
+| `GET` | `/api/dongles/:id/profiles` | Profiles for a dongle |
+| `GET` | `/api/bandplan` | Band plan (region-aware) |
+| `GET` | `/api/bookmarks` | Admin/user/decoder bookmark feed |
+| `GET` | `/api/decoder/history` | Persisted decoder messages with filters |
+| `GET` | `/api/decoder/messages` | Message feed |
+| `GET` | `/api/decoder/summary` | Decoder statistics summary |
+| `GET` | `/api/decoder/aircraft` | Persisted ADS-B entities |
+| `GET` | `/api/decoder/vessels` | Persisted AIS entities |
+| `GET` | `/api/decoder/modes` | Supported background decoder modes |
+| `GET` | `/api/decoder/catalog` | Read-only decoder calling-frequency catalogue |
+| `GET` | `/api/map/checkpoint` | Initial map snapshot |
+| `GET` | `/api/map/weather/:z/:x/:y` | Proxied OpenWeatherMap cloud tile |
 
-```yaml
-database:
-  userRetentionDays: 90          # closed sessions older than this are deleted
-  userPurgeIntervalMinutes: 360  # maintenance cadence; 0 disables
-  userMapRecentMinutes: 60       # disconnected users stay on the live map
-```
+### Admin
 
-- Auto-purge runs every six hours by default and removes only **closed** sessions; open sessions are never deleted.
-- Admin API: `GET /api/admin/users/map`, `GET /api/admin/users/analytics?since=<ms>&until=<ms>`, `POST /api/admin/users/purge` (`{}` for the retention purge, `{"all":true}` to clear).
-- Stored fields include connection start/end, IP/real IP, country/region/city/coordinates, continent, receiver/profile, tuned frequency, mode and bandwidth.
-- This is personal data. The public users ribbon only receives country/region; IP, city and coordinates are admin-only. Keep the SQLite file on a trusted volume and apply your local privacy policy.
+Admin endpoints use the admin session cookie, or `Authorization: Bearer <password>`.
 
-## Demodulation Modes
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/admin/login` | Authenticate |
+| `POST` | `/api/admin/save-config` | Persist config |
+| `POST` | `/api/admin/dongles/:id/start` / `stop` | Control a dongle |
+| `POST` | `/api/admin/dongles/:id/profile` | Switch active profile |
+| `POST`/`PUT`/`DELETE` | `/api/admin/dongles/:id/profiles[/:pid]` | Profile CRUD |
+| `GET` | `/api/admin/bookmarks/regions` | Bookmark folder options and selection |
+| `GET` | `/api/admin/decoder-catalog` | Decoder catalogue status/entries |
+| `POST` | `/api/admin/decoder-catalog/refresh` | Force catalogue refresh |
+| `GET`/`POST`/`PUT`/`DELETE` | `/api/admin/decoders[/:id]` | Background decoder CRUD |
+| `GET` | `/api/admin/users/map` | Live user map |
+| `GET` | `/api/admin/users/analytics` | Session analytics |
+| `POST` | `/api/admin/users/purge` | Purge user history |
+| `GET` | `/api/admin/geoip` | GeoIP status |
+| `POST` | `/api/admin/geoip/update` | Update GeoIP database |
+| `GET` | `/api/admin/status` | Detailed server status |
 
-### Analog (client-side, pure TypeScript)
+## WebSocket
 
-| Mode | Description | Bandwidth | Notes |
-|------|-------------|-----------|-------|
-| **WFM** | Wideband FM (broadcast radio) | 150–200 kHz | Stereo FM with PLL pilot detection, SNR-proportional blend, RDS decoding |
-| **NFM** | Narrowband FM (VHF/UHF comms) | 5–25 kHz | De-emphasis filter |
-| **AM** | Amplitude Modulation (aviation, shortwave) | 3–10 kHz | Envelope detection + AGC; auto-detects C-QUAM stereo |
-| **USB** | Upper Sideband (HF amateur, marine) | 1–4 kHz | BFO complex oscillator |
-| **LSB** | Lower Sideband (HF amateur, CB) | 1–4 kHz | Conjugate flip + BFO |
-| **CW** | Continuous Wave / Morse code | 50–1000 Hz | 700Hz BFO + narrow bandpass |
-| **RAW** | Raw IQ passthrough | Variable | I-channel audio output |
+| Socket | Format | Purpose |
+|--------|--------|---------|
+| `/ws` | Binary server → client; JSON client → server | Audio, IQ, FFT, metadata, decoders, user ribbon |
+| `/ws/map` | JSON server → client | Map checkpoint plus incremental aircraft/vessel/position/grid updates |
 
-### Digital (server-side, external binaries) - NOT YET IMPLEMENTED
-
-| Mode | Binary | Description |
-|------|--------|-------------|
-| **ADS-B** | `dump1090` | Aircraft tracking at 1090 MHz |
-| **ACARS** | `acarsdec` | Aircraft data link messages |
-| **VDL2** | `dumpvdl2` | VHF digital data link |
-| **AIS** | `rtl_ais` | Ship tracking |
-| **APRS** | `direwolf` | Amateur packet radio |
-| **POCSAG** | `multimon-ng` | Pager decoding |
-| **FT8/FT4** | `jt9` | Weak-signal amateur modes |
-| **WSPR** | `wsprd` | Propagation reporting |
-
-Digital decoders are optional — install the binaries you need. The server auto-detects available binaries at startup.
+The map socket is intentionally separate so a busy map never delays audio or waterfall frames. See [SPEC.md](SPEC.md) for the binary protocol.
 
 ## Deployment
 
-### run Docker Compose from this Repo
+### Docker Compose
 
 ```bash
 cd docker
 docker compose up -d
 ```
 
-The Dockerfile builds the Rust backend and client in a multi-stage image. USB passthrough requires `privileged: true` on Linux.
-
-### Docker Compose (spin your own)
+USB passthrough on Linux needs the device mounted (and often `privileged: true`):
 
 ```yaml
 services:
   no-sdr:
     image: ghcr.io/gbozo/no-sdr:latest
     ports:
-      - "3000:3000"    
+      - "3000:3000"
     environment:
-      - NODE_ENV=production
       - LOG_LEVEL=info
-    # Required for USB access on Linux
     privileged: true
     devices:
       - /dev:/dev
-    restart: unless-stopped
     volumes:
-      - ../config:/app/config   
-    
+      - ../config:/app/config
+    restart: unless-stopped
 ```
 
-Configure the dongle source as `rtl_tcp` with `host: rtl_tcp` and `port: 1234`.
+For a remote dongle, set `source.type: rtl_tcp`, `host: rtl_tcp`, `port: 1234`.
 
 ### Raspberry Pi
 
-no-sdr runs well on Raspberry Pi 4/5 (ARM64).
+Runs on ARM64 (tested on Pi 4/5):
 
 ```bash
-sudo apt install rtl-sdr
 git clone https://github.com/gbozo/no-sdr.git
 cd no-sdr
-npm install && npm run build && npm start
+npm install
+npm run build
+npm start
 ```
 
-### Reverse Proxy (nginx) - Only if you want to terminate SSL
+### Reverse proxy
+
+Only needed for TLS termination:
 
 ```nginx
 server {
@@ -450,99 +484,69 @@ server {
 }
 ```
 
-## REST API
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `GET` | `/api/status` | — | Server status, uptime, client count |
-| `GET` | `/api/dongles` | — | List all configured dongles |
-| `GET` | `/api/dongles/:id` | — | Get dongle info |
-| `GET` | `/api/dongles/:id/profiles` | — | List profiles for dongle |
-| `GET` | `/api/decoders` | — | List running decoders |
-| `GET` | `/api/decoder/catalog` | — | Read-only decoder calling-frequency catalogue |
-| `GET` | `/api/map/checkpoint` | — | Initial live-map checkpoint (station, aircraft, vessels, grid decodes) |
-| `GET` | `/api/map/weather/:z/:x/:y` | — | Proxied OpenWeatherMap cloud tile |
-| `GET` | `/api/decoders/check` | — | Check which decoder binaries are installed |
-| `POST` | `/api/admin/login` | — | Authenticate (body: `{ password }`) |
-| `POST` | `/api/admin/dongles/:id/start` | Admin | Start a dongle |
-| `POST` | `/api/admin/dongles/:id/stop` | Admin | Stop a dongle |
-| `POST` | `/api/admin/dongles/:id/profile` | Admin | Switch active profile (body: `{ profileId }`) |
-| `POST` | `/api/admin/dongles/:id/profiles` | Admin | Create new profile (body: profile object) |
-| `PUT` | `/api/admin/dongles/:id/profiles/:pid` | Admin | Update profile (body: partial profile) |
-| `DELETE` | `/api/admin/dongles/:id/profiles/:pid` | Admin | Delete profile |
-| `GET` | `/api/admin/bookmarks/regions` | Admin | List bookmark region/country folders and the current selection |
-| `GET` | `/api/admin/decoder-catalog` | Admin | Read-only decoder catalogue status and entries |
-| `POST` | `/api/admin/decoder-catalog/refresh` | Admin | Refresh the decoder catalogue from its configured URL |
-| `POST` | `/api/admin/save-config` | Admin | Persist current config to disk |
-| `GET` | `/api/admin/status` | Admin | Full status with memory usage |
-
-Admin endpoints require `Authorization: Bearer <password>` header.
-
-## WebSocket Protocol
-
-The WebSocket endpoint is at `/ws`. Server-to-client messages use a binary protocol with a type byte prefix. Client-to-server messages are JSON text.
-
-The map page has a separate JSON WebSocket at `/ws/map`: it sends an initial checkpoint and then incremental aircraft/vessel/grid-decode updates, keeping map traffic away from the audio/FFT socket.
-
-See [SPEC.md](SPEC.md) for the complete protocol specification.
-
 ## Development
 
 ```bash
-# Start everything in demo mode with hot reload
-npm run dev:demo
-
-# Build all workspaces
-npm run build
-
-# Type check all workspaces
+npm run dev          # Rust server :3000 + Vite :3001
+npm run dev:demo     # Same, with simulated signals
+npm run build        # client + Rust release build
 npm run typecheck
-
-# Clean build artifacts
-npm run clean
+npm run test:rust
 ```
 
-### Project Structure
+### Project structure
 
-- **`serverrs/`** — Rust backend, hardware management, FFT, IQ extraction, Opus audio pipeline, WebSocket
-- **`client/`** — SolidJS frontend, Canvas renderers, DSP, stereo FM, RDS decoder, AudioWorklet + EQ
+```text
+serverrs/               Rust backend
+  src/api/              REST, admin, band plan, bookmarks, map feed
+  src/ws/               Main WebSocket protocol and client manager
+  src/dsp/              FFT, NCO, filters, decimation, IQ correction
+  src/demod/            FM, AM, SSB, CW, SAM, C-QUAM
+  src/decoders/         Native decoder workers and SQLite store
+  src/dongle/           Sources, native drivers, Opus, recording
+client/                 SolidJS client
+  src/components/       Receiver UI, decoder workspace, waterfall, map
+  src/engine/           Demodulators, RDS, audio, workers, analysis
+  src/admin/            Admin console and analytics views
+  src/shared/           Protocol, modes, types, grids, decoder catalogue
+desktop/                Electron shell and packaging
+docker/                 Container build and compose
+```
 
-Build order: `client` → `serverrs` (the server serves the built client).
+Build order is client → Rust server, because the server serves the built SPA.
 
 ## Contributing
 
-Contributions are welcome. Please:
+1. Fork and create a feature branch.
+2. Run `npm run build && npm run typecheck` before submitting.
+3. Keep pull requests focused — one feature or fix per PR.
+4. Add config examples when introducing new modes, sources or decoders.
 
-1. Fork the repo and create a feature branch
-2. Run `npm run build && npm run typecheck` before submitting
-3. Keep PRs focused — one feature or fix per PR
-4. Add to `config/config.yaml` examples if adding new modes or decoders
+### Where help is useful
 
-### Areas Where Help Is Needed
-
-- **AM Stereo (C-QUAM) testing** — auto-detection is experimental; we need testers near C-QUAM stations (~45 in the US, a handful in Italy, Japan, Philippines, Thailand). Requires direct sampling mod or HF-capable dongle. Please report results!
-- **Testing** — unit tests for DSP, protocol, config validation, ADPCM codec
-- **WebGL waterfall** — GPU-accelerated rendering for large FFT sizes
-- **Recording** — IQ recording and playback (SigMF format)
-- **Bookmarks** — frequency bookmark management
-- **New decoders** — WASM ports of C decoders (FT8, DAB, etc.)
+- **C-QUAM AM stereo field reports** — especially near C-QUAM stations.
+- **New native decoders** and improvements to weak-signal performance.
+- **GPU/Vulkan DSP** — FFT, FIR, NCO, decimation and FM stereo FIR are the first targets.
+- **WebGL waterfall** for very large FFT sizes.
+- **DSP and protocol tests**, especially on ARM hardware.
+- **Documentation** for source drivers, decoder settings and deployment setups.
 
 ## License
 
-GPL-3.0-or-later
+GPL-3.0-or-later.
 
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version. It is distributed in the hope that it will be useful, but WITHOUT ANY
-WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE. See `LICENSE` for the full text.
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version. It is
+distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See [`LICENSE`](LICENSE) for the full text.
 
 ## Acknowledgments
 
-- [OpenWebRX](https://github.com/jketterl/openwebrx) — the gold standard of open-source WebSDR, major architectural inspiration
-- [Intercept](https://github.com/smittix/intercept) — modern signal intelligence platform, UI/UX reference
+- [OpenWebRX](https://github.com/jketterl/openwebrx) — major architectural inspiration for open WebSDRs
+- [Intercept](https://github.com/smittix/intercept) — UI/UX and signal-intelligence reference
 - [fft.js](https://github.com/nicedoc/fft.js) by Fedor Indutny — fast pure-JS radix-4 FFT
-- [RTL-SDR](https://www.rtl-sdr.com/) community — for making software-defined radio accessible to everyone
-- [SolidJS](https://www.solidjs.com/) — reactive UI without the VDOM overhead
-
+- [RTL-SDR](https://www.rtl-sdr.com/) community — making software-defined radio accessible
+- [SolidJS](https://www.solidjs.com/) — reactive UI without VDOM overhead
+- OpenWeatherMap and DB-IP for optional weather and geolocation data
