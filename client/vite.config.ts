@@ -88,5 +88,19 @@ export default defineConfig({
     target: 'esnext',
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('solid-js') || id.includes('@solidjs')) return 'solid';
+            if (id.includes('opus-decoder') || id.includes('fflate')) return 'codecs';
+            return 'vendor';
+          }
+          if (id.includes('/src/engine/')) return 'engine';
+          if (id.includes('/src/components/')) return 'components';
+          return undefined;
+        },
+      },
+    },
   },
 });
