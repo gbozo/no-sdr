@@ -397,7 +397,7 @@ fn encode_frame(
     // Rounded immediately: the decoder only sees the i16 in the header.
     let pw_floor = pw.map(|_| range.blank_floor(stats, 5, 0.0).round());
 
-    let mut work: Vec<f32> = Vec::new();
+    let mut work: Vec<f32>;
     let src: &[f32] = if let Some((pct, margin)) = v.blank {
         let floor = range.blank_floor(stats, pct, margin);
         work = frame.to_vec();
