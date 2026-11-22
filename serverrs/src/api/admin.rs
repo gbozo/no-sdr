@@ -10,6 +10,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use parking_lot::Mutex;
+#[cfg(feature = "analytics")]
 use serde::Deserialize;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;

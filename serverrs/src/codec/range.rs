@@ -139,7 +139,6 @@ impl<'a> RangeDecoder<'a> {
 }
 
 #[inline]
-#[inline(always)]
 fn byte_context(prev_residual: u8) -> usize {
     (prev_residual >> (8 - BYTE_CTX_BITS)) as usize
 }
