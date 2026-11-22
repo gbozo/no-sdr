@@ -280,17 +280,27 @@ const DongleEditor: Component<{
     if (adminStore.usbDevices().length === 0) {
       setScanError('No devices found. Check the USB cable, udev rules and vendor library/service.');
     }
-    // Keep the current pick if the device is still present; otherwise clear it
-    // so the select does not point at a vanished option.
-    const stillPresent = adminStore
-      .usbDevices()
-      .some((device) => device.source === type && deviceKey(device) === selectedDevice());
-    if (!stillPresent) setSelectedDevice('');
+    // Restore the saved pick if it is still attached, otherwise clear the
+    // select so it never points at a vanished option.
+    const source = localState().source ?? dongle()?.source;
+    const devices = adminStore.usbDevices().filter((device) => device.source === type);
+    const saved =
+      (source?.serial
+        ? devices.find((device) => device.serial === source.serial)
+        : undefined) ??
+      devices.find(
+        (device) =>
+          source?.host &&
+          device.address &&
+          device.address.startsWith(`${source.host}:`),
+      ) ??
+      devices.find((device) => (device.index ?? 0) === (source?.deviceIndex ?? 0));
+    setSelectedDevice(saved ? deviceKey(saved) : '');
   }
 
   function applyDetectedDevice(device: UsbDevice) {
     if (device.serial) updateLocalSource('serial', device.serial);
-    if (typeof device.index === 'number') updateLocal('deviceIndex', device.index);
+    if (typeof device.index === 'number') updateLocalSource('deviceIndex', device.index);
     if (device.address) {
       const [host, port] = device.address.split(':');
       updateLocalSource('host', host);
@@ -324,6 +334,9 @@ const DongleEditor: Component<{
       setLocalState({ ...d, source: { ...d.source } });
       setSelectedDevice('');
       setEditing(true);
+      if (hasDeviceScan(d.source?.type)) {
+        void scanDevices(d.source.type);
+      }
     }
   }
 
@@ -630,9 +643,9 @@ const DongleEditor: Component<{
                 </Show>
                 <Show when={!isHackRf(sourceType()) && !isAirspyFamily(sourceType()) && !isAirspyHf(sourceType()) && !isElad(sourceType()) && !isRx888(sourceType()) && !isPluto(sourceType()) && !isVendorLibrarySource(sourceType())}>
                   <FieldGroup label="Device Index">
-                    <Show when={editing()} fallback={<ValueDisplay value={String(d().deviceIndex || 0)} />}>
-                      <input type="number" value={current().deviceIndex || 0} min={0} max={9}
-                        onInput={(e) => updateLocal('deviceIndex', parseInt(e.currentTarget.value) || 0)}
+                    <Show when={editing()} fallback={<ValueDisplay value={String(d().source?.deviceIndex ?? d().deviceIndex ?? 0)} />}>
+                      <input type="number" value={current().source?.deviceIndex ?? current().deviceIndex ?? 0} min={0} max={9}
+                        onInput={(e) => updateLocalSource('deviceIndex', parseInt(e.currentTarget.value) || 0)}
                         class="admin-input w-16" />
                     </Show>
                   </FieldGroup>
