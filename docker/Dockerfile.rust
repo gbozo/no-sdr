@@ -33,6 +33,7 @@ ENV CMAKE_POLICY_VERSION_MINIMUM=3.5
 WORKDIR /app
 
 COPY serverrs/Cargo.toml serverrs/Cargo.lock ./
+COPY serverrs/decoder-catalog.json ./
 COPY serverrs/src ./src
 COPY serverrs/bands ./bands
 COPY serverrs/vendor ./vendor
