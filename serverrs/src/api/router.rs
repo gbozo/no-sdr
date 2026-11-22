@@ -106,6 +106,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/bookmarks", get(public_bookmarks))
         .route("/bandplan", get(bandplan))
         .route("/decoder/catalog", get(super::decoder_catalog::catalog_json))
+        .route("/map/checkpoint", get(super::map::checkpoint))
+        .route("/map/weather/{z}/{x}/{y}", get(super::map::weather_tile))
         .route("/identify", get(identify).post(identify))
         .route("/identify/status", get(identify_status))
         .nest("/admin", admin_router);
@@ -127,6 +129,7 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/ws", get(ws_handler))
+        .route("/ws/map", get(super::map::ws_map))
         .route("/health", get(health))
         .nest("/api", api_router)
         .fallback(spa_handler)

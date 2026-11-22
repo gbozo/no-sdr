@@ -7,6 +7,7 @@ pub mod decoder_catalog;
 #[cfg(feature = "decoders")]
 pub mod decoders;
 pub mod identify;
+pub mod map;
 pub mod recognizer;
 pub mod router;
 pub mod system;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub bookmarks_dir: String,
     pub bandplan: Arc<BandPlanService>,
     pub decoder_catalog: Arc<DecoderCatalogService>,
+    pub weather_client: reqwest::Client,
     pub identify: Arc<IdentifyService>,
     pub auth: Arc<admin::AdminAuth>,
     pub static_dir: PathBuf,

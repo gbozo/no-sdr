@@ -460,6 +460,8 @@ server {
 | `GET` | `/api/dongles/:id/profiles` | — | List profiles for dongle |
 | `GET` | `/api/decoders` | — | List running decoders |
 | `GET` | `/api/decoder/catalog` | — | Read-only decoder calling-frequency catalogue |
+| `GET` | `/api/map/checkpoint` | — | Initial live-map checkpoint (station, aircraft, vessels, grid decodes) |
+| `GET` | `/api/map/weather/:z/:x/:y` | — | Proxied OpenWeatherMap cloud tile |
 | `GET` | `/api/decoders/check` | — | Check which decoder binaries are installed |
 | `POST` | `/api/admin/login` | — | Authenticate (body: `{ password }`) |
 | `POST` | `/api/admin/dongles/:id/start` | Admin | Start a dongle |
@@ -479,6 +481,8 @@ Admin endpoints require `Authorization: Bearer <password>` header.
 ## WebSocket Protocol
 
 The WebSocket endpoint is at `/ws`. Server-to-client messages use a binary protocol with a type byte prefix. Client-to-server messages are JSON text.
+
+The map page has a separate JSON WebSocket at `/ws/map`: it sends an initial checkpoint and then incremental aircraft/vessel/grid-decode updates, keeping map traffic away from the audio/FFT socket.
 
 See [SPEC.md](SPEC.md) for the complete protocol specification.
 

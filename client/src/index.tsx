@@ -8,6 +8,7 @@ import { registerSW } from 'virtual:pwa-register';
 
 // Lazy-load admin page (not needed for SDR users)
 const AdminPage = lazy(() => import('./admin/AdminPage.js'));
+const MapPage = lazy(() => import('./map/MapPage.js'));
 
 // Register service worker — autoUpdate silently updates in background
 registerSW({
@@ -27,6 +28,7 @@ render(
     <Router>
       <Route path="/" component={App} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/map" component={MapPage} />
     </Router>
   ),
   root,

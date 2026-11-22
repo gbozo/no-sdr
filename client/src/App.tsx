@@ -427,6 +427,26 @@ const App: Component = () => {
           </Show>
         </Show>
 
+        {/* Map Button */}
+        <a
+          href="/map"
+          class="ml-4 p-1.5 border border-border rounded-sm
+                 text-text-dim hover:text-cyan hover:border-cyan
+                 transition-colors inline-flex items-center"
+          title="Open the live map"
+          onClick={(e) => {
+            if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+              e.preventDefault();
+              navigate('/map');
+            }
+          }}
+        >
+          <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 14s4-4.2 4-7.3A4 4 0 004 6.7C4 9.8 8 14 8 14z"/>
+            <circle cx="8" cy="6.7" r="1.4"/>
+          </svg>
+        </a>
+
         {/* Admin Button */}
         <a
           href="/admin"

@@ -613,6 +613,75 @@ impl DecoderStore {
             .unwrap_or_default()
     }
 
+    /// Entities of one kind updated at or after `since_ms`, oldest first.
+    pub fn entities_since(&self, kind: &str, since_ms: i64, limit: usize) -> Vec<Value> {
+        let Some(conn) = &self.conn else {
+            return Vec::new();
+        };
+        let conn = conn.lock();
+        let limit = limit.clamp(1, 5000) as i64;
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT kind, entity_key, payload, first_seen_ms, last_seen_ms
+             FROM decoder_entities
+             WHERE kind = ?1 AND last_seen_ms >= ?2
+             ORDER BY last_seen_ms ASC LIMIT ?3",
+        ) else {
+            return Vec::new();
+        };
+        let rows = stmt.query_map(params![kind, since_ms, limit], |row| {
+            let payload: String = row.get(2)?;
+            Ok(json!({
+                "kind": row.get::<_, String>(0)?,
+                "key": row.get::<_, String>(1)?,
+                "firstSeenMs": row.get::<_, i64>(3)?,
+                "lastSeenMs": row.get::<_, i64>(4)?,
+                "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null),
+            }))
+        });
+        rows.map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Recent persisted decodes that carry a Maidenhead grid, newest first.
+    pub fn grid_messages(&self, since_ms: i64, limit: usize) -> Vec<Value> {
+        self.decode_messages_matching(
+            "received_ms >= ?1 AND json_extract(payload, '$.grid') IS NOT NULL",
+            since_ms,
+            limit,
+        )
+    }
+
+    /// Recent APRS/HFDL-style decodes carrying latitude/longitude fixes.
+    pub fn position_messages(&self, since_ms: i64, limit: usize) -> Vec<Value> {
+        self.decode_messages_matching(
+            "received_ms >= ?1 AND (json_extract(payload, '$.lat') IS NOT NULL \
+             OR json_extract(payload, '$.aprs.lat') IS NOT NULL)",
+            since_ms,
+            limit,
+        )
+    }
+
+    fn decode_messages_matching(&self, condition: &str, since_ms: i64, limit: usize) -> Vec<Value> {
+        let Some(conn) = &self.conn else {
+            return Vec::new();
+        };
+        let conn = conn.lock();
+        let limit = limit.clamp(1, 5000) as i64;
+        let sql = format!(
+            "SELECT id, decoder_id, dongle_id, mode, received_ms, text,
+                    frequency_hz, audio_hz, snr_db, dt_sec, period, payload
+             FROM decoder_messages
+             WHERE {condition}
+             ORDER BY received_ms DESC, id DESC LIMIT ?2"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return Vec::new();
+        };
+        let rows = stmt.query_map(params![since_ms, limit], row_to_json);
+        rows.map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     pub fn stats(&self) -> Value {
         let Some(conn) = &self.conn else {
             return json!({"enabled": false, "path": self.path});
