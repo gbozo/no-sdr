@@ -140,7 +140,7 @@ Layers include:
 - **Grid decodes** — FT8/FT4/FT2/WSPR and other grid-bearing modes plotted at their Maidenhead grid centre.
 - **Position reports** — APRS and HFDL latitude/longitude fixes.
 - **Maidenhead grid** — field, 4-character square and 6-character subsquare overlay.
-- **Cloud cover** — server-proxied OpenWeatherMap cloud tiles, re-encoded as lossless WebP and cached server-side (roughly one third of the original PNG size).
+- **Cloud cover** — client-side Open-Meteo cloud-cover grid; no API key and no server-side weather bytes.
 
 Map details:
 
@@ -342,7 +342,6 @@ Each dongle has one or more profiles. Switching the active profile updates every
 
 ### Optional integrations
 
-- **OpenWeatherMap** — set `server.openWeatherMapApiKey` to enable the map cloud-cover layer.
 - **AudD / ACRCloud** — set the provider credentials to enable the Music ID button.
 - **DB-IP City Lite** — optional offline geolocation for user analytics.
 
@@ -391,7 +390,6 @@ DB-IP City Lite updates monthly, is hot-swapped without dropping lookups, and st
 | `GET` | `/api/decoder/modes` | Supported background decoder modes |
 | `GET` | `/api/decoder/catalog` | Read-only decoder calling-frequency catalogue |
 | `GET` | `/api/map/checkpoint` | Initial map snapshot |
-| `GET` | `/api/map/weather/:z/:x/:y` | Proxied OpenWeatherMap cloud tile |
 
 ### Admin
 
@@ -549,4 +547,4 @@ See [`LICENSE`](LICENSE) for the full text.
 - [fft.js](https://github.com/nicedoc/fft.js) by Fedor Indutny — fast pure-JS radix-4 FFT
 - [RTL-SDR](https://www.rtl-sdr.com/) community — making software-defined radio accessible
 - [SolidJS](https://www.solidjs.com/) — reactive UI without VDOM overhead
-- OpenWeatherMap and DB-IP for optional weather and geolocation data
+- Open-Meteo and DB-IP for optional weather and geolocation data

@@ -79,23 +79,6 @@ const GeneralSection: Component = () => {
             </Show>
           </SettingsGroup>
 
-          {/* Weather overlay */}
-          <SettingsGroup
-            title="Weather Overlay"
-            description="OpenWeatherMap API key for the future cloud/weather overlay on OpenStreetMap."
-          >
-            <FieldRow
-              label="API Key"
-              help="Create a key at openweathermap.org/api. It stays server-side and is not sent to clients."
-            >
-              <ApiKeyInput
-                value={cfg().openWeatherMapApiKey}
-                onChange={(v) => adminStore.updateServerConfigField('openWeatherMapApiKey', v)}
-                placeholder="OpenWeatherMap API key"
-              />
-            </FieldRow>
-          </SettingsGroup>
-
           {/* Network */}
           <SettingsGroup title="Network" description="Server bind address (requires restart to take effect)">
             <FieldRow label="Host" help="IP address to bind to (0.0.0.0 = all interfaces)">

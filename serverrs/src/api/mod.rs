@@ -40,7 +40,6 @@ pub struct AppState {
     pub bookmarks_dir: String,
     pub bandplan: Arc<BandPlanService>,
     pub decoder_catalog: Arc<DecoderCatalogService>,
-    pub weather_client: reqwest::Client,
     pub identify: Arc<IdentifyService>,
     pub auth: Arc<admin::AdminAuth>,
     pub static_dir: PathBuf,

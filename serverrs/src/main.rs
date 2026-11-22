@@ -195,7 +195,6 @@ async fn async_main() -> Result<()> {
         bookmarks_dir,
         bandplan,
         decoder_catalog,
-        weather_client: reqwest::Client::new(),
         identify,
         auth: AdminAuth::new(admin_password),
         static_dir: PathBuf::from(static_dir),

@@ -235,8 +235,6 @@ export interface ServerConfig {
   acrcloudHost: string;
   acrcloudAccessKey: string;
   acrcloudAccessSecret: string;
-  /** OpenWeatherMap API key for the map weather/cloud overlay. */
-  openWeatherMapApiKey: string;
   // Decoder history database
   decoderPath: string;
   retentionDays: number;
@@ -347,7 +345,6 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {  port: 3000,
   acrcloudHost: '',
   acrcloudAccessKey: '',
   acrcloudAccessSecret: '',
-  openWeatherMapApiKey: '',
   decoderPath: '',
   retentionDays: 0,
   purgeIntervalMinutes: 30,
@@ -519,7 +516,6 @@ function createAdminStore() {
           acrcloudHost: data.acrcloudHost ?? '',
           acrcloudAccessKey: data.acrcloudAccessKey ?? '',
           acrcloudAccessSecret: data.acrcloudAccessSecret ?? '',
-          openWeatherMapApiKey: data.openWeatherMapApiKey ?? '',
           decoderPath: data.decoderPath ?? '',
           retentionDays: data.retentionDays ?? 0,
           purgeIntervalMinutes: data.purgeIntervalMinutes ?? 30,

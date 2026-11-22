@@ -21,7 +21,7 @@ interface MapStation {
   version: string;
   clients: number;
   decoders: Array<{ mode: string; label: string; description?: string }>;
-  weather: { enabled: boolean; provider: string; layer: string };
+  weather: { enabled: boolean; provider: string };
 }
 
 interface MapCheckpoint {
@@ -618,7 +618,14 @@ const MapPage: Component = () => {
   let container: HTMLDivElement | undefined;
   let map: L.Map | undefined;
   let baseLayer: L.TileLayer | undefined;
-  let weatherLayer: L.TileLayer | undefined;
+  let weatherOverlay: L.ImageOverlay | undefined;
+  let cloudTimer: number | null = null;
+  let cloudRequest = 0;
+  let cloudFetchKey = '';
+  const cloudCache = new Map<
+    string,
+    { at: number; dataUrl: string; bounds: L.LatLngBounds }
+  >();
   let resizeObserver: ResizeObserver | undefined;
 
   const [mapReady, setMapReady] = createSignal(false);
@@ -801,19 +808,143 @@ const MapPage: Component = () => {
     baseLayer = L.tileLayer(style.url, options).addTo(map);
   }
 
+  function scheduleClouds() {
+    if (!map || !layerState().weather) return;
+    if (cloudTimer !== null) window.clearTimeout(cloudTimer);
+    cloudTimer = window.setTimeout(() => {
+      cloudTimer = null;
+      void refreshCloudCover();
+    }, 350);
+  }
+
+  function renderCloudCanvas(values: Array<number | null>, cols: number, rows: number): string {
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    const frame = ctx.createImageData(size, size);
+    const data = frame.data;
+    const valueAt = (col: number, row: number) =>
+      values[row * cols + col] ?? 0;
+
+    for (let y = 0; y < size; y++) {
+      const gy = (y + 0.5) / size * (rows - 1);
+      const y0 = Math.min(rows - 1, Math.floor(gy));
+      const y1 = Math.min(rows - 1, y0 + 1);
+      const ty = gy - y0;
+      for (let x = 0; x < size; x++) {
+        const gx = (x + 0.5) / size * (cols - 1);
+        const x0 = Math.min(cols - 1, Math.floor(gx));
+        const x1 = Math.min(cols - 1, x0 + 1);
+        const tx = gx - x0;
+        const top = valueAt(x0, y0) * (1 - tx) + valueAt(x1, y0) * tx;
+        const bottom = valueAt(x0, y1) * (1 - tx) + valueAt(x1, y1) * tx;
+        const coverage = Math.max(0, Math.min(100, top * (1 - ty) + bottom * ty));
+        const t = coverage / 100;
+        const smooth = t * t * (3 - 2 * t);
+        const index = (y * size + x) * 4;
+        data[index] = 235;
+        data[index + 1] = 246;
+        data[index + 2] = 255;
+        data[index + 3] = Math.round(smooth * 150);
+      }
+    }
+    ctx.putImageData(frame, 0, 0);
+    return canvas.toDataURL('image/webp', 0.9);
+  }
+
+  async function refreshCloudCover() {
+    if (!map || !layerState().weather) return;
+    const bounds = map.getBounds();
+    const lonPad = Math.max(0.05, (bounds.getEast() - bounds.getWest()) * 0.18);
+    const latPad = Math.max(0.05, (bounds.getNorth() - bounds.getSouth()) * 0.18);
+    const west = Math.max(-180, bounds.getWest() - lonPad);
+    const east = Math.min(180, bounds.getEast() + lonPad);
+    const south = Math.max(-85, bounds.getSouth() - latPad);
+    const north = Math.min(85, bounds.getNorth() + latPad);
+    const cols = 7;
+    const rows = 7;
+    const cacheKey =
+      `${north.toFixed(3)},${south.toFixed(3)},${west.toFixed(3)},${east.toFixed(3)}` +
+      `|${cols}x${rows}`;
+    const cached = cloudCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
+      showCloudOverlay(cached.dataUrl, cached.bounds);
+      return;
+    }
+    if (cloudFetchKey === cacheKey) return;
+    cloudFetchKey = cacheKey;
+    const lats: string[] = [];
+    const lons: string[] = [];
+    for (let row = 0; row < rows; row++) {
+      const lat = north - (north - south) * (row / (rows - 1));
+      for (let col = 0; col < cols; col++) {
+        lats.push(lat.toFixed(4));
+        lons.push((west + (east - west) * (col / (cols - 1))).toFixed(4));
+      }
+    }
+    const url =
+      `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}` +
+      `&longitude=${lons.join(',')}&current=cloud_cover&timezone=UTC`;
+    const request = ++cloudRequest;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const items = Array.isArray(payload) ? payload : [payload];
+      const values = items.map((item) => {
+        const value = item?.current?.cloud_cover;
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+      });
+      if (request !== cloudRequest || !layerState().weather || !map) return;
+      const dataUrl = renderCloudCanvas(values, cols, rows);
+      if (!dataUrl) return;
+      const overlayBounds = L.latLngBounds([
+        [south, west],
+        [north, east],
+      ]);
+      if (cloudCache.size > 32) cloudCache.clear();
+      cloudCache.set(cacheKey, { at: Date.now(), dataUrl, bounds: overlayBounds });
+      showCloudOverlay(dataUrl, overlayBounds);
+    } catch {
+      // Leave the last good cloud image in place.
+    } finally {
+      if (cloudFetchKey === cacheKey) cloudFetchKey = '';
+    }
+  }
+
+  function showCloudOverlay(dataUrl: string, bounds: L.LatLngBounds) {
+    if (!map) return;
+    if (!weatherOverlay) {
+      weatherOverlay = L.imageOverlay(dataUrl, bounds, {
+        opacity: 0.78,
+        pane: 'weatherPane',
+        interactive: false,
+        attribution: 'Weather data &copy; Open-Meteo',
+      }).addTo(map);
+    } else {
+      weatherOverlay.setBounds(bounds);
+      weatherOverlay.setUrl(dataUrl);
+      if (!map.hasLayer(weatherOverlay)) weatherOverlay.addTo(map);
+    }
+  }
+
   function syncWeatherLayer() {
     if (!map) return;
-    const shouldShow = layerState().weather && !!station()?.weather.enabled;
-    if (shouldShow && !weatherLayer) {
-      weatherLayer = L.tileLayer('/api/map/weather/{z}/{x}/{y}', {
-        opacity: 0.65,
-        maxZoom: 19,
-        pane: 'weatherPane',
-        attribution: 'Clouds &copy; OpenWeatherMap',
-      }).addTo(map);
-    } else if (!shouldShow && weatherLayer) {
-      map.removeLayer(weatherLayer);
-      weatherLayer = undefined;
+    const shouldShow = layerState().weather && station()?.weather.enabled !== false;
+    if (shouldShow) {
+      if (weatherOverlay) {
+        if (!map.hasLayer(weatherOverlay)) {
+          weatherOverlay.addTo(map);
+          scheduleClouds();
+        }
+      } else {
+        scheduleClouds();
+      }
+    } else if (weatherOverlay && map.hasLayer(weatherOverlay)) {
+      map.removeLayer(weatherOverlay);
     }
   }
 
@@ -1350,6 +1481,8 @@ const MapPage: Component = () => {
 
     map.on('moveend', refreshGrid);
     map.on('zoomend', refreshGrid);
+    map.on('moveend', scheduleClouds);
+    map.on('zoomend', scheduleClouds);
     resizeObserver = new ResizeObserver(() => map?.invalidateSize());
     resizeObserver.observe(container);
     ageTimer = window.setInterval(() => setAgeTick((tick) => tick + 1), 5000);
@@ -1362,6 +1495,7 @@ const MapPage: Component = () => {
     if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
     if (ageTimer !== null) window.clearInterval(ageTimer);
     if (motionTimer !== null) window.clearInterval(motionTimer);
+    if (cloudTimer !== null) window.clearTimeout(cloudTimer);
     socket?.close();
     socket = null;
     map?.remove();
@@ -1526,10 +1660,9 @@ const MapPage: Component = () => {
             <MapLayerRow
               id="weather"
               label="Cloud cover"
-              hint={station()?.weather.enabled ? 'OpenWeatherMap cloud tiles' : 'Add an OpenWeatherMap key in Admin → Identify'}
+              hint="Open-Meteo cloud cover (no API key, rendered client-side)"
               checked={layerState().weather}
               colour="#6bb3ff"
-              disabled={!station()?.weather.enabled}
               onChange={(v) => setLayer('weather', v)}
             />
           </div>
