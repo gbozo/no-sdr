@@ -25,6 +25,7 @@ flate2 = { version = "1", features = ["zlib-rs"] }
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
+image = { version = "0.25", default-features = false, features = ["png"] }
 num-complex = "0.4"
 parking_lot = "0.12"
 rand = "0.8"
@@ -44,6 +45,7 @@ tower-http = { version = "0.6", features = ["fs", "cors", "trace", "set-header"]
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+webp = "0.3"
 
 # Optional codecs/hardware.
 opus = { version = "0.3", optional = true }

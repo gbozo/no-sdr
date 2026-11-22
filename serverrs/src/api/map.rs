@@ -4,7 +4,9 @@
 //! audio/FFT WebSocket. The feed is built from the persisted decoder store, so
 //! it works without touching the main client pipelines.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -13,6 +15,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::{SinkExt, StreamExt};
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 
 use super::AppState;
@@ -22,6 +25,16 @@ const ENTITY_ACTIVE_MS: i64 = 5 * 60 * 1000;
 const CHECKPOINT_GRID_LIMIT: usize = 3_000;
 const UPDATE_LIMIT: usize = 1_000;
 const UPDATE_INTERVAL_MS: u64 = 750;
+const WEATHER_CACHE_TTL: Duration = Duration::from_secs(600);
+const WEATHER_CACHE_MAX: usize = 512;
+
+struct CachedTile {
+    at: Instant,
+    bytes: Vec<u8>,
+    webp: bool,
+}
+
+static WEATHER_CACHE: OnceLock<Mutex<HashMap<(u32, u32, u32), CachedTile>>> = OnceLock::new();
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -176,10 +189,7 @@ pub async fn checkpoint(State(state): State<AppState>) -> Json<Value> {
     Json(checkpoint_json(&state))
 }
 
-pub async fn ws_map(
-    State(state): State<AppState>,
-    ws: WebSocketUpgrade,
-) -> Response {
+pub async fn ws_map(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| map_socket(socket, state))
 }
 
@@ -226,6 +236,58 @@ async fn map_socket(socket: WebSocket, state: AppState) {
     }
 }
 
+fn weather_cache() -> &'static Mutex<HashMap<(u32, u32, u32), CachedTile>> {
+    WEATHER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_weather(z: u32, x: u32, y: u32) -> Option<(Vec<u8>, bool)> {
+    let mut cache = weather_cache().lock();
+    let now = Instant::now();
+    if cache
+        .get(&(z, x, y))
+        .is_some_and(|entry| now.duration_since(entry.at) >= WEATHER_CACHE_TTL)
+    {
+        cache.remove(&(z, x, y));
+        return None;
+    }
+    cache
+        .get(&(z, x, y))
+        .map(|entry| (entry.bytes.clone(), entry.webp))
+}
+
+fn store_weather(z: u32, x: u32, y: u32, bytes: Vec<u8>, webp: bool) {
+    let mut cache = weather_cache().lock();
+    let now = Instant::now();
+    cache.retain(|_, entry| now.duration_since(entry.at) < WEATHER_CACHE_TTL);
+    if cache.len() >= WEATHER_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(
+        (z, x, y),
+        CachedTile {
+            at: now,
+            bytes,
+            webp,
+        },
+    );
+}
+
+/// Lossless WebP is about one third the size of the OWM PNG tiles while
+/// preserving the alpha mask, so map clients fetch far fewer bytes.
+fn encode_cloud_webp(png: &[u8]) -> Option<Vec<u8>> {
+    let image = image::load_from_memory(png).ok()?.to_rgba8();
+    let encoder = webp::Encoder::from_rgba(image.as_raw(), image.width(), image.height());
+    let mut config = webp::WebPConfig::new().ok()?;
+    config.lossless = 1;
+    config.alpha_compression = 0;
+    config.quality = 100.0;
+    config.method = 6;
+    encoder
+        .encode_advanced(&config)
+        .ok()
+        .map(|encoded| encoded.to_vec())
+}
+
 /// Proxy OpenWeatherMap cloud tiles so the API key stays server-side.
 pub async fn weather_tile(
     State(state): State<AppState>,
@@ -233,6 +295,9 @@ pub async fn weather_tile(
 ) -> Response {
     if z > 19 {
         return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Some((bytes, webp)) = cached_weather(z, x, y) {
+        return weather_response(bytes, webp);
     }
     let key = state
         .cfg
@@ -244,9 +309,7 @@ pub async fn weather_tile(
     if key.is_empty() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let url = format!(
-        "https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid={key}"
-    );
+    let url = format!("https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid={key}");
     let response = match state
         .weather_client
         .get(url)
@@ -261,9 +324,21 @@ pub async fn weather_tile(
         Ok(bytes) => bytes,
         Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
     };
+    let (payload, webp) = match encode_cloud_webp(&bytes) {
+        Some(webp_bytes) => (webp_bytes, true),
+        None => (bytes.to_vec(), false),
+    };
+    store_weather(z, x, y, payload.clone(), webp);
+    weather_response(payload, webp)
+}
+
+fn weather_response(bytes: Vec<u8>, webp: bool) -> Response {
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "image/png")
+        .header(
+            header::CONTENT_TYPE,
+            if webp { "image/webp" } else { "image/png" },
+        )
         .header(header::CACHE_CONTROL, "public, max-age=600")
         .body(Body::from(bytes))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
@@ -278,5 +353,17 @@ mod tests {
         assert_eq!(grid_from_lat_lon(37.9838, 23.7275), "KM17UX");
         assert_eq!(grid_from_lat_lon(51.5074, -0.1278), "IO91WM");
         assert_eq!(grid_from_lat_lon(0.0, 0.0), "");
+    }
+
+    #[test]
+    fn cloud_tiles_encode_to_webp() {
+        let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 255, 255, 128]));
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let encoded = encode_cloud_webp(&png).expect("webp encoding");
+        assert_eq!(&encoded[..4], b"RIFF");
+        assert_eq!(&encoded[8..12], b"WEBP");
     }
 }

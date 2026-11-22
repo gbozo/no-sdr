@@ -140,7 +140,7 @@ Layers include:
 - **Grid decodes** — FT8/FT4/FT2/WSPR and other grid-bearing modes plotted at their Maidenhead grid centre.
 - **Position reports** — APRS and HFDL latitude/longitude fixes.
 - **Maidenhead grid** — field, 4-character square and 6-character subsquare overlay.
-- **Cloud cover** — server-proxied OpenWeatherMap cloud tiles.
+- **Cloud cover** — server-proxied OpenWeatherMap cloud tiles, re-encoded as lossless WebP and cached server-side (roughly one third of the original PNG size).
 
 Map details:
 
