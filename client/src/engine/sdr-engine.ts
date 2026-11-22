@@ -660,6 +660,7 @@ export class SdrEngine {
       // state_sync from server provides the full dongle list — no REST fallback needed
       // Fetch public bookmarks (admin-configured) for bookmark ribbon display
       this.fetchAdminBookmarks();
+      void store.loadDecoderCatalog();
       void this.fetchEdgeInfo();
     };
 
@@ -1341,6 +1342,8 @@ export class SdrEngine {
     // Worker draws the spectrum + tuning indicator immediately.
     if (this.spectrumWorker) {
       const frame = fftData.slice(); // clone — fftBuffer owns the original
+      const decoderWindow = store.decoderMode() ? store.decoderWindow() : null;
+      const center = store.centerFrequency();
       this.spectrumWorker.postMessage(
         {
           type: 'frame',
@@ -1348,6 +1351,9 @@ export class SdrEngine {
           tuneOffset: store.tuneOffset(),
           bandwidth: store.bandwidth(),
           sampleRate: store.sampleRate(),
+          sideband: DEMOD_MODES[store.mode()]?.sideband ?? 'both',
+          decoderStartOffset: decoderWindow ? decoderWindow.window.startHz - center : null,
+          decoderEndOffset: decoderWindow ? decoderWindow.window.endHz - center : null,
         },
         [frame.buffer],
       );
@@ -2820,7 +2826,7 @@ export class SdrEngine {
     try {
       const res = await fetch('/api/bookmarks');
       if (!res.ok) return;
-      const data = await res.json() as { id: string; name: string; frequency: number; mode: string; bandwidth?: number; description?: string }[];
+      const data = await res.json() as { id: string; name: string; frequency: number; mode: string; bandwidth?: number; description?: string; source?: 'config' | 'file' | 'decoder'; implemented?: boolean }[];
       store.setAdminBookmarks(Array.isArray(data) ? data : []);
     } catch {
       // silently ignore — admin bookmarks are optional

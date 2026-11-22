@@ -721,6 +721,27 @@ pub async fn bookmark_regions(State(state): State<AppState>) -> Response {
     )
 }
 
+/// Read-only decoder catalogue status and entries.
+pub async fn decoder_catalog_status(State(state): State<AppState>) -> Response {
+    json_response(StatusCode::OK, state.decoder_catalog.status(), None)
+}
+
+/// Forces an upstream catalogue refresh while keeping the last good copy on
+/// failure. The catalogue entries themselves remain read-only.
+pub async fn refresh_decoder_catalog(State(state): State<AppState>) -> Response {
+    match state.decoder_catalog.refresh().await {
+        Ok(()) => json_response(StatusCode::OK, state.decoder_catalog.status(), None),
+        Err(error) => json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({
+                "error": error,
+                "catalog": state.decoder_catalog.status(),
+            }),
+            None,
+        ),
+    }
+}
+
 pub async fn create_bookmark(State(state): State<AppState>, body: Bytes) -> Response {
     let bm: Bookmark = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -903,6 +924,9 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "usersRibbon": cfg.server.users_ribbon,
             "bookmarkRegions": cfg.server.bookmark_regions,
             "bandplanRegion": cfg.server.bandplan_region,
+            "decoderBookmarksEnabled": cfg.server.decoder_bookmarks_enabled,
+            "decoderCatalogUrl": cfg.server.decoder_catalog_url,
+            "decoderCatalogRefreshHours": cfg.server.decoder_catalog_refresh_hours,
             "fftHistoryFftSize": cfg.server.fft_history_fft_size,
             "fftHistoryCompression": cfg.server.fft_history_compression,
             "fftHistorySmoothMarginDb": cfg.server.fft_history_smooth_margin_db,
@@ -1038,6 +1062,11 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
                 "r3" => "r3".to_string(),
                 _ => String::new(),
             };
+        }
+        set_bool!("decoderBookmarksEnabled", decoder_bookmarks_enabled);
+        set_string!("decoderCatalogUrl", decoder_catalog_url);
+        if let Some(v) = map.get("decoderCatalogRefreshHours").and_then(|v| v.as_i64()) {
+            s.decoder_catalog_refresh_hours = (v as i32).max(1);
         }
 
         if let Some(v) = map.get("opusComplexity").and_then(|v| v.as_i64()) {

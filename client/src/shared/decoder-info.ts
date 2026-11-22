@@ -6,6 +6,7 @@
 // The waterfall previews are illustrative, not recordings.
 
 import type { DigitalMode } from './types';
+import { DIGITAL_MODES } from './modes';
 
 export type DecoderPreviewStyle =
   | 'mfsk'       // slotted multi-tone weak-signal modes
@@ -20,6 +21,21 @@ export type DecoderPreviewStyle =
 export interface DecoderFrequency {
   label: string;
   hz: number;
+}
+
+/** Server-owned, read-only decoder calling-frequency catalogue. */
+export interface DecoderCatalogMode {
+  mode: string;
+  name: string;
+  description: string;
+  bandwidth: number;
+  frequencies: DecoderFrequency[];
+}
+
+export interface DecoderCatalog {
+  revision: string;
+  updated?: string | null;
+  modes: DecoderCatalogMode[];
 }
 
 export interface DecoderInfo {
@@ -584,4 +600,12 @@ export const DECODER_INFO: Record<DigitalMode, DecoderInfo> = {
 
 export function decoderInfoFor(mode: string): DecoderInfo | null {
   return (DECODER_INFO as Record<string, DecoderInfo>)[mode] ?? null;
+}
+
+/** Published frequencies for a decoder, falling back to its typical frequency. */
+export function decoderFrequencies(mode: string): DecoderFrequency[] {
+  const info = (DECODER_INFO as Record<string, DecoderInfo | undefined>)[mode];
+  if (info?.frequencies?.length) return info.frequencies;
+  const typical = DIGITAL_MODES[mode as keyof typeof DIGITAL_MODES]?.typicalFrequency;
+  return typical ? [{ label: 'Calling', hz: typical }] : [];
 }

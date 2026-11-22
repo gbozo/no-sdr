@@ -67,7 +67,7 @@ fn canonical_mode(mode: &str) -> String {
     .to_string()
 }
 
-fn implemented_mode(mode: &str) -> bool {
+pub(crate) fn implemented_mode(mode: &str) -> bool {
     matches!(
         canonical_mode(mode).as_str(),
         "wfm"

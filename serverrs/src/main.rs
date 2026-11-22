@@ -165,6 +165,9 @@ async fn async_main() -> Result<()> {
     let bandplan = BandPlanService::new();
     bandplan.start_scheduler();
 
+    let decoder_catalog = serverrs::api::DecoderCatalogService::new(cfg.clone());
+    decoder_catalog.start_scheduler();
+
     let bookmarks_dir = std::env::var("BOOKMARKS_DIR")
         .ok()
         .filter(|s| !s.is_empty())
@@ -191,6 +194,7 @@ async fn async_main() -> Result<()> {
         cfg_version: cfg_version.clone(),
         bookmarks_dir,
         bandplan,
+        decoder_catalog,
         identify,
         auth: AdminAuth::new(admin_password),
         static_dir: PathBuf::from(static_dir),

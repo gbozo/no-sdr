@@ -6,7 +6,7 @@ import { Component, onMount, onCleanup, Show, createSignal, For, createEffect, c
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 import { bands, tagColor, TAG_BORDER_COLORS } from '../store/bandplan.js';
-import { isDecoderMode, normalizeBookmarkMode } from '~/shared';
+import { isDecoderMode, normalizeBookmarkMode, DEMOD_MODES } from '~/shared';
 
 const WaterfallDisplay: Component = () => {
   let waterfallRef!: HTMLCanvasElement;
@@ -58,13 +58,23 @@ const WaterfallDisplay: Component = () => {
     const sr = store.sampleRate();
     const offset = store.tuneOffset();
     const bw = store.bandwidth();
+    const sideband = DEMOD_MODES[store.mode()]?.sideband ?? 'both';
     // Convert current tuned offset to normalised zoom-space position
     const normFull = (offset / sr) + 0.5;
     const normZoomed = (normFull - zs) / (ze - zs);
-    // Half-bandwidth in zoom-space
-    const halfBwZoom = (bw / sr / 2) / (ze - zs);
-    const lo = normZoomed - halfBwZoom;
-    const hi = normZoomed + halfBwZoom;
+    const bwZoom = (bw / sr) / (ze - zs);
+    const lo =
+      sideband === 'upper'
+        ? normZoomed
+        : sideband === 'lower'
+          ? normZoomed - bwZoom
+          : normZoomed - bwZoom / 2;
+    const hi =
+      sideband === 'upper'
+        ? normZoomed + bwZoom
+        : sideband === 'lower'
+          ? normZoomed
+          : normZoomed + bwZoom / 2;
     return relX >= lo && relX <= hi;
   };
 
@@ -92,7 +102,11 @@ const WaterfallDisplay: Component = () => {
     const tuneOffset  = store.tuneOffset();
     const bandwidth   = store.bandwidth();
     const sampleRate  = store.sampleRate();
+    const sideband    = DEMOD_MODES[store.mode()]?.sideband ?? 'both';
     const [zs, ze]    = store.spectrumZoom();
+    const decoderMode = store.decoderMode();
+    const decoderWindow = store.decoderWindow();
+    const centerFrequency = store.centerFrequency();
 
     const w = canvas.offsetWidth;
     const h = canvas.offsetHeight;
@@ -106,15 +120,25 @@ const WaterfallDisplay: Component = () => {
 
     ctx.clearRect(0, 0, w, h);
 
-    // Compute center pixel and half-bandwidth in pixels (zoom-aware)
+    // Compute center pixel and passband edges (zoom-aware). SSB places the
+    // dial/carrier at one edge; AM/FM/CW stay symmetric around the dial.
     const viewSpan   = ze - zs;
     const normFull   = (tuneOffset / sampleRate) + 0.5;
     const normZoomed = (normFull - zs) / viewSpan;
     const centerX    = normZoomed * w;
-    const halfBwNorm = (bandwidth / sampleRate / 2) / viewSpan;
-    const halfBw     = halfBwNorm * w;
-    const left       = centerX - halfBw;
-    const right      = centerX + halfBw;
+    const bwPx       = ((bandwidth / sampleRate) / viewSpan) * w;
+    let left: number;
+    let right: number;
+    if (sideband === 'upper') {
+      left = centerX;
+      right = centerX + bwPx;
+    } else if (sideband === 'lower') {
+      left = centerX - bwPx;
+      right = centerX;
+    } else {
+      left = centerX - bwPx / 2;
+      right = centerX + bwPx / 2;
+    }
 
     // Bandwidth edge lines (yellow-ish, matching spectrum.ts)
     ctx.strokeStyle = 'rgba(255,252,98,0.55)';
@@ -134,6 +158,41 @@ const WaterfallDisplay: Component = () => {
     ctx.lineTo(centerX, h);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // Exact RF window consumed by the active digital decoder. This can be
+    // wider or offset from the demodulator passband (e.g. an FT8 USB window).
+    if (decoderMode && decoderWindow && sampleRate > 0) {
+      const xOfOffset = (offset: number) =>
+        ((((offset / sampleRate) + 0.5) - zs) / viewSpan) * w;
+      const a = xOfOffset(decoderWindow.window.startHz - centerFrequency);
+      const b = xOfOffset(decoderWindow.window.endHz - centerFrequency);
+      const decoderLeft = Math.min(a, b);
+      const decoderRight = Math.max(a, b);
+
+      if (decoderRight >= 0 && decoderLeft <= w) {
+        ctx.fillStyle = 'rgba(74, 163, 255, 0.13)';
+        ctx.fillRect(decoderLeft, 0, decoderRight - decoderLeft, h);
+
+        ctx.strokeStyle = 'rgba(120, 205, 255, 0.9)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(decoderLeft, 0);
+        ctx.lineTo(decoderLeft, h);
+        ctx.moveTo(decoderRight, 0);
+        ctx.lineTo(decoderRight, h);
+        ctx.stroke();
+
+        const decoderCenter = (decoderLeft + decoderRight) / 2;
+        ctx.strokeStyle = 'rgba(74, 163, 255, 0.7)';
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(decoderCenter, 0);
+        ctx.lineTo(decoderCenter, h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
   });
 
   onMount(() => {
@@ -977,7 +1036,7 @@ interface RibbonItem {
   label: string;
   mode: string;
   bandwidth: number;
-  source: 'admin' | 'user';
+  source: 'admin' | 'user' | 'decoder';
   /** false when the server-side mode cannot be demodulated by this client */
   implemented: boolean;
 }
@@ -1018,7 +1077,7 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
     const all: RibbonItem[] = [
       ...store.adminBookmarks()
         .filter(b => b.frequency >= loHz && b.frequency <= hiHz)
-        .map(b => ({ hz: b.frequency, label: b.name, mode: b.mode, bandwidth: b.bandwidth ?? 0, source: 'admin' as const, implemented: b.implemented !== false })),
+        .map(b => ({ hz: b.frequency, label: b.name, mode: b.mode, bandwidth: b.bandwidth ?? 0, source: b.source === 'decoder' ? 'decoder' as const : 'admin' as const, implemented: b.implemented !== false })),
       ...store.bookmarks()
         .filter(b => b.hz >= loHz && b.hz <= hiHz)
         .map(b => ({ hz: b.hz, label: b.label, mode: b.decoder ?? b.mode, bandwidth: b.bandwidth, source: 'user' as const, implemented: true })),
@@ -1176,7 +1235,9 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
                 const cp2Y = bBottom + (stemEnd - bBottom) * 0.75;
                 const path = `M ${bCentreX} ${bBottom} C ${bCentreX} ${cp1Y}, ${p.stemX} ${cp2Y}, ${p.stemX} ${stemEnd}`;
                 const stroke = p.implemented
-                  ? 'var(--sdr-accent)'
+                  ? p.source === 'decoder'
+                    ? 'rgba(74, 163, 255, 0.72)'
+                    : 'var(--sdr-accent)'
                   : 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)';
 
                 return (
@@ -1194,7 +1255,9 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
             {(p, i) => {
               const modeLabel = p.mode.toUpperCase();
               const unimplemented = !p.implemented;
-              const tooltip = `${p.label}\n${(p.hz / 1e6).toFixed(4)} MHz  •  ${modeLabel}${p.bandwidth ? '  •  ' + formatBw(p.bandwidth) + ' Hz BW' : ''}${unimplemented ? '\n⚠ Mode not supported' : ''}`;
+              const decoderSource = p.source === 'decoder';
+              const accent = decoderSource ? '#4aa3ff' : 'var(--sdr-accent)';
+              const tooltip = `${p.label}\n${(p.hz / 1e6).toFixed(4)} MHz  •  ${modeLabel}${p.bandwidth ? '  •  ' + formatBw(p.bandwidth) + ' Hz BW' : ''}${decoderSource ? '\nRead-only decoder calling frequency' : ''}${unimplemented ? '\n⚠ Mode not supported' : ''}`;
               // Lower frequency = lower index = higher z-index (rendered on top)
               const zIdx = placed().length - i();
 
@@ -1208,11 +1271,11 @@ const BookmarkRibbon: Component<{ width: number }> = (props) => {
                     width: `${p.bannerW}px`,
                     height: `${BANNER_H}px`,
                     background: '#000',
-                    border: `1px solid ${unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : 'var(--sdr-accent)'}`,
+                    border: `1px solid ${unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : accent}`,
                     'border-radius': '2px',
                     'font-size': '10px',
                     'font-family': 'JetBrains Mono, monospace',
-                    color: unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : 'var(--sdr-accent)',
+                    color: unimplemented ? 'color-mix(in srgb, var(--sdr-accent) 40%, transparent)' : accent,
                     overflow: 'hidden',
                     'white-space': 'nowrap',
                     'text-overflow': 'ellipsis',

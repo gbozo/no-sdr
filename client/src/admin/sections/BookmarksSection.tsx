@@ -361,6 +361,162 @@ const RegionPanel: Component = () => {
   );
 };
 
+// ---- Read-only decoder calling-frequency catalogue ----
+const DecoderCatalogPanel: Component = () => {
+  const cfg = () => adminStore.serverConfig();
+  const catalog = () => adminStore.decoderCatalog();
+
+  onMount(() => {
+    if (!adminStore.decoderCatalog()) adminStore.loadDecoderCatalog();
+  });
+
+  const lastUpdated = () => {
+    const value = catalog()?.lastUpdated;
+    if (!value) return 'embedded snapshot';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  };
+
+  const modeTitle = (mode: {
+    name: string;
+    mode: string;
+    frequencies: { label: string; hz: number }[];
+  }) =>
+    mode.frequencies
+      .map((f) => `${f.label} ${(f.hz / 1e6).toFixed(4)} MHz`)
+      .join(' · ');
+
+  return (
+    <div class="mb-5 p-3 border border-border/30 rounded-md bg-sdr-surface/40">
+      <div class="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <div class="flex items-center gap-2">
+            <h3 class="text-[10px] font-mono uppercase tracking-wider text-accent">
+              Decoder Calling Frequencies
+            </h3>
+            <span class="text-[8px] font-mono uppercase tracking-wider text-amber border border-amber/30 rounded px-1">
+              Read-only
+            </span>
+          </div>
+          <p class="text-[10px] font-mono text-text-dim mt-1 leading-relaxed">
+            Server-owned catalogue used by the decoder hints, quick-tune links and
+            bookmark ribbon. Entries cannot be edited or deleted here.
+          </p>
+        </div>
+        <button
+          class="px-2 py-0.5 text-[10px] font-mono uppercase rounded border border-border/50 text-text-dim hover:text-text-primary hover:border-accent/50 transition-colors disabled:opacity-40"
+          disabled={adminStore.decoderCatalogRefreshing()}
+          onClick={() => adminStore.refreshDecoderCatalog()}
+          title="Fetch the configured upstream catalogue now"
+        >
+          {adminStore.decoderCatalogRefreshing() ? 'Refreshing…' : 'Refresh now'}
+        </button>
+      </div>
+
+      <label class="flex items-center gap-2 px-2 py-1.5 mb-2 rounded border border-border/30 bg-sdr-base/40 cursor-pointer">
+        <input
+          type="checkbox"
+          class="accent-cyan"
+          checked={cfg().decoderBookmarksEnabled}
+          onChange={(e) =>
+            adminStore.updateServerConfigField('decoderBookmarksEnabled', e.currentTarget.checked)
+          }
+        />
+        <span class="text-[10px] font-mono text-text-primary">
+          Show decoder calling frequencies in the public bookmark feed and spectrum ribbon
+        </span>
+      </label>
+
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_120px] gap-2 mb-2">
+        <div class="flex flex-col gap-1">
+          <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
+            Upstream catalogue URL
+          </label>
+          <input
+            type="text"
+            class="admin-input text-[10px]"
+            value={cfg().decoderCatalogUrl}
+            onChange={(e) =>
+              adminStore.updateServerConfigField('decoderCatalogUrl', e.currentTarget.value)
+            }
+            placeholder="https://…/decoder-catalog.json"
+          />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
+            Refresh hours
+          </label>
+          <input
+            type="number"
+            min="1"
+            class="admin-input text-[10px]"
+            value={cfg().decoderCatalogRefreshHours}
+            onChange={(e) =>
+              adminStore.updateServerConfigField(
+                'decoderCatalogRefreshHours',
+                Math.max(1, parseInt(e.currentTarget.value) || 1),
+              )
+            }
+          />
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] font-mono text-text-dim mb-2">
+        <span>
+          Revision <span class="text-text-secondary">{catalog()?.revision ?? '—'}</span>
+        </span>
+        <span>
+          Modes <span class="text-text-secondary">{catalog()?.modeCount ?? 0}</span>
+        </span>
+        <span>
+          Frequencies <span class="text-text-secondary">{catalog()?.frequencyCount ?? 0}</span>
+        </span>
+        <span>
+          Updated <span class="text-text-secondary">{lastUpdated()}</span>
+        </span>
+      </div>
+
+      <Show when={catalog()?.lastError}>
+        <div class="mb-2 px-2 py-1 text-[9px] font-mono text-red-400 border border-red-400/30 bg-red-400/5 rounded-sm">
+          Last refresh failed: {catalog()!.lastError}
+        </div>
+      </Show>
+
+      <Show
+        when={(catalog()?.modes.length ?? 0) > 0}
+        fallback={
+          <div class="text-[10px] font-mono text-text-dim uppercase animate-pulse py-2">
+            {adminStore.decoderCatalogLoading() ? 'Loading catalogue…' : 'Catalogue unavailable'}
+          </div>
+        }
+      >
+        <div class="max-h-40 overflow-auto grid grid-cols-1 sm:grid-cols-2 gap-1">
+          <For each={catalog()!.modes}>
+            {(mode) => (
+              <div
+                class="border border-border/30 rounded-sm bg-sdr-base/40 px-2 py-1 min-w-0"
+                title={modeTitle(mode)}
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[10px] font-mono uppercase tracking-wider text-text-primary truncate">
+                    {mode.name || mode.mode.toUpperCase()}
+                  </span>
+                  <span class="text-[9px] font-mono text-cyan tabular-nums shrink-0">
+                    {mode.frequencies.length}
+                  </span>
+                </div>
+                <div class="text-[9px] font-mono text-text-dim/70 truncate">
+                  {mode.frequencies.map((f) => f.label).join(' · ')}
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+};
+
 // ---- Main Section ----
 const BookmarksSection: Component = () => {
   const [editingId, setEditingId] = createSignal<string | null>(null);
@@ -404,6 +560,8 @@ const BookmarksSection: Component = () => {
       </div>
 
       <RegionPanel />
+
+      <DecoderCatalogPanel />
 
       {/* Add Form */}
       <Show when={adding()}>

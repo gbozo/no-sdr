@@ -25,9 +25,12 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
   const info = () => DECODER_INFO[props.mode as keyof typeof DECODER_INFO];
 
   return (
-    <div class="absolute inset-0 z-30 flex items-stretch justify-center bg-black/65 p-2 md:p-4" onClick={props.onClose}>
+    <div
+      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-3"
+      onClick={props.onClose}
+    >
       <div
-        class="w-full max-w-2xl min-h-0 flex flex-col rounded-sm border border-cyan/30 bg-sdr-surface shadow-2xl"
+        class="w-full max-w-2xl max-h-full min-h-0 flex flex-col rounded-sm border border-cyan/30 bg-sdr-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div class="flex items-start gap-3 px-3 py-2 border-b border-border/50 shrink-0">
@@ -88,7 +91,7 @@ const DecoderInfoPanel: Component<{ mode: string; onClose: () => void }> = (prop
                 <div>
                   <div class="text-[9px] font-mono uppercase tracking-wider text-text-dim mb-1">Typical frequencies</div>
                   <div class="grid grid-cols-2 sm:grid-cols-3 gap-1">
-                    <For each={data().frequencies}>
+                    <For each={store.decoderFrequenciesFor(props.mode)}>
                       {(f) => (
                         <button
                           onClick={() => {

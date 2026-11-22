@@ -53,7 +53,10 @@ import type {
   MeteorStatus,
   Js8Message,
   Js8Status,
+  DecoderCatalog,
+  DecoderFrequency,
 } from '~/shared';
+import { decoderFrequencies } from '~/shared';
 
 // All codecs supported by the client (used as fallback when server doesn't send allowedCodecs)
 const ALL_FFT_CODECS: FftCodecType[] = ['none', 'adpcm', 'deflate-smooth', 'range'];
@@ -78,8 +81,9 @@ export interface AdminBookmark {
   mode: string;
   bandwidth?: number;
   description?: string;
-  /** "config" = from config.yaml, "file" = from bookmarks directory */
-  source?: 'config' | 'file';
+  /** "config" = from config.yaml, "file" = from bookmarks directory,
+   *  "decoder" = generated read-only calling frequency. */
+  source?: 'config' | 'file' | 'decoder';
   /** Whether the client can actually demodulate this mode */
   implemented?: boolean;
 }
@@ -399,6 +403,32 @@ function createStore() {
 
   // ---- Admin Bookmarks (fetched from /api/bookmarks after connect) ----
   const [adminBookmarks, setAdminBookmarks] = createSignal<AdminBookmark[]>([]);
+  // ---- Read-only decoder calling-frequency catalogue ----
+  const [decoderCatalog, setDecoderCatalog] = createSignal<DecoderCatalog | null>(null);
+  const [decoderCatalogLoading, setDecoderCatalogLoading] = createSignal(false);
+
+  async function loadDecoderCatalog(): Promise<void> {
+    setDecoderCatalogLoading(true);
+    try {
+      const res = await fetch('/api/decoder/catalog');
+      if (res.ok) {
+        const data = (await res.json()) as DecoderCatalog;
+        if (Array.isArray(data.modes)) setDecoderCatalog(data);
+      }
+    } catch {
+      // Keep the static fallback in decoder-info.ts.
+    } finally {
+      setDecoderCatalogLoading(false);
+    }
+  }
+
+  /** Prefer the server catalogue; fall back to the bundled reference list. */
+  function decoderFrequenciesFor(mode: string): DecoderFrequency[] {
+    const entry = decoderCatalog()?.modes.find(
+      (m) => m.mode.toLowerCase() === mode.trim().toLowerCase(),
+    );
+    return entry?.frequencies?.length ? entry.frequencies : decoderFrequencies(mode);
+  }
 
   // ---- Codec Preferences (localStorage-persisted) ----
   const [fftCodec, setFftCodec] = persist<FftCodecType>('codec.fft', 'range');
@@ -1100,6 +1130,9 @@ function createStore() {
         dtSec: event.dtSec ?? 0,
         durationSec: event.durationSec,
         confidence: event.confidence,
+        variant: event.variant,
+        fit: event.fit,
+        hardErrors: event.hardErrors,
         period: event.period ?? 15,
       };
       setMeteorMessages((previous) => [message, ...previous].slice(0, 1000));
@@ -1376,6 +1409,9 @@ function createStore() {
     signalMarkers, setSignalMarkers,
     bookmarks, setBookmarks,
     adminBookmarks, setAdminBookmarks,
+    decoderCatalog, setDecoderCatalog,
+    decoderCatalogLoading,
+    loadDecoderCatalog, decoderFrequenciesFor,
 
     // Codec Preferences
     fftCodec, setFftCodec,

@@ -551,6 +551,15 @@
     flex-shrink: 0;
   }
 
+  /* Decoder mode has a published frequency inside the current profile span.
+     Keep this dimmer than .active so the selected mode still reads clearly. */
+  .mil-btn.decoder-in-range:not(.active)::before {
+    background: rgba(74, 163, 255, 0.58);
+    box-shadow:
+      0 0 5px rgba(74, 163, 255, 0.48),
+      inset 0 1px 1px rgba(255, 255, 255, 0.22);
+  }
+
   .mil-btn:hover {
     color: #c0cfe4;
     background: linear-gradient(175deg, #1e2638 0%, #111822 60%, #0b0f18 100%);

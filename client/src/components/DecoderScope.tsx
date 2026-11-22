@@ -212,11 +212,18 @@ const DecoderScope: Component<{ fullWidth?: boolean }> = (props) => {
     const maxDb = store.waterfallMax();
 
     if (history.length > 0) {
-      const rows = Math.min(history.length, plotH);
-      const img = ctx.createImageData(w, Math.max(1, rows));
+      // Always fill the canvas height. A taller pane used to leave the lower
+      // part black once the 160-frame history cap was reached; stretch the
+      // visible history across the plot instead.
+      const visible = history.slice(-plotH);
+      const img = ctx.createImageData(w, plotH);
       const data = img.data;
-      for (let y = 0; y < rows; y++) {
-        const frame = history[history.length - 1 - y];
+      for (let y = 0; y < plotH; y++) {
+        const index = Math.min(
+          visible.length - 1,
+          Math.floor((y * visible.length) / plotH),
+        );
+        const frame = visible[visible.length - 1 - index];
         const row = y * w * 4;
         for (let x = 0; x < w; x++) {
           const hz = d.start + (x / w) * span;

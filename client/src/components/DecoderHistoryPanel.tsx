@@ -133,11 +133,11 @@ const DecoderHistoryPanel: Component<{ mode: string; onClose: () => void }> = (p
 
   return (
     <div
-      class="absolute inset-0 z-40 flex items-stretch justify-center bg-black/70 p-2 md:p-4"
+      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-3"
       onClick={props.onClose}
     >
       <div
-        class="w-full max-w-6xl min-h-0 flex flex-col rounded-sm border border-cyan/30 bg-sdr-surface shadow-2xl"
+        class="w-full max-w-6xl max-h-full min-h-0 flex flex-col rounded-sm border border-cyan/30 bg-sdr-surface shadow-2xl"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {

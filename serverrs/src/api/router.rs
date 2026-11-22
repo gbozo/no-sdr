@@ -42,6 +42,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/dongles/{id}/profiles-order", put(admin::reorder_profiles))
         .route("/bookmarks", get(admin::admin_bookmarks).post(admin::create_bookmark))
         .route("/bookmarks/regions", get(admin::bookmark_regions))
+        .route("/decoder-catalog", get(admin::decoder_catalog_status))
+        .route("/decoder-catalog/refresh", post(admin::refresh_decoder_catalog))
         .route(
             "/bookmarks/{id}",
             put(admin::update_bookmark).delete(admin::delete_bookmark),
@@ -103,6 +105,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/edge", get(edge_info))
         .route("/bookmarks", get(public_bookmarks))
         .route("/bandplan", get(bandplan))
+        .route("/decoder/catalog", get(super::decoder_catalog::catalog_json))
         .route("/identify", get(identify).post(identify))
         .route("/identify/status", get(identify_status))
         .nest("/admin", admin_router);
@@ -262,11 +265,12 @@ async fn edge_info(State(state): State<AppState>) -> Response {
 }
 
 async fn public_bookmarks(State(state): State<AppState>) -> Response {
-    let (config_bookmarks, regions) = {
+    let (config_bookmarks, regions, include_decoder_bookmarks) = {
         let cfg = state.cfg.read();
         (
             bookmark_loader::from_config(&cfg.bookmarks),
             cfg.server.bookmark_regions.clone(),
+            cfg.server.decoder_bookmarks_enabled,
         )
     };
     let mut result = config_bookmarks;
@@ -276,6 +280,19 @@ async fn public_bookmarks(State(state): State<AppState>) -> Response {
             regions.as_deref(),
         ));
     }
+    if include_decoder_bookmarks {
+        result.extend(state.decoder_catalog.bookmarks());
+    }
+    // Config/file bookmarks win over generated decoder entries at the same
+    // frequency + mode, so a curated bookmark is never duplicated by the
+    // read-only catalogue.
+    let mut seen = std::collections::HashSet::new();
+    result.retain(|bookmark| {
+        seen.insert((
+            bookmark.frequency,
+            bookmark.mode.trim().to_ascii_lowercase(),
+        ))
+    });
     admin::json_response(
         StatusCode::OK,
         serde_json::to_value(result).unwrap_or_else(|_| json!([])),

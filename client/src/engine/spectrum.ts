@@ -325,26 +325,43 @@ export class SpectrumRenderer {
   /**
    * Draw a tuning indicator at the given frequency offset
    */
-  drawTuningIndicator(offset: number, bandwidth: number, sampleRate: number): void {
+  drawTuningIndicator(
+    offset: number,
+    bandwidth: number,
+    sampleRate: number,
+    sideband: 'both' | 'upper' | 'lower' | 'none' = 'both',
+  ): void {
     if (!this.ready || this.paused) return;
 
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
 
-    // Convert frequency offset to canvas pixel — zoom-aware
-    // Normalise offset to [0,1] across full bandwidth, then remap into zoom viewport
+    // Convert frequency offset to canvas pixel — zoom-aware.
+    // SSB puts the dial/carrier at one edge of the passband.
     const normFull   = (offset / sampleRate) + 0.5;
     const normZoomed = (normFull - this.zoomStart) / (this.zoomEnd - this.zoomStart);
     const centerX    = normZoomed * w;
-    const halfBwNorm = (bandwidth / sampleRate / 2) / (this.zoomEnd - this.zoomStart);
-    const halfBw     = halfBwNorm * w;
+    const bwPx       = ((bandwidth / sampleRate) / (this.zoomEnd - this.zoomStart)) * w;
+
+    let left: number;
+    let right: number;
+    if (sideband === 'upper') {
+      left = centerX;
+      right = centerX + bwPx;
+    } else if (sideband === 'lower') {
+      left = centerX - bwPx;
+      right = centerX;
+    } else {
+      left = centerX - bwPx / 2;
+      right = centerX + bwPx / 2;
+    }
 
     // Draw bandwidth rectangle
     ctx.fillStyle = 'rgba(74, 163, 255, 0.22)';
-    ctx.fillRect(centerX - halfBw, 0, halfBw * 2, h);
+    ctx.fillRect(left, 0, right - left, h);
 
-    // Draw center line
+    // Draw dial / tuning line
     ctx.strokeStyle = this.accentColor;
     ctx.lineWidth = 0.5;
     ctx.setLineDash([2, 2]);
@@ -353,8 +370,7 @@ export class SpectrumRenderer {
     ctx.lineTo(centerX, h);
     ctx.stroke();
     ctx.setLineDash([]);
-    const left=centerX - halfBw;
-    const right=centerX + halfBw
+
     // Draw bandwidth edges
     ctx.strokeStyle = 'rgba(255, 252, 98, 0.4)';
     ctx.lineWidth = 0.8;
@@ -369,11 +385,62 @@ export class SpectrumRenderer {
     ctx.fillStyle = '#ffffff65';
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
-    
+
     for (let db = Math.ceil(this.minDb / 20) * 20; db <= this.maxDb; db += 10) {
       const y = h - ((db - this.minDb) / range) * h;
-      ctx.fillText(`${db}`, right + 9, y - 2);      
+      ctx.fillText(`${db}`, right + 9, y - 2);
     }
+  }
+
+  /**
+   * Draw the exact RF window consumed by the active digital decoder.
+   * Uses absolute offsets from the receiver centre so the range can differ
+   * from the demodulator passband (e.g. an FT8 USB window above the dial).
+   */
+  drawDecoderIndicator(
+    startOffset: number,
+    endOffset: number,
+    sampleRate: number,
+  ): void {
+    if (!this.ready || this.paused || sampleRate <= 0) return;
+
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const ctx = this.ctx;
+    const zoomSpan = this.zoomEnd - this.zoomStart;
+    if (zoomSpan <= 0) return;
+
+    const xOf = (offset: number) =>
+      (((offset / sampleRate) + 0.5 - this.zoomStart) / zoomSpan) * w;
+    const a = xOf(startOffset);
+    const b = xOf(endOffset);
+    const left = Math.min(a, b);
+    const right = Math.max(a, b);
+    if (right < 0 || left > w) return;
+
+    ctx.fillStyle = 'rgba(74, 163, 255, 0.12)';
+    ctx.fillRect(left, 0, right - left, h);
+
+    ctx.strokeStyle = 'rgba(120, 205, 255, 0.9)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(left, 0);
+    ctx.lineTo(left, h);
+    ctx.moveTo(right, 0);
+    ctx.lineTo(right, h);
+    ctx.stroke();
+
+    // Dashed centre line makes the exact decoder band obvious over the
+    // regular demodulator passband indicator.
+    const center = (left + right) / 2;
+    ctx.strokeStyle = 'rgba(74, 163, 255, 0.7)';
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath();
+    ctx.moveTo(center, 0);
+    ctx.lineTo(center, h);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   /**

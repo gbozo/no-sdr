@@ -29,6 +29,10 @@ pub const VALID_MODES: [&str; 9] = [
 pub const DEFAULT_FFT_CODECS: [&str; 4] = ["none", "adpcm", "deflate-smooth", "range"];
 pub const DEFAULT_IQ_CODECS: [&str; 5] = ["none", "adpcm", "opus-lo", "opus", "opus-hq"];
 
+/// Upstream decoder calling-frequency catalogue refreshed periodically.
+pub const DEFAULT_DECODER_CATALOG_URL: &str =
+    "https://raw.githubusercontent.com/gbozo/no-sdr/main/serverrs/decoder-catalog.json";
+
 /// Tracks the in-memory config revision number for optimistic concurrency.
 #[derive(Debug)]
 pub struct ConfigVersion {
@@ -394,6 +398,17 @@ pub struct ServerConfig {
     /// `r1`, `r2` or `r3`.
     #[serde(default)]
     pub bandplan_region: String,
+    /// Show generated decoder calling frequencies in the public bookmark feed
+    /// and spectrum ribbon.
+    #[serde(default = "default_true")]
+    pub decoder_bookmarks_enabled: bool,
+    /// Upstream JSON catalogue for decoder calling frequencies. Empty disables
+    /// network refresh and keeps the embedded catalogue.
+    #[serde(default = "default_decoder_catalog_url")]
+    pub decoder_catalog_url: String,
+    /// Hours between decoder catalogue refreshes (minimum 1).
+    #[serde(default = "default_decoder_catalog_refresh_hours")]
+    pub decoder_catalog_refresh_hours: i32,
     /// Tracing/log level: trace, debug, info, warn, error (or off).
     /// `LOG_LEVEL` in the environment overrides this.
     #[serde(default)]
@@ -454,6 +469,9 @@ impl Default for ServerConfig {
             users_ribbon: default_users_ribbon(),
             bookmark_regions: None,
             bandplan_region: String::new(),
+            decoder_bookmarks_enabled: true,
+            decoder_catalog_url: default_decoder_catalog_url(),
+            decoder_catalog_refresh_hours: default_decoder_catalog_refresh_hours(),
             log_level: String::new(),
             fft_history_fft_size: 0,
             fft_history_compression: String::new(),
@@ -687,6 +705,9 @@ pub fn apply_defaults(cfg: &mut Config) {
         "r1" | "r2" | "r3" => bandplan_region,
         _ => String::new(),
     };
+    if cfg.server.decoder_catalog_refresh_hours < 1 {
+        cfg.server.decoder_catalog_refresh_hours = default_decoder_catalog_refresh_hours();
+    }
     // Retired history codecs migrate to the current default.
     let history_compression = cfg.server.fft_history_compression.trim().to_string();
     cfg.server.fft_history_compression = match history_compression.as_str() {
@@ -989,6 +1010,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_decoder_catalog_url() -> String {
+    DEFAULT_DECODER_CATALOG_URL.to_string()
+}
+
+fn default_decoder_catalog_refresh_hours() -> i32 {
+    24
+}
+
 fn default_users_ribbon() -> String {
     "users".to_string()
 }
@@ -1098,6 +1127,18 @@ mod tests {
         assert!(p.dc_offset_removal_enabled());
         assert!(cfg.dongles[0].enabled);
         assert!(cfg.dongles[0].auto_start);
+    }
+
+    #[test]
+    fn decoder_catalog_defaults_and_clamping() {
+        let cfg = parse("");
+        assert_eq!(cfg.server.decoder_catalog_url, DEFAULT_DECODER_CATALOG_URL);
+        assert_eq!(cfg.server.decoder_catalog_refresh_hours, 24);
+        assert!(cfg.server.decoder_bookmarks_enabled);
+
+        let cfg = parse("server:\n  decoderCatalogRefreshHours: 0\n  decoderBookmarksEnabled: false\n");
+        assert_eq!(cfg.server.decoder_catalog_refresh_hours, 24);
+        assert!(!cfg.server.decoder_bookmarks_enabled);
     }
 
     #[test]

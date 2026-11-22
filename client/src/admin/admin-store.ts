@@ -115,6 +115,30 @@ export interface BookmarkRegion {
   bookmarks: number;
 }
 
+export interface DecoderCatalogFrequency {
+  label: string;
+  hz: number;
+}
+
+export interface DecoderCatalogMode {
+  mode: string;
+  name: string;
+  description: string;
+  bandwidth: number;
+  frequencies: DecoderCatalogFrequency[];
+}
+
+/** Read-only decoder calling-frequency catalogue status. */
+export interface DecoderCatalogStatus {
+  revision: string;
+  modeCount: number;
+  frequencyCount: number;
+  lastUpdated: string | null;
+  lastError: string;
+  sourceUrl: string;
+  modes: DecoderCatalogMode[];
+}
+
 // ---- Background Decoder Types ----
 
 export interface DecoderConfig {
@@ -188,6 +212,12 @@ export interface ServerConfig {
   bookmarkRegions: string[] | null;
   /** Default band plan region: '', 'r1', 'r2' or 'r3'. */
   bandplanRegion: string;
+  /** Show generated decoder calling frequencies in the bookmark ribbon. */
+  decoderBookmarksEnabled: boolean;
+  /** Upstream read-only decoder catalogue URL (empty = embedded only). */
+  decoderCatalogUrl: string;
+  /** Hours between catalogue refreshes. */
+  decoderCatalogRefreshHours: number;
   fftHistoryFftSize: number;
   fftHistoryCompression: string;
   /** `deflate-smooth` clamp margin for the history burst, dB. */
@@ -301,6 +331,9 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {  port: 3000,
   usersRibbon: 'users',
   bookmarkRegions: null,
   bandplanRegion: '',
+  decoderBookmarksEnabled: true,
+  decoderCatalogUrl: 'https://raw.githubusercontent.com/gbozo/no-sdr/main/serverrs/decoder-catalog.json',
+  decoderCatalogRefreshHours: 24,
   fftHistoryFftSize: 1024,
   fftHistoryCompression: 'deflate-smooth',
   fftHistorySmoothMarginDb: 2.0,
@@ -364,6 +397,9 @@ function createAdminStore() {
   const [bookmarksLoading, setBookmarksLoading] = createSignal(false);
   const [bookmarkRegionOptions, setBookmarkRegionOptions] = createSignal<BookmarkRegion[]>([]);
   const [bookmarkRegionsLoading, setBookmarkRegionsLoading] = createSignal(false);
+  const [decoderCatalog, setDecoderCatalog] = createSignal<DecoderCatalogStatus | null>(null);
+  const [decoderCatalogLoading, setDecoderCatalogLoading] = createSignal(false);
+  const [decoderCatalogRefreshing, setDecoderCatalogRefreshing] = createSignal(false);
 
   // ---- Background Decoders ----
   const [decoders, setDecoders] = createSignal<DecoderConfig[]>([]);
@@ -396,6 +432,7 @@ function createAdminStore() {
         loadDongles();
         loadBookmarks();
         loadBookmarkRegions();
+        loadDecoderCatalog();
         loadDecoders();
       }
       return ok;
@@ -424,6 +461,7 @@ function createAdminStore() {
         loadDongles();
         loadBookmarks();
         loadBookmarkRegions();
+        loadDecoderCatalog();
         loadDecoders();
         return true;
       }
@@ -465,6 +503,9 @@ function createAdminStore() {
           usersRibbon: data.usersRibbon ?? 'users',
           bookmarkRegions: Array.isArray(data.bookmarkRegions) ? data.bookmarkRegions : null,
           bandplanRegion: data.bandplanRegion ?? '',
+          decoderBookmarksEnabled: data.decoderBookmarksEnabled ?? true,
+          decoderCatalogUrl: data.decoderCatalogUrl ?? DEFAULT_SERVER_CONFIG.decoderCatalogUrl,
+          decoderCatalogRefreshHours: data.decoderCatalogRefreshHours ?? 24,
           fftHistoryFftSize: data.fftHistoryFftSize ?? DEFAULT_SERVER_CONFIG.fftHistoryFftSize,
           fftHistoryCompression: data.fftHistoryCompression ?? DEFAULT_SERVER_CONFIG.fftHistoryCompression,
           fftHistorySmoothMarginDb: data.fftHistorySmoothMarginDb ?? DEFAULT_SERVER_CONFIG.fftHistorySmoothMarginDb,
@@ -904,6 +945,38 @@ function createAdminStore() {
     setBookmarkRegionsLoading(false);
   }
 
+  /** Loads the read-only decoder calling-frequency catalogue. */
+  async function loadDecoderCatalog(): Promise<void> {
+    setDecoderCatalogLoading(true);
+    try {
+      const res = await fetch('/api/admin/decoder-catalog', { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setDecoderCatalog(data);
+      }
+    } catch {}
+    setDecoderCatalogLoading(false);
+  }
+
+  /** Forces a catalogue refresh; entries stay read-only. */
+  async function refreshDecoderCatalog(): Promise<boolean> {
+    setDecoderCatalogRefreshing(true);
+    try {
+      const res = await fetch('/api/admin/decoder-catalog/refresh', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.catalog) setDecoderCatalog(data.catalog);
+      else await loadDecoderCatalog();
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      setDecoderCatalogRefreshing(false);
+    }
+  }
+
   async function createBookmark(bm: Bookmark): Promise<boolean> {
     try {
       const res = await fetch('/api/admin/bookmarks', {
@@ -1248,6 +1321,8 @@ function createAdminStore() {
     bookmarks, bookmarksLoading,
     bookmarkRegionOptions, bookmarkRegionsLoading,
     loadBookmarks, loadBookmarkRegions, createBookmark, updateBookmark, deleteBookmark,
+    decoderCatalog, decoderCatalogLoading, decoderCatalogRefreshing,
+    loadDecoderCatalog, refreshDecoderCatalog,
 
     // Background decoders
     decoders, decoderModes, decoderSummary, decodersLoading, decodersError,

@@ -17,7 +17,9 @@
 //     (canvas is transferred)
 //
 //   { type: 'frame', fftData: Float32Array,
-//     tuneOffset: number, bandwidth: number, sampleRate: number }
+//     tuneOffset: number, bandwidth: number, sampleRate: number,
+//     sideband?: 'both' | 'upper' | 'lower' | 'none',
+//     decoderStartOffset?: number | null, decoderEndOffset?: number | null }
 //     (fftData transferred)
 //
 //   { type: 'set-range', minDb: number, maxDb: number }
@@ -68,7 +70,18 @@ self.onmessage = (e: MessageEvent) => {
         msg.tuneOffset as number,
         msg.bandwidth as number,
         msg.sampleRate as number,
+        (msg.sideband as 'both' | 'upper' | 'lower' | 'none' | undefined) ?? 'both',
       );
+      if (
+        typeof msg.decoderStartOffset === 'number' &&
+        typeof msg.decoderEndOffset === 'number'
+      ) {
+        renderer.drawDecoderIndicator(
+          msg.decoderStartOffset as number,
+          msg.decoderEndOffset as number,
+          msg.sampleRate as number,
+        );
+      }
       break;
     }
 

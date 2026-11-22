@@ -23,12 +23,12 @@ import WefaxDisplay from './WefaxDisplay.js';
 import SstvDisplay from './SstvDisplay.js';
 import HellDisplay from './HellDisplay.js';
 import TextModeDisplay from './TextModeDisplay.js';
-import MeteorDisplay from './MeteorDisplay.js';
 import Js8Display from './Js8Display.js';
 import TimeSignalDisplay from './TimeSignalDisplay.js';
 import DecoderInfoPanel from './DecoderInfoPanel.js';
 import DecoderHistoryPanel from './DecoderHistoryPanel.js';
 import DecoderScope from './DecoderScope.js';
+import DecoderDetails from './DecoderDetails.js';
 
 const DECODERS = [
   { id: 'ft8', label: 'FT8' },
@@ -73,6 +73,7 @@ function formatHz(hz: unknown): string {
 }
 
 function decodeConfidence(data: Record<string, unknown>): number | null {
+  if (typeof data.confidence === 'number') return data.confidence;
   const stats = (data.stats ?? {}) as Record<string, unknown>;
   if (typeof stats.confidence === 'number') return stats.confidence;
   if (typeof stats.hardErrors === 'number') {
@@ -80,6 +81,40 @@ function decodeConfidence(data: Record<string, unknown>): number | null {
     return hard === 0 ? 1 : Math.max(0, 1 - hard / 40);
   }
   return null;
+}
+
+/** Matches base modes and their period/sub-mode variants (fst4-60, q65-30). */
+function modeMatches(candidate: string, active: string): boolean {
+  const c = candidate.trim().toLowerCase();
+  const a = active.trim().toLowerCase();
+  return c === a || c.startsWith(`${a}-`) || a.startsWith(`${c}-`);
+}
+
+/** Mode-specific hint shown while the weak-signal table is empty. */
+function weakSignalEmptyText(mode: string): string {
+  const m = mode.toLowerCase();
+  if (m.startsWith('fst4')) {
+    return 'Waiting for FST4 decodes — tune to the FST4 calling frequency (e.g. 7.078 MHz USB) and match the period setting.';
+  }
+  if (m.startsWith('q65')) {
+    return 'Waiting for Q65 decodes — tune to the Q65 calling frequency (e.g. 50.275 MHz USB) and select the matching Q65 sub-mode.';
+  }
+  if (m === 'jt65') {
+    return 'Waiting for JT65 decodes — tune to 14.076 MHz USB and wait for a 60-second period.';
+  }
+  if (m === 'jt9') {
+    return 'Waiting for JT9 decodes — tune to 14.078 MHz USB and wait for a 60-second period.';
+  }
+  if (m === 'wspr') {
+    return 'Waiting for WSPR spots — tune to 14.0956 MHz USB and wait for a 120-second period.';
+  }
+  if (m === 'pi4') {
+    return 'Waiting for PI4 beacons — tune to 144.471 MHz USB and wait for the minute-boundary transmission.';
+  }
+  if (m === 'msk144' || m === 'fsk441') {
+    return "Waiting for meteor bursts — tune to 50.260 MHz USB (or the band's calling frequency) and keep the period setting matched to the stations you are hearing.";
+  }
+  return 'Waiting for a slot…';
 }
 
 interface TableRow {
@@ -120,21 +155,40 @@ const DecoderDisplay: Component = () => {
   const isHell = () => store.decoderMode() === 'hell';
   const isJs8 = () => store.decoderMode() === 'js8';
   const isTimeSignal = () => store.decoderMode() === 'dcf77' || store.decoderMode() === 'als162';
+  /** WSJT-family / weak-signal modes share the decode table + zoom scope UI. */
+  const isWeakSignal = () => {
+    const mode = store.decoderMode();
+    return (
+      mode === 'ft8' ||
+      mode === 'ft4' ||
+      mode === 'ft2' ||
+      mode === 'jt65' ||
+      mode === 'jt9' ||
+      mode === 'wspr' ||
+      mode === 'pi4' ||
+      mode === 'msk144' ||
+      mode === 'fsk441' ||
+      mode.startsWith('fst4') ||
+      mode.startsWith('q65')
+    );
+  };
+  /** These modes arrive through the dedicated meteor message store. */
+  const usesMeteorMessages = () =>
+    isWeakSignal() && !['ft8', 'ft4', 'ft2'].includes(store.decoderMode());
+  /** True when any published frequency for this decoder is inside the profile span. */
+  const decoderInRange = (id: string): boolean => {
+    const frequencies = store.decoderFrequenciesFor(id);
+    const half = store.sampleRate() / 2;
+    const center = store.centerFrequency();
+    if (half <= 0 || frequencies.length === 0) return false;
+    return frequencies.some((f) => f.hz >= center - half && f.hz <= center + half);
+  };
   const isText = () =>
     store.decoderMode() === 'olivia' ||
     store.decoderMode() === 'thor' ||
     store.decoderMode() === 'fsq' ||
     store.decoderMode() === 'psk31' ||
     store.decoderMode() === 'rtty';
-  const isMeteor = () =>
-    store.decoderMode() === 'msk144' ||
-    store.decoderMode() === 'fsk441' ||
-    store.decoderMode() === 'fst4' ||
-    store.decoderMode() === 'q65' ||
-    store.decoderMode() === 'jt65' ||
-    store.decoderMode() === 'jt9' ||
-    store.decoderMode() === 'wspr' ||
-    store.decoderMode() === 'pi4';
 
   // Load previous decodes for the active mode. The history panel offers deep
   // browsing (search/date range); this copy is merged into the live table so
@@ -159,25 +213,52 @@ const DecoderDisplay: Component = () => {
     });
   });
 
+  /** Convert weak-signal meteor-store decodes into generic table rows. */
+  const meteorTableRows = (): TableRow[] => {
+    if (!usesMeteorMessages()) return [];
+    return store.meteorMessages()
+      .filter((message) => modeMatches(message.mode, store.decoderMode()))
+      .map((message) => ({
+        decoderType: message.mode || store.decoderMode(),
+        receivedAt:
+          (message.at > 0 ? message.at : Date.now() / 1000) * 1000,
+        data: {
+          kind: 'decode',
+          text: message.text,
+          rfHz: message.rfHz,
+          audioHz: message.audioHz,
+          snrDb: message.snrDb,
+          dtSec: message.dtSec,
+          period: message.period,
+          confidence: message.confidence,
+          variant: message.variant,
+          fit: message.fit,
+          stats: {
+            crcOk: true,
+            confidence: message.confidence,
+            hardErrors: message.hardErrors,
+          },
+        } as Record<string, unknown>,
+      }));
+  };
+
   const liveRows = (): TableRow[] => {
     const mode = store.decoderMode();
-    return store.decoderMessages().filter((message) => {
+    const generic = store.decoderMessages().filter((message) => {
       const kindOk =
         !message.data.kind ||
         message.data.kind === 'decode' ||
         message.data.kind === 'message';
-      const modeOk =
-        !mode || message.decoderType.toLowerCase() === mode.toLowerCase();
-      return kindOk && modeOk;
+      return kindOk && (!mode || modeMatches(message.decoderType, mode));
     });
+    return [...generic, ...meteorTableRows()];
   };
 
   const historyTableRows = (): TableRow[] =>
     historyRows()
       .filter(
         (message) =>
-          !store.decoderMode() ||
-          message.mode.toLowerCase() === store.decoderMode().toLowerCase(),
+          !store.decoderMode() || modeMatches(message.mode, store.decoderMode()),
       )
       .map((message) => ({
         decoderType: message.mode,
@@ -288,7 +369,12 @@ const DecoderDisplay: Component = () => {
                 onClick={() => select(decoder.id)}
                 class={`mil-btn text-[10px] px-2 py-0.5 shrink-0 ${
                   store.decoderMode() === decoder.id ? 'active border-cyan text-cyan' : ''
-                }`}
+                } ${decoderInRange(decoder.id) ? 'decoder-in-range' : ''}`}
+                title={
+                  decoderInRange(decoder.id)
+                    ? `${decoder.label} — has typical frequencies in the current receiver span`
+                    : decoder.label
+                }
               >
                 {decoder.label}
               </button>
@@ -306,6 +392,15 @@ const DecoderDisplay: Component = () => {
             </button>
           </Show>
           <Show when={store.decoderMode()}>
+            <Show when={usesMeteorMessages()}>
+              <button
+                onClick={() => store.clearMeteor()}
+                class="mil-btn text-[9px] px-1.5 py-0.5 text-red-400/80 border-red-500/30 hover:text-red-400"
+                title="Clear live decodes for this mode"
+              >
+                Clear
+              </button>
+            </Show>
             <button
               onClick={() => {
                 setShowInfo(false);
@@ -337,6 +432,11 @@ const DecoderDisplay: Component = () => {
       </div>
 
       <Show when={!isAdsb() && !isAcars() && !isAis() && !isVdl2() && !isHfdl() && !isAprs() && !isNavtex() && !isPacket() && !isIsm() && !isWefax() && !isSstv() && !isHell() && !isText() && !isJs8() && !isTimeSignal()}>
+      {/* All WSJT weak-signal modes share the reference/live details strip,
+          decode table and secondary waterfall. */}
+      <Show when={isWeakSignal()}>
+        <DecoderDetails mode={store.decoderMode()} />
+      </Show>
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Decode table */}
         <div class="flex-1 min-w-0 min-h-0 overflow-auto border-b md:border-b-0 md:border-r border-border/40">
@@ -347,6 +447,7 @@ const DecoderDisplay: Component = () => {
                 <th class="text-left px-2 py-1">MESSAGE</th>
                 <th class="text-left px-2 py-1">GRID</th>
                 <th class="text-right px-2 py-1">FREQ</th>
+                <th class="text-right px-2 py-1">DT</th>
                 <th class="text-right px-2 py-1">SNR</th>
                 <th class="text-right px-2 py-1">CONF</th>
                 <th class="text-right px-2 py-1">FEC</th>
@@ -379,6 +480,11 @@ const DecoderDisplay: Component = () => {
                       {formatHz(message.data.rfHz)}
                     </td>
                     <td class="px-2 py-1 text-right text-text-dim">
+                      {typeof message.data.dtSec === 'number'
+                        ? `${message.data.dtSec.toFixed(2)}s`
+                        : ''}
+                    </td>
+                    <td class="px-2 py-1 text-right text-text-dim">
                       {typeof message.data.snrDb === 'number'
                         ? `${Math.round(message.data.snrDb)}`
                         : ''}
@@ -391,7 +497,15 @@ const DecoderDisplay: Component = () => {
                     </td>
                     <td class="px-2 py-1 text-right whitespace-nowrap">
                       {(() => {
-                        const stats = (message.data.stats ?? {}) as Record<string, unknown>;
+                        const data = message.data;
+                        const variant = typeof data.variant === 'string' ? data.variant : '';
+                        if (variant) {
+                          const fit = typeof data.fit === 'number'
+                            ? ` ${Math.round(data.fit * 100)}%`
+                            : '';
+                          return <span class="text-cyan/80">{variant}{fit}</span>;
+                        }
+                        const stats = (data.stats ?? {}) as Record<string, unknown>;
                         const hard = typeof stats.hardErrors === 'number' ? stats.hardErrors : 0;
                         if (stats.crcOk === false) {
                           return <span class="text-amber">BAD</span>;
@@ -409,7 +523,9 @@ const DecoderDisplay: Component = () => {
             </tbody>
           </table>
           <Show when={mergedRows().length === 0}>
-            <p class="text-[9px] font-mono text-text-dim px-2 py-3">Waiting for a slot…</p>
+            <p class="text-[9px] font-mono text-text-dim px-2 py-3">
+              {weakSignalEmptyText(store.decoderMode())}
+            </p>
           </Show>
         </div>
 
@@ -454,9 +570,6 @@ const DecoderDisplay: Component = () => {
       </Show>
       <Show when={isText()}>
         <TextModeDisplay />
-      </Show>
-      <Show when={isMeteor()}>
-        <MeteorDisplay />
       </Show>
       <Show when={isJs8()}>
         <Js8Display />

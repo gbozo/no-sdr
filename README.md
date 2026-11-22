@@ -459,6 +459,7 @@ server {
 | `GET` | `/api/dongles/:id` | — | Get dongle info |
 | `GET` | `/api/dongles/:id/profiles` | — | List profiles for dongle |
 | `GET` | `/api/decoders` | — | List running decoders |
+| `GET` | `/api/decoder/catalog` | — | Read-only decoder calling-frequency catalogue |
 | `GET` | `/api/decoders/check` | — | Check which decoder binaries are installed |
 | `POST` | `/api/admin/login` | — | Authenticate (body: `{ password }`) |
 | `POST` | `/api/admin/dongles/:id/start` | Admin | Start a dongle |
@@ -468,6 +469,8 @@ server {
 | `PUT` | `/api/admin/dongles/:id/profiles/:pid` | Admin | Update profile (body: partial profile) |
 | `DELETE` | `/api/admin/dongles/:id/profiles/:pid` | Admin | Delete profile |
 | `GET` | `/api/admin/bookmarks/regions` | Admin | List bookmark region/country folders and the current selection |
+| `GET` | `/api/admin/decoder-catalog` | Admin | Read-only decoder catalogue status and entries |
+| `POST` | `/api/admin/decoder-catalog/refresh` | Admin | Refresh the decoder catalogue from its configured URL |
 | `POST` | `/api/admin/save-config` | Admin | Persist current config to disk |
 | `GET` | `/api/admin/status` | Admin | Full status with memory usage |
 

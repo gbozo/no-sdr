@@ -429,11 +429,9 @@ pub(crate) fn window_spec(
     }
     #[cfg(feature = "meteor")]
     if is_meteor_mode(mode) {
-        // MSK144/FSK441 already have a dedicated meteor display; a second
-        // decimator for a mini waterfall is not worth the CPU.
-        let mut spec = usb_window(dial_hz, 2_500.0, 1_500.0, period_s);
-        spec.scope = false;
-        return spec;
+        // Same weak-signal workspace as FT8/FST4/Q65: a 3 kHz USB channel with
+        // the optional zoom waterfall.
+        return usb_window(dial_hz, 3_000.0, 1_500.0, period_s);
     }
     #[cfg(feature = "js8")]
     if is_js8(mode) {
