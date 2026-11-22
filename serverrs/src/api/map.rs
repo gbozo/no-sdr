@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use super::AppState;
 
-const GRID_LOOKBACK_MS: i64 = 24 * 60 * 60 * 1000;
+const SPOTTING_LOOKBACK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const ENTITY_ACTIVE_MS: i64 = 5 * 60 * 1000;
 const CHECKPOINT_GRID_LIMIT: usize = 3_000;
 const UPDATE_LIMIT: usize = 1_000;
@@ -101,8 +101,8 @@ fn checkpoint_json(state: &AppState) -> Value {
     let now = now_ms();
     let aircraft = fresh_entities(aircraft_entities(state), now);
     let vessels = fresh_entities(vessel_entities(state), now);
-    let decodes = grid_messages(state, now - GRID_LOOKBACK_MS, CHECKPOINT_GRID_LIMIT);
-    let positions = position_messages(state, now - GRID_LOOKBACK_MS, CHECKPOINT_GRID_LIMIT);
+    let decodes = grid_messages(state, now - SPOTTING_LOOKBACK_MS, CHECKPOINT_GRID_LIMIT);
+    let positions = position_messages(state, now - SPOTTING_LOOKBACK_MS, CHECKPOINT_GRID_LIMIT);
     json!({
         "type": "checkpoint",
         "at": now,

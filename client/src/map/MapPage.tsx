@@ -56,6 +56,7 @@ interface GridStation {
   snrDb: number;
   lastSeenMs: number;
   count: number;
+  noGrid?: boolean;
 }
 
 interface MetricSample {
@@ -300,13 +301,14 @@ function gridPopup(station: GridStation): string {
     <div class="map-popup-title">${escapeHtml(station.callsign || station.grid)} <span class="map-popup-badge">${escapeHtml(station.mode.toUpperCase())}</span></div>
     <div class="map-popup-sub">${escapeHtml(station.text)}</div>
     ${popupRows([
-      ['GRID', station.grid],
+      ['GRID', station.noGrid ? 'no grid' : station.grid],
       ['COORDS', `${station.lat.toFixed(3)}, ${station.lon.toFixed(3)}`],
       ['FREQ', station.frequencyHz > 0 ? `${(station.frequencyHz / 1e6).toFixed(6)} MHz` : '—'],
       ['SNR', Number.isFinite(station.snrDb) ? `${Math.round(station.snrDb)} dB` : '—'],
       ['HEARD', `${station.count} decode${station.count === 1 ? '' : 's'}`],
       ['LAST', timeAgo(station.lastSeenMs)],
     ])}
+    ${station.noGrid ? '<p class="map-popup-text">No grid in decode; plotted near the receiver location.</p>' : ''}
   </div>`;
 }
 
@@ -561,7 +563,7 @@ function trailColor(t: number): string {
 function gridIcon(station: GridStation): L.DivIcon {
   return L.divIcon({
     className: 'map-grid-marker',
-    html: `<div class="map-grid-glyph"><span class="map-grid-label">${escapeHtml(station.callsign || station.grid)}</span><span class="map-grid-mode">${escapeHtml(station.mode.toUpperCase())}</span></div>`,
+    html: `<div class="map-grid-glyph"><span class="map-grid-label">${escapeHtml(station.callsign || station.grid || 'NO GRID')}</span><span class="map-grid-mode">${escapeHtml(station.mode.toUpperCase())}</span></div>`,
     iconSize: [64, 30],
     iconAnchor: [32, 15],
   });
@@ -684,15 +686,38 @@ const MapPage: Component = () => {
 
   const gridStations = createMemo<GridStation[]>(() => {
     const aggregated = new Map<string, GridStation>();
+    const receiver = station();
+    const receiverLat = asNumber(receiver?.lat);
+    const receiverLon = asNumber(receiver?.lon);
     for (const message of decodes().values()) {
       const payload = (message.payload ?? {}) as Record<string, unknown>;
       const storedGrid = asString(payload.grid);
       const grid = (storedGrid || extractGridFromText(message.mode, message.text)).toUpperCase();
-      if (!grid) continue;
-      const center = gridCenter(grid);
-      if (!center) continue;
-      const callsign = asString(payload.callsign).trim() || callsignFromText(message.mode, message.text);
-      const key = `${message.mode}|${grid}|${callsign || message.text}`;
+      const center = grid ? gridCenter(grid) : null;
+      const callsign =
+        asString(payload.callsign).trim() || callsignFromText(message.mode, message.text);
+      let key: string;
+      let lat: number;
+      let lon: number;
+      let noGrid = false;
+      if (center) {
+        key = `${message.mode}|${grid}|${callsign || message.text}`;
+        lat = center.lat;
+        lon = center.lon;
+      } else {
+        if (
+          receiverLat === null ||
+          receiverLon === null ||
+          (receiverLat === 0 && receiverLon === 0)
+        ) {
+          continue;
+        }
+        key = `${message.mode}|nogrid|${callsign || message.text}`;
+        const hash = [...key].reduce((value, char) => (value * 31 + char.charCodeAt(0)) | 0, 0);
+        lat = receiverLat + (((Math.abs(hash) % 9) - 4) * 0.012);
+        lon = receiverLon + ((((Math.abs(hash) >> 4) % 9) - 4) * 0.016);
+        noGrid = true;
+      }
       const previous = aggregated.get(key);
       if (previous) {
         previous.count += 1;
@@ -708,13 +733,14 @@ const MapPage: Component = () => {
         callsign,
         mode: message.mode,
         grid,
-        lat: center.lat,
-        lon: center.lon,
+        lat,
+        lon,
         text: message.text,
         frequencyHz: message.frequencyHz,
         snrDb: message.snrDb,
         lastSeenMs: message.receivedMs,
         count: 1,
+        noGrid,
       });
     }
     return [...aggregated.values()];

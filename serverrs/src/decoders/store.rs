@@ -642,10 +642,12 @@ impl DecoderStore {
             .unwrap_or_default()
     }
 
-    /// Recent persisted decodes that carry a Maidenhead grid, newest first.
+    /// Recent persisted decodes that carry a Maidenhead grid, plus FT8-family
+    /// rows whose grid may only be extractable from the message text.
     pub fn grid_messages(&self, since_ms: i64, limit: usize) -> Vec<Value> {
         self.decode_messages_matching(
-            "received_ms >= ?1 AND json_extract(payload, '$.grid') IS NOT NULL",
+            "received_ms >= ?1 AND (json_extract(payload, '$.grid') IS NOT NULL \
+             OR mode IN ('ft8', 'ft4', 'ft2'))",
             since_ms,
             limit,
         )
