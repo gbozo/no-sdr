@@ -447,6 +447,20 @@ pub struct ServerConfig {
     pub acrcloud_access_key: String,
     #[serde(default)]
     pub acrcloud_access_secret: String,
+    /// OpenWeatherMap API key for the map cloud overlay. Published to map
+    /// clients so browsers can fetch tiles directly and tile traffic stays off
+    /// this server.
+    #[serde(default)]
+    pub open_weather_map_api_key: String,
+    /// Maximum airport marker distance from the receiver, in km. 0 disables
+    /// the limit. The receiver map location must be configured for this to
+    /// apply.
+    #[serde(default = "default_airport_range_km")]
+    pub airport_range_km: i32,
+    /// Maximum navaid marker distance from the receiver, in km. 0 disables the
+    /// limit.
+    #[serde(default = "default_navaid_range_km")]
+    pub navaid_range_km: i32,
 }
 
 impl Default for ServerConfig {
@@ -482,6 +496,9 @@ impl Default for ServerConfig {
             acrcloud_host: String::new(),
             acrcloud_access_key: String::new(),
             acrcloud_access_secret: String::new(),
+            open_weather_map_api_key: String::new(),
+            airport_range_km: default_airport_range_km(),
+            navaid_range_km: default_navaid_range_km(),
         }
     }
 }
@@ -703,6 +720,8 @@ pub fn apply_defaults(cfg: &mut Config) {
     if cfg.server.decoder_catalog_refresh_hours < 1 {
         cfg.server.decoder_catalog_refresh_hours = default_decoder_catalog_refresh_hours();
     }
+    cfg.server.airport_range_km = cfg.server.airport_range_km.clamp(0, 20_000);
+    cfg.server.navaid_range_km = cfg.server.navaid_range_km.clamp(0, 20_000);
     // Retired history codecs migrate to the current default.
     let history_compression = cfg.server.fft_history_compression.trim().to_string();
     cfg.server.fft_history_compression = match history_compression.as_str() {
@@ -1013,6 +1032,14 @@ fn default_decoder_catalog_refresh_hours() -> i32 {
     24
 }
 
+fn default_airport_range_km() -> i32 {
+    250
+}
+
+fn default_navaid_range_km() -> i32 {
+    350
+}
+
 fn default_users_ribbon() -> String {
     "users".to_string()
 }
@@ -1151,6 +1178,17 @@ mod tests {
         let cfg = parse("server:\n  bandplanRegion: r9\n");
         assert_eq!(cfg.server.bandplan_region, "");
         assert_eq!(cfg.server.bookmark_regions, None);
+    }
+
+    #[test]
+    fn aviation_ranges_default_and_clamp() {
+        let cfg = parse("");
+        assert_eq!(cfg.server.airport_range_km, 250);
+        assert_eq!(cfg.server.navaid_range_km, 350);
+
+        let cfg = parse("server:\n  airportRangeKm: -20\n  navaidRangeKm: 99999\n");
+        assert_eq!(cfg.server.airport_range_km, 0);
+        assert_eq!(cfg.server.navaid_range_km, 20_000);
     }
 
     #[test]

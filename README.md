@@ -73,7 +73,7 @@ decoders are part of the Rust server, not a pile of external binaries.
 | **SDR sources** | RTL-SDR, HackRF, Airspy R2/Mini, Airspy HF+, HydraSDR, ELAD, RX-888, PlutoSDR, SDRplay, LimeSDR, Fobos, `rtl_tcp`/`airspy_tcp`/`hfp_tcp`/`rsp_tcp`, demo simulator |
 | **Analog modes** | WFM stereo + RDS, NFM, AM, C-QUAM AM stereo, SAM, USB, LSB, CW, Raw IQ |
 | **Digital decoders** | 31 native decoders: weak-signal, aircraft, marine, APRS/packet, image/text and time signals |
-| **Map** | Live ADS-B, AIS, APRS/HFDL and FT8/FT4/FT2/WSPR grid spots; station marker; Maidenhead grid; weather; trails |
+| **Map** | Live ADS-B, AIS, APRS/HFDL and FT8/FT4/FT2/WSPR grid spots; station marker; airports/navaids; Maidenhead grid; OpenSeaMap seamarks; weather; trails |
 | **Admin** | Dongle/profile management, device scanning, bookmarks, decoder workers, feature flags, monitoring, music ID |
 | **Analytics** | User sessions, live/history maps, country/region stats, top modes/frequencies, retention and purge |
 | **Compression** | Per-client FFT codecs and IQ codecs, including server-side Opus and stereo FM |
@@ -139,8 +139,13 @@ Layers include:
 - **Vessels** — AIS positions, MMSI, type, callsign, speed/course/heading, destination, ETA.
 - **Grid decodes** — FT8/FT4/FT2/WSPR and other grid-bearing modes plotted at their Maidenhead grid centre.
 - **Position reports** — APRS and HFDL latitude/longitude fixes.
+- **Airports** — OurAirports public-domain airport data, filtered by viewport and zoom.
+- **Navaids** — VOR, VORTAC, TACAN, NDB and DME stations from OurAirports.
 - **Maidenhead grid** — field, 4-character square and 6-character subsquare overlay.
-- **Cloud cover** — client-side Open-Meteo cloud-cover grid; no API key and no server-side weather bytes.
+- **OpenSeaMap** — seamarks, buoys, lights, and nautical symbols.
+- **Cloud cover** — OpenWeatherMap tiles fetched directly by the browser.
+- Airport and navaid reference data courtesy of [OurAirports](https://ourairports.com/) (public domain). Airport and navaid ranges are admin-configurable in km from the receiver location; `0` disables the limit.
+- Aircraft/vessel trails are simplified server-side and stored with the entity: 5% line tolerance, 500 ft altitude tolerance, up to 240 significant points.
 
 Map details:
 
@@ -342,6 +347,7 @@ Each dongle has one or more profiles. Switching the active profile updates every
 
 ### Optional integrations
 
+- **OpenWeatherMap** — set `server.openWeatherMapApiKey` to enable the map cloud-cover layer. Browsers fetch tiles directly from OpenWeatherMap; the key is public and cloud image traffic does not pass through the server.
 - **AudD / ACRCloud** — set the provider credentials to enable the Music ID button.
 - **DB-IP City Lite** — optional offline geolocation for user analytics.
 
@@ -390,6 +396,7 @@ DB-IP City Lite updates monthly, is hot-swapped without dropping lookups, and st
 | `GET` | `/api/decoder/modes` | Supported background decoder modes |
 | `GET` | `/api/decoder/catalog` | Read-only decoder calling-frequency catalogue |
 | `GET` | `/api/map/checkpoint` | Initial map snapshot |
+| `GET` | `/api/map/aviation` | Viewport airports or navaids from OurAirports |
 
 ### Admin
 
@@ -547,4 +554,4 @@ See [`LICENSE`](LICENSE) for the full text.
 - [fft.js](https://github.com/nicedoc/fft.js) by Fedor Indutny — fast pure-JS radix-4 FFT
 - [RTL-SDR](https://www.rtl-sdr.com/) community — making software-defined radio accessible
 - [SolidJS](https://www.solidjs.com/) — reactive UI without VDOM overhead
-- Open-Meteo and DB-IP for optional weather and geolocation data
+- OpenWeatherMap and DB-IP for optional weather and geolocation data

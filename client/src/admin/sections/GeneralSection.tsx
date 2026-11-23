@@ -79,6 +79,69 @@ const GeneralSection: Component = () => {
             </Show>
           </SettingsGroup>
 
+          {/* Weather overlay */}
+          <SettingsGroup
+            title="Weather Overlay"
+            description="OpenWeatherMap API key for the cloud-cover layer on the operations map."
+          >
+            <FieldRow
+              label="API Key"
+              help="Create a key at openweathermap.org/api. Leave blank to disable the cloud layer."
+            >
+              <ApiKeyInput
+                value={cfg().openWeatherMapApiKey}
+                onChange={(v) => adminStore.updateServerConfigField('openWeatherMapApiKey', v)}
+                placeholder="OpenWeatherMap API key"
+              />
+            </FieldRow>
+            <div class="mt-2 px-3 py-2 bg-amber/5 border border-amber/20 rounded-sm">
+              <p class="text-[10px] font-mono text-amber uppercase tracking-wider">
+                Cloud tiles are fetched directly by the browser
+              </p>
+              <p class="mt-1 text-[10px] font-mono text-amber/80 leading-relaxed">
+                When the layer is enabled, each visitor downloads tiles from OpenWeatherMap.
+                This keeps image bandwidth off this server, but the API key is sent to every
+                browser and is visible to anyone who opens the map. Visitors consume your
+                OpenWeatherMap quota directly.
+              </p>
+            </div>
+          </SettingsGroup>
+
+          {/* Aviation layers */}
+          <SettingsGroup
+            title="Aviation Layers"
+            description="Limit airport and navaid markers to a radius around the receiver."
+          >
+            <FieldRow
+              label="Airport range (km)"
+              help="Maximum distance from the receiver. Set 0 for unlimited."
+            >
+              <NumberInput
+                value={cfg().airportRangeKm}
+                onChange={(v) => adminStore.updateServerConfigField('airportRangeKm', v)}
+                min={0}
+                max={20000}
+              />
+            </FieldRow>
+            <FieldRow
+              label="Navaid range (km)"
+              help="Maximum distance from the receiver. Set 0 for unlimited."
+            >
+              <NumberInput
+                value={cfg().navaidRangeKm}
+                onChange={(v) => adminStore.updateServerConfigField('navaidRangeKm', v)}
+                min={0}
+                max={20000}
+              />
+            </FieldRow>
+            <div class="mt-2 px-3 py-2 bg-amber/5 border border-amber/20 rounded-sm">
+              <p class="text-[10px] font-mono text-amber/80 leading-relaxed">
+                The range is measured from Receiver Location. If that location is unset, no
+                radius limit is applied.
+              </p>
+            </div>
+          </SettingsGroup>
+
           {/* Network */}
           <SettingsGroup title="Network" description="Server bind address (requires restart to take effect)">
             <FieldRow label="Host" help="IP address to bind to (0.0.0.0 = all interfaces)">

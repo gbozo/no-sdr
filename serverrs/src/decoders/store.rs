@@ -84,6 +84,145 @@ enum EntityKey {
     Mmsi,
 }
 
+/// Simplified trajectory kept in the entity payload. It survives restarts and
+/// avoids re-storing every raw position while still preserving turns and
+/// altitude changes.
+const TRAJECTORY_POINT_LIMIT: usize = 240;
+const TRAJECTORY_LINE_TOLERANCE: f64 = 0.02;
+const TRAJECTORY_ALTITUDE_TOLERANCE_FT: i64 = 500;
+
+#[derive(Debug, Clone)]
+struct TrajectoryPoint {
+    lat: f64,
+    lon: f64,
+    altitude_ft: Option<i64>,
+}
+
+fn trajectory_point_key(lat: f64, lon: f64) -> String {
+    format!("{lat:.6},{lon:.6}")
+}
+
+fn parse_trajectory(payload: &Value) -> (Vec<TrajectoryPoint>, Option<String>) {
+    let mut points = Vec::new();
+    if let Some(rows) = payload.get("trajectory").and_then(Value::as_array) {
+        for row in rows {
+            let Some(values) = row.as_array() else { continue };
+            let (Some(lat), Some(lon)) = (
+                values.first().and_then(Value::as_f64),
+                values.get(1).and_then(Value::as_f64),
+            ) else {
+                continue;
+            };
+            if !lat.is_finite() || !lon.is_finite() {
+                continue;
+            }
+            points.push(TrajectoryPoint {
+                lat,
+                lon,
+                altitude_ft: values.get(2).and_then(Value::as_i64),
+            });
+        }
+    }
+    let cursor = payload
+        .get("trajectoryCursor")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    (points, cursor)
+}
+
+fn parse_track(payload: &Value) -> Vec<(f64, f64)> {
+    let Some(rows) = payload.get("track").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let values = row.as_array()?;
+            let lat = values.first()?.as_f64()?;
+            let lon = values.get(1)?.as_f64()?;
+            (lat.is_finite() && lon.is_finite()).then_some((lat, lon))
+        })
+        .collect()
+}
+
+fn trajectory_point_off_line(
+    previous: &TrajectoryPoint,
+    latest: &TrajectoryPoint,
+    next: &TrajectoryPoint,
+) -> bool {
+    let scale = (((previous.lat + latest.lat) / 2.0) * std::f64::consts::PI / 180.0).cos();
+    let bx = previous.lon * scale;
+    let ax = latest.lon * scale;
+    let cx = next.lon * scale;
+    let base = ((ax - bx).powi(2) + (latest.lat - previous.lat).powi(2)).sqrt();
+    if base < 1e-9 {
+        return false;
+    }
+    let projection =
+        ((ax - bx) * (cx - bx) + (latest.lat - previous.lat) * (next.lat - previous.lat))
+            / (base * base);
+    if projection <= 1.0 {
+        return false;
+    }
+    let perpendicular =
+        ((ax - bx) * (next.lat - previous.lat)
+            - (latest.lat - previous.lat) * (cx - bx))
+            .abs()
+            / base;
+    perpendicular <= base * TRAJECTORY_LINE_TOLERANCE
+}
+
+fn merge_trajectory(
+    mut points: Vec<TrajectoryPoint>,
+    cursor: Option<String>,
+    track: &[(f64, f64)],
+    altitude_ft: Option<i64>,
+) -> (Vec<TrajectoryPoint>, Option<String>) {
+    let mut start = 0;
+    if let Some(cursor) = cursor.as_deref() {
+        if let Some(index) = track
+            .iter()
+            .position(|(lat, lon)| trajectory_point_key(*lat, *lon) == cursor)
+        {
+            start = index + 1;
+        } else {
+            points.clear();
+        }
+    }
+    let mut last_key = cursor;
+    for (lat, lon) in track.iter().skip(start) {
+        let key = trajectory_point_key(*lat, *lon);
+        if last_key.as_deref() == Some(key.as_str()) {
+            continue;
+        }
+        let next = TrajectoryPoint {
+            lat: *lat,
+            lon: *lon,
+            altitude_ft,
+        };
+        if points.len() >= 2 {
+            let previous = &points[points.len() - 2];
+            let latest = &points[points.len() - 1];
+            let altitude_change = (next.altitude_ft.unwrap_or(0)
+                - latest.altitude_ft.unwrap_or(0))
+            .abs();
+            if altitude_change <= TRAJECTORY_ALTITUDE_TOLERANCE_FT
+                && trajectory_point_off_line(previous, latest, &next)
+            {
+                let latest_index = points.len() - 1;
+                points[latest_index] = next;
+                last_key = Some(key);
+                continue;
+            }
+        }
+        points.push(next);
+        last_key = Some(key);
+    }
+    if points.len() > TRAJECTORY_POINT_LIMIT {
+        points.drain(..points.len() - TRAJECTORY_POINT_LIMIT);
+    }
+    (points, last_key)
+}
+
 /// Minimum interval between entity-table writes for one decoder. Last-seen
 /// timestamps are minute-scale data, so five seconds is plenty.
 const ENTITY_WRITE_INTERVAL_MS: i64 = 5_000;
@@ -563,10 +702,45 @@ impl DecoderStore {
                 .filter(|v| *v > 0)
                 .map(|s| s.saturating_mul(1000))
                 .unwrap_or(now);
+            let existing = conn
+                .query_row(
+                    "SELECT payload FROM decoder_entities WHERE kind = ?1 AND entity_key = ?2",
+                    params![kind, key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten();
+            let (mut trajectory, cursor) = existing
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .as_ref()
+                .map(parse_trajectory)
+                .unwrap_or_default();
+            let track = parse_track(entry);
+            let altitude_ft = entry.get("altitude_ft").and_then(Value::as_i64);
+            let (merged, cursor) = merge_trajectory(trajectory, cursor, &track, altitude_ft);
+            trajectory = merged;
+
             let mut payload = entry.clone();
             if let Some(object) = payload.as_object_mut() {
                 object.insert("decoderId".to_string(), json!(decoder_id));
                 object.insert("dongleId".to_string(), json!(dongle_id));
+                object.insert(
+                    "trajectory".to_string(),
+                    Value::Array(
+                        trajectory
+                            .iter()
+                            .map(|point| {
+                                json!([point.lat, point.lon, point.altitude_ft])
+                            })
+                            .collect(),
+                    ),
+                );
+                object.insert("trajectoryCursor".to_string(), json!(cursor));
+                // The simplified trajectory replaces the raw history in
+                // SQLite; the live decoder snapshot still carries `track`.
+                object.remove("track");
             }
             let result = conn.execute(
                 "INSERT INTO decoder_entities
@@ -1136,6 +1310,54 @@ mod tests {
         assert_eq!(rows[0]["payload"]["dongleId"], "d1");
         assert_eq!(rows[0]["firstSeenMs"], 1_760_000_000_000i64);
         assert_eq!(rows[0]["lastSeenMs"], 1_760_000_002_000i64);
+    }
+
+    #[test]
+    fn trajectory_keeps_significant_points_and_altitude_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DecoderStore::open(dir.path().join("decoders.sqlite"));
+        let t0 = 1_760_000_000_000;
+        let first = vec![json!({
+            "icao": 0x40621d,
+            "altitude_ft": 38_000,
+            "track": [[51.0, -0.1], [51.001, -0.1]],
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_001,
+        })];
+        store.upsert_aircraft_at("adsb-local", "d1", &first, t0);
+        let rows = store.entities("aircraft", 10);
+        assert_eq!(rows[0]["payload"]["trajectory"].as_array().unwrap().len(), 2);
+        assert!(rows[0]["payload"].get("track").is_none());
+
+        let second = vec![json!({
+            "icao": 0x40621d,
+            "altitude_ft": 38_100,
+            "track": [[51.0, -0.1], [51.001, -0.1], [51.002, -0.1]],
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_002,
+        })];
+        store.upsert_aircraft_at("adsb-local", "d1", &second, t0 + 6_000);
+        let rows = store.entities("aircraft", 10);
+        assert_eq!(
+            rows[0]["payload"]["trajectory"].as_array().unwrap().len(),
+            2,
+            "a collinear point replaces the latest one"
+        );
+
+        let third = vec![json!({
+            "icao": 0x40621d,
+            "altitude_ft": 39_000,
+            "track": [[51.0, -0.1], [51.001, -0.1], [51.002, -0.1], [51.003, -0.1]],
+            "first_at": 1_760_000_000,
+            "last_at": 1_760_000_003,
+        })];
+        store.upsert_aircraft_at("adsb-local", "d1", &third, t0 + 12_000);
+        let rows = store.entities("aircraft", 10);
+        assert_eq!(
+            rows[0]["payload"]["trajectory"].as_array().unwrap().len(),
+            3,
+            "a significant altitude change is kept"
+        );
     }
 
     #[test]

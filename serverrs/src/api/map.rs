@@ -60,7 +60,7 @@ fn grid_from_lat_lon(latitude: f64, longitude: f64) -> String {
 }
 
 fn station_json(state: &AppState) -> Value {
-    let (callsign, location, description, lat, lon) = {
+    let (callsign, location, description, lat, lon, weather_api_key) = {
         let cfg = state.cfg.read();
         let server = &cfg.server;
         (
@@ -69,6 +69,7 @@ fn station_json(state: &AppState) -> Value {
             server.description.clone(),
             server.receiver_latitude,
             server.receiver_longitude,
+            server.open_weather_map_api_key.trim().to_string(),
         )
     };
     let grid = grid_from_lat_lon(lat, lon);
@@ -87,8 +88,12 @@ fn station_json(state: &AppState) -> Value {
         "clients": state.ws.client_count(),
         "decoders": decoder_modes,
         "weather": {
-            "enabled": true,
-            "provider": "open-meteo",
+            "enabled": !weather_api_key.is_empty(),
+            "provider": "openweathermap",
+            "layer": "clouds_new",
+            // Sent to browsers so they can fetch tiles directly. Do not add a
+            // proxy: the point is to keep cloud image traffic off this server.
+            "apiKey": weather_api_key,
         },
     })
 }
@@ -172,7 +177,10 @@ pub async fn checkpoint(State(state): State<AppState>) -> Json<Value> {
     Json(checkpoint_json(&state))
 }
 
-pub async fn ws_map(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
+pub async fn ws_map(
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> Response {
     ws.on_upgrade(move |socket| map_socket(socket, state))
 }
 

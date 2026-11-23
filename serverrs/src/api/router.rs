@@ -107,6 +107,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/bandplan", get(bandplan))
         .route("/decoder/catalog", get(super::decoder_catalog::catalog_json))
         .route("/map/checkpoint", get(super::map::checkpoint))
+        .route("/map/aviation", get(super::aviation::aviation))
         .route("/identify", get(identify).post(identify))
         .route("/identify/status", get(identify_status))
         .nest("/admin", admin_router);

@@ -168,6 +168,13 @@ async fn async_main() -> Result<()> {
     let decoder_catalog = serverrs::api::DecoderCatalogService::new(cfg.clone());
     decoder_catalog.start_scheduler();
 
+    let aviation_dir = cfg_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("aviation");
+    let aviation = serverrs::api::AviationService::new(aviation_dir);
+    aviation.start_scheduler();
+
     let bookmarks_dir = std::env::var("BOOKMARKS_DIR")
         .ok()
         .filter(|s| !s.is_empty())
@@ -195,6 +202,7 @@ async fn async_main() -> Result<()> {
         bookmarks_dir,
         bandplan,
         decoder_catalog,
+        aviation,
         identify,
         auth: AdminAuth::new(admin_password),
         static_dir: PathBuf::from(static_dir),

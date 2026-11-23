@@ -21,7 +21,7 @@ interface MapStation {
   version: string;
   clients: number;
   decoders: Array<{ mode: string; label: string; description?: string }>;
-  weather: { enabled: boolean; provider: string };
+  weather: { enabled: boolean; provider: string; layer: string; apiKey: string };
 }
 
 interface MapCheckpoint {
@@ -42,6 +42,34 @@ interface MapUpdate {
   vessels: DecoderEntity[];
   decodes: DecoderHistoryMessage[];
   positions?: DecoderHistoryMessage[];
+}
+
+interface MapAirport {
+  ident: string;
+  name: string;
+  kind: string;
+  lat: number;
+  lon: number;
+  elevationFt: number | null;
+  municipality: string;
+  isoCountry: string;
+  iata: string;
+  icao: string;
+  scheduledService: boolean;
+  homeLink: string;
+}
+
+interface MapNavaid {
+  ident: string;
+  name: string;
+  kind: string;
+  frequencyKhz: number | null;
+  lat: number;
+  lon: number;
+  elevationFt: number | null;
+  isoCountry: string;
+  usage: string;
+  associatedAirport: string;
 }
 
 interface GridStation {
@@ -65,7 +93,16 @@ interface MetricSample {
   speedKt: number | null;
 }
 
-type LayerId = 'aircraft' | 'vessels' | 'decodes' | 'positions' | 'grid' | 'weather';
+type LayerId =
+  | 'aircraft'
+  | 'vessels'
+  | 'decodes'
+  | 'positions'
+  | 'airports'
+  | 'navaids'
+  | 'grid'
+  | 'seamarks'
+  | 'weather';
 type LayerState = Record<LayerId, boolean>;
 type StyleId = 'dark' | 'osm' | 'light' | 'satellite' | 'terrain';
 
@@ -122,7 +159,10 @@ const DEFAULT_LAYERS: LayerState = {
   vessels: true,
   decodes: true,
   positions: true,
+  airports: false,
+  navaids: false,
   grid: false,
+  seamarks: false,
   weather: false,
 };
 
@@ -294,6 +334,124 @@ function stationPopup(station: MapStation): string {
     ${station.description ? `<p class="map-popup-text">${escapeHtml(station.description)}</p>` : ''}
     ${modes ? `<p class="map-popup-text"><strong>Decoders:</strong> ${escapeHtml(modes)}</p>` : ''}
   </div>`;
+}
+
+function titleCaseKind(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function airportPopup(airport: MapAirport): string {
+  const links: Array<[string, string]> = [
+    ['OurAirports', `https://ourairports.com/airports/${encodeURIComponent(airport.ident)}/`],
+  ];
+  if (airport.homeLink) links.push(['Website', airport.homeLink]);
+  return `<div class="map-popup">
+    <div class="map-popup-title">${escapeHtml(airport.name || airport.ident)} <span class="map-popup-badge">${escapeHtml(airport.icao || airport.ident)}</span></div>
+    <div class="map-popup-sub">${escapeHtml(titleCaseKind(airport.kind))}</div>
+    ${popupRows([
+      ['IDENT', airport.ident],
+      ['ICAO', airport.icao || '—'],
+      ['IATA', airport.iata || '—'],
+      ['ELEV', airport.elevationFt == null ? '—' : `${airport.elevationFt} ft`],
+      ['CITY', airport.municipality || '—'],
+      ['COUNTRY', airport.isoCountry || '—'],
+      ['SCHED', airport.scheduledService ? 'yes' : 'no'],
+    ])}
+    ${externalLinks(links)}
+  </div>`;
+}
+
+function navaidPopup(navaid: MapNavaid): string {
+  const frequency =
+    navaid.frequencyKhz == null
+      ? '—'
+      : navaid.kind.toUpperCase().startsWith('NDB')
+        ? `${navaid.frequencyKhz} kHz`
+        : `${(navaid.frequencyKhz / 1000).toFixed(3)} MHz`;
+  return `<div class="map-popup">
+    <div class="map-popup-title">${escapeHtml(navaid.ident)} <span class="map-popup-badge">${escapeHtml(navaid.kind.toUpperCase())}</span></div>
+    <div class="map-popup-sub">${escapeHtml(navaid.name || 'Navaid')}</div>
+    ${popupRows([
+      ['TYPE', titleCaseKind(navaid.kind)],
+      ['FREQ', frequency],
+      ['ELEV', navaid.elevationFt == null ? '—' : `${navaid.elevationFt} ft`],
+      ['COUNTRY', navaid.isoCountry || '—'],
+      ['USAGE', navaid.usage || '—'],
+      ['AIRPORT', navaid.associatedAirport || '—'],
+    ])}
+  </div>`;
+}
+
+function airportColour(kind: string): string {
+  if (kind === 'large_airport') return '#4aa3ff';
+  if (kind === 'medium_airport') return '#7dff9b';
+  if (kind === 'small_airport') return '#ffd24a';
+  if (kind === 'heliport') return '#ff9f6b';
+  return '#9fb0c7';
+}
+
+function navaidColour(kind: string): string {
+  const upper = kind.toUpperCase();
+  if (upper === 'VORTAC') return '#9d8cff';
+  if (upper.startsWith('VOR')) return '#4fb8e8';
+  if (upper === 'TACAN') return '#7dff9b';
+  if (upper.startsWith('NDB')) return '#ff9f6b';
+  return '#d6a85e';
+}
+
+function airportIcon(airport: MapAirport): L.DivIcon {
+  const colour = airportColour(airport.kind);
+  const size = airport.kind === 'large_airport' ? 24 : airport.kind === 'medium_airport' ? 20 : 17;
+  const heliport = airport.kind === 'heliport';
+  const body = heliport
+    ? `<circle cx="16" cy="16" r="12" fill="${colour}" stroke="#05070b" stroke-width="2"/>
+       <text x="16" y="21" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13" font-weight="800" fill="#05070b">H</text>`
+    : `<circle cx="16" cy="16" r="12" fill="${colour}" stroke="#05070b" stroke-width="2"/>
+       <circle cx="16" cy="16" r="9.5" fill="none" stroke="${colour}" stroke-opacity=".55" stroke-width="1"/>
+       <path d="M11 21 21 11M11 12 20 21" stroke="#05070b" stroke-width="3.4" stroke-linecap="round"/>
+       <path d="M11 21 21 11M11 12 20 21" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/>`;
+  return L.divIcon({
+    className: 'map-airport-marker',
+    html: `<div class="map-airport-glyph"><svg viewBox="0 0 32 32" width="${size}" height="${size}">${body}</svg></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function navaidIcon(navaid: MapNavaid): L.DivIcon {
+  const colour = navaidColour(navaid.kind);
+  const kind = navaid.kind.toUpperCase();
+  let body: string;
+  if (kind === 'VORTAC') {
+    body = `<path d="M16 3.5 27 9.8v12.4L16 28.5 5 22.2V9.8Z" fill="#07121d" stroke="#05070b" stroke-width="2"/>
+      <path d="M16 5.3 25.3 10.6v10.8L16 26.7 6.7 21.4V10.6Z" fill="${colour}" fill-opacity=".22" stroke="${colour}" stroke-width="1.3"/>
+      <rect x="12.5" y="12.5" width="7" height="7" rx="1" fill="${colour}" stroke="#05070b" stroke-width="1.5"/>`;
+  } else if (kind.startsWith('VOR')) {
+    body = `<path d="M16 3.5 27 9.8v12.4L16 28.5 5 22.2V9.8Z" fill="#07121d" stroke="#05070b" stroke-width="2"/>
+      <path d="M16 5.3 25.3 10.6v10.8L16 26.7 6.7 21.4V10.6Z" fill="${colour}" fill-opacity=".22" stroke="${colour}" stroke-width="1.3"/>
+      <circle cx="16" cy="16" r="3.4" fill="${colour}" stroke="#05070b" stroke-width="1.5"/>`;
+  } else if (kind === 'TACAN') {
+    body = `<path d="M16 4 28 16 16 28 4 16Z" fill="#07121d" stroke="#05070b" stroke-width="2"/>
+      <path d="M16 6.3 25.7 16 16 25.7 6.3 16Z" fill="${colour}" fill-opacity=".22" stroke="${colour}" stroke-width="1.3"/>
+      <path d="M11.5 11.5 20.5 20.5M20.5 11.5 11.5 20.5" stroke="${colour}" stroke-width="1.8" stroke-linecap="round"/>`;
+  } else if (kind.startsWith('NDB')) {
+    body = `<circle cx="16" cy="16" r="12" fill="#07121d" stroke="#05070b" stroke-width="2"/>
+      <circle cx="16" cy="16" r="3.2" fill="${colour}" stroke="#05070b" stroke-width="1.4"/>
+      <path d="M9.5 9.5a9.2 9.2 0 000 13M22.5 9.5a9.2 9.2 0 010 13" fill="none" stroke="${colour}" stroke-width="2" stroke-linecap="round"/>`;
+  } else {
+    body = `<path d="M16 4 28 16 16 28 4 16Z" fill="#07121d" stroke="#05070b" stroke-width="2"/>
+      <path d="M16 7 25 16 16 25 7 16Z" fill="${colour}" fill-opacity=".22" stroke="${colour}" stroke-width="1.3"/>
+      <circle cx="16" cy="16" r="2.6" fill="${colour}"/>`;
+  }
+  const size = 18;
+  return L.divIcon({
+    className: 'map-navaid-marker',
+    html: `<div class="map-navaid-glyph"><svg viewBox="0 0 32 32" width="${size}" height="${size}">${body}</svg></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
 }
 
 function gridPopup(station: GridStation): string {
@@ -560,6 +718,142 @@ function trailColor(t: number): string {
   return `rgb(${mix(from[0], to[0])},${mix(from[1], to[1])},${mix(from[2], to[2])})`;
 }
 
+/** Deep blue at sea level, neon green at 12,000 ft, neon yellow at 30,000 ft. */
+function altitudeTrailColor(altitudeFt: number): string {
+  const stops = [
+    { altitude: 0, rgb: [12, 64, 255] },
+    { altitude: 12_000, rgb: [57, 255, 20] },
+    { altitude: 30_000, rgb: [248, 255, 0] },
+  ];
+  const altitude = Math.max(0, altitudeFt);
+  if (altitude >= stops[stops.length - 1].altitude) {
+    const [r, g, b] = stops[stops.length - 1].rgb;
+    return `rgb(${r},${g},${b})`;
+  }
+  const index = altitude >= stops[1].altitude ? 1 : 0;
+  const from = stops[index];
+  const to = stops[index + 1];
+  const t = (altitude - from.altitude) / (to.altitude - from.altitude);
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
+  return `rgb(${mix(from.rgb[0], to.rgb[0])},${mix(from.rgb[1], to.rgb[1])},${mix(from.rgb[2], to.rgb[2])})`;
+}
+
+function trailPointKey(point: [number, number]): string {
+  return `${point[0].toFixed(6)},${point[1].toFixed(6)}`;
+}
+
+interface TrailPoint {
+  lat: number;
+  lon: number;
+  altitudeFt: number | null;
+  key: string;
+}
+
+interface TrailCache {
+  points: Map<string, TrailPoint[]>;
+  cursors: Map<string, string>;
+}
+
+const TRAIL_LINE_TOLERANCE = 0.02;
+const TRAIL_ALTITUDE_TOLERANCE_FT = 500;
+const TRAIL_POINT_LIMIT = 240;
+
+function trailPointOffLine(b: TrailPoint, a: TrailPoint, c: TrailPoint): boolean {
+  const scale = Math.cos((((b.lat + a.lat) / 2) * Math.PI) / 180);
+  const bx = b.lon * scale;
+  const ax = a.lon * scale;
+  const cx = c.lon * scale;
+  const base = Math.hypot(ax - bx, a.lat - b.lat);
+  if (base < 1e-9) return false;
+  // Only a point ahead of A counts as a simplification. A point behind A or
+  // between B and A is a direction change and must be kept.
+  const projection =
+    ((ax - bx) * (cx - bx) + (a.lat - b.lat) * (c.lat - b.lat)) / (base * base);
+  if (projection <= 1) return false;
+  const perpendicular =
+    Math.abs((ax - bx) * (c.lat - b.lat) - (a.lat - b.lat) * (cx - bx)) / base;
+  return perpendicular <= base * TRAIL_LINE_TOLERANCE;
+}
+
+function parseServerTrajectory(value: unknown): TrailPoint[] | null {
+  if (!Array.isArray(value)) return null;
+  const points: TrailPoint[] = [];
+  for (const row of value) {
+    if (!Array.isArray(row) || row.length < 2) continue;
+    const lat = asNumber(row[0]);
+    const lon = asNumber(row[1]);
+    if (lat === null || lon === null) continue;
+    points.push({
+      lat,
+      lon,
+      altitudeFt: asNumber(row[2]),
+      key: trailPointKey([lat, lon]),
+    });
+  }
+  return points.length > 0 ? points : null;
+}
+
+function simplifyTrail(
+  cache: TrailCache,
+  entityKey: string,
+  track: [number, number][],
+  altitudeFt: number | null,
+): TrailPoint[] {
+  let points = cache.points.get(entityKey);
+  if (!points) {
+    points = [];
+    cache.points.set(entityKey, points);
+  }
+  let start = 0;
+  const cursor = cache.cursors.get(entityKey);
+  if (cursor) {
+    const index = track.findIndex((point) => trailPointKey(point) === cursor);
+    if (index >= 0) {
+      start = index + 1;
+    } else {
+      // The server's capped history rolled past our cursor; rebuild.
+      points.length = 0;
+    }
+  }
+
+  for (let index = start; index < track.length; index++) {
+    const point = track[index];
+    const key = trailPointKey(point);
+    if (points[points.length - 1]?.key === key) {
+      cache.cursors.set(entityKey, key);
+      continue;
+    }
+    const next: TrailPoint = {
+      lat: point[0],
+      lon: point[1],
+      altitudeFt,
+      key,
+    };
+    if (points.length >= 2) {
+      const previous = points[points.length - 2];
+      const latest = points[points.length - 1];
+      const altitudeChange = Math.abs(
+        (next.altitudeFt ?? 0) - (latest.altitudeFt ?? 0),
+      );
+      if (
+        altitudeChange <= TRAIL_ALTITUDE_TOLERANCE_FT &&
+        trailPointOffLine(previous, latest, next)
+      ) {
+        points[points.length - 1] = next;
+        cache.cursors.set(entityKey, key);
+        continue;
+      }
+    }
+    points.push(next);
+    cache.cursors.set(entityKey, key);
+  }
+
+  if (points.length > TRAIL_POINT_LIMIT) {
+    points.splice(0, points.length - TRAIL_POINT_LIMIT);
+  }
+  return points;
+}
+
 function gridIcon(station: GridStation): L.DivIcon {
   return L.divIcon({
     className: 'map-grid-marker',
@@ -618,14 +912,9 @@ const MapPage: Component = () => {
   let container: HTMLDivElement | undefined;
   let map: L.Map | undefined;
   let baseLayer: L.TileLayer | undefined;
-  let weatherOverlay: L.ImageOverlay | undefined;
-  let cloudTimer: number | null = null;
-  let cloudRequest = 0;
-  let cloudFetchKey = '';
-  const cloudCache = new Map<
-    string,
-    { at: number; dataUrl: string; bounds: L.LatLngBounds }
-  >();
+  let seamarkLayer: L.TileLayer | undefined;
+  let weatherLayer: L.TileLayer | undefined;
+  let weatherLayerKey = '';
   let resizeObserver: ResizeObserver | undefined;
 
   const [mapReady, setMapReady] = createSignal(false);
@@ -638,18 +927,28 @@ const MapPage: Component = () => {
   const [lastAt, setLastAt] = createSignal<number | null>(null);
   const [ageTick, setAgeTick] = createSignal(0);
   const [layerState, setLayerState] = createSignal<LayerState>(readLayers());
+  const [layersCollapsed, setLayersCollapsed] = createSignal(false);
   const [styleId, setStyleId] = createSignal<StyleId>(readStyle());
+  const [airportRows, setAirportRows] = createSignal<MapAirport[]>([]);
+  const [navaidRows, setNavaidRows] = createSignal<MapNavaid[]>([]);
 
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let ageTimer: number | null = null;
   let motionTimer: number | null = null;
+  let aviationTimer: number | null = null;
+  let airportRetryTimer: number | null = null;
+  let navaidRetryTimer: number | null = null;
+  let airportFetchToken = 0;
+  let navaidFetchToken = 0;
   let initialViewDone = false;
 
   let aircraftGroup: L.LayerGroup | undefined;
   let vesselGroup: L.LayerGroup | undefined;
   let decodeGroup: L.LayerGroup | undefined;
   let positionGroup: L.LayerGroup | undefined;
+  let airportGroup: L.LayerGroup | undefined;
+  let navaidGroup: L.LayerGroup | undefined;
   let gridGroup: L.LayerGroup | undefined;
   let stationGroup: L.LayerGroup | undefined;
   let stationMarker: L.Marker | undefined;
@@ -658,20 +957,20 @@ const MapPage: Component = () => {
   const aircraftStale = new Map<string, boolean>();
   const aircraftRows = new Map<string, DecoderEntity>();
   const aircraftSamples = new Map<string, MetricSample[]>();
-  const aircraftDots = new Map<string, L.LayerGroup>();
   const aircraftLeaders = new Map<string, L.Polyline>();
   const aircraftShadows = new Map<string, L.Marker>();
   const vesselMarkers = new Map<string, L.Marker>();
   const vesselStale = new Map<string, boolean>();
   const vesselRows = new Map<string, DecoderEntity>();
   const vesselSamples = new Map<string, MetricSample[]>();
-  const vesselDots = new Map<string, L.LayerGroup>();
   const vesselLeaders = new Map<string, L.Polyline>();
   const vesselShadows = new Map<string, L.Marker>();
   const gridMarkers = new Map<string, L.Marker>();
   const positionMarkers = new Map<number, L.Marker>();
   const aircraftTrails = new Map<string, L.LayerGroup>();
+  const aircraftTrailCache: TrailCache = { points: new Map(), cursors: new Map() };
   const vesselTrails = new Map<string, L.LayerGroup>();
+  const vesselTrailCache: TrailCache = { points: new Map(), cursors: new Map() };
 
   function readLayers(): LayerState {
     try {
@@ -794,6 +1093,104 @@ const MapPage: Component = () => {
     saveLayers(next);
   };
 
+  function renderAirports(rows: MapAirport[]) {
+    airportGroup?.clearLayers();
+    for (const airport of rows) {
+      L.marker([airport.lat, airport.lon], {
+        icon: airportIcon(airport),
+        keyboard: false,
+      })
+        .bindPopup(airportPopup(airport), { className: 'sdr-map-popup', maxWidth: 340 })
+        .bindTooltip(`${airport.ident} · ${airport.name}`, {
+          direction: 'top',
+          offset: [0, -7],
+        })
+        .addTo(airportGroup!);
+    }
+  }
+
+  function renderNavaids(rows: MapNavaid[]) {
+    navaidGroup?.clearLayers();
+    for (const navaid of rows) {
+      L.marker([navaid.lat, navaid.lon], {
+        icon: navaidIcon(navaid),
+        keyboard: false,
+      })
+        .bindPopup(navaidPopup(navaid), { className: 'sdr-map-popup', maxWidth: 330 })
+        .bindTooltip(`${navaid.ident} · ${navaid.kind}`, {
+          direction: 'top',
+          offset: [0, -7],
+        })
+        .addTo(navaidGroup!);
+    }
+  }
+
+  function scheduleAviationRetry(kind: 'airports' | 'navaids') {
+    const existing = kind === 'airports' ? airportRetryTimer : navaidRetryTimer;
+    if (existing !== null) return;
+    const timer = window.setTimeout(() => {
+      if (kind === 'airports') airportRetryTimer = null;
+      else navaidRetryTimer = null;
+      if (
+        (kind === 'airports' && layerState().airports) ||
+        (kind === 'navaids' && layerState().navaids)
+      ) {
+        void fetchAviation(kind);
+      }
+    }, 5_000);
+    if (kind === 'airports') airportRetryTimer = timer;
+    else navaidRetryTimer = timer;
+  }
+
+  async function fetchAviation(kind: 'airports' | 'navaids') {
+    if (!map) return;
+    if (kind === 'airports' && !layerState().airports) return;
+    if (kind === 'navaids' && !layerState().navaids) return;
+    const bounds = map.getBounds();
+    const params = new URLSearchParams({
+      kind,
+      minLat: String(bounds.getSouth()),
+      maxLat: String(bounds.getNorth()),
+      minLon: String(bounds.getWest()),
+      maxLon: String(bounds.getEast()),
+      zoom: String(Math.round(map.getZoom())),
+    });
+    const token = kind === 'airports' ? ++airportFetchToken : ++navaidFetchToken;
+    try {
+      const response = await fetch(`/api/map/aviation?${params.toString()}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as {
+        ready: boolean;
+        items: Array<MapAirport | MapNavaid>;
+      };
+      if (kind === 'airports' ? token !== airportFetchToken : token !== navaidFetchToken) return;
+      if (!payload.ready) {
+        scheduleAviationRetry(kind);
+        return;
+      }
+      if (kind === 'airports') {
+        const rows = payload.items as MapAirport[];
+        setAirportRows(rows);
+        renderAirports(rows);
+      } else {
+        const rows = payload.items as MapNavaid[];
+        setNavaidRows(rows);
+        renderNavaids(rows);
+      }
+    } catch (error) {
+      console.warn(`aviation ${kind} fetch failed`, error);
+    }
+  }
+
+  function scheduleAviationRefresh() {
+    if (aviationTimer !== null) window.clearTimeout(aviationTimer);
+    aviationTimer = window.setTimeout(() => {
+      aviationTimer = null;
+      if (layerState().airports) void fetchAviation('airports');
+      if (layerState().navaids) void fetchAviation('navaids');
+    }, 300);
+  }
+
   function applyBaseStyle() {
     if (!map) return;
     if (baseLayer) map.removeLayer(baseLayer);
@@ -808,143 +1205,49 @@ const MapPage: Component = () => {
     baseLayer = L.tileLayer(style.url, options).addTo(map);
   }
 
-  function scheduleClouds() {
-    if (!map || !layerState().weather) return;
-    if (cloudTimer !== null) window.clearTimeout(cloudTimer);
-    cloudTimer = window.setTimeout(() => {
-      cloudTimer = null;
-      void refreshCloudCover();
-    }, 350);
-  }
-
-  function renderCloudCanvas(values: Array<number | null>, cols: number, rows: number): string {
-    const size = 512;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return '';
-    const frame = ctx.createImageData(size, size);
-    const data = frame.data;
-    const valueAt = (col: number, row: number) =>
-      values[row * cols + col] ?? 0;
-
-    for (let y = 0; y < size; y++) {
-      const gy = (y + 0.5) / size * (rows - 1);
-      const y0 = Math.min(rows - 1, Math.floor(gy));
-      const y1 = Math.min(rows - 1, y0 + 1);
-      const ty = gy - y0;
-      for (let x = 0; x < size; x++) {
-        const gx = (x + 0.5) / size * (cols - 1);
-        const x0 = Math.min(cols - 1, Math.floor(gx));
-        const x1 = Math.min(cols - 1, x0 + 1);
-        const tx = gx - x0;
-        const top = valueAt(x0, y0) * (1 - tx) + valueAt(x1, y0) * tx;
-        const bottom = valueAt(x0, y1) * (1 - tx) + valueAt(x1, y1) * tx;
-        const coverage = Math.max(0, Math.min(100, top * (1 - ty) + bottom * ty));
-        const t = coverage / 100;
-        const smooth = t * t * (3 - 2 * t);
-        const index = (y * size + x) * 4;
-        data[index] = 235;
-        data[index + 1] = 246;
-        data[index + 2] = 255;
-        data[index + 3] = Math.round(smooth * 150);
-      }
-    }
-    ctx.putImageData(frame, 0, 0);
-    return canvas.toDataURL('image/webp', 0.9);
-  }
-
-  async function refreshCloudCover() {
-    if (!map || !layerState().weather) return;
-    const bounds = map.getBounds();
-    const lonPad = Math.max(0.05, (bounds.getEast() - bounds.getWest()) * 0.18);
-    const latPad = Math.max(0.05, (bounds.getNorth() - bounds.getSouth()) * 0.18);
-    const west = Math.max(-180, bounds.getWest() - lonPad);
-    const east = Math.min(180, bounds.getEast() + lonPad);
-    const south = Math.max(-85, bounds.getSouth() - latPad);
-    const north = Math.min(85, bounds.getNorth() + latPad);
-    const cols = 7;
-    const rows = 7;
-    const cacheKey =
-      `${north.toFixed(3)},${south.toFixed(3)},${west.toFixed(3)},${east.toFixed(3)}` +
-      `|${cols}x${rows}`;
-    const cached = cloudCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
-      showCloudOverlay(cached.dataUrl, cached.bounds);
-      return;
-    }
-    if (cloudFetchKey === cacheKey) return;
-    cloudFetchKey = cacheKey;
-    const lats: string[] = [];
-    const lons: string[] = [];
-    for (let row = 0; row < rows; row++) {
-      const lat = north - (north - south) * (row / (rows - 1));
-      for (let col = 0; col < cols; col++) {
-        lats.push(lat.toFixed(4));
-        lons.push((west + (east - west) * (col / (cols - 1))).toFixed(4));
-      }
-    }
-    const url =
-      `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}` +
-      `&longitude=${lons.join(',')}&current=cloud_cover&timezone=UTC`;
-    const request = ++cloudRequest;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const payload = await res.json();
-      const items = Array.isArray(payload) ? payload : [payload];
-      const values = items.map((item) => {
-        const value = item?.current?.cloud_cover;
-        return typeof value === 'number' && Number.isFinite(value) ? value : null;
-      });
-      if (request !== cloudRequest || !layerState().weather || !map) return;
-      const dataUrl = renderCloudCanvas(values, cols, rows);
-      if (!dataUrl) return;
-      const overlayBounds = L.latLngBounds([
-        [south, west],
-        [north, east],
-      ]);
-      if (cloudCache.size > 32) cloudCache.clear();
-      cloudCache.set(cacheKey, { at: Date.now(), dataUrl, bounds: overlayBounds });
-      showCloudOverlay(dataUrl, overlayBounds);
-    } catch {
-      // Leave the last good cloud image in place.
-    } finally {
-      if (cloudFetchKey === cacheKey) cloudFetchKey = '';
-    }
-  }
-
-  function showCloudOverlay(dataUrl: string, bounds: L.LatLngBounds) {
+  function syncSeamarkLayer() {
     if (!map) return;
-    if (!weatherOverlay) {
-      weatherOverlay = L.imageOverlay(dataUrl, bounds, {
-        opacity: 0.78,
-        pane: 'weatherPane',
-        interactive: false,
-        attribution: 'Weather data &copy; Open-Meteo',
+    if (layerState().seamarks && !seamarkLayer) {
+      seamarkLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+        attribution:
+          'Seamarks &copy; <a href="https://www.openseamap.org/" target="_blank" rel="noopener">OpenSeaMap</a> contributors',
+        maxZoom: 19,
+        maxNativeZoom: 18,
+        pane: 'seamarkPane',
       }).addTo(map);
-    } else {
-      weatherOverlay.setBounds(bounds);
-      weatherOverlay.setUrl(dataUrl);
-      if (!map.hasLayer(weatherOverlay)) weatherOverlay.addTo(map);
+    } else if (!layerState().seamarks && seamarkLayer) {
+      map.removeLayer(seamarkLayer);
+      seamarkLayer = undefined;
     }
   }
 
   function syncWeatherLayer() {
     if (!map) return;
-    const shouldShow = layerState().weather && station()?.weather.enabled !== false;
+    const weather = station()?.weather;
+    const apiKey = weather?.apiKey?.trim() ?? '';
+    const shouldShow = layerState().weather && !!weather?.enabled && apiKey !== '';
     if (shouldShow) {
-      if (weatherOverlay) {
-        if (!map.hasLayer(weatherOverlay)) {
-          weatherOverlay.addTo(map);
-          scheduleClouds();
-        }
-      } else {
-        scheduleClouds();
+      const layer = weather?.layer || 'clouds_new';
+      const key = `${layer}:${apiKey}`;
+      const url =
+        `https://tile.openweathermap.org/map/${encodeURIComponent(layer)}/{z}/{x}/{y}.png` +
+        `?appid=${encodeURIComponent(apiKey)}`;
+      if (!weatherLayer) {
+        weatherLayer = L.tileLayer(url, {
+          opacity: 0.65,
+          maxZoom: 19,
+          pane: 'weatherPane',
+          attribution: 'Clouds &copy; OpenWeatherMap',
+        }).addTo(map);
+        weatherLayerKey = key;
+      } else if (weatherLayerKey !== key) {
+        weatherLayer.setUrl(url);
+        weatherLayerKey = key;
       }
-    } else if (weatherOverlay && map.hasLayer(weatherOverlay)) {
-      map.removeLayer(weatherOverlay);
+    } else if (weatherLayer) {
+      map.removeLayer(weatherLayer);
+      weatherLayer = undefined;
+      weatherLayerKey = '';
     }
   }
 
@@ -1039,7 +1342,7 @@ const MapPage: Component = () => {
       rowState: Map<string, DecoderEntity>,
       samples: Map<string, MetricSample[]>,
       trails: Map<string, L.LayerGroup>,
-      dots: Map<string, L.LayerGroup>,
+      trailCache: TrailCache | undefined,
       leaders: Map<string, L.Polyline>,
       shadows: Map<string, L.Marker>,
       group: L.LayerGroup | undefined,
@@ -1111,7 +1414,16 @@ const MapPage: Component = () => {
         const track = Array.isArray(row.payload.track)
           ? (row.payload.track as [number, number][])
           : [];
-        if (track.length > 1) {
+        const altitudeAware = row.kind === 'aircraft';
+        const serverTrajectory = parseServerTrajectory(row.payload.trajectory);
+        const simplified =
+          serverTrajectory ??
+          (trailCache
+            ? simplifyTrail(trailCache, row.key, track, altitudeAware ? entityAltitude(row) : null)
+            : []);
+        const trailTrack: [number, number][] = simplified.map((point) => [point.lat, point.lon]);
+        const trailAltitudes: Array<number | null> = simplified.map((point) => point.altitudeFt);
+        if (simplified.length > 0) {
           let trailGroup = trails.get(row.key);
           if (!trailGroup) {
             trailGroup = L.layerGroup().addTo(group);
@@ -1119,46 +1431,80 @@ const MapPage: Component = () => {
           }
           trailGroup.clearLayers();
 
-          // One thin dark casing, then a blue→cyan→green segmented path so it
-          // reads like a Flightradar-style history rather than a single line.
-          L.polyline(track, {
-            color: '#151515',
-            weight: 4.4,
-            opacity: stale ? 0.12 : 0.4,
+          if (trailTrack.length >= 2) {
+            // One thin dark casing, then a segmented path so it reads like a
+            // Flightradar-style history rather than a single line.
+            L.polyline(trailTrack, {
+              color: '#151515',
+              weight: 4.4,
+              opacity: stale ? 0.12 : 0.4,
+              interactive: false,
+            }).addTo(trailGroup);
+
+            if (altitudeAware) {
+              for (let index = 1; index < trailTrack.length; index++) {
+                const from = trailTrack[index - 1];
+                const to = trailTrack[index];
+                const altitude =
+                  ((trailAltitudes[index - 1] ?? 0) + (trailAltitudes[index] ?? 0)) / 2;
+                L.polyline([from, to], {
+                  color: stale ? '#555555' : altitudeTrailColor(altitude),
+                  weight: 3.2,
+                  opacity: stale ? 0.2 : 0.72,
+                  interactive: false,
+                }).addTo(trailGroup);
+              }
+            } else {
+              const bands = Math.min(12, Math.max(1, trailTrack.length - 1));
+              for (let band = 0; band < bands; band++) {
+                const start = Math.floor((band * (trailTrack.length - 1)) / bands);
+                const end = Math.ceil(((band + 1) * (trailTrack.length - 1)) / bands);
+                const slice = trailTrack.slice(start, end + 1);
+                if (slice.length < 2) continue;
+                const colour = stale ? '#555555' : trailColor((band + 0.5) / bands);
+                L.polyline(slice, {
+                  color: colour,
+                  weight: 3.2,
+                  opacity: stale ? 0.2 : 0.72,
+                  interactive: false,
+                }).addTo(trailGroup);
+              }
+            }
+          }
+
+          const latest = simplified[simplified.length - 1];
+          const latestAltitude = latest.altitudeFt ?? (altitudeAware ? entityAltitude(row) : null);
+          const latestPoint: [number, number] = [latest.lat, latest.lon];
+          const latestColour = altitudeAware
+            ? altitudeTrailColor(latestAltitude ?? 0)
+            : '#b7ffc9';
+          L.circleMarker(latestPoint, {
+            radius: 2.4,
+            color: '#05070b',
+            weight: 1,
+            fillColor: stale ? '#555555' : latestColour,
+            fillOpacity: stale ? 0.3 : 0.95,
             interactive: false,
           }).addTo(trailGroup);
 
-          const bands = Math.min(12, Math.max(1, track.length - 1));
-          for (let band = 0; band < bands; band++) {
-            const start = Math.floor((band * (track.length - 1)) / bands);
-            const end = Math.ceil(((band + 1) * (track.length - 1)) / bands);
-            const slice = track.slice(start, end + 1);
-            if (slice.length < 2) continue;
-            const colour = stale
+          if (
+            Math.abs(latestPoint[0] - position[0]) > 1e-7 ||
+            Math.abs(latestPoint[1] - position[1]) > 1e-7
+          ) {
+            // Keep the accepted trail fixed and show the dead-reckoned part as
+            // a separate prediction instead of moving the whole history line.
+            const predictedColour = stale
               ? '#555555'
-              : trailColor((band + 0.5) / bands);
-            L.polyline(slice, {
-              color: colour,
-              weight: 3.2,
-              opacity: stale ? 0.2 : 0.72,
+              : altitudeAware
+                ? altitudeTrailColor(entityAltitude(row))
+                : '#39ff14';
+            L.polyline([latestPoint, position], {
+              color: predictedColour,
+              weight: 2.2,
+              opacity: stale ? 0.18 : 0.55,
+              dashArray: '3 4',
               interactive: false,
             }).addTo(trailGroup);
-          }
-
-          let dotGroup = dots.get(row.key);
-          if (!dotGroup) {
-            dotGroup = L.layerGroup().addTo(group);
-            dots.set(row.key, dotGroup);
-          }
-          dotGroup.clearLayers();
-          for (const point of track) {
-            L.circleMarker(point, {
-              radius: 2.2,
-              stroke: false,
-              fillColor: '#b7ffc9',
-              fillOpacity: stale ? 0.28 : 0.92,
-              interactive: false,
-            }).addTo(dotGroup);
           }
         }
 
@@ -1199,12 +1545,8 @@ const MapPage: Component = () => {
         if (!present.has(key)) {
           group.removeLayer(trail);
           trails.delete(key);
-        }
-      }
-      for (const [key, dotGroup] of dots) {
-        if (!present.has(key)) {
-          group.removeLayer(dotGroup);
-          dots.delete(key);
+          trailCache?.points.delete(key);
+          trailCache?.cursors.delete(key);
         }
       }
       for (const [key, leader] of leaders) {
@@ -1228,7 +1570,7 @@ const MapPage: Component = () => {
       aircraftRows,
       aircraftSamples,
       aircraftTrails,
-      aircraftDots,
+      aircraftTrailCache,
       aircraftLeaders,
       aircraftShadows,
       aircraftGroup,
@@ -1243,7 +1585,7 @@ const MapPage: Component = () => {
       vesselRows,
       vesselSamples,
       vesselTrails,
-      vesselDots,
+      vesselTrailCache,
       vesselLeaders,
       vesselShadows,
       vesselGroup,
@@ -1353,8 +1695,11 @@ const MapPage: Component = () => {
     toggle(vesselGroup, state.vessels);
     toggle(decodeGroup, state.decodes);
     toggle(positionGroup, state.positions);
+    toggle(airportGroup, state.airports);
+    toggle(navaidGroup, state.navaids);
     toggle(gridGroup, state.grid);
     toggle(stationGroup, true);
+    syncSeamarkLayer();
     syncWeatherLayer();
     if (state.grid) refreshGrid();
   }
@@ -1454,6 +1799,10 @@ const MapPage: Component = () => {
       attributionControl: true,
       preferCanvas: true,
     });
+    // Nautical marks sit above the base map but below weather and grid labels.
+    map.createPane('seamarkPane');
+    const seamarkPane = map.getPane('seamarkPane');
+    if (seamarkPane) seamarkPane.style.zIndex = '250';
     map.createPane('weatherPane');
     const weatherPane = map.getPane('weatherPane');
     if (weatherPane) weatherPane.style.zIndex = '350';
@@ -1469,6 +1818,8 @@ const MapPage: Component = () => {
     vesselGroup = L.layerGroup();
     decodeGroup = L.layerGroup();
     positionGroup = L.layerGroup();
+    airportGroup = L.layerGroup();
+    navaidGroup = L.layerGroup();
     gridGroup = L.layerGroup();
     stationGroup = L.layerGroup().addTo(map);
 
@@ -1481,8 +1832,8 @@ const MapPage: Component = () => {
 
     map.on('moveend', refreshGrid);
     map.on('zoomend', refreshGrid);
-    map.on('moveend', scheduleClouds);
-    map.on('zoomend', scheduleClouds);
+    map.on('moveend', scheduleAviationRefresh);
+    map.on('zoomend', scheduleAviationRefresh);
     resizeObserver = new ResizeObserver(() => map?.invalidateSize());
     resizeObserver.observe(container);
     ageTimer = window.setInterval(() => setAgeTick((tick) => tick + 1), 5000);
@@ -1495,7 +1846,9 @@ const MapPage: Component = () => {
     if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
     if (ageTimer !== null) window.clearInterval(ageTimer);
     if (motionTimer !== null) window.clearInterval(motionTimer);
-    if (cloudTimer !== null) window.clearTimeout(cloudTimer);
+    if (aviationTimer !== null) window.clearTimeout(aviationTimer);
+    if (airportRetryTimer !== null) window.clearTimeout(airportRetryTimer);
+    if (navaidRetryTimer !== null) window.clearTimeout(navaidRetryTimer);
     socket?.close();
     socket = null;
     map?.remove();
@@ -1512,6 +1865,12 @@ const MapPage: Component = () => {
     if (!mapReady()) return;
     layerState();
     applyLayerVisibility();
+  });
+
+  createEffect(() => {
+    if (!mapReady()) return;
+    layerState();
+    scheduleAviationRefresh();
   });
 
   createEffect(() => {
@@ -1597,7 +1956,15 @@ const MapPage: Component = () => {
           </div>
 
           <div class="pointer-events-auto flex items-center gap-2 px-3 py-2 rounded-md border border-border/40 bg-sdr-surface/90 backdrop-blur-md shadow-2xl">
-            <span class={`h-2 w-2 rounded-full ${connection() === 'live' ? 'bg-green-400 shadow-[0_0_8px_#38c180]' : connection() === 'connecting' ? 'bg-amber animate-pulse' : 'bg-red-400'}`} />
+            <span
+              class={`h-2 w-2 rounded-full ${
+                connection() === 'live'
+                  ? 'bg-green shadow-[0_0_10px_#38c180]'
+                  : connection() === 'connecting'
+                    ? 'bg-amber animate-pulse'
+                    : 'bg-red'
+              }`}
+            />
             <span class="text-[9px] font-mono uppercase tracking-wider text-text-dim">
               {connection() === 'live' ? 'Live' : connection() === 'connecting' ? 'Connecting' : 'Offline'}
             </span>
@@ -1609,10 +1976,66 @@ const MapPage: Component = () => {
       </header>
 
       {/* Layers / style panel */}
-      <aside class="absolute top-20 right-3 z-[1000] w-[min(19rem,calc(100vw-1.5rem))] max-h-[calc(100vh-6.5rem)] overflow-auto rounded-md border border-border/40 bg-sdr-surface/92 backdrop-blur-md shadow-2xl">
-        <div class="p-3 border-b border-border/30">
-          <div class="text-[9px] font-mono uppercase tracking-[0.16em] text-cyan">Layers</div>
-          <div class="mt-2 space-y-1">
+      <aside
+        class={`absolute top-20 right-3 z-[1000] rounded-md border border-border/40 bg-sdr-surface/92 backdrop-blur-md shadow-2xl ${
+          layersCollapsed()
+            ? ''
+            : 'w-[min(19rem,calc(100vw-1.5rem))] max-h-[calc(100vh-6.5rem)] overflow-auto'
+        }`}
+      >
+        <Show
+          when={!layersCollapsed()}
+          fallback={
+            <button
+              type="button"
+              class="flex h-10 w-10 items-center justify-center rounded-md text-cyan transition-colors hover:bg-cyan/10"
+              onClick={() => setLayersCollapsed(false)}
+              title="Show layers"
+              aria-label="Show layers"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+                <path d="m3 12 9 5 9-5" />
+                <path d="m3 16 9 5 9-5" />
+              </svg>
+            </button>
+          }
+        >
+          <div class="p-3 border-b border-border/30">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-[9px] font-mono uppercase tracking-[0.16em] text-cyan">Layers</div>
+              <button
+                type="button"
+                class="flex h-5 w-5 items-center justify-center rounded-sm border border-border/50 text-text-dim transition-colors hover:border-cyan/50 hover:text-cyan"
+                onClick={() => setLayersCollapsed(true)}
+                title="Minimize layers"
+                aria-label="Minimize layers"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="12"
+                  height="12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5 12h14" />
+                </svg>
+              </button>
+            </div>
+            <div class="mt-2 space-y-1">
             <MapLayerRow
               id="aircraft"
               label="Aircraft"
@@ -1649,6 +2072,27 @@ const MapPage: Component = () => {
               checked={layerState().positions}
               onChange={(v) => setLayer('positions', v)}
             />
+            <div class="pt-2 pb-0.5 text-[8px] font-mono uppercase tracking-wider text-text-dim/60">
+              Aviation
+            </div>
+            <MapLayerRow
+              id="airports"
+              label="Airports"
+              hint="OurAirports public-domain airport data"
+              count={airportRows().length}
+              colour="#4aa3ff"
+              checked={layerState().airports}
+              onChange={(v) => setLayer('airports', v)}
+            />
+            <MapLayerRow
+              id="navaids"
+              label="Navaids"
+              hint="VOR, VORTAC, TACAN, NDB and DME stations"
+              count={navaidRows().length}
+              colour="#9d8cff"
+              checked={layerState().navaids}
+              onChange={(v) => setLayer('navaids', v)}
+            />
             <MapLayerRow
               id="grid"
               label="Maidenhead grid"
@@ -1658,11 +2102,24 @@ const MapPage: Component = () => {
               onChange={(v) => setLayer('grid', v)}
             />
             <MapLayerRow
+              id="seamarks"
+              label="OpenSeaMap"
+              hint="Seamarks, buoys, lights, and nautical symbols"
+              checked={layerState().seamarks}
+              colour="#4fb8e8"
+              onChange={(v) => setLayer('seamarks', v)}
+            />
+            <MapLayerRow
               id="weather"
               label="Cloud cover"
-              hint="Open-Meteo cloud cover (no API key, rendered client-side)"
+              hint={
+                station()?.weather.enabled
+                  ? 'OpenWeatherMap cloud tiles (fetched by your browser)'
+                  : 'Add an OpenWeatherMap key in Admin → General'
+              }
               checked={layerState().weather}
               colour="#6bb3ff"
+              disabled={!station()?.weather.enabled}
               onChange={(v) => setLayer('weather', v)}
             />
           </div>
@@ -1695,6 +2152,7 @@ const MapPage: Component = () => {
             </button>
           </div>
         </div>
+        </Show>
       </aside>
 
       {/* Legend / status */}
@@ -1709,6 +2167,7 @@ const MapPage: Component = () => {
             <span class="text-amber">◈ {layerCounts().decodes}</span>
             <span class="text-purple">◎ {layerCounts().positions}</span>
             <span class="text-purple">▦ {layerState().grid ? 'on' : 'off'}</span>
+            <span class="text-cyan/70">⚓ {layerState().seamarks ? 'on' : 'off'}</span>
           </div>
         </div>
       </div>

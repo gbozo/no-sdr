@@ -945,6 +945,9 @@ pub async fn get_server_config(State(state): State<AppState>) -> Response {
             "acrcloudHost": cfg.server.acrcloud_host,
             "acrcloudAccessKey": cfg.server.acrcloud_access_key,
             "acrcloudAccessSecret": cfg.server.acrcloud_access_secret,
+            "openWeatherMapApiKey": cfg.server.open_weather_map_api_key,
+            "airportRangeKm": cfg.server.airport_range_km,
+            "navaidRangeKm": cfg.server.navaid_range_km,
             "version": version,
         }),
         Some(version),
@@ -1019,6 +1022,13 @@ pub async fn update_server_config(State(state): State<AppState>, body: Bytes) ->
         set_string!("acrcloudHost", acrcloud_host);
         set_string!("acrcloudAccessKey", acrcloud_access_key);
         set_string!("acrcloudAccessSecret", acrcloud_access_secret);
+        set_string!("openWeatherMapApiKey", open_weather_map_api_key);
+        if let Some(v) = map.get("airportRangeKm").and_then(|v| v.as_i64()) {
+            s.airport_range_km = (v as i32).clamp(0, 20_000);
+        }
+        if let Some(v) = map.get("navaidRangeKm").and_then(|v| v.as_i64()) {
+            s.navaid_range_km = (v as i32).clamp(0, 20_000);
+        }
         set_i32!("port", port);
         set_i32!("fftHistoryFftSize", fft_history_fft_size);
         if let Some(v) = map.get("fftDeflateLevel").and_then(|v| v.as_i64()) {

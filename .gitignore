@@ -23,6 +23,9 @@ Thumbs.db
 *.log
 logs/
 
+# Downloaded reference data
+config/aviation/
+
 # Database
 *.db
 *.db-journal

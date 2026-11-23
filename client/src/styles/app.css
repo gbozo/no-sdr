@@ -674,9 +674,25 @@
 .map-vessel-marker,
 .map-grid-marker,
 .map-station-marker,
+.map-airport-marker,
+.map-navaid-marker,
 .maidenhead-label {
   background: transparent;
   border: 0;
+}
+
+.map-airport-glyph,
+.map-navaid-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(1px 2px 0 rgba(0, 0, 0, 0.9));
+  transition: transform 120ms ease;
+}
+
+.map-airport-marker:hover .map-airport-glyph,
+.map-navaid-marker:hover .map-navaid-glyph {
+  transform: scale(1.18);
 }
 
 .map-aircraft-glyph,
@@ -847,17 +863,14 @@
   align-items: center;
   justify-content: center;
   white-space: nowrap;
-  color: rgba(0, 0, 0, 0.7);
-  font: 700 9px/1 var(--font-mono);
+  color: rgba(85, 85, 85, 0.5);
+  font: 800 14px/1 var(--font-mono);
   letter-spacing: 0.06em;
-  text-shadow: none;
-  background: rgba(176, 182, 194, 0.7);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
-  border: 1px solid rgba(0, 0, 0, 0.22);
-  border-radius: 3px;
-  padding: 2px 4px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
   pointer-events: none;
 }
 

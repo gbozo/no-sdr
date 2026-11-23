@@ -21,6 +21,7 @@ axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
 base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+csv = "1"
 flate2 = { version = "1", features = ["zlib-rs"] }
 futures-util = "0.3"
 hex = "0.4"

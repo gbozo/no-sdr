@@ -235,6 +235,12 @@ export interface ServerConfig {
   acrcloudHost: string;
   acrcloudAccessKey: string;
   acrcloudAccessSecret: string;
+  /** OpenWeatherMap API key for the map weather/cloud overlay. */
+  openWeatherMapApiKey: string;
+  /** Maximum airport distance from the receiver, km. 0 = unlimited. */
+  airportRangeKm: number;
+  /** Maximum navaid distance from the receiver, km. 0 = unlimited. */
+  navaidRangeKm: number;
   // Decoder history database
   decoderPath: string;
   retentionDays: number;
@@ -345,6 +351,9 @@ const DEFAULT_SERVER_CONFIG: ServerConfig = {  port: 3000,
   acrcloudHost: '',
   acrcloudAccessKey: '',
   acrcloudAccessSecret: '',
+  openWeatherMapApiKey: '',
+  airportRangeKm: 250,
+  navaidRangeKm: 350,
   decoderPath: '',
   retentionDays: 0,
   purgeIntervalMinutes: 30,
@@ -516,6 +525,9 @@ function createAdminStore() {
           acrcloudHost: data.acrcloudHost ?? '',
           acrcloudAccessKey: data.acrcloudAccessKey ?? '',
           acrcloudAccessSecret: data.acrcloudAccessSecret ?? '',
+          openWeatherMapApiKey: data.openWeatherMapApiKey ?? '',
+          airportRangeKm: data.airportRangeKm ?? 250,
+          navaidRangeKm: data.navaidRangeKm ?? 350,
           decoderPath: data.decoderPath ?? '',
           retentionDays: data.retentionDays ?? 0,
           purgeIntervalMinutes: data.purgeIntervalMinutes ?? 30,
