@@ -1,4 +1,4 @@
-//! ACARS channel: raw IQ → 12 kHz AM audio → `sdroxide` ACARS receiver.
+//! ACARS channel: raw IQ → 12.5 kHz AM audio → the ACARS receiver.
 //!
 //! ACARS sits on the VHF airband as an amplitude-modulated 2400-baud MSK
 //! signal in a roughly 5 kHz-wide channel. The shared `IqExtractor` pulls that
@@ -16,8 +16,9 @@ use crate::config::DecoderConfig;
 use crate::demod::{AmDemod, Demodulator};
 use crate::dsp::{IqExtractor, IqExtractorConfig};
 
-/// The ACARS receiver is built for exactly this audio rate.
-const ACARS_AUDIO_RATE: u32 = 12_000;
+/// The ACARS receiver is built for exactly this audio rate (acarsdec's
+/// `INTRATE`).
+const ACARS_AUDIO_RATE: u32 = 12_500;
 /// Channel width around the carrier. The MSK tones span 1200–2400 Hz and the
 /// AM sidebands add a little on each side.
 const ACARS_BANDWIDTH_HZ: i32 = 6_000;
@@ -51,8 +52,8 @@ impl AcarsChannel {
 
         let mut extractor = IqExtractor::new(IqExtractorConfig {
             input_sample_rate: sample_rate as i32,
-            // Ask for slightly over 12 kHz so the integer decimator does not
-            // land below it; the linear resampler takes it to exactly 12 kHz.
+            // Ask for slightly over 12.5 kHz so the integer decimator does not
+            // land below it; the linear resampler takes it to exactly 12.5 kHz.
             output_sample_rate: (ACARS_AUDIO_RATE + 200) as i32,
             tune_offset: offset as i32,
             dc_offset_removal: true,

@@ -267,12 +267,14 @@ pub struct AcarsRx {
     /// The last `bitlen` mixed samples, newest overwriting oldest.
     inb: Vec<Complex32>,
     inb_idx: usize,
-    /// VCO phase (the carrier) and the bit-clock accumulator.
-    phi: f32,
-    clk: f32,
-    /// PI carrier loop: frequency and phase corrections.
-    df: f32,
-    dphi: f32,
+    /// VCO phase (the carrier) and the bit-clock accumulator. acarsdec keeps
+    /// these in `double`; f32 accumulators drift over a long burst and move the
+    /// matched-filter read.
+    phi: f64,
+    clk: f64,
+    /// PI carrier loop: integrated frequency and phase corrections.
+    df: f64,
+    dphi: f64,
     /// Symbols emitted: selects the I/Q arm and the two-symbol sign flip.
     symbols: u32,
     /// Bits since the last framing attempt, trimmed to a sane maximum.
@@ -292,15 +294,19 @@ pub struct AcarsRx {
 }
 
 impl AcarsRx {
-    pub fn new(_rate: f64) -> Self {
-        // acarsdec runs its demodulator at one fixed rate (12.5 kHz today) and
-        // averages its input down to it. This implementation is fed exactly
-        // 12 kHz by the channel extractor; the constants below are fixed rather
-        // than re-derived per rate — re-derived, 48 kHz decoded nothing.
-        let demod_rate = 12_000.0f64;
+    pub fn new(rate: f64) -> Self {
+        // acarsdec runs its demodulator at 12.5 kHz. That is not arbitrary:
+        // at 12 kHz a symbol is exactly 5 samples and `clk` lands precisely on
+        // the 3π/2 trigger, so a rounding difference fires the bit clock one
+        // sample early and every matched-filter read is off by a sample —
+        // clean bursts then never frame. 12.5 kHz gives a non-integer 5.2083
+        // samples per symbol and the trigger is unambiguous.
+        let demod_rate = if rate > 0.0 { rate } else { 12_500.0 };
+        // acarsdec's MFLTOVER: 240 sub-samples per input sample.
         let over = 240usize;
         let bitlen = (demod_rate / 1200.0).ceil().max(1.0) as usize;
         let mut mflt = vec![0.0f32; bitlen * over + 1];
+        // The half wave of a 1200 Hz sine: the matched filter acarsdec uses.
         for (i, h) in mflt.iter_mut().enumerate() {
             *h = (std::f32::consts::PI * 1200.0 * i as f32 / demod_rate as f32 / over as f32).sin();
         }
@@ -345,30 +351,27 @@ impl AcarsRx {
         let ms = audio.iter().map(|s| s * s).sum::<f32>() / audio.len().max(1) as f32;
         self.level += 0.3 * (ms.sqrt() - self.level);
 
-        // The carrier loop's integral and proportional gains, applied once per
-        // symbol. A PI loop, where current acarsdec uses a one-pole filter
-        // (`PLLG`/`PLLC`); with these, every burst in acarsdec's recording
-        // locks. The symbol rate is fixed, so they are per-symbol constants and
-        // must not be scaled by the input rate — that made an engine-fed
-        // 48 kHz signal far too slow to lock.
-        let ki = 71e-7 / 10.0;
-        let kp = 60e-3 / 10.0;
-        let tau = std::f32::consts::TAU;
-        let bit_clock = 1.5 * std::f32::consts::PI;
+        // acarsdec's PI carrier loop, with the gains scaled by the filter
+        // length (`PLLKi`/`PLLKp`). The legacy acarsdec used a one-pole loop
+        // (`PLLG`/`PLLC`); the receiver here follows the current code.
+        let ki = 71e-7 / self.bitlen as f64;
+        let kp = 60e-3 / self.bitlen as f64;
+        let tau = std::f64::consts::TAU;
+        let bit_clock = 1.5 * std::f64::consts::PI;
 
         let n = audio.len();
 
         for k in 0..n {
             let sample = audio[k];
             // VCO frequency: the 1800 Hz centre plus the loop's correction.
-            let s = tau * CENTER_HZ as f32 / self.rate + self.dphi;
+            let s = tau * CENTER_HZ / self.rate as f64 + self.dphi;
 
             self.clk += s;
             if self.clk > bit_clock {
                 self.clk -= bit_clock;
 
                 // The matched filter, read at the clock's fractional position.
-                let mut o = (self.over as f32 * (self.clk / s)) as usize;
+                let mut o = (self.over as f64 * (self.clk / s)) as usize;
                 if o > self.over {
                     o = self.over;
                 }
@@ -381,11 +384,11 @@ impl AcarsRx {
                 let v = v / (v.norm() + 1e-8);
 
                 let (vo, dphi) = if self.symbols & 1 == 1 {
-                    let vo = v.im;
-                    (vo, if vo >= 0.0 { -v.re } else { v.re })
+                    let vo = v.im as f64;
+                    (vo, if vo >= 0.0 { -(v.re as f64) } else { v.re as f64 })
                 } else {
-                    let vo = v.re;
-                    (vo, if vo >= 0.0 { v.im } else { -v.im })
+                    let vo = v.re as f64;
+                    (vo, if vo >= 0.0 { v.im as f64 } else { -(v.im as f64) })
                 };
                 let bit = if self.symbols & 2 != 0 { -vo } else { vo };
                 self.push_bit(bit > 0.0, out);
@@ -402,7 +405,7 @@ impl AcarsRx {
                 self.phi -= tau;
             }
             // Mix down by the VCO, newest sample into the circular buffer.
-            self.inb[self.inb_idx] = Complex32::from_polar(1.0, -self.phi) * sample;
+            self.inb[self.inb_idx] = Complex32::from_polar(1.0, -self.phi as f32) * sample;
             self.inb_idx = (self.inb_idx + 1) % self.bitlen;
         }
     }
@@ -590,7 +593,7 @@ mod tests {
         bits[text] ^= 1;
         bits[text + 1] ^= 1;
         bits.extend(std::iter::repeat_n(1, 8 * 400));
-        let mut rx = AcarsRx::new(12_000.0);
+        let mut rx = AcarsRx::new(12_500.0);
         let mut out = Vec::new();
         for b in bits {
             rx.push_bit(b == 1, &mut out);
@@ -649,5 +652,58 @@ mod tests {
     #[test]
     fn the_block_check_is_the_reflected_crc() {
         assert_eq!(crc16(b"123456789"), 0x2189);
+    }
+
+    /// A burst of MSK audio built from the same bits the encoder writes:
+    /// 2400 baud, 1200 Hz for a zero and 2400 Hz for a one, each bit starting
+    /// from zero phase. Tones are evaluated at the real sample times, so the
+    /// non-integer samples-per-bit of 12.5 kHz is handled correctly.
+    fn msk_audio(bits: &[u8], rate: f64) -> Vec<f32> {
+        let samples_per_bit = rate / BAUD;
+        let total = (bits.len() as f64 * samples_per_bit).round() as usize;
+        let mut out = Vec::with_capacity(total);
+        for k in 0..total {
+            let position = k as f64 / samples_per_bit;
+            let bit = bits.get(position.floor() as usize).copied().unwrap_or(0);
+            let tone = if bit != 0 { 2400.0 } else { 1200.0 };
+            let phase = std::f64::consts::TAU * tone * (position - position.floor()) / BAUD;
+            out.push((0.6 * phase.sin()) as f32);
+        }
+        out
+    }
+
+    /// The demodulator must lock to a clean synthesized burst. When this fails,
+    /// the wire path above is not at fault: the MSK receiver itself is.
+    #[test]
+    fn the_demodulator_reads_synthesized_msk_audio() {
+        for invert in [false, true] {
+            let mut bits = encode(&sample());
+            // A real burst is followed by idle, not cut off at the last bit:
+            // the demod's one-symbol latency would otherwise leave the final
+            // DEL byte short and the parser rightly refuses the block.
+            bits.extend(std::iter::repeat_n(1, 64));
+            let mut audio = msk_audio(&bits, 12_500.0);
+            // The carrier loop settles with either sign, so an upside-down
+            // burst must decode too (acarsdec sees both in the wild).
+            if invert {
+                audio.iter_mut().for_each(|sample| *sample = -*sample);
+            }
+            let mut rx = AcarsRx::new(12_500.0);
+            let mut events = Vec::new();
+            for chunk in audio.chunks(120) {
+                rx.process(chunk, &mut events);
+            }
+            let texts: Vec<String> = events
+                .iter()
+                .map(|AcarsEvent::Message(m)| m.text.clone())
+                .collect();
+            assert!(
+                texts.iter().any(|t| t == "HELLO FROM ACARS"),
+                "synthesized MSK burst did not decode (invert={invert}): frames={} bad={} level={:.3} texts={texts:?}",
+                rx.frames(),
+                rx.bad(),
+                rx.level()
+            );
+        }
     }
 }

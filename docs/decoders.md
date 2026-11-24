@@ -477,7 +477,7 @@ raw-IQ mode and does not need the ADS-B window. The channel path is:
 ```
 Dongle IQ → IqExtractor (tune + decimate to ~12 kHz, 6 kHz bandwidth)
           → AmDemod (envelope)
-          → LinearResampler to exactly 12 kHz
+          → LinearResampler to exactly 12.5 kHz
           → SDROXIDE ACARS receiver (bit clock + frame parse/BSC)
           → MSG_DECODER events
 ```
