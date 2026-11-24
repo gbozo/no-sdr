@@ -3,11 +3,15 @@
 //! The map has its own socket so aircraft/vessel/grid updates never share the
 //! audio/FFT WebSocket. The feed is built from the persisted decoder store, so
 //! it works without touching the main client pipelines.
+//!
+//! Large frames are raw DEFLATE (`FRAME_DEFLATE`), so a populated checkpoint
+//! costs a fraction of its JSON size. A reconnect that passes its last `at` as
+//! `?since=` gets one delta frame instead of the checkpoint again.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::Json;
 use futures_util::{SinkExt, StreamExt};
@@ -19,7 +23,41 @@ const SPOTTING_LOOKBACK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const ENTITY_ACTIVE_MS: i64 = 5 * 60 * 1000;
 const CHECKPOINT_GRID_LIMIT: usize = 3_000;
 const UPDATE_LIMIT: usize = 1_000;
+/// One row per aircraft/vessel key, and the map only shows the 2,000 newest,
+/// so this covers a full table in one delta.
+const UPDATE_ENTITY_LIMIT: usize = 2_000;
 const UPDATE_INTERVAL_MS: u64 = 750;
+
+/// First byte of a compressed map frame: the rest is raw DEFLATE (no zlib
+/// wrapper) of the UTF-8 JSON document.
+const FRAME_DEFLATE: u8 = 0x01;
+/// Below this size deflate costs more than it saves, so the frame stays text.
+const COMPRESS_MIN_BYTES: usize = 1024;
+/// JSON is far from the FFT's noise-like byte stream; level 6 is still cheap
+/// here and saves roughly an order of magnitude on a populated checkpoint.
+const COMPRESS_LEVEL: u32 = 6;
+
+/// Encode one map document for the wire.
+///
+/// Small frames stay `Text` so the client can keep a plain `JSON.parse` path;
+/// anything large is `Binary` with the `FRAME_DEFLATE` marker. The browser
+/// already ships `fflate` for FFT deflate, so decoding costs no new dependency.
+fn map_frame(value: &Value) -> Message {
+    let text = value.to_string();
+    if text.len() < COMPRESS_MIN_BYTES {
+        return Message::Text(text.into());
+    }
+    match crate::codec::deflate::deflate_bytes(text.as_bytes(), COMPRESS_LEVEL) {
+        Ok(body) => {
+            let mut frame = Vec::with_capacity(1 + body.len());
+            frame.push(FRAME_DEFLATE);
+            frame.extend_from_slice(&body);
+            Message::Binary(frame.into())
+        }
+        // Compression is an optimisation; never fail the map feed over it.
+        Err(_) => Message::Text(text.into()),
+    }
+}
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -115,15 +153,16 @@ fn checkpoint_json(state: &AppState) -> Value {
     })
 }
 
-fn update_json(state: &AppState, since: i64) -> Value {
+fn update_json(state: &AppState, since: i64, max_rows: usize) -> Value {
     let now = now_ms();
-    // Aircraft/vessel tables are small and change continuously. Sending the
-    // current tables avoids any missed-delta edge cases while still keeping
-    // map traffic off the main audio/FFT socket.
-    let aircraft = fresh_entities(aircraft_entities(state), now);
-    let vessels = fresh_entities(vessel_entities(state), now);
-    let decodes = grid_messages(state, since, UPDATE_LIMIT);
-    let positions = position_messages(state, since, UPDATE_LIMIT);
+    // Aircraft and vessels are sent as deltas: only rows whose lastSeen moved
+    // past the cursor. The client merges by key and hides rows older than
+    // ENTITY_ACTIVE_MS itself, so resending both full tables every tick only
+    // burned bandwidth.
+    let aircraft = fresh_entities(aircraft_entities_since(state, since), now);
+    let vessels = fresh_entities(vessel_entities_since(state, since), now);
+    let decodes = grid_messages(state, since, max_rows);
+    let positions = position_messages(state, since, max_rows);
     json!({
         "type": "update",
         "at": now,
@@ -135,12 +174,30 @@ fn update_json(state: &AppState, since: i64) -> Value {
     })
 }
 
+/// A reconnect may name the last `at` it applied, in which case the full
+/// checkpoint is skipped and one delta is sent instead. Reject cursors that
+/// are in the future (clock skew) or older than the history the checkpoint
+/// itself would cover.
+fn resume_cursor(since: Option<i64>, now: i64) -> Option<i64> {
+    since.filter(|s| *s > 0 && *s <= now && *s >= now - SPOTTING_LOOKBACK_MS)
+}
+
 #[cfg(feature = "decoders")]
 fn aircraft_entities(state: &AppState) -> Vec<Value> {
     state.decoder_store.entities("aircraft", 2_000)
 }
 #[cfg(not(feature = "decoders"))]
 fn aircraft_entities(_state: &AppState) -> Vec<Value> {
+    Vec::new()
+}
+#[cfg(feature = "decoders")]
+fn aircraft_entities_since(state: &AppState, since: i64) -> Vec<Value> {
+    state
+        .decoder_store
+        .entities_since("aircraft", since, UPDATE_ENTITY_LIMIT)
+}
+#[cfg(not(feature = "decoders"))]
+fn aircraft_entities_since(_state: &AppState, _since: i64) -> Vec<Value> {
     Vec::new()
 }
 fn fresh_entities(mut rows: Vec<Value>, now: i64) -> Vec<Value> {
@@ -154,6 +211,16 @@ fn vessel_entities(state: &AppState) -> Vec<Value> {
 }
 #[cfg(not(feature = "decoders"))]
 fn vessel_entities(_state: &AppState) -> Vec<Value> {
+    Vec::new()
+}
+#[cfg(feature = "decoders")]
+fn vessel_entities_since(state: &AppState, since: i64) -> Vec<Value> {
+    state
+        .decoder_store
+        .entities_since("vessel", since, UPDATE_ENTITY_LIMIT)
+}
+#[cfg(not(feature = "decoders"))]
+fn vessel_entities_since(_state: &AppState, _since: i64) -> Vec<Value> {
     Vec::new()
 }
 #[cfg(feature = "decoders")]
@@ -179,20 +246,50 @@ pub async fn checkpoint(State(state): State<AppState>) -> Json<Value> {
 
 pub async fn ws_map(
     State(state): State<AppState>,
+    Query(query): Query<MapQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    ws.on_upgrade(move |socket| map_socket(socket, state))
+    ws.on_upgrade(move |socket| map_socket(socket, state, query.since))
 }
 
-async fn map_socket(socket: WebSocket, state: AppState) {
+/// Query string on `/ws/map`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct MapQuery {
+    /// Last `at` the client applied; when present a delta is sent instead of
+    /// the full checkpoint.
+    #[serde(default)]
+    pub since: Option<i64>,
+}
+
+async fn map_socket(socket: WebSocket, state: AppState, resume_since: Option<i64>) {
     let (mut sender, mut receiver) = socket.split();
-    let checkpoint_value = checkpoint_json(&state);
-    let mut cursor = checkpoint_value["at"].as_i64().unwrap_or_else(now_ms);
-    let mut last_station = checkpoint_value["station"].clone();
-    let checkpoint = checkpoint_value.to_string();
-    if sender.send(Message::Text(checkpoint.into())).await.is_err() {
-        return;
-    }
+    let now = now_ms();
+
+    let (mut cursor, mut last_station) = if let Some(since) = resume_cursor(resume_since, now) {
+        // Reconnect: one delta frame, no multi-megabyte checkpoint.
+        let update = update_json(&state, since, CHECKPOINT_GRID_LIMIT);
+        let cursor = update["at"].as_i64().unwrap_or_else(now_ms);
+        let station = update["station"].clone();
+        if sender.send(map_frame(&update)).await.is_err() {
+            return;
+        }
+        (cursor, station)
+    } else {
+        let checkpoint_value = checkpoint_json(&state);
+        let cursor = checkpoint_value["at"].as_i64().unwrap_or_else(now_ms);
+        let station = checkpoint_value["station"].clone();
+        // Serialising and compressing a multi-megabyte checkpoint is CPU work;
+        // keep it off the async worker so audio/FFT tasks are not stalled.
+        let checkpoint =
+            match tokio::task::spawn_blocking(move || map_frame(&checkpoint_value)).await {
+                Ok(frame) => frame,
+                Err(_) => return,
+            };
+        if sender.send(checkpoint).await.is_err() {
+            return;
+        }
+        (cursor, station)
+    };
 
     let mut ticker = tokio::time::interval(Duration::from_millis(UPDATE_INTERVAL_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -202,7 +299,7 @@ async fn map_socket(socket: WebSocket, state: AppState) {
         tokio::select! {
             _ = ticker.tick() => {
                 let tick_cursor = now_ms();
-                let update = update_json(&state, cursor);
+                let update = update_json(&state, cursor, UPDATE_LIMIT);
                 let station_changed = update["station"] != last_station;
                 let has_data = update["aircraft"].as_array().is_some_and(|v| !v.is_empty())
                     || update["vessels"].as_array().is_some_and(|v| !v.is_empty())
@@ -211,7 +308,7 @@ async fn map_socket(socket: WebSocket, state: AppState) {
                 cursor = tick_cursor;
                 last_station = update["station"].clone();
                 if (has_data || station_changed)
-                    && sender.send(Message::Text(update.to_string().into())).await.is_err()
+                    && sender.send(map_frame(&update)).await.is_err()
                 {
                     break;
                 }
@@ -230,11 +327,70 @@ async fn map_socket(socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn maidenhead_matches_known_squares() {
         assert_eq!(grid_from_lat_lon(37.9838, 23.7275), "KM17UX");
         assert_eq!(grid_from_lat_lon(51.5074, -0.1278), "IO91WM");
         assert_eq!(grid_from_lat_lon(0.0, 0.0), "");
+    }
+
+    #[test]
+    fn resume_cursor_accepts_recent_past_only() {
+        let now = 1_795_500_000_000;
+        assert_eq!(resume_cursor(None, now), None);
+        assert_eq!(resume_cursor(Some(0), now), None);
+        assert_eq!(resume_cursor(Some(now + 1), now), None, "future cursor");
+        assert_eq!(
+            resume_cursor(Some(now - SPOTTING_LOOKBACK_MS - 1), now),
+            None,
+            "older than the checkpoint lookback"
+        );
+        assert_eq!(resume_cursor(Some(now), now), Some(now));
+        assert_eq!(
+            resume_cursor(Some(now - 1_000), now),
+            Some(now - 1_000)
+        );
+    }
+
+    #[test]
+    fn small_map_frames_stay_text() {
+        let value = json!({"type": "update", "at": 1, "decodes": []});
+        match map_frame(&value) {
+            Message::Text(text) => {
+                assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), value);
+            }
+            _ => panic!("a small document must stay a text frame"),
+        }
+    }
+
+    #[test]
+    fn large_map_frames_are_deflated_and_round_trip() {
+        let rows: Vec<Value> = (0..200)
+            .map(|id| json!({"id": id, "text": "CQ DE N0CALL FN42 ".repeat(4)}))
+            .collect();
+        let value = json!({"type": "checkpoint", "at": 1, "decodes": rows});
+        let raw_len = value.to_string().len();
+        assert!(raw_len >= COMPRESS_MIN_BYTES);
+
+        match map_frame(&value) {
+            Message::Binary(frame) => {
+                assert_eq!(frame[0], FRAME_DEFLATE);
+                let mut plain = Vec::new();
+                flate2::read::DeflateDecoder::new(&frame[1..])
+                    .read_to_end(&mut plain)
+                    .expect("deflate stream");
+                let back: Value = serde_json::from_slice(&plain).expect("json");
+                assert_eq!(back, value);
+                assert!(
+                    frame.len() < raw_len / 2,
+                    "compressed {} vs raw {}",
+                    frame.len(),
+                    raw_len
+                );
+            }
+            _ => panic!("a large document must be a deflated binary frame"),
+        }
     }
 }

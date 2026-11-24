@@ -8,6 +8,7 @@ import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup
 import { useNavigate } from '@solidjs/router';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { inflateSync } from 'fflate';
 import { gridCenter, extractGridFromText } from '~/shared';
 import type { DecoderEntity, DecoderHistoryMessage } from '../engine/decoder-history.js';
 
@@ -1768,12 +1769,28 @@ const MapPage: Component = () => {
     if (socket && socket.readyState <= WebSocket.OPEN) return;
     setConnection('connecting');
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws/map`);
+    // On a reconnect, tell the server where we got to so it sends one delta
+    // instead of the whole checkpoint again. The signals survive the socket,
+    // so the aircraft/vessel/decode maps are still populated.
+    const since = lastAt() ?? 0;
+    const resume = since > 0 ? `?since=${Math.round(since)}` : '';
+    const ws = new WebSocket(`${proto}//${location.host}/ws/map${resume}`);
     socket = ws;
+    ws.binaryType = 'arraybuffer';
     ws.onopen = () => setConnection('live');
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(String(event.data)) as MapCheckpoint | MapUpdate;
+        // The server deflates large checkpoints/updates into binary frames:
+        // [0x01][raw DEFLATE of UTF-8 JSON]. Small frames stay plain text.
+        let text: string;
+        if (typeof event.data === 'string') {
+          text = event.data;
+        } else {
+          const bytes = new Uint8Array(event.data as ArrayBuffer);
+          if (bytes[0] !== 0x01) return;
+          text = new TextDecoder().decode(inflateSync(bytes.subarray(1)));
+        }
+        const data = JSON.parse(text) as MapCheckpoint | MapUpdate;
         if (data.type === 'checkpoint') applyCheckpoint(data);
         else if (data.type === 'update') applyUpdate(data);
       } catch {

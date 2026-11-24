@@ -57,7 +57,16 @@ pub fn set_smooth_margin_db(db: f32) {
 }
 
 fn deflate(data: &[u8]) -> Result<Vec<u8>> {
-    let mut enc = DeflateEncoder::new(Vec::new(), Compression::new(deflate_level()));
+    deflate_bytes(data, deflate_level())
+}
+
+/// Raw DEFLATE (no zlib wrapper) at an explicit level.
+///
+/// Shared by the FFT frames and by JSON payloads (the map WebSocket), so both
+/// sides use one framing rule: the bytes after the message header are a plain
+/// deflate stream that `fflate.inflateSync` can read without a zlib header.
+pub fn deflate_bytes(data: &[u8], level: u32) -> Result<Vec<u8>> {
+    let mut enc = DeflateEncoder::new(Vec::new(), Compression::new(level.clamp(1, 9)));
     enc.write_all(data).context("flate write")?;
     enc.finish().context("flate close")
 }
