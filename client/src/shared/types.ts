@@ -96,6 +96,8 @@ export interface DongleProfile {
   gain: number | null;
   /** Description shown in UI */
   description: string;
+  /** Per-profile ppm correction; omit/null inherits the dongle value. */
+  ppmCorrection?: number | null;
   /** Direct sampling mode: 0=off, 1=I-ADC, 2=Q-ADC (for HF reception) */
   directSampling?: number;
   /** Swap I and Q channels (fixes inverted spectrum on some dongles) */
@@ -166,6 +168,8 @@ export interface DecoderWindowInfo {
   expectedAudioHz: number;
   period: number;
   suggestTuneHz: number | null;
+  /** Wide acquisition band around the dial (ACARS AFC), in Hz. */
+  captureBandwidthHz?: number;
 }
 
 export interface DecoderStats {
@@ -908,6 +912,26 @@ export interface DecoderMessage {
   raw?: string;
 }
 
+export interface AcarsFields {
+  /** Departure airport (ICAO, 4 chars) when the label carries it. */
+  origin?: string;
+  /** Destination airport (ICAO, 4 chars). */
+  destination?: string;
+  /** Estimated time of arrival, usually HHMM. */
+  eta?: string;
+  /** OOOI times, usually HHMM. */
+  gateOut?: string;
+  wheelsOff?: string;
+  wheelsOn?: string;
+  gateIn?: string;
+  /** Fuel on board with any unit suffix the message used. */
+  fuel?: string;
+  /** Aircraft type code when the application text names one. */
+  type?: string;
+  /** Flight level or altitude as written. */
+  altitude?: string;
+}
+
 export interface AcarsMessage {
   /** Mode character, as text. */
   mode: string;
@@ -917,6 +941,14 @@ export interface AcarsMessage {
   label: string;
   blockId: string;
   text: string;
+  /** Downlink header: 4-character message sequence number. */
+  msgNo?: string;
+  /** Downlink header: 6-character flight id (e.g. QR048K). */
+  flight?: string;
+  /** Text after the downlink header; `text` for uplinks. */
+  body?: string;
+  /** Best-effort application fields from the label and text. */
+  fields?: AcarsFields;
   crcOk: boolean;
   /** Unix seconds. */
   at: number;
@@ -929,6 +961,8 @@ export interface AcarsStatus {
   bad: number;
   /** Smoothed audio level, 0–1-ish. */
   level: number;
+  /** Carrier offset applied by the AFC, in Hz. */
+  afcHz?: number;
 }
 
 // ---- Server Status ----

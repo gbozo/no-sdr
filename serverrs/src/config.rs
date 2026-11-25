@@ -594,6 +594,10 @@ pub struct DongleProfile {
     pub swap_iq: bool,
     #[serde(default)]
     pub oscillator_offset: i32,
+    /// Crystal correction for this profile, in ppm. `None` inherits the
+    /// dongle-wide `ppmCorrection`; `Some` overrides it for this band.
+    #[serde(default)]
+    pub ppm_correction: Option<i32>,
     #[serde(default)]
     pub direct_sampling: i32,
     #[serde(default)]
@@ -625,6 +629,7 @@ impl Default for DongleProfile {
             tuning_step: 0,
             swap_iq: false,
             oscillator_offset: 0,
+            ppm_correction: None,
             direct_sampling: 0,
             description: String::new(),
             dongle_id: String::new(),
@@ -636,6 +641,12 @@ impl Default for DongleProfile {
 }
 
 impl DongleProfile {
+    /// Effective crystal correction: the profile override when set, otherwise
+    /// the dongle-wide value.
+    pub fn ppm(&self, fallback: i32) -> i32 {
+        self.ppm_correction.unwrap_or(fallback)
+    }
+
     /// Resolved DC-offset-removal flag (defaults to true, like Go).
     pub fn dc_offset_removal_enabled(&self) -> bool {
         self.dc_offset_removal.unwrap_or(true)
@@ -1149,6 +1160,17 @@ mod tests {
         assert!(p.dc_offset_removal_enabled());
         assert!(cfg.dongles[0].enabled);
         assert!(cfg.dongles[0].auto_start);
+    }
+
+    #[test]
+    fn profile_ppm_override_overrides_the_dongle_value() {
+        let cfg = parse(
+            "server:\n  port: 3000\ndongles:\n  - id: d1\n    ppmCorrection: 45\n    sampleRate: 2400000\n    profiles:\n      - id: p1\n        sampleRate: 2400000\n        defaultBandwidth: 200000\n        defaultMode: wfm\n      - id: p2\n        sampleRate: 2400000\n        defaultBandwidth: 200000\n        defaultMode: wfm\n        ppmCorrection: 59\n",
+        );
+        let dongle = &cfg.dongles[0];
+        assert_eq!(dongle.ppm, 45);
+        assert_eq!(dongle.profiles[0].ppm(dongle.ppm), 45);
+        assert_eq!(dongle.profiles[1].ppm(dongle.ppm), 59);
     }
 
     #[test]

@@ -25,6 +25,7 @@ logs/
 
 # Downloaded reference data
 config/aviation/
+config/aircraft/
 
 # Database
 *.db

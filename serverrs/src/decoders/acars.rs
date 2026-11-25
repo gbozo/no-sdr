@@ -48,10 +48,41 @@ pub struct AcarsFrame {
     pub label: String,
     /// The block identifier.
     pub block_id: String,
-    /// The message text.
+    /// The message text, header included.
     pub text: String,
+    /// Downlink header: the 4-character message sequence number.
+    pub message_no: String,
+    /// Downlink header: the 6-character flight id (e.g. `QR048K`).
+    pub flight_id: String,
+    /// Text after the downlink header (`text` for uplinks).
+    pub body: String,
+    /// Structured fields recovered from the body and label.
+    pub fields: AcarsFields,
     /// Whether the block-check sequence matched.
     pub crc_ok: bool,
+}
+
+/// Fields recovered from an ACARS body.
+///
+/// ACARS itself is only the transport: everything here comes from the airline
+/// application text, so each field is best-effort. Labels Q1/Q2/QA..QT and a
+/// few numbered ones have fixed layouts (ported from acarsdec's `label.c`);
+/// positions and tagged values (`FUEL`, `ACFT`, `ALT`, …) are scanned from the
+/// text. Empty means "not present in this message".
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AcarsFields {
+    pub origin: Option<String>,
+    pub destination: Option<String>,
+    pub eta: Option<String>,
+    pub gate_out: Option<String>,
+    pub wheels_off: Option<String>,
+    pub wheels_on: Option<String>,
+    pub gate_in: Option<String>,
+    pub fuel: Option<String>,
+    pub aircraft_type: Option<String>,
+    pub altitude: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 /// What the decoder produces.
@@ -165,6 +196,329 @@ fn printable(b: u8) -> char {
     }
 }
 
+/// Split a downlink block's text into its 4-character message number, its
+/// 6-character flight id and the body.
+///
+/// Block ids `0`–`9` are downlinks, and their text starts with those ten
+/// characters (ARINC 618). Uplinks (letter block ids) carry no such header, so
+/// their body is the whole text.
+fn split_downlink(block_id: &str, text: &str) -> (String, String, String) {
+    let downlink = block_id.as_bytes().first().is_some_and(u8::is_ascii_digit);
+    if downlink && text.len() >= 10 {
+        let head = &text.as_bytes()[..10];
+        if head.iter().all(|b| b.is_ascii_alphanumeric() || *b == b' ') {
+            let head = &text[..10];
+            return (
+                head[..4].trim().to_string(),
+                head[4..].trim().to_string(),
+                text[10..].trim().to_string(),
+            );
+        }
+    }
+    (String::new(), String::new(), text.to_string())
+}
+
+/// Value that follows the first of `keys` (case-insensitive, whole word).
+/// Used for the free-form application text; only values with a digit are
+/// accepted so prose like "FUEL IS LOW" does not become a fuel reading.
+fn tagged_value(text: &str, keys: &[&str]) -> Option<String> {
+    let upper = text.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
+    for key in keys {
+        let mut from = 0;
+        while let Some(rel) = upper[from..].find(key) {
+            let at = from + rel;
+            let end = at + key.len();
+            let word_start = at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+            let word_end = end >= bytes.len() || !bytes[end].is_ascii_alphanumeric();
+            if word_start && word_end {
+                let mut i = end;
+                while i < bytes.len() && matches!(bytes[i], b' ' | b':' | b'=' | b'\t' | b'/') {
+                    i += 1;
+                }
+                let value: String = upper[i..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+                    .collect();
+                if !value.is_empty() && value.chars().any(|c| c.is_ascii_digit()) {
+                    return Some(value);
+                }
+            }
+            from = end;
+            if from >= upper.len() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// `LAT N 47.176/LON E 2.943` and its spacing variants.
+fn parse_position(text: &str) -> Option<(f64, f64)> {
+    let upper = text.to_ascii_uppercase();
+    if let (Some(lat_at), Some(lon_at)) = (upper.find("LAT"), upper.find("LON")) {
+        if lon_at > lat_at {
+            if let (Some(lat), Some(lon)) = (
+                parse_coordinate(&upper[lat_at + 3..lon_at], 90.0),
+                parse_coordinate(&upper[lon_at + 3..], 180.0),
+            ) {
+                return Some((lat, lon));
+            }
+        }
+    }
+    // ACARS application text often packs the fix without keywords:
+    // `N37969E023988` is N 37.969 / E 023.988, as seen in a live AOC report.
+    parse_compact_position(&upper)
+}
+
+/// `[NS]ddddd[EW]dddddd`, three decimal places, no separators.
+fn parse_compact_position(text: &str) -> Option<(f64, f64)> {
+    let bytes = text.as_bytes();
+    let digits = |slice: &[u8]| -> Option<f64> {
+        std::str::from_utf8(slice).ok()?.parse::<f64>().ok()
+    };
+    let mut i = 0;
+    while i + 13 <= bytes.len() {
+        let ns = bytes[i];
+        let ew = bytes[i + 6];
+        if (ns == b'N' || ns == b'S')
+            && (ew == b'E' || ew == b'W')
+            && bytes[i + 1..i + 6].iter().all(u8::is_ascii_digit)
+            && bytes[i + 7..i + 13].iter().all(u8::is_ascii_digit)
+        {
+            let lat = digits(&bytes[i + 1..i + 6])? / 1000.0;
+            let lon = digits(&bytes[i + 7..i + 13])? / 1000.0;
+            if lat <= 90.0 && lon <= 180.0 {
+                return Some((
+                    if ns == b'S' { -lat } else { lat },
+                    if ew == b'W' { -lon } else { lon },
+                ));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_coordinate(text: &str, limit: f64) -> Option<f64> {
+    let mut chars = text
+        .chars()
+        .skip_while(|c| c.is_whitespace() || matches!(c, '/' | ',' | ':'));
+    let sign = match chars.next()? {
+        'N' | 'E' => 1.0,
+        'S' | 'W' => -1.0,
+        _ => return None,
+    };
+    let rest: String = chars.collect();
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '/' | ':'));
+    let number: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let value: f64 = number.parse().ok()?;
+    // DDMM.m / DDDMM.m when the integer part is longer than three digits;
+    // otherwise decimal degrees, which is what most ACARS position reports
+    // use (`LAT N 47.176/LON E 2.943`).
+    let value = if number.split('.').next().map_or(0, str::len) > 3 {
+        let degrees = (value / 100.0).trunc();
+        let minutes = value - degrees * 100.0;
+        if minutes >= 60.0 {
+            return None;
+        }
+        degrees + minutes / 60.0
+    } else {
+        value
+    };
+    (value <= limit).then_some(sign * value)
+}
+
+/// Copy a fixed 4-character field out of a label body.
+fn set_field(dst: &mut Option<String>, body: &[u8], at: usize) {
+    if let Some(slice) = body.get(at..at + 4) {
+        let text: String = slice.iter().map(|&b| b as char).collect();
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            *dst = Some(text);
+        }
+    }
+}
+
+/// Fixed-layout OOOI/route labels from acarsdec's `label.c`. The Q-series and
+/// the numbered labels that put origin/destination/ETA at stable offsets are
+/// covered; airline-private layouts are left to the generic scanners.
+fn decode_label(label: &str, body: &str, f: &mut AcarsFields) {
+    let b = body.as_bytes();
+    match label {
+        "Q1" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.gate_out, b, 4);
+            set_field(&mut f.wheels_off, b, 8);
+            set_field(&mut f.wheels_on, b, 12);
+            set_field(&mut f.gate_in, b, 16);
+            set_field(&mut f.destination, b, 24);
+        }
+        "Q2" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.eta, b, 4);
+        }
+        "QA" | "QH" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.gate_out, b, 4);
+        }
+        "QB" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.wheels_off, b, 4);
+        }
+        "QC" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.wheels_on, b, 4);
+        }
+        "QD" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.gate_in, b, 4);
+        }
+        "QE" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.gate_out, b, 4);
+            set_field(&mut f.destination, b, 8);
+        }
+        "QF" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.wheels_off, b, 4);
+            set_field(&mut f.destination, b, 8);
+        }
+        "QG" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.gate_out, b, 4);
+            set_field(&mut f.gate_in, b, 8);
+        }
+        "QK" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.wheels_on, b, 4);
+            set_field(&mut f.destination, b, 8);
+        }
+        "QL" => {
+            set_field(&mut f.destination, b, 0);
+            set_field(&mut f.gate_in, b, 8);
+            set_field(&mut f.origin, b, 13);
+        }
+        "QM" => {
+            set_field(&mut f.destination, b, 0);
+            set_field(&mut f.origin, b, 8);
+        }
+        "QN" => {
+            set_field(&mut f.destination, b, 4);
+            set_field(&mut f.eta, b, 8);
+        }
+        "QP" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.destination, b, 4);
+            set_field(&mut f.gate_out, b, 8);
+        }
+        "QQ" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.destination, b, 4);
+            set_field(&mut f.wheels_off, b, 8);
+        }
+        "QR" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.destination, b, 4);
+            set_field(&mut f.wheels_on, b, 8);
+        }
+        "QS" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.destination, b, 4);
+            set_field(&mut f.gate_in, b, 8);
+        }
+        "QT" => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.destination, b, 4);
+            set_field(&mut f.gate_out, b, 8);
+            set_field(&mut f.gate_in, b, 12);
+        }
+        "12" | "1G" | "83" if b.get(4) == Some(&b',') => {
+            set_field(&mut f.origin, b, 0);
+            set_field(&mut f.destination, b, 5);
+        }
+        "2Z" => set_field(&mut f.destination, b, 0),
+        "45" if b.first() == Some(&b'A') => set_field(&mut f.destination, b, 1),
+        "80" if body.get(6..11) == Some("/DEST") => set_field(&mut f.destination, b, 12),
+        "8E" | "8S" if b.get(4) == Some(&b',') => {
+            set_field(&mut f.destination, b, 0);
+            set_field(&mut f.eta, b, 5);
+        }
+        "17"
+            if body.starts_with("ETA ")
+                && b.get(8) == Some(&b',')
+                && b.get(13) == Some(&b',') =>
+        {
+            set_field(&mut f.eta, b, 4);
+            set_field(&mut f.origin, b, 9);
+            set_field(&mut f.destination, b, 14);
+        }
+        "21" if b.get(6) == Some(&b',') && b.get(11) == Some(&b',') => {
+            set_field(&mut f.origin, b, 7);
+            set_field(&mut f.destination, b, 12);
+        }
+        "33"
+            if b.first() == Some(&b',')
+                && b.get(20) == Some(&b',')
+                && b.get(25) == Some(&b',') =>
+        {
+            set_field(&mut f.origin, b, 21);
+            set_field(&mut f.destination, b, 26);
+        }
+        "15" if body.starts_with("FST01") => {
+            set_field(&mut f.origin, b, 5);
+            set_field(&mut f.destination, b, 9);
+        }
+        "10" if body.starts_with("ARR01") => {
+            set_field(&mut f.destination, b, 12);
+            set_field(&mut f.eta, b, 16);
+        }
+        "11" if body.get(13..17) == Some("/DS ") => {
+            set_field(&mut f.destination, b, 17);
+            if body.get(21..26) == Some("/ETA ") {
+                set_field(&mut f.eta, b, 26);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_report(
+    label: &str,
+    block_id: &str,
+    text: &str,
+) -> (String, String, String, AcarsFields) {
+    let (message_no, flight_id, body) = split_downlink(block_id, text);
+    let mut fields = AcarsFields::default();
+    decode_label(label, &body, &mut fields);
+    if let Some((lat, lon)) = parse_position(&body) {
+        fields.latitude = Some(lat);
+        fields.longitude = Some(lon);
+    }
+    if fields.fuel.is_none() {
+        fields.fuel = tagged_value(
+            &body,
+            &["FUEL ON BOARD", "BLOCK FUEL", "TRIP FUEL", "FOB", "FOD", "FUEL"],
+        );
+    }
+    if fields.aircraft_type.is_none() {
+        fields.aircraft_type = tagged_value(
+            &body,
+            &["AIRCRAFT TYPE", "ACFT TYPE", "TYPE", "ACFT", "A/C", "EQPT", "EQUIP"],
+        );
+    }
+    if fields.altitude.is_none() {
+        fields.altitude = tagged_value(&body, &["FLIGHT LEVEL", "ALTITUDE", "ALT", "FL"]);
+    }
+    if fields.eta.is_none() {
+        fields.eta = tagged_value(&body, &["ETA"]);
+    }
+    (message_no, flight_id, body, fields)
+}
+
 /// Parse the header and text that follow `SOH`.
 fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     // mode(1) address(7) ack(1) label(2) block_id(1) STX-or-ETX(1)
@@ -231,6 +585,7 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     // the transmitted BCS carries the low byte first.
     let bcs = u16::from_le_bytes([rest[idx], rest[idx + 1]]);
     let crc_ok = crc16(&rest[..idx]) == bcs;
+    let (message_no, flight_id, body, fields) = parse_report(&label, &block_id, &text);
 
     Some(AcarsFrame {
         mode,
@@ -240,6 +595,10 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
         label,
         block_id,
         text,
+        message_no,
+        flight_id,
+        body,
+        fields,
         crc_ok,
     })
 }
@@ -515,6 +874,7 @@ mod tests {
             block_id: "1".into(),
             text: "HELLO FROM ACARS".into(),
             crc_ok: true,
+            ..Default::default()
         }
     }
 
@@ -542,6 +902,7 @@ mod tests {
             block_id: "A".into(),
             text: String::new(),
             crc_ok: true,
+            ..Default::default()
         };
         let got = parse_frame(&encode(&msg)).expect("a header-only frame");
         assert_eq!(
@@ -653,6 +1014,96 @@ mod tests {
     fn the_block_check_is_the_reflected_crc() {
         assert_eq!(crc16(b"123456789"), 0x2189);
     }
+
+    /// Downlink text starts with a 4-character message number and a
+    /// 6-character flight id; the body is what follows (ARINC 618).
+    #[test]
+    fn downlink_header_separates_message_number_and_flight() {
+        let (no, fid, body) = split_downlink("6", "S81AQR048K0EV233638VS/");
+        assert_eq!(no, "S81A");
+        assert_eq!(fid, "QR048K");
+        assert_eq!(body, "0EV233638VS/");
+
+        let (no, fid, body) = split_downlink("A", "PLAIN UPLINK TEXT");
+        assert!(no.is_empty());
+        assert!(fid.is_empty());
+        assert_eq!(body, "PLAIN UPLINK TEXT");
+    }
+
+    #[test]
+    fn position_reports_yield_coordinates() {
+        assert_eq!(
+            parse_position("LAT N 47.176/LON E 2.943"),
+            Some((47.176, 2.943))
+        );
+        assert_eq!(
+            parse_position("POS LAT S33.5 LON W070.25 END"),
+            Some((-33.5, -70.25))
+        );
+        // DDMM.m / DDDMM.m form.
+        let (lat, lon) = parse_position("LAT N4732.1/LON E00256.4").expect("ddmm position");
+        assert!((lat - 47.535).abs() < 1e-9, "lat {lat}");
+        assert!((lon - 2.94).abs() < 1e-9, "lon {lon}");
+        assert_eq!(parse_position("no coordinates here"), None);
+        // Compact application-text form seen live (SX-DVS AOC report).
+        assert_eq!(
+            parse_position("N37969E02398819360256P006240013"),
+            Some((37.969, 23.988))
+        );
+        assert_eq!(parse_position("S33500W070250"), Some((-33.5, -70.25)));
+    }
+
+    #[test]
+    fn tagged_values_and_downlink_header_fill_the_fields() {
+        let (no, fid, body, fields) = parse_report(
+            "H1",
+            "1",
+            "S81AQR048KFUEL 12.3T ACFT B77W ALT FL350 ETA 1234",
+        );
+        assert_eq!(no, "S81A");
+        assert_eq!(fid, "QR048K");
+        assert_eq!(body, "FUEL 12.3T ACFT B77W ALT FL350 ETA 1234");
+        assert_eq!(fields.fuel.as_deref(), Some("12.3T"));
+        assert_eq!(fields.aircraft_type.as_deref(), Some("B77W"));
+        assert_eq!(fields.altitude.as_deref(), Some("FL350"));
+        assert_eq!(fields.eta.as_deref(), Some("1234"));
+    }
+
+    /// Q1 carries origin, the four OOOI times and destination at fixed
+    /// offsets (acarsdec `label_q1`).
+    #[test]
+    fn q1_label_fills_route_and_times() {
+        let mut fields = AcarsFields::default();
+        decode_label("Q1", "EGLL1200121514301445XXXXKJFK", &mut fields);
+        assert_eq!(fields.origin.as_deref(), Some("EGLL"));
+        assert_eq!(fields.gate_out.as_deref(), Some("1200"));
+        assert_eq!(fields.wheels_off.as_deref(), Some("1215"));
+        assert_eq!(fields.wheels_on.as_deref(), Some("1430"));
+        assert_eq!(fields.gate_in.as_deref(), Some("1445"));
+        assert_eq!(fields.destination.as_deref(), Some("KJFK"));
+    }
+
+    /// The whole path: encoded frame → parser → structured fields.
+    #[test]
+    fn a_downlink_frame_exposes_position_and_fields() {
+        let msg = AcarsFrame {
+            mode: "2".into(),
+            address: ".A7-BHT".into(),
+            ack: " ".into(),
+            label: "16".into(),
+            block_id: "1".into(),
+            text: "S81AQR048KFUEL 12.3T LAT N 47.176/LON E 2.943".into(),
+            crc_ok: true,
+            ..Default::default()
+        };
+        let got = parse_frame(&encode(&msg)).expect("a frame");
+        assert_eq!(got.flight_id, "QR048K");
+        assert_eq!(got.body, "FUEL 12.3T LAT N 47.176/LON E 2.943");
+        assert_eq!(got.fields.fuel.as_deref(), Some("12.3T"));
+        assert_eq!(got.fields.latitude, Some(47.176));
+        assert_eq!(got.fields.longitude, Some(2.943));
+    }
+
 
     /// A burst of MSK audio built from the same bits the encoder writes:
     /// 2400 baud, 1200 Hz for a zero and 2400 Hz for a one, each bit starting

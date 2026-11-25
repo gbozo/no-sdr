@@ -259,6 +259,27 @@ function aircraftPopup(entity: DecoderEntity, samples: MetricSample[] = []): str
   const icao = asNumber(p.icao) ?? 0;
   const hex = icaoHex(icao);
   const callsign = asString(p.callsign).trim() || hex;
+  const registration = asString(p.registration).trim();
+  const typeName = asString(p.typeName).trim() || asString(p.typeCode).trim();
+  const operator = asString(p.operator).trim();
+  const acars = (p.acars ?? {}) as Record<string, unknown>;
+  const acarsFields = (acars.fields ?? {}) as Record<string, unknown>;
+  const flight = asString(acars.flight).trim() || asString(p.flight).trim();
+  const acarsType = asString(acarsFields.type).trim();
+  const origin = asString(acarsFields.origin).trim();
+  const destination = asString(acarsFields.destination).trim();
+  const eta = asString(acarsFields.eta).trim();
+  const fuel = asString(acarsFields.fuel).trim();
+  const acarsAltitude = asString(acarsFields.altitude).trim();
+  const acarsTimes = [
+    ['OUT', asString(acarsFields.gateOut)],
+    ['OFF', asString(acarsFields.wheelsOff)],
+    ['ON', asString(acarsFields.wheelsOn)],
+    ['IN', asString(acarsFields.gateIn)],
+  ]
+    .filter(([, value]) => value)
+    .map(([label, value]) => `${label} ${value}`)
+    .join(' · ');
   const alt = p.on_ground ? 'GND' : asNumber(p.altitude_ft) == null ? '—' : `${Math.round(asNumber(p.altitude_ft)!)} ft`;
   const speed = asNumber(p.ground_speed_kt) == null ? '—' : `${Math.round(asNumber(p.ground_speed_kt)!)} kt`;
   const track = asNumber(p.track_deg) == null ? '—' : `${Math.round(asNumber(p.track_deg)!)}°`;
@@ -271,17 +292,26 @@ function aircraftPopup(entity: DecoderEntity, samples: MetricSample[] = []): str
   const speeds = samples
     .map((sample) => sample.speedKt)
     .filter((value): value is number => value !== null);
+  const acarsPresent = flight || origin || destination || fuel || acarsTimes;
   return `<div class="map-popup">
-    <div class="map-popup-title">${escapeHtml(callsign)} <span class="map-popup-badge">ADS-B</span></div>
+    <div class="map-popup-title">${escapeHtml(callsign)} <span class="map-popup-badge">ADS-B</span>${acarsPresent ? ' <span class="map-popup-badge">ACARS</span>' : ''}</div>
     ${emergency ? `<div class="map-popup-alert">${escapeHtml(emergency)}</div>` : ''}
-    <div class="map-popup-sub">${escapeHtml(hex)} · ${escapeHtml(asString(p.category) || 'aircraft')}</div>
+    <div class="map-popup-sub">${escapeHtml(hex)} · ${escapeHtml(asString(p.category) || 'aircraft')}${operator ? ` · ${escapeHtml(operator)}` : ''}</div>
     ${popupRows([
-      ['ALT', alt],
-      ['GS', speed],
-      ['TRK', track],
-      ['V/S', vs],
-      ['SQK', squawk],
-      ['LAST', timeAgo(entity.lastSeenMs)],
+      ...(registration ? [['REG', registration] as [string, string]] : []),
+      ...(typeName || acarsType ? [['TYPE', typeName || acarsType] as [string, string]] : []),
+      ...(flight ? [['FLIGHT', flight] as [string, string]] : []),
+      ...(origin || destination ? [['ROUTE', `${origin || '?'} → ${destination || '?'}`] as [string, string]] : []),
+      ...(eta ? [['ETA', eta] as [string, string]] : []),
+      ...(acarsTimes ? [['TIMES', acarsTimes] as [string, string]] : []),
+      ...(fuel ? [['FUEL', fuel] as [string, string]] : []),
+      ...(acarsAltitude ? [['ALT (ACARS)', acarsAltitude] as [string, string]] : []),
+      ['ALT', alt] as [string, string],
+      ['GS', speed] as [string, string],
+      ['TRK', track] as [string, string],
+      ['V/S', vs] as [string, string],
+      ['SQK', squawk] as [string, string],
+      ['LAST', timeAgo(entity.lastSeenMs)] as [string, string],
     ])}
     ${altitudes.length > 1 ? histogramSvg(altitudes, 'Altitude', 'ft', '#38e8ff') : ''}
     ${histogramSvg(speeds, 'Speed', 'kt', '#7dff9b')}
@@ -876,6 +906,8 @@ function positionIcon(callsign: string, mode: string): L.DivIcon {
 function positionPopup(message: DecoderHistoryMessage): string {
   const payload = (message.payload ?? {}) as Record<string, unknown>;
   const aprs = (payload.aprs ?? {}) as Record<string, unknown>;
+  const acars = (payload.acars ?? {}) as Record<string, unknown>;
+  const fields = (acars.fields ?? {}) as Record<string, unknown>;
   const lat = asNumber(aprs.lat) ?? asNumber(payload.lat);
   const lon = asNumber(aprs.lon) ?? asNumber(payload.lon);
   const callsign =
@@ -883,15 +915,46 @@ function positionPopup(message: DecoderHistoryMessage): string {
     asString(payload.callsign) ||
     callsignFromText(message.mode, message.text) ||
     message.mode.toUpperCase();
+  const isAcars = message.mode.trim().toLowerCase() === 'acars';
+  const flight = asString(acars.flight).trim();
+  const body = asString(acars.body).trim() || message.text;
+  const origin = asString(fields.origin).trim();
+  const destination = asString(fields.destination).trim();
+  const eta = asString(fields.eta).trim();
+  const type = asString(fields.type).trim();
+  const fuel = asString(fields.fuel).trim();
+  const altitude = asString(fields.altitude).trim();
+  const times = [
+    ['OUT', asString(fields.gateOut)],
+    ['OFF', asString(fields.wheelsOff)],
+    ['ON', asString(fields.wheelsOn)],
+    ['IN', asString(fields.gateIn)],
+  ]
+    .filter(([, value]) => value)
+    .map(([label, value]) => `${label} ${value}`)
+    .join(' · ');
+  const rows: Array<[string, string]> = [];
+  if (isAcars) {
+    rows.push(['REG', callsign]);
+    if (flight) rows.push(['FLIGHT', flight]);
+    if (type) rows.push(['TYPE', type]);
+    if (origin || destination) rows.push(['ROUTE', `${origin || '?'} → ${destination || '?'}`]);
+    if (eta) rows.push(['ETA', eta]);
+    if (times) rows.push(['TIMES', times]);
+    if (fuel) rows.push(['FUEL', fuel]);
+    if (altitude) rows.push(['ALT', altitude]);
+  }
+  rows.push(
+    ['COORDS', lat !== null && lon !== null ? `${lat.toFixed(4)}, ${lon.toFixed(4)}` : '—'],
+    ['FREQ', message.frequencyHz > 0 ? `${(message.frequencyHz / 1e6).toFixed(6)} MHz` : '—'],
+    ['SNR', Number.isFinite(message.snrDb) ? `${Math.round(message.snrDb)} dB` : '—'],
+    ['LAST', timeAgo(message.receivedMs)],
+  );
+  const title = flight ? `${callsign} ${flight}` : callsign;
   return `<div class="map-popup">
-    <div class="map-popup-title">${escapeHtml(callsign)} <span class="map-popup-badge">${escapeHtml(message.mode.toUpperCase())}</span></div>
-    <div class="map-popup-sub">${escapeHtml(message.text)}</div>
-    ${popupRows([
-      ['COORDS', lat !== null && lon !== null ? `${lat.toFixed(4)}, ${lon.toFixed(4)}` : '—'],
-      ['FREQ', message.frequencyHz > 0 ? `${(message.frequencyHz / 1e6).toFixed(6)} MHz` : '—'],
-      ['SNR', Number.isFinite(message.snrDb) ? `${Math.round(message.snrDb)} dB` : '—'],
-      ['LAST', timeAgo(message.receivedMs)],
-    ])}
+    <div class="map-popup-title">${escapeHtml(title)} <span class="map-popup-badge">${isAcars ? 'ACARS' : escapeHtml(message.mode.toUpperCase())}</span></div>
+    <div class="map-popup-sub">${escapeHtml(body)}</div>
+    ${popupRows(rows)}
   </div>`;
 }
 
@@ -2141,7 +2204,8 @@ const MapPage: Component = () => {
             />
           </div>
           <p class="mt-2 text-[8px] font-mono text-text-dim/70 leading-relaxed">
-            VDL2/ACARS messages carry no position data and are not plotted.
+            VDL2 messages carry no position data and are not plotted. ACARS
+            position reports are plotted as their own markers.
           </p>
         </div>
 

@@ -25,6 +25,7 @@ const AcarsDisplay: Component = () => {
   const status = () => store.acarsStatus();
   const messages = createMemo(() => store.acarsMessages().slice(0, MAX_ROWS));
   const level = () => Math.round(Math.min(1, Math.max(0, status().level)) * 100);
+  const captureKHz = () => (store.decoderWindow()?.captureBandwidthHz ?? 0) / 1000;
 
   return (
     <div class="flex-1 min-h-0 flex flex-col bg-sdr-surface/30">
@@ -35,7 +36,13 @@ const AcarsDisplay: Component = () => {
           <span>FRM {status().frames}</span>
           <span>BAD {status().bad}</span>
           <span>LVL {level()}%</span>
-          <span class="text-text-dim/70">131.550 MHz · AM · 2400 baud</span>
+          <span>AFC {Math.round(status().afcHz ?? 0)} Hz</span>
+          <Show when={captureKHz() > 0}>
+            <span>CAP {captureKHz().toFixed(0)} kHz</span>
+          </Show>
+          <span class="text-text-dim/70">
+            {(store.tunedFrequency() / 1e6).toFixed(3)} MHz · AM · 2400 baud
+          </span>
         </div>
       </div>
 
@@ -46,6 +53,7 @@ const AcarsDisplay: Component = () => {
               <th class="text-left px-1.5 py-1 text-text-dim">TIME</th>
               <th class="text-left px-1.5 py-1 text-text-dim">MODE</th>
               <th class="text-left px-1.5 py-1 text-text-dim">ADDRESS</th>
+              <th class="text-left px-1.5 py-1 text-text-dim">FLIGHT</th>
               <th class="text-left px-1.5 py-1 text-text-dim">LABEL</th>
               <th class="text-left px-1.5 py-1 text-text-dim">BLK</th>
               <th class="text-left px-1.5 py-1 text-text-dim">TEXT</th>
@@ -61,9 +69,10 @@ const AcarsDisplay: Component = () => {
                   </td>
                   <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{message.mode}</td>
                   <td class="px-1.5 py-1 text-text-primary whitespace-nowrap">{message.address}</td>
+                  <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{message.flight || '—'}</td>
                   <td class="px-1.5 py-1 text-text-secondary whitespace-nowrap">{message.label}</td>
                   <td class="px-1.5 py-1 text-text-dim whitespace-nowrap">{message.blockId}</td>
-                  <td class="px-1.5 py-1 text-text-primary break-all">{message.text}</td>
+                  <td class="px-1.5 py-1 text-text-primary break-all">{message.body || message.text}</td>
                   <td
                     class={`px-1.5 py-1 whitespace-nowrap ${
                       message.crcOk ? 'text-cyan' : 'text-amber'

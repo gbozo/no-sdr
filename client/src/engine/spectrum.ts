@@ -5,6 +5,8 @@
 // Operates entirely in a Web Worker via OffscreenCanvas.
 // ============================================================
 
+import { normalizeSpectrumZoom } from '~/shared';
+
 export class SpectrumRenderer {
   private ctx: OffscreenCanvasRenderingContext2D;
   private minDb: number;
@@ -479,8 +481,9 @@ export class SpectrumRenderer {
    * e.g. setZoom(0.25, 0.75) zooms to the centre half of the spectrum.
    */
   setZoom(start: number, end: number): void {
-    this.zoomStart = Math.max(0, Math.min(start, end - 0.01));
-    this.zoomEnd   = Math.min(1, Math.max(end, start + 0.01));
+    // Same clamp as the waterfall worker, the store and the click mapping.
+    // A narrower minimum here used to stretch this canvas at max zoom.
+    [this.zoomStart, this.zoomEnd] = normalizeSpectrumZoom(start, end);
     // Clear peak buffer — pixel-indexed and now stale after zoom change.
     // Noise floor is bin-indexed so it survives zoom changes without reset.
     this._peakDb = null;

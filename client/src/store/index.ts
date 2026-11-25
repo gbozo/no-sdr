@@ -580,6 +580,7 @@ function createStore() {
         frames?: number;
         bad?: number;
         level?: number;
+        afcHz?: number;
         acars?: AcarsMessage;
       };
       if (event.kind === 'status') {
@@ -587,6 +588,7 @@ function createStore() {
           frames: event.frames ?? 0,
           bad: event.bad ?? 0,
           level: event.level ?? 0,
+          afcHz: event.afcHz ?? 0,
         });
         return;
       }

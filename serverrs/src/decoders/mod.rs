@@ -204,6 +204,12 @@ impl WindowSpec {
                 object.insert("decodeBand".into(), band.to_json());
             }
         }
+        if is_acars(mode) {
+            // The ACARS channel captures this much around the dial for the
+            // AFC; show it so the operator knows fine-tuning is unnecessary.
+            value["captureBandwidthHz"] =
+                json!(acars_channel::ACARS_CAPTURE_BANDWIDTH_HZ as f64);
+        }
         value
     }
 }
@@ -1945,6 +1951,9 @@ pub(crate) fn persist_result(
         store.upsert_vessels(decoder_id, dongle_id, vessels);
         return;
     }
+    if mode == "acars" {
+        store.upsert_acars(decoder_id, dongle_id, data);
+    }
 
     // VDL2 status updates carry a rolling message list.
     if let Some(messages) = data.get("messages").and_then(|v| v.as_array()) {
@@ -2183,6 +2192,14 @@ fn run_worker(
         for channel in &mut channels {
             channel.process_chunk(&input.chunk, now);
             for data in channel.take_results() {
+                // A background ACARS status is not the client's meter: every
+                // background channel would overwrite the foreground panel's
+                // level/AFC. Messages still go through.
+                if channel.config().mode == "acars"
+                    && data.get("kind").and_then(|k| k.as_str()) == Some("status")
+                {
+                    continue;
+                }
                 persist_result(
                     &store.store,
                     &mut store.seen,
@@ -2253,6 +2270,8 @@ mod tests {
         assert_eq!(acars.window_kind, "am");
         assert_eq!(acars.window.center_hz(), 131_550_000.0);
         assert_eq!(acars.window.bandwidth_hz(), 6_000.0);
+        let json = acars.to_json("acars-test", "acars", None);
+        assert_eq!(json["captureBandwidthHz"], 16_000.0);
 
         let hfdl = window_spec("hfdl", 21_931_000.0, 21_931_000.0, 2_400_000);
         assert_eq!(hfdl.window.bandwidth_hz(), 24_000.0);

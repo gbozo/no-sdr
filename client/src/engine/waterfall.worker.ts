@@ -31,7 +31,7 @@
 //   { type: 'seek-offset', offset: number }     — freeze/unfreeze live updates
 // ============================================================
 
-import type { WaterfallColorTheme } from '~/shared';
+import { normalizeSpectrumZoom, type WaterfallColorTheme } from '~/shared';
 
 // ---- Inline palette (no DOM import needed) ----
 
@@ -483,8 +483,7 @@ self.onmessage = (e: MessageEvent) => {
     }
 
     case 'set-zoom': {
-      zoomStart    = Math.max(0, Math.min(msg.start, msg.end - 0.01));
-      zoomEnd      = Math.min(1, Math.max(msg.end, msg.start + 0.01));
+      [zoomStart, zoomEnd] = normalizeSpectrumZoom(msg.start, msg.end);
       rowImageData = null;
       clear();
       break;

@@ -627,6 +627,89 @@ impl DecoderStore {
         );
     }
 
+    /// Merge one ACARS block into a per-registration entity.
+    ///
+    /// ACARS carries airline application data (flight id, route, times,
+    /// fuel/type tags) that the map wants on the aircraft bubble. The address
+    /// is the tail number, which is also how the aircraft metadata index maps
+    /// an ICAO address to a registration, so this row is the join key.
+    pub fn upsert_acars(&self, decoder_id: &str, dongle_id: &str, data: &Value) {
+        let Some(conn) = &self.conn else {
+            return;
+        };
+        let Some(acars) = data.get("acars") else {
+            return;
+        };
+        let Some(address) = acars.get("address").and_then(Value::as_str) else {
+            return;
+        };
+        let address = address.trim().trim_matches('.').trim();
+        if address.is_empty() {
+            return;
+        }
+        let key = address.to_ascii_uppercase();
+        let now = now_ms();
+        let conn = conn.lock();
+        let existing: Option<(String, i64)> = conn
+            .query_row(
+                "SELECT payload, first_seen_ms FROM decoder_entities
+                 WHERE kind = 'acars' AND entity_key = ?1",
+                params![key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        let (mut payload, first_seen) = existing
+            .and_then(|(text, first)| serde_json::from_str::<Value>(&text).ok().map(|v| (v, first)))
+            .unwrap_or_else(|| (json!({}), now));
+        if !payload.is_object() {
+            payload = json!({});
+        }
+        let Some(object) = payload.as_object_mut() else {
+            return;
+        };
+        object.insert("decoderId".to_string(), json!(decoder_id));
+        object.insert("dongleId".to_string(), json!(dongle_id));
+        object.insert("address".to_string(), json!(address));
+        object.insert("lastSeenMs".to_string(), json!(now));
+        for field in [
+            "mode", "ack", "label", "blockId", "text", "flight", "msgNo", "body", "crcOk", "at",
+        ] {
+            if let Some(value) = acars.get(field) {
+                object.insert(field.to_string(), value.clone());
+            }
+        }
+        // Keep fields across blocks: one message may carry the route, another
+        // the fuel figure, and the aircraft bubble should show both.
+        if let Some(fields) = acars.get("fields").and_then(Value::as_object) {
+            let entry = object.entry("fields".to_string()).or_insert_with(|| json!({}));
+            if let Some(map) = entry.as_object_mut() {
+                for (name, value) in fields {
+                    map.insert(name.clone(), value.clone());
+                }
+            }
+        }
+        for field in ["lat", "lon", "callsign"] {
+            if let Some(value) = data.get(field) {
+                object.insert(field.to_string(), value.clone());
+            }
+        }
+        if let Some(text) = data.get("text") {
+            object.insert("lastText".to_string(), text.clone());
+        }
+        let _ = conn.execute(
+            "INSERT INTO decoder_entities
+             (kind, entity_key, payload, first_seen_ms, last_seen_ms)
+             VALUES ('acars', ?1, ?2, ?3, ?4)
+             ON CONFLICT(kind, entity_key) DO UPDATE SET
+                 payload = excluded.payload,
+                 first_seen_ms = MIN(decoder_entities.first_seen_ms, excluded.first_seen_ms),
+                 last_seen_ms = excluded.last_seen_ms",
+            params![key, payload.to_string(), first_seen, now],
+        );
+    }
+
     pub fn upsert_vessels(&self, decoder_id: &str, dongle_id: &str, vessels: &[Value]) {
         self.upsert_entities(
             "vessel",
@@ -1401,6 +1484,51 @@ mod tests {
         assert_eq!(rows[0]["key"], "237123456");
         assert_eq!(rows[0]["payload"]["name"], "AGIOS NIKOLAOS");
         assert_eq!(rows[0]["payload"]["dongleId"], "d1");
+    }
+
+    #[test]
+    fn acars_rows_merge_fields_across_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DecoderStore::open(dir.path().join("decoders.sqlite"));
+        store.upsert_acars(
+            "acars-131",
+            "d1",
+            &json!({
+                "text": "S12ADLH586",
+                "acars": {
+                    "address": ".D-AINR",
+                    "flight": "DLH586",
+                    "label": "Q1",
+                    "fields": { "origin": "EDDF", "destination": "LGAV" }
+                }
+            }),
+        );
+        store.upsert_acars(
+            "acars-131",
+            "d1",
+            &json!({
+                "text": "S13ADLH586",
+                "lat": 37.969,
+                "lon": 23.988,
+                "callsign": "D-AINR",
+                "acars": {
+                    "address": "D-AINR",
+                    "label": "H1",
+                    "fields": { "fuel": "12.3T" }
+                }
+            }),
+        );
+
+        let rows = store.entities("acars", 10);
+        assert_eq!(rows.len(), 1, "one row per registration");
+        assert_eq!(rows[0]["key"], "D-AINR");
+        let payload = &rows[0]["payload"];
+        assert_eq!(payload["address"], "D-AINR");
+        assert_eq!(payload["flight"], "DLH586");
+        assert_eq!(payload["fields"]["origin"], "EDDF");
+        assert_eq!(payload["fields"]["fuel"], "12.3T");
+        assert_eq!(payload["lat"], 37.969);
+        assert_eq!(payload["lon"], 23.988);
     }
 }
 

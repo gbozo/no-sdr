@@ -32,7 +32,7 @@ fn address_from(dcfg: &DongleConfig) -> String {
 
 pub fn config_from_dongle(
     dcfg: &DongleConfig,
-    _profile: &DongleProfile,
+    profile: &DongleProfile,
     sample_rate: u32,
 ) -> (String, PlutoConfig) {
     let settings = &dcfg.source.settings;
@@ -59,7 +59,7 @@ pub fn config_from_dongle(
     if let Some(v) = setting_f64(settings, "ppm") {
         cfg.ppm = v;
     } else {
-        cfg.ppm = dcfg.ppm as f64;
+        cfg.ppm = profile.ppm(dcfg.ppm) as f64;
     }
     if let Some(v) = setting_u32(settings, "bufferSamples") {
         cfg.buffer_samples = v as usize;

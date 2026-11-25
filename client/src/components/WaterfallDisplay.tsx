@@ -6,7 +6,7 @@ import { Component, onMount, onCleanup, Show, createSignal, For, createEffect, c
 import { engine } from '../engine/sdr-engine.js';
 import { store } from '../store/index.js';
 import { bands, tagColor, TAG_BORDER_COLORS } from '../store/bandplan.js';
-import { isDecoderMode, normalizeBookmarkMode, DEMOD_MODES } from '~/shared';
+import { isDecoderMode, normalizeBookmarkMode, DEMOD_MODES, MIN_SPECTRUM_ZOOM_SPAN } from '~/shared';
 
 const WaterfallDisplay: Component = () => {
   let waterfallRef!: HTMLCanvasElement;
@@ -107,6 +107,8 @@ const WaterfallDisplay: Component = () => {
     const decoderMode = store.decoderMode();
     const decoderWindow = store.decoderWindow();
     const centerFrequency = store.centerFrequency();
+    // ACARS AFC moves the actual capture/demod centre off the dial.
+    const acarsAfc = decoderMode === 'acars' ? (store.acarsStatus().afcHz ?? 0) : 0;
 
     const w = canvas.offsetWidth;
     const h = canvas.offsetHeight;
@@ -159,13 +161,43 @@ const WaterfallDisplay: Component = () => {
     ctx.stroke();
     ctx.setLineDash([]);
 
+    // Wide acquisition window: the ACARS AFC can find a carrier anywhere in
+    // this band, so the operator does not need to fine-tune the dial.
+    const captureBw = decoderWindow?.captureBandwidthHz ?? 0;
+    if (decoderMode && decoderWindow && captureBw > 0 && sampleRate > 0) {
+      const xOfOffset = (offset: number) =>
+        ((((offset / sampleRate) + 0.5) - zs) / viewSpan) * w;
+      const half = captureBw / 2;
+      const captureCenter = decoderWindow.dialHz + acarsAfc;
+      const ca = xOfOffset(captureCenter - half - centerFrequency);
+      const cb = xOfOffset(captureCenter + half - centerFrequency);
+      const capLeft = Math.min(ca, cb);
+      const capRight = Math.max(ca, cb);
+      if (capRight >= 0 && capLeft <= w) {
+        ctx.fillStyle = 'rgba(74, 163, 255, 0.05)';
+        ctx.fillRect(capLeft, 0, capRight - capLeft, h);
+        ctx.strokeStyle = 'rgba(120, 205, 255, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(capLeft + 0.5, 0.5, Math.max(0, capRight - capLeft - 1), h - 1);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(150, 215, 255, 0.85)';
+        ctx.font = '9px monospace';
+        ctx.fillText(
+          `CAPTURE ${(captureBw / 1000).toFixed(0)} kHz`,
+          Math.max(2, capLeft + 4),
+          12,
+        );
+      }
+    }
+
     // Exact RF window consumed by the active digital decoder. This can be
     // wider or offset from the demodulator passband (e.g. an FT8 USB window).
     if (decoderMode && decoderWindow && sampleRate > 0) {
       const xOfOffset = (offset: number) =>
         ((((offset / sampleRate) + 0.5) - zs) / viewSpan) * w;
-      const a = xOfOffset(decoderWindow.window.startHz - centerFrequency);
-      const b = xOfOffset(decoderWindow.window.endHz - centerFrequency);
+      const a = xOfOffset(decoderWindow.window.startHz + acarsAfc - centerFrequency);
+      const b = xOfOffset(decoderWindow.window.endHz + acarsAfc - centerFrequency);
       const decoderLeft = Math.min(a, b);
       const decoderRight = Math.max(a, b);
 
@@ -477,7 +509,7 @@ const WaterfallDisplay: Component = () => {
     const rect   = spectrumRef.getBoundingClientRect();
     const pivot  = (e.clientX - rect.left) / rect.width;
     const zoom   = Math.pow(1.002, rawDelta);
-    const newSpan = Math.min(1, Math.max(0.005, span * zoom));
+    const newSpan = Math.min(1, Math.max(MIN_SPECTRUM_ZOOM_SPAN, span * zoom));
     const pivotFrac = zs + pivot * span;
     let newStart = pivotFrac - pivot * newSpan;
     let newEnd   = newStart + newSpan;
@@ -486,7 +518,7 @@ const WaterfallDisplay: Component = () => {
     newStart = Math.max(0, newStart);
     newEnd   = Math.min(1, newEnd);
     const finalSpan = newEnd - newStart;
-    if (finalSpan < 0.005) return;
+    if (finalSpan < MIN_SPECTRUM_ZOOM_SPAN) return;
     if (finalSpan > 0.999) newStart = 0, newEnd = 1;
     if (zs === newStart && ze === newEnd) return;
     engine.setSpectrumZoom(newStart, newEnd);
@@ -662,7 +694,7 @@ const WaterfallDisplay: Component = () => {
       const newDist = pinchDist(e.touches[0], e.touches[1]);
       const scale = touchPinchDist / newDist; // >1 = zoom out, <1 = zoom in
       touchPinchDist = newDist;
-      const newSpan = Math.min(1, Math.max(0.005, span * scale));
+      const newSpan = Math.min(1, Math.max(MIN_SPECTRUM_ZOOM_SPAN, span * scale));
       const pivot = touchPinchMid;
       const pivotFrac = zs + pivot * span;
       let ns = pivotFrac - pivot * newSpan;

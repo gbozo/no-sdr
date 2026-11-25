@@ -1,6 +1,7 @@
 //! HTTP API layer: router, admin, band plan, bookmarks, recognition.
 
 pub mod admin;
+pub mod aircraft_db;
 pub mod aviation;
 pub mod bandplan;
 pub mod bookmarks;
@@ -24,6 +25,7 @@ use crate::dongle::Manager;
 use crate::ws::WsManager;
 
 pub use admin::AdminAuth;
+pub use aircraft_db::AircraftDb;
 pub use aviation::AviationService;
 pub use bandplan::{BandEntry, BandPlanService};
 pub use bookmarks::PublicBookmark;
@@ -43,6 +45,7 @@ pub struct AppState {
     pub bandplan: Arc<BandPlanService>,
     pub decoder_catalog: Arc<DecoderCatalogService>,
     pub aviation: Arc<AviationService>,
+    pub aircraft_db: Arc<AircraftDb>,
     pub identify: Arc<IdentifyService>,
     pub auth: Arc<admin::AdminAuth>,
     pub static_dir: PathBuf,

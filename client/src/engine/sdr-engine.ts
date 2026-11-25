@@ -42,6 +42,7 @@ import {
   type FftCodecType,
   type IqCodecType,
   type DemodMode,
+  normalizeSpectrumZoom,
 } from '~/shared';
 import { inflateSync } from 'fflate';
 import { OpusDecoder } from 'opus-decoder';
@@ -2649,9 +2650,12 @@ export class SdrEngine {
    * Both spectrum and waterfall renderers are updated.
    */
   setSpectrumZoom(start: number, end: number): void {
-    store.setSpectrumZoom([start, end]);
-    this.spectrumWorker?.postMessage({ type: 'set-zoom', start, end });
-    this.waterfallWorker?.postMessage({ type: 'set-zoom', start, end });
+    // One clamp for the store (labels, tune overlay, click-to-tune) and both
+    // canvases, so a max-zoom viewport renders the range it reports.
+    const [lo, hi] = normalizeSpectrumZoom(start, end);
+    store.setSpectrumZoom([lo, hi]);
+    this.spectrumWorker?.postMessage({ type: 'set-zoom', start: lo, end: hi });
+    this.waterfallWorker?.postMessage({ type: 'set-zoom', start: lo, end: hi });
     // Defer waterfall prefill to next rAF — multiple wheel events within one
     // frame collapse into a single redraw instead of blocking on every tick.
     this.scheduleWaterfallPrefill();

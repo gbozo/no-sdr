@@ -5,7 +5,7 @@
 // ============================================================
 
 import { getPalette, type Palette, type PaletteEntry } from './palettes.js';
-import type { WaterfallColorTheme } from '~/shared';
+import { normalizeSpectrumZoom, type WaterfallColorTheme } from '~/shared';
 
 export class WaterfallRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -132,8 +132,7 @@ export class WaterfallRenderer {
   }
 
   setZoom(start: number, end: number): void {
-    this.zoomStart = Math.max(0, Math.min(start, end - 0.01));
-    this.zoomEnd   = Math.min(1, Math.max(end, start + 0.01));
+    [this.zoomStart, this.zoomEnd] = normalizeSpectrumZoom(start, end);
     this.rowImageData = null;
     // Caller is responsible for calling prefillFromBuffer() after setZoom
     // to avoid a blank waterfall — clear as fallback only

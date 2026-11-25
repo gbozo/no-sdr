@@ -168,6 +168,7 @@ export interface PushDongleProfile {
   dongleId: string;
   swapIQ?: boolean;
   oscillatorOffset?: number;
+  ppmCorrection?: number | null;
   directSampling?: number;
   preFilterNb?: boolean;
   preFilterNbThreshold?: number;

@@ -42,6 +42,8 @@ export interface DongleProfile {
   tuningStep: number;
   swapIQ: boolean;
   oscillatorOffset: number;
+  /** Per-profile ppm override; null/undefined inherits the dongle value. */
+  ppmCorrection?: number | null;
   directSampling: number;
   description: string;
   dongleId: string;

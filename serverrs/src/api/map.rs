@@ -8,6 +8,7 @@
 //! costs a fraction of its JSON size. A reconnect that passes its last `at` as
 //! `?since=` gets one delta frame instead of the checkpoint again.
 
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -184,7 +185,9 @@ fn resume_cursor(since: Option<i64>, now: i64) -> Option<i64> {
 
 #[cfg(feature = "decoders")]
 fn aircraft_entities(state: &AppState) -> Vec<Value> {
-    state.decoder_store.entities("aircraft", 2_000)
+    let mut rows = state.decoder_store.entities("aircraft", 2_000);
+    enrich_aircraft(state, &mut rows);
+    rows
 }
 #[cfg(not(feature = "decoders"))]
 fn aircraft_entities(_state: &AppState) -> Vec<Value> {
@@ -192,14 +195,123 @@ fn aircraft_entities(_state: &AppState) -> Vec<Value> {
 }
 #[cfg(feature = "decoders")]
 fn aircraft_entities_since(state: &AppState, since: i64) -> Vec<Value> {
-    state
+    let mut rows = state
         .decoder_store
-        .entities_since("aircraft", since, UPDATE_ENTITY_LIMIT)
+        .entities_since("aircraft", since, UPDATE_ENTITY_LIMIT);
+    enrich_aircraft(state, &mut rows);
+    rows
 }
 #[cfg(not(feature = "decoders"))]
 fn aircraft_entities_since(_state: &AppState, _since: i64) -> Vec<Value> {
     Vec::new()
 }
+/// Aircraft metadata from the local index: registration and type by ICAO
+/// address, operator by callsign prefix, and the latest ACARS block for the
+/// same registration. Everything is merged into the entity payload the map
+/// already receives, so the client needs no separate lookups.
+fn enrich_aircraft(state: &AppState, rows: &mut [Value]) {
+    if rows.is_empty() {
+        return;
+    }
+    let db = state.aircraft_db.index();
+    let acars = acars_entities(state);
+    for row in rows.iter_mut() {
+        let Some(payload) = row.get_mut("payload").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let icao = payload.get("icao").and_then(Value::as_u64).map(|v| v as u32);
+        let callsign = payload
+            .get("callsign")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let mut registration = String::new();
+        if let Some(icao) = icao {
+            if let Some(meta) = db.aircraft(icao) {
+                if !meta.registration.is_empty() {
+                    registration = meta.registration.to_ascii_uppercase();
+                    payload.insert("registration".to_string(), json!(meta.registration.as_ref()));
+                }
+                if !meta.type_code.is_empty() {
+                    payload.insert("typeCode".to_string(), json!(meta.type_code.as_ref()));
+                    if let Some(name) = db.type_name(&meta.type_code) {
+                        payload.insert("typeName".to_string(), json!(name));
+                    }
+                }
+            }
+        }
+        // Many GA aircraft transmit their registration as the callsign. Only
+        // adopt it when ACARS has heard that address, so an airline callsign
+        // is never mistaken for a tail number.
+        if registration.is_empty()
+            && !callsign.is_empty()
+            && acars.contains_key(&callsign.to_ascii_uppercase())
+        {
+            registration = callsign.to_ascii_uppercase();
+            payload.insert("registration".to_string(), json!(registration));
+        }
+        if let Some(operator) = db.operator_for_callsign(&callsign) {
+            if !operator.name.is_empty() {
+                payload.insert("operator".to_string(), json!(operator.name));
+            }
+            if !operator.country.is_empty() {
+                payload.insert("operatorCountry".to_string(), json!(operator.country));
+            }
+        }
+        let matched = if registration.is_empty() {
+            None
+        } else {
+            acars.get(&registration).cloned()
+        }
+        .or_else(|| acars.get(&callsign.to_ascii_uppercase()).cloned())
+        .or_else(|| {
+            acars.values().find(|entry| {
+                entry
+                    .get("flight")
+                    .and_then(Value::as_str)
+                    .is_some_and(|flight| flight.eq_ignore_ascii_case(&callsign))
+            }).cloned()
+        });
+        if let Some(entry) = matched {
+            if let Some(flight) = entry.get("flight").and_then(Value::as_str) {
+                payload
+                    .entry("flight".to_string())
+                    .or_insert_with(|| json!(flight));
+            }
+            payload.insert("acars".to_string(), entry);
+        }
+    }
+}
+
+/// Latest ACARS entity per registration, keyed upper-case, ignoring rows that
+/// have not been heard for 30 minutes.
+#[cfg(feature = "decoders")]
+fn acars_entities(state: &AppState) -> HashMap<String, Value> {
+    let mut map = HashMap::new();
+    let cutoff = now_ms() - 30 * 60 * 1000;
+    for row in state.decoder_store.entities("acars", 2_000) {
+        if row.get("lastSeenMs").and_then(Value::as_i64).unwrap_or(0) < cutoff {
+            continue;
+        }
+        let Some(payload) = row.get("payload") else {
+            continue;
+        };
+        let Some(address) = payload.get("address").and_then(Value::as_str) else {
+            continue;
+        };
+        let key = address.trim().trim_matches('.').trim().to_ascii_uppercase();
+        if !key.is_empty() {
+            map.insert(key, payload.clone());
+        }
+    }
+    map
+}
+#[cfg(not(feature = "decoders"))]
+fn acars_entities(_state: &AppState) -> HashMap<String, Value> {
+    HashMap::new()
+}
+
 fn fresh_entities(mut rows: Vec<Value>, now: i64) -> Vec<Value> {
     let cutoff = now - ENTITY_ACTIVE_MS;
     rows.retain(|row| row["lastSeenMs"].as_i64().unwrap_or(0) >= cutoff);

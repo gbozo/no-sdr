@@ -54,7 +54,7 @@ pub fn config_from_dongle(
     if let Some(v) = setting_f64(settings, "ppm") {
         cfg.ppm = v;
     } else {
-        cfg.ppm = dcfg.ppm as f64;
+        cfg.ppm = profile.ppm(dcfg.ppm) as f64;
     }
     if let Some(v) = setting_u8(settings, "transfers") {
         cfg.transfers = v;

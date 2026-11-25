@@ -380,6 +380,7 @@ const DongleEditor: Component<{
       fftSize: preset.fftSize,
       fftFps: preset.fftFps,
       tuneOffset: preset.defaultTuneOffset,
+      ppmCorrection: null,
       tuningStep: 1000,
       directSampling: preset.directSampling ?? 0,
       description: preset.description,
@@ -395,6 +396,7 @@ const DongleEditor: Component<{
       fftSize: 2048,
       fftFps: 25,
       tuneOffset: 0,
+      ppmCorrection: null,
       tuningStep: 1000,
       directSampling: 0,
       description: '',
@@ -1446,6 +1448,14 @@ const ProfileEditor: Component<{
           <FieldGroup label="Oscillator Offset (Hz)">
             <input type="number" value={local().oscillatorOffset || 0}
               onInput={(e) => update('oscillatorOffset', parseInt(e.currentTarget.value) || 0)}
+              class="admin-input w-full" />
+          </FieldGroup>
+          <FieldGroup label="PPM Correction">
+            <input type="number" value={local().ppmCorrection ?? ''} placeholder="inherit dongle"
+              onInput={(e) => {
+                const raw = e.currentTarget.value.trim();
+                update('ppmCorrection', raw === '' ? null : parseInt(raw, 10) || 0);
+              }}
               class="admin-input w-full" />
           </FieldGroup>
         </div>

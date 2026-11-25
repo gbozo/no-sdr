@@ -24,7 +24,7 @@ const DDC_BLOCK: u32 = 8192;
 
 pub fn config_from_dongle(
     dcfg: &DongleConfig,
-    _profile: &DongleProfile,
+    profile: &DongleProfile,
     sample_rate: u32,
 ) -> Settings {
     let settings = &dcfg.source.settings;
@@ -44,7 +44,7 @@ pub fn config_from_dongle(
     cfg.pga = setting_bool(settings, "pga").unwrap_or(cfg.pga);
     cfg.attenuator_db = setting_f64(settings, "attenuatorDb").unwrap_or(cfg.attenuator_db);
     cfg.vga_db = setting_f64(settings, "vgaDb").unwrap_or(cfg.vga_db);
-    cfg.ppm = setting_f64(settings, "ppm").unwrap_or(dcfg.ppm as f64);
+    cfg.ppm = setting_f64(settings, "ppm").unwrap_or(profile.ppm(dcfg.ppm) as f64);
     cfg.tuner_gain_db = setting_f64(settings, "tunerGainDb").unwrap_or(cfg.tuner_gain_db);
     cfg.tuner_agc = setting_bool(settings, "tunerAgc").unwrap_or(cfg.tuner_agc);
     cfg

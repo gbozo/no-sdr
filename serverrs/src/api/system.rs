@@ -134,7 +134,8 @@ pub fn clients(state: &AppState) -> Vec<Value> {
                 if !info.profile_id.is_empty() {
                     if let Some(p) = d.profiles.iter().find(|p| p.id == info.profile_id) {
                         entry["profileName"] = json!(p.name);
-                        entry["centerFrequency"] = json!(p.center_frequency);
+                        entry["centerFrequency"] =
+                            json!(p.center_frequency + p.oscillator_offset as i64);
                     }
                 }
             }

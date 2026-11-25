@@ -1420,9 +1420,10 @@ impl Manager {
             cmd.set_frequency((profile.center_frequency + profile.oscillator_offset as i64) as u32);
         let sample_rate = effective_sample_rate(dcfg.sample_rate, profile.sample_rate);
         let _ = cmd.set_sample_rate(sample_rate as u32);
-        if dcfg.ppm != 0 {
-            let _ = cmd.set_frequency_correction(dcfg.ppm as u32);
-        }
+        // Always send it: zero is a valid per-profile value and used to be
+        // skipped, so switching from an override back to the dongle value
+        // never reached the hardware.
+        let _ = cmd.set_frequency_correction(profile.ppm(dcfg.ppm) as u32);
         let _ = cmd.set_bias_t(dcfg.bias_t as u32);
     }
 
@@ -1707,7 +1708,7 @@ impl Manager {
             id = %dcfg.id,
             gain = dcfg.gain,
             profile_gain = profile.gain,
-            ppm = dcfg.ppm,
+            ppm = profile.ppm(dcfg.ppm),
             direct_sampling = dcfg.direct_sampling,
             bias_t = dcfg.bias_t,
             digital_agc = dcfg.digital_agc,
@@ -2468,7 +2469,9 @@ impl Manager {
                     .as_ref()
                     .map(|geo| geo.region_code.clone())
                     .unwrap_or_default();
-                let frequency_hz = profile.center_frequency + state.tune_offset;
+                let frequency_hz = profile.center_frequency
+                    + profile.oscillator_offset as i64
+                    + state.tune_offset;
                 #[cfg(feature = "analytics")]
                 self.user_store.touch_session(
                     &client.id,
@@ -2798,7 +2801,9 @@ impl Manager {
             msg_type: "subscribed".to_string(),
             dongle_id: Some(dongle_id.clone()),
             profile_id: Some(profile.id.clone()),
-            center_freq: Some(profile.center_frequency as f64),
+            // The hardware is tuned to centre + oscillator offset; report
+            // that so the VFO, waterfall and click-to-tune agree with RF.
+            center_freq: Some((profile.center_frequency + profile.oscillator_offset as i64) as f64),
             sample_rate: Some(sample_rate as i64),
             fft_size: Some(profile.fft_size as i64),
             iq_sample_rate: Some(output_rate_for_mode_bandwidth(&mode, meta_bw) as i64),
@@ -3607,6 +3612,8 @@ impl Manager {
                     ),
                 }
             }
+            // Per-profile crystal correction (None inherits the dongle value).
+            let _ = cmd.set_frequency_correction(profile.ppm(dcfg.ppm) as u32);
             // Gain, direct sampling, bias-T, RTL AGC and offset tuning: the
             // same routine dongle start uses, so a profile switch cannot miss
             // a setting (the digital-AGC flag used to be skipped here).
@@ -3655,7 +3662,9 @@ impl Manager {
                 msg_type: "profile_changed".to_string(),
                 dongle_id: Some(dongle_id.to_string()),
                 profile_id: Some(profile.id.clone()),
-                center_freq: Some(profile.center_frequency as f64),
+                center_freq: Some(
+                    (profile.center_frequency + profile.oscillator_offset as i64) as f64,
+                ),
                 sample_rate: Some(sample_rate as i64),
                 fft_size: Some(profile.fft_size as i64),
                 iq_sample_rate: Some(output_rate_for_mode_bandwidth(&mode, default_bw as i32) as i64),

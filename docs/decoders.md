@@ -254,11 +254,19 @@ Schema:
   ADS-B uses `kind = 'aircraft'`, `entity_key = <ICAO hex>`, with the full
   aircraft row in `payload` and first/last seen timestamps. Snapshots upsert
   here; they are never appended to `decoder_messages`. AIS uses the same table
-  with `kind = 'vessel'` and the MMSI as the key.
+  with `kind = 'vessel'` and the MMSI as the key. ACARS uses `kind = 'acars'`
+  with the aircraft registration as the key and merges each block's flight,
+  route and application fields into the row.
 - VDL2, HFDL and ISM status updates carry rolling tables rather than one-shot
   events. New entries (keyed by decode time/raw frame, HFDL log key or ISM
   device+report) are appended to `decoder_messages` once; repeats in later
   status snapshots are suppressed.
+
+The map feed enriches `kind = 'aircraft'` rows from the Mictronics readsb
+metadata cache (`config/aircraft/`, about 14 MB, refreshed weekly): ICAO address →
+registration and type, callsign prefix → operator. It also joins the
+`kind = 'acars'` row for the same registration, so an ACARS block's flight,
+route, times and fuel appear on the ADS-B aircraft bubble.
 
 Read API:
 
@@ -497,11 +505,31 @@ client's tune offset; the background decoder uses `frequencyHz`.
 Events are sent as `decoderType: "acars"`:
 
 ```json
-{"kind":"message","text":"...","rfHz":131550000,"acars":{
-  "mode":"2","address":"G-EUUU","ack":"\u0015","label":"H1",
-  "blockId":"1","text":"...","crcOk":true,"at":1760000000}}
+{"kind":"message","text":"...","rfHz":131550000,
+ "callsign":"A7-BHT","lat":47.176,"lon":2.943,
+ "acars":{
+   "mode":"2","address":"A7-BHT","ack":"NAK","label":"16",
+   "blockId":"1","text":"S81AQR048KFUEL 12.3T LAT N 47.176/LON E 2.943",
+   "msgNo":"S81A","flight":"QR048K",
+   "body":"FUEL 12.3T LAT N 47.176/LON E 2.943",
+   "fields":{"fuel":"12.3T","type":"B77W","origin":"EGLL","destination":"KJFK"},
+   "crcOk":true,"at":1760000000}}
 {"kind":"status","frames":42,"bad":3,"level":0.07}
 ```
+
+Downlink blocks (block id `0`–`9`) begin with a 4-character message
+number and a 6-character flight id; these are split out as `msgNo` and
+`flight`, and the remainder is `body` (`text` stays the raw block text).
+
+Application fields are best-effort and come from two places: the fixed
+layouts of labels Q1/Q2/QA–QT and a few numbered ones (origin,
+destination, ETA, gate/wheels times), and scans of the text for
+`FUEL`/`FOB`, `ACFT`/`TYPE`, `ALT`/`FL`, `LAT …/LON …` and the compact
+`N37969E023988` form. A parsed
+position also sets top-level `lat`/`lon` and `callsign`, so the map's
+position layer and popup pick ACARS up without extra client work.
+ACARS is shown as its own marker: joining it to an ADS-B aircraft would
+need a registration↔ICAO database, which the receiver does not ship.
 
 `status` is sent twice a second (receiver meter and counters); `message` is
 sent once per accepted block. Message events carry the usual `text`/`rfHz`
