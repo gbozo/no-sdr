@@ -177,6 +177,22 @@ export class AudioEngine {
           this.fadeInRemaining = 0;
           this.fadeInLen = 64; // ~1.3ms ramp — eliminates pop on playback resume
 
+          // Retune crossfade state. Instead of flushing the whole jitter buffer
+          // (which zeroed 200ms of audio), a retune trims the backlog and fades
+          // the retained tail out while fading the next incoming audio in.
+          // tailRemaining counts source samples left in the retained region;
+          // writeFadeRemaining is applied to newly written samples.
+          this.tailRemaining = 0;
+          this.tailFadeOutLen = 0;
+          this.writeFadeRemaining = 0;
+          this.writeFadeLen = 1;
+          // Stay in playing state across a retune: wait for the next packet
+          // without the 200ms prefill and without the 3-underrun bail-out.
+          this.fastResume = false;
+          // Keep the tolerant resume behaviour for ~1s after a retune so a
+          // brief jitter burst does not trigger a 200ms re-buffer.
+          this.retuneGuard = 0;
+
           // Underrun detection
           this.underruns = 0;
           // Consecutive underrun counter — only reset playing after 3 in a row
@@ -199,6 +215,76 @@ export class AudioEngine {
               this.playing = false;
               this.consecutiveUnderruns = 0;
               this.fadeInRemaining = 0;
+              this.tailRemaining = 0;
+              this.tailFadeOutLen = 0;
+              this.writeFadeRemaining = 0;
+              this.fastResume = false;
+              this.retuneGuard = 0;
+              return;
+            }
+
+            // Soft retune: trim the backlog and crossfade instead of flushing.
+            if (e.data && e.data.type === 'retune') {
+              const retain = Math.max(0, Math.round((e.data.retainMs > 0 ? e.data.retainMs : 90) * 48));
+              const fade = Math.max(1, Math.round((e.data.fadeMs > 0 ? e.data.fadeMs : 10) * 48));
+              this.retuneGuard = 48000; // ~1s of tolerant underrun handling
+              if (!this.playing) {
+                // Not audible yet: drop stale audio and start on fresh data.
+                this.buffered = 0;
+                this.readPos = this.writePos;
+                this.tailRemaining = 0;
+                this.tailFadeOutLen = 0;
+                this.fastResume = true;
+                return;
+              }
+              // Only pay the crossfade when there is a real backlog to drop.
+              // During a fine-tune drag the buffer is already short, so later
+              // retunes leave it alone (and avoid repeated dips).
+              if (e.data.trim !== false && this.buffered > retain + fade) {
+                const drop = this.buffered - retain;
+                this.readPos = (this.readPos + drop) % this.bufferLen;
+                this.buffered = retain;
+                this.tailRemaining = this.buffered;
+                this.tailFadeOutLen = Math.min(this.buffered, fade);
+                this.writeFadeLen = fade;
+                this.writeFadeRemaining = fade;
+                this.fastResume = true;
+              }
+              return;
+            }
+
+            // Exact retune boundary for the IQ/ADPCM path: the server flagged
+            // the first frame after switching the NCO. Keep only a short tail
+            // of the old frequency, fade it out, and fade the new frame in.
+            if (e.data && e.data.type === 'boundary') {
+              const fade = Math.max(1, Math.round((e.data.ms > 0 ? e.data.ms : 10) * 48));
+              this.retuneGuard = 48000;
+              this.writeFadeLen = fade;
+              this.writeFadeRemaining = fade;
+              if (!this.playing) {
+                this.buffered = 0;
+                this.readPos = this.writePos;
+                this.tailRemaining = 0;
+                this.tailFadeOutLen = 0;
+                this.fastResume = true;
+                return;
+              }
+              if (this.buffered > fade) {
+                const drop = this.buffered - fade;
+                this.readPos = (this.readPos + drop) % this.bufferLen;
+                this.buffered = fade;
+              }
+              this.tailRemaining = this.buffered;
+              this.tailFadeOutLen = Math.min(this.buffered, fade);
+              this.fastResume = true;
+              return;
+            }
+
+            // Arm a fade-in on the next samples written.
+            if (e.data && e.data.type === 'fade-in') {
+              const len = Math.max(1, Math.round((e.data.ms > 0 ? e.data.ms : 10) * 48));
+              this.writeFadeLen = len;
+              this.writeFadeRemaining = len;
               return;
             }
 
@@ -225,12 +311,21 @@ export class AudioEngine {
               this.buffered = Math.max(0, this.buffered - drop);
             }
 
-            // Write samples into ring buffers
+            // Write samples into ring buffers, applying the retune fade-in to
+            // the first samples that follow a trimmed/crossfaded region.
+            let wf = this.writeFadeRemaining;
+            const wfLen = Math.max(1, this.writeFadeLen);
             for (let i = 0; i < len; i++) {
-              this.bufferL[this.writePos] = left[i];
-              this.bufferR[this.writePos] = right[i];
+              let gain = 1;
+              if (wf > 0) {
+                gain = 1 - wf / wfLen;
+                wf--;
+              }
+              this.bufferL[this.writePos] = left[i] * gain;
+              this.bufferR[this.writePos] = right[i] * gain;
               this.writePos = (this.writePos + 1) % this.bufferLen;
             }
+            this.writeFadeRemaining = wf;
             this.buffered += len;
           };
         }
@@ -240,6 +335,10 @@ export class AudioEngine {
           const outR = outputs[0][1];
           if (!outL) return true;
           const len = outL.length; // typically 128
+
+          if (this.retuneGuard > 0) {
+            this.retuneGuard = Math.max(0, this.retuneGuard - len);
+          }
 
           // Wait for minimum buffer before starting playback
           if (!this.playing) {
@@ -259,6 +358,12 @@ export class AudioEngine {
           if (this.buffered < len) {
             outL.fill(0);
             if (outR) outR.fill(0);
+            // After a retune we deliberately stay in playing state: the next
+            // packet resumes the stream immediately instead of waiting for the
+            // 200ms prefill (which is what made tuning feel like a dropout).
+            if (this.fastResume || this.retuneGuard > 0) {
+              return true;
+            }
             this.underruns++;
             this.consecutiveUnderruns++;
             // Only drop back to re-fill mode after 3 consecutive underruns
@@ -272,6 +377,7 @@ export class AudioEngine {
           }
           // Underrun resolved — reset counter
           this.consecutiveUnderruns = 0;
+          this.fastResume = false;
 
           // ---- Continuous proportional drift correction ----
           // Instead of a dead-zone threshold, always nudge toward targetBuffer.
@@ -313,6 +419,20 @@ export class AudioEngine {
           }
           this.readPos = (this.readPos + consume) % this.bufferLen;
           this.buffered -= consume;
+
+          // ---- Retune fade-out over the retained tail ----
+          // The trimmed region ends where the first post-retune samples were
+          // written, which have their own fade-in. Ramping the tail down to
+          // zero makes the join click-free even across a gap.
+          if (this.tailRemaining > 0) {
+            const fadeLen = Math.max(1, this.tailFadeOutLen);
+            for (let i = 0; i < len && this.tailRemaining > 0; i++) {
+              const g = Math.min(1.0, this.tailRemaining / fadeLen);
+              outL[i] *= g;
+              if (outR) outR[i] *= g;
+              this.tailRemaining--;
+            }
+          }
 
           // ---- Fade-in ramp after playback resume (prevents pop) ----
           if (this.fadeInRemaining > 0) {
@@ -430,6 +550,40 @@ export class AudioEngine {
     if (this.workletNode) {
       this.workletNode.port.postMessage('reset');
     }
+  }
+
+  /**
+   * Clear the standalone capture ring without touching playback. Used on a
+   * retune so music identification does not see audio from the old frequency.
+   */
+  resetCapture(): void {
+    this.capturePos = 0;
+    this.captureLen = 0;
+  }
+
+  /**
+   * Soft retune: keep playback running, trim the backlog to `retainMs`, and
+   * crossfade over the dropped audio instead of flushing the jitter buffer.
+   * The capture ring is left intact so identify still has its history.
+   */
+  retune(opts?: { retainMs?: number; fadeMs?: number; trim?: boolean }): void {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({
+      type: 'retune',
+      retainMs: opts?.retainMs ?? 90,
+      fadeMs: opts?.fadeMs ?? 10,
+      trim: opts?.trim !== false,
+    });
+  }
+
+  /**
+   * Trim to the exact server-side retune boundary and crossfade. Used on the
+   * IQ/ADPCM path, where the client demodulates and the server flags the first
+   * frame after the NCO switch.
+   */
+  retuneBoundary(ms = 10): void {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'boundary', ms });
   }
 
   /**

@@ -56,6 +56,7 @@ import { EdgeSpectrumClient } from './edge-spectrum.js';
 import { LmsAnr } from './lms-anr.js';
 import { HangAgc, AGC_PRESETS } from './agc.js';
 import { RumbleFilter, AutoNotch, HiBlendFilter } from './audio-filters.js';
+import { analyse, computeModQuality, modGrade, type AnalysisConfig, type ModQuality } from './analysis.js';
 import { store } from '../store/index.js';
 import type { Bookmark, EdgeInfo } from '../store/index.js';
 import { ALL_FFT_CODECS, ALL_IQ_CODECS } from '../store/index.js';
@@ -286,6 +287,26 @@ export class SdrEngine {
   // Squelch grace period: after tuning/mode change, bypass squelch briefly
   // so the jitter buffer can fill and signal level can stabilize.
   private squelchBypassUntil = 0;
+
+  // Timestamp of the previous tune. Used to distinguish a discrete jump (trim
+  // the jitter backlog + crossfade) from a continuous fine-tune drag (leave the
+  // now-short buffer alone so every step does not dip the audio).
+  private lastTuneAt = 0;
+
+  // Stereo width derived from the decoded L/R audio (0 = mono, 1 = wide).
+  // This is the only stereo metric available on the Opus path, where the
+  // client-side demodulator is idle because the server demodulates.
+  private stereoWidth = 0;
+  private stereoWidthValid = false;
+
+  // Live modulation-quality reading for the main panel. Computed from the
+  // main FFT at a low rate; the Signal Analysis view keeps its own copy so it
+  // can freeze independently.
+  private liveModQuality: ModQuality | null = null;
+  private liveModQualityAt = 0;
+  private liveModQualityHold = 0;
+  private liveModQualitySeen = false;
+  private liveModQualityMode = '';
 
   // Tracks whether we have ever successfully subscribed in this session.
   // Unlike activeDongleId (cleared on disconnect), this stays true across
@@ -1021,6 +1042,12 @@ export class SdrEngine {
         }
         const iqRawData = new Int16Array(payload, 6);
         this.bwIqRawBytes += iqRawData.byteLength;
+        // Bit 0 marks the first IQ frame after a server-side retune. Fade the
+        // demodulated audio in at that exact boundary so the frequency switch
+        // does not click, even when the jitter buffer was not trimmed.
+        if ((iqRawHdr.getUint8(5) & 1) !== 0) {
+          this.audio.retuneBoundary(10);
+        }
         this.processIqData(iqRawData);
         break;
       }
@@ -1040,6 +1067,9 @@ export class SdrEngine {
           this.updateResampleRatio();
         }
         const adpcmData = new Uint8Array(payload, 10);
+        if ((iqAdpcmHdr.getUint8(9) & 1) !== 0) {
+          this.audio.retuneBoundary(10);
+        }
         const decoded = this.iqAdpcmDecoder.decode(adpcmData);
         // Trim to exact sample count (ADPCM may produce +1 sample if odd count)
         const iqData = sampleCount < decoded.length ? decoded.subarray(0, sampleCount) : decoded;
@@ -1089,9 +1119,11 @@ export class SdrEngine {
                 this.agc.processStereo(channelData[0], channelData[1]);
               }
               this.applySoftMuteStereo(channelData[0], channelData[1]);
+              this.updateStereoWidth(channelData[0], channelData[1]);
               this.audio.pushStereoAudio(channelData[0], channelData[1]);
               if (!store.stereoDetected()) store.setStereoDetected(true);
             } else {
+              this.decayStereoWidth();
               // Apply Adaptive NR
               if (store.nrEnabled()) {
                 this.anr.process(channelData[0]);
@@ -1359,6 +1391,62 @@ export class SdrEngine {
         [frame.buffer],
       );
     }
+    this.updateLiveModQuality(fftData);
+  }
+
+  /** Public copy of the live modulation-quality reading for the main panel. */
+  getModQuality(): ModQuality | null {
+    return this.liveModQuality;
+  }
+
+  private updateLiveModQuality(frame: Float32Array): void {
+    const mode = store.mode();
+    const isMod = mode === 'am' || mode === 'sam' || mode === 'am-stereo'
+      || mode === 'usb' || mode === 'lsb';
+    if (!isMod) {
+      this.liveModQuality = null;
+      this.liveModQualitySeen = false;
+      return;
+    }
+    const now = performance.now();
+    if (now - this.liveModQualityAt < 120) return;
+    this.liveModQualityAt = now;
+    if (mode !== this.liveModQualityMode) {
+      this.liveModQualityMode = mode;
+      this.liveModQualitySeen = false;
+      this.liveModQualityHold = 0;
+    }
+    const cfg: AnalysisConfig = {
+      sampleRate: store.sampleRate(),
+      centerHz: store.centerFrequency(),
+      tuneHz: store.tunedFrequency(),
+      bandwidth: store.bandwidth(),
+      measureBwHz: Math.max(1, store.bandwidth()),
+    };
+    // Narrow window for in-band depth/bandwidth/SNR; wide window for
+    // opposite-sideband and splatter. Both come from the full-span FFT.
+    const narrow = analyse(frame, cfg, Math.max(cfg.bandwidth, 3000));
+    const wide = analyse(frame, cfg, Math.max(cfg.bandwidth * 8, 24_000));
+    const q = narrow && wide
+      ? computeModQuality(narrow, wide, true, mode, cfg.tuneHz, cfg.bandwidth)
+      : null;
+    if (!q) {
+      this.liveModQuality = null;
+      this.liveModQualitySeen = false;
+      return;
+    }
+    if (!this.liveModQualitySeen) {
+      this.liveModQualityHold = q.score;
+      this.liveModQualitySeen = true;
+    } else {
+      const alpha = q.score > this.liveModQualityHold ? 0.35 : 0.04;
+      this.liveModQualityHold += alpha * (q.score - this.liveModQualityHold);
+    }
+    this.liveModQuality = {
+      ...q,
+      score: this.liveModQualityHold,
+      grade: modGrade(this.liveModQualityHold),
+    };
   }
 
   /**
@@ -1415,12 +1503,14 @@ export class SdrEngine {
         this.audioOutCount += resampled.left.length;
         if (resampled.left.length > 0 && squelchOpen) {
           this.applySoftMuteStereo(resampled.left, resampled.right);
+          this.updateStereoWidth(resampled.left, resampled.right);
           this.audio.pushStereoAudio(resampled.left, resampled.right);
         }
         if (!store.stereoDetected()) {
           store.setStereoDetected(true);
         }
       } else {
+        this.decayStereoWidth();
         // Resample to 48kHz first so the adaptive filters run at their design rate.
         const resampled = this.resampleTo48k(stereoResult.left);
         // LMS adaptive NR
@@ -1442,6 +1532,7 @@ export class SdrEngine {
         }
       }
     } else {
+      this.decayStereoWidth();
       const audioSamples = this.demodulator.process(iqData);
       this.iqInCount += iqData.length / 2;
       // Resample to 48kHz first so the adaptive filters run at their design rate.
@@ -2076,30 +2167,37 @@ export class SdrEngine {
   }
 
   tune(offsetHz: number): void {
+    const previous = store.tuneOffset();
     store.setTuneOffset(offsetHz);
-    // Reset demodulator to clear stale filter state at the new frequency
-    this.demodulator.reset();
-    // Reset ADPCM decoder — predictor state is invalid after frequency change
-    this.iqAdpcmDecoder.reset();
-    // Reset audio filter IIR state — delay-line history from the old frequency
-    // causes a transient noise burst on the first frames of the new frequency.
-    this.rumbleFilter.reset();
-    this.autoNotch.reset();
-    this.hiBlend.reset();
-    // Reset soft-mute gain so the new frequency starts at full gain
-    this.softMuteGain = 1.0;
-    // Flush stale audio from the jitter buffer. On the Opus path the old
-    // comment said "server re-tunes seamlessly" but the jitter buffer can hold
-    // up to 3 seconds of audio — without a flush the user hears the old
-    // frequency playing out before the new one starts (the "takes longer" effect).
-    this.audio.resetBuffer();
-    // Bypass squelch for 500ms so jitter buffer fills before squelch gates audio
-    this.squelchBypassUntil = performance.now() + 500;
+    // Do NOT reset the demodulator, ADPCM predictor or audio IIR filters here.
+    // Those resets zeroed state and produced an audible transient on every
+    // tune; the server now keeps the NCO/filters continuous, and the jitter
+    // buffer crossfades the dropped audio instead of being flushed.
+    const now = performance.now();
+    const delta = Math.abs(offsetHz - previous);
+    const codec = store.iqCodec();
+    const opus = codec === 'opus' || codec === 'opus-hq' || codec === 'opus-lo';
+    // A discrete jump drops the backlog so the new frequency is heard quickly.
+    // A continuous fine-tune drag keeps the already-short buffer, avoiding a
+    // fade on every mouse-move step.
+    const discrete = now - this.lastTuneAt > 180;
+    this.lastTuneAt = now;
+    const fadeMs = Math.min(18, 6 + delta / 8000);
+    this.audio.retune({
+      retainMs: opus ? 90 : 50,
+      fadeMs,
+      trim: discrete,
+    });
+    // Keep the identify ring free of the old frequency without disturbing the
+    // freshly crossfaded playback buffer.
+    this.audio.resetCapture();
+    // Bypass squelch briefly so the new signal level has time to settle.
+    this.squelchBypassUntil = now + 300;
     this.clearAnalysisScope();
     this.send({ cmd: 'tune', offset: offsetHz });
     this.updateMediaSession();
-    // Arm the identify cooldown for ADPCM/none — the client ring buffer was just
-    // flushed and needs 10s to refill before recognition is reliable.
+    // Arm the identify cooldown for ADPCM/none — the client ring buffer is
+    // still refilling after a trim before recognition is reliable.
     this.armIdentifyCooldown();
   }
 
@@ -2748,21 +2846,70 @@ export class SdrEngine {
   getAudioCompressor(): DynamicsCompressorNode | null { return this.audio.getCompressor(); }
 
   /**
-   * Stereo blend factor for the active demodulator (0 = mono, 1 = full stereo).
-   * Reads PilotPLL.blendFactor for WFM and lockLevel for C-QUAM/SAM.
-   * Returns -1 if the current mode is not stereo-capable or the demod doesn't expose blend.
+   * Stereo metric for the active path (0 = mono, 1 = full stereo).
+   *
+   * IQ path: the local demodulator knows best — WFM exposes the pilot-derived
+   * blend, C-QUAM its lock level.
+   * Opus path: the server demodulates, so the client demodulator is idle; use
+   * the L/R width measured from the decoded audio instead.
+   * Returns -1 when nothing is known yet (the UI renders "n/a").
    */
   getStereoBlend(): number {
     const d = this.demodulator as any;
-    if (d?.blendFactor !== undefined) return d.blendFactor as number;
-    // WFM demod wraps PilotPLL internally; blendFactor exposed via getter
+    if (!this.isOpusIqCodec()) {
+      if (typeof d?.blendFactor === 'number') return d.blendFactor;
+      if (typeof d?.getLockLevel === 'function') return d.getLockLevel();
+      if (typeof d?.lockLevel === 'number') return d.lockLevel;
+    }
+    if (this.stereoWidthValid) return this.stereoWidth;
+    if (typeof d?.blendFactor === 'number') return d.blendFactor;
+    if (typeof d?.getLockLevel === 'function') return d.getLockLevel();
+    if (typeof d?.lockLevel === 'number') return d.lockLevel;
     return -1;
   }
 
-  /** Carrier/PLL lock confidence for synchronous demodulators (SAM). */
+  private isOpusIqCodec(): boolean {
+    const c = store.iqCodec();
+    return c === 'opus' || c === 'opus-hq' || c === 'opus-lo';
+  }
+
+  /**
+   * Measure stereo width from decoded L/R audio: side/mid RMS ratio, scaled so
+   * typical stereo lands near 1. This works for WFM and C-QUAM and does not
+   * depend on which side demodulated the signal.
+   */
+  private updateStereoWidth(left: Float32Array, right: Float32Array): void {
+    const n = Math.min(left.length, right.length);
+    if (n === 0) return;
+    // Subsample: the metric is a slow indicator, not an audio signal.
+    const step = Math.max(1, Math.floor(n / 512));
+    let mid = 0;
+    let side = 0;
+    for (let i = 0; i < n; i += step) {
+      const m = (left[i] + right[i]) * 0.5;
+      const s = (left[i] - right[i]) * 0.5;
+      mid += m * m;
+      side += s * s;
+    }
+    const ratio = Math.sqrt(side / (mid + side + 1e-12));
+    const target = Math.min(1, ratio * 2);
+    this.stereoWidth += 0.15 * (target - this.stereoWidth);
+    this.stereoWidthValid = true;
+  }
+
+  private decayStereoWidth(): void {
+    this.stereoWidth += 0.15 * (0 - this.stereoWidth);
+    this.stereoWidthValid = true;
+  }
+
+  /** Carrier/PLL lock confidence for synchronous demodulators (SAM/C-QUAM). */
   getSyncLock(): number {
     const d = this.demodulator as any;
-    if (typeof d?.getLockLevel === 'function') return d.getLockLevel() as number;
+    // On the Opus path the server demodulates; the client demodulator is idle,
+    // so any value here would be a lie (0% even when locked).
+    if (this.isOpusIqCodec()) return -1;
+    if (typeof d?.getLockLevel === 'function') return d.getLockLevel();
+    if (typeof d?.lockLevel === 'number') return d.lockLevel;
     return -1;
   }
 

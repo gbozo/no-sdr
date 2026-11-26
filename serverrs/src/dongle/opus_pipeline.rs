@@ -81,6 +81,15 @@ pub struct OpusPipeline {
     rds_decoder: Option<RdsDecoder>,
     rds_last_json: Option<Vec<u8>>,
 
+    /// Samples left in the short fade-in that hides the demodulator transient
+    /// after a user retune.
+    retune_fade_in_remaining: usize,
+    retune_fade_in_len: usize,
+    /// Samples left in the fade-out that is applied to the old frequency before
+    /// the deferred NCO switch (discrete retunes on the Opus path).
+    retune_fade_out_remaining: usize,
+    retune_fade_out_len: usize,
+
     capture_ring: Vec<f32>,
     capture_pos: usize,
     capture_len: usize,
@@ -188,6 +197,10 @@ impl OpusPipeline {
             pending_channels: 0,
             rds_decoder,
             rds_last_json: None,
+            retune_fade_in_remaining: 0,
+            retune_fade_in_len: 0,
+            retune_fade_out_remaining: 0,
+            retune_fade_out_len: 0,
             capture_ring: vec![0.0; capture_cap],
             capture_pos: 0,
             capture_len: 0,
@@ -215,7 +228,7 @@ impl OpusPipeline {
         }
 
         // Demodulate.
-        let audio = self.demodulator.process(&self.complex_buf);
+        let mut audio = self.demodulator.process(&self.complex_buf);
         if audio.is_empty() {
             return Vec::new();
         }
@@ -348,7 +361,46 @@ impl OpusPipeline {
                 }
             }
         }
-        let audio_for_opus: &[f32] = scratch.as_deref().unwrap_or(&audio);
+        let audio_for_opus: &mut [f32] = match scratch.as_deref_mut() {
+            Some(buf) => buf,
+            None => audio.as_mut_slice(),
+        };
+
+        // Retune envelope. A discrete jump on the Opus path is deferred: the
+        // old frequency fades out first, then the NCO is switched and the new
+        // frequency fades in. This makes the join through the 60 ms encoder
+        // look like a crossfade instead of a step.
+        if !audio_for_opus.is_empty() {
+            let ch = if demod_is_stereo && self.channels == 2 { 2 } else { 1 };
+            let frames = audio_for_opus.len() / ch;
+            if self.retune_fade_out_remaining > 0 {
+                let total = self.retune_fade_out_len.max(1) as f32;
+                let mut remaining = self.retune_fade_out_remaining;
+                for f in 0..frames {
+                    let gain = remaining as f32 / total;
+                    if remaining > 0 {
+                        remaining -= 1;
+                    }
+                    for c in 0..ch {
+                        audio_for_opus[f * ch + c] *= gain;
+                    }
+                }
+                self.retune_fade_out_remaining = remaining;
+            } else if self.retune_fade_in_remaining > 0 {
+                let total = self.retune_fade_in_len.max(1) as f32;
+                let mut remaining = self.retune_fade_in_remaining;
+                for f in 0..frames {
+                    let gain = 1.0 - (remaining as f32 / total);
+                    if remaining > 0 {
+                        remaining -= 1;
+                    }
+                    for c in 0..ch {
+                        audio_for_opus[f * ch + c] *= gain;
+                    }
+                }
+                self.retune_fade_in_remaining = remaining;
+            }
+        }
 
         let out_len = audio_for_opus.len();
         if out_len == 0 {
@@ -374,7 +426,7 @@ impl OpusPipeline {
             }
             self.capture_len = (self.capture_len + frames).min(cap);
         } else {
-            for &sample in audio_for_opus {
+            for &sample in audio_for_opus.iter() {
                 self.capture_ring[pos] = sample;
                 pos += 1;
                 if pos == cap {
@@ -388,7 +440,7 @@ impl OpusPipeline {
         // float32 → int16 PCM (reused buffer).
         self.pcm_buf.clear();
         self.pcm_buf.reserve(out_len);
-        for &sample in audio_for_opus {
+        for &sample in audio_for_opus.iter() {
             let mut v = sample * 32767.0;
             if v > 32767.0 {
                 v = 32767.0;
@@ -527,6 +579,10 @@ impl OpusPipeline {
             self.rds_decoder = Some(RdsDecoder::new(self.sample_rate as f64));
         }
         self.rds_last_json = None;
+        self.retune_fade_in_remaining = 0;
+        self.retune_fade_in_len = 0;
+        self.retune_fade_out_remaining = 0;
+        self.retune_fade_out_len = 0;
         self.capture_pos = 0;
         self.capture_len = 0;
         self.upsample_accum = 0.0;
@@ -553,6 +609,34 @@ impl OpusPipeline {
         (0..avail)
             .map(|i| self.capture_ring[(start + i) % self.capture_cap])
             .collect()
+    }
+
+    /// Starts fading the current (old-frequency) audio to silence. The caller
+    /// switches the NCO once [`Self::fade_out_finished`] returns true.
+    pub fn begin_fade_out(&mut self, ms: f64) {
+        let len = ((ms.max(0.0) / 1000.0) * 48_000.0).round() as usize;
+        self.retune_fade_out_len = len.max(1);
+        self.retune_fade_out_remaining = self.retune_fade_out_len;
+        self.retune_fade_in_remaining = 0;
+    }
+
+    /// True while a fade-out is still being emitted.
+    pub fn fade_out_active(&self) -> bool {
+        self.retune_fade_out_remaining > 0
+    }
+
+    /// True once the old-frequency fade-out has been fully emitted.
+    pub fn fade_out_finished(&self) -> bool {
+        self.retune_fade_out_len > 0 && self.retune_fade_out_remaining == 0
+    }
+
+    /// Starts fading the new-frequency audio in from silence.
+    pub fn begin_fade_in(&mut self, ms: f64) {
+        let len = ((ms.max(0.0) / 1000.0) * 48_000.0).round() as usize;
+        self.retune_fade_out_len = 0;
+        self.retune_fade_out_remaining = 0;
+        self.retune_fade_in_len = len.max(1);
+        self.retune_fade_in_remaining = self.retune_fade_in_len;
     }
 
     pub fn close(&mut self) {

@@ -336,13 +336,16 @@ pub fn pack_fft_deflate_message(
 }
 
 /// Pack raw IQ samples with a self-describing header:
-/// `[0x02][u32 sampleRate][u8 channels=2][u8 reserved=0][i16 samples...]`.
-pub fn pack_iq_message(samples: &[i16], sample_rate: u32) -> Vec<u8> {
+/// `[0x02][u32 sampleRate][u8 channels=2][u8 flags][i16 samples...]`.
+///
+/// `flags` bit 0 marks the first IQ frame produced after a user retune, so the
+/// client can fade the demodulated audio in at exactly the new frequency.
+pub fn pack_iq_message(samples: &[i16], sample_rate: u32, retune: bool) -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 + 6 + samples.len() * 2);
     buf.push(MSG_IQ);
     buf.extend_from_slice(&sample_rate.to_le_bytes());
     buf.push(2); // always 2-channel interleaved I/Q
-    buf.push(0); // reserved
+    buf.push(if retune { 1 } else { 0 });
     for s in samples {
         buf.extend_from_slice(&s.to_le_bytes());
     }
@@ -350,14 +353,19 @@ pub fn pack_iq_message(samples: &[i16], sample_rate: u32) -> Vec<u8> {
 }
 
 /// Pack ADPCM-compressed IQ data:
-/// `[0x09][u32 sampleCount][u32 sampleRate][u8 channels=2][u8 0][adpcm]`.
-pub fn pack_iq_adpcm_message(adpcm: &[u8], sample_count: u32, sample_rate: u32) -> Vec<u8> {
+/// `[0x09][u32 sampleCount][u32 sampleRate][u8 channels=2][u8 flags][adpcm]`.
+pub fn pack_iq_adpcm_message(
+    adpcm: &[u8],
+    sample_count: u32,
+    sample_rate: u32,
+    retune: bool,
+) -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 + 10 + adpcm.len());
     buf.push(MSG_IQ_ADPCM);
     buf.extend_from_slice(&sample_count.to_le_bytes());
     buf.extend_from_slice(&sample_rate.to_le_bytes());
     buf.push(2); // always 2-channel interleaved I/Q
-    buf.push(0); // reserved
+    buf.push(if retune { 1 } else { 0 });
     buf.extend_from_slice(adpcm);
     buf
 }
@@ -435,7 +443,7 @@ mod tests {
 
     #[test]
     fn pack_iq_adpcm() {
-        let msg = pack_iq_adpcm_message(&[0xAB, 0xCD, 0xEF, 0x12], 1024, 48000);
+        let msg = pack_iq_adpcm_message(&[0xAB, 0xCD, 0xEF, 0x12], 1024, 48000, false);
         assert_eq!(msg[0], MSG_IQ_ADPCM);
         assert_eq!(u32::from_le_bytes([msg[1], msg[2], msg[3], msg[4]]), 1024);
         assert_eq!(u32::from_le_bytes([msg[5], msg[6], msg[7], msg[8]]), 48000);
@@ -443,6 +451,12 @@ mod tests {
         assert_eq!(msg[10], 0);
         assert_eq!(&msg[11..], &[0xAB, 0xCD, 0xEF, 0x12]);
         assert_eq!(msg.len(), 1 + 10 + 4);
+    }
+
+    #[test]
+    fn pack_iq_adpcm_retune_flag() {
+        let msg = pack_iq_adpcm_message(&[0xAB], 128, 48000, true);
+        assert_eq!(msg[10], 1);
     }
 
     #[test]
@@ -470,7 +484,7 @@ mod tests {
     #[test]
     fn pack_iq() {
         let samples = [100i16, -200, 32767, -32768, 0];
-        let msg = pack_iq_message(&samples, 240_000);
+        let msg = pack_iq_message(&samples, 240_000, false);
         assert_eq!(msg[0], MSG_IQ);
         assert_eq!(
             u32::from_le_bytes([msg[1], msg[2], msg[3], msg[4]]),

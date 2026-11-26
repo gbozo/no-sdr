@@ -9,6 +9,17 @@
 import { Component, For, Show, createSignal, createEffect, onMount, onCleanup } from 'solid-js';
 import { store } from '../store/index.js';
 import { engine } from '../engine/sdr-engine.js';
+import {
+  analyse,
+  computeModQuality,
+  modGrade,
+  clamp,
+  type AnalysisConfig,
+  type AnalysisStats,
+  type FrameCoverage,
+  type Marker,
+  type ModQuality,
+} from '../engine/analysis.js';
 import type { AnalysisScopeFrame } from '~/shared';
 
 const TRACE_MODES: { id: TraceMode; label: string; title: string }[] = [
@@ -21,87 +32,9 @@ const TRACE_MODES: { id: TraceMode; label: string; title: string }[] = [
 const MAX_WATERFALL_FRAMES = 140;
 const MAX_LEVEL_FRAMES = 180;
 
-interface Marker {
-  hz: number;
-  offsetHz: number;
-  db: number;
-}
-
-interface AnalysisStats {
-  winLowHz: number;
-  winHighHz: number;
-  spanHz: number;
-  hzPerBin: number;
-  start: number;
-  end: number;
-  bins: Float32Array;
-  peakDb: number;
-  peakHz: number;
-  minDb: number;
-  minHz: number;
-  noiseFloorDb: number;
-  meanDb: number;
-  snrDb: number;
-  crestDb: number;
-  bw3DbHz: number;
-  peaks: Marker[];
-  lows: Marker[];
-  fullPeakDb: number;
-  fullPeakHz: number;
-  fullLowDb: number;
-  fullLowHz: number;
-  measureBwHz: number;
-  chanPowerDb: number;
-  chanNoiseDb: number;
-  chanSnrDb: number;
-  occupiedBwHz: number;
-  carrierDb: number;
-  carrierHz: number;
-  carrierOffsetHz: number;
-  carrierToNoiseDb: number;
-  usbPowerDb: number;
-  lsbPowerDb: number;
-  sbBalancePct: number;
-  amDepthPct: number;
-}
-
-interface AnalysisConfig {
-  sampleRate: number;
-  centerHz: number;
-  tuneHz: number;
-  bandwidth: number;
-  measureBwHz: number;
-}
-
 interface LevelPoint {
   peak: number;
   floor: number;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function dbToLinear(db: number): number {
-  return Math.pow(10, db / 10);
-}
-
-function linearToDb(power: number): number {
-  return 10 * Math.log10(Math.max(power, 1e-30));
-}
-
-function sumLinearPower(frame: Float32Array, start: number, end: number): number {
-  let power = 0;
-  for (let i = Math.max(0, start); i < Math.min(frame.length, end); i++) {
-    if (Number.isFinite(frame[i])) power += dbToLinear(frame[i]);
-  }
-  return power;
-}
-
-/** Absolute-Hz coverage of a secondary-FFT frame. */
-interface FrameCoverage {
-  lowHz: number;
-  spanHz: number;
 }
 
 /** Convert a u8 secondary-scope frame to dB bins. */
@@ -170,229 +103,6 @@ function accentColor(): string {
   return getComputedStyle(document.documentElement).getPropertyValue('--sdr-accent').trim() || '#4aa3ff';
 }
 
-function analyse(
-  frame: Float32Array,
-  cfg: AnalysisConfig,
-  spanHz: number,
-  coverage?: FrameCoverage | null,
-): AnalysisStats | null {
-  const frameLen = frame.length;
-  if (frameLen === 0) return null;
-  if (!coverage && cfg.sampleRate <= 0) return null;
-
-  const hzPerBin = coverage && coverage.spanHz > 0
-    ? coverage.spanHz / frameLen
-    : cfg.sampleRate / frameLen;
-  const frameLow = coverage
-    ? coverage.lowHz
-    : cfg.centerHz - cfg.sampleRate / 2;
-  // A secondary frame defines the exact demodulator passband (one-sided for
-  // USB/LSB). Without one, fall back to a symmetric window around the tune.
-  const wantedLow = coverage ? coverage.lowHz : cfg.tuneHz - spanHz / 2;
-  const wantedHigh = coverage
-    ? coverage.lowHz + coverage.spanHz
-    : cfg.tuneHz + spanHz / 2;
-  const start = clamp(Math.floor((wantedLow - frameLow) / hzPerBin), 0, frameLen - 1);
-  const end = clamp(Math.ceil((wantedHigh - frameLow) / hzPerBin), start + 1, frameLen);
-  const lowHz = frameLow + start * hzPerBin;
-  const highHz = frameLow + end * hzPerBin;
-  const bins = frame.slice(start, end);
-  const n = bins.length;
-  if (n === 0) return null;
-
-  let peakDb = -Infinity;
-  let peakIdx = 0;
-  let lowDb = Infinity;
-  let lowIdx = 0;
-  let sum = 0;
-  let finite = 0;
-  for (let i = 0; i < n; i++) {
-    const v = bins[i];
-    if (!Number.isFinite(v)) continue;
-    sum += v;
-    finite++;
-    if (v > peakDb) { peakDb = v; peakIdx = i; }
-    if (v < lowDb) { lowDb = v; lowIdx = i; }
-  }
-  if (finite === 0) return null;
-
-  // Noise reference from the whole sampled span. Using the analysis window
-  // alone biases the noise floor upward when the signal fills the window.
-  const noiseSamples: number[] = [];
-  const noiseStride = Math.max(1, Math.floor(frameLen / 2048));
-  for (let i = 0; i < frameLen; i += noiseStride) {
-    if (Number.isFinite(frame[i])) noiseSamples.push(frame[i]);
-  }
-  noiseSamples.sort((a, b) => a - b);
-  const noiseFloorDb = noiseSamples.length
-    ? noiseSamples[Math.floor(noiseSamples.length / 2)]
-    : -120;
-  const meanDb = sum / finite;
-
-  const binHz = (index: number) => lowHz + (index + 0.5) * hzPerBin;
-  const marker = (index: number, db: number): Marker => {
-    const hz = binHz(index);
-    return { hz, offsetHz: hz - cfg.tuneHz, db };
-  };
-
-  const peaks: Marker[] = [];
-  const lows: Marker[] = [];
-  const peakThreshold = noiseFloorDb + 6;
-  const lowThreshold = noiseFloorDb - 6;
-  for (let i = 1; i < n - 1; i++) {
-    const v = bins[i];
-    if (!Number.isFinite(v)) continue;
-    if (v >= bins[i - 1] && v > bins[i + 1] && v >= peakThreshold) {
-      peaks.push(marker(i, v));
-    }
-    if (v <= bins[i - 1] && v < bins[i + 1] && v <= lowThreshold) {
-      lows.push(marker(i, v));
-    }
-  }
-  peaks.sort((a, b) => b.db - a.db);
-  lows.sort((a, b) => a.db - b.db);
-  peaks.splice(4);
-  lows.splice(4);
-  if (peaks.length === 0) peaks.push(marker(peakIdx, peakDb));
-  if (lows.length === 0) lows.push(marker(lowIdx, lowDb));
-
-  // −3 dB bandwidth around the strongest bin, clamped to the noise floor.
-  const edge = Math.max(noiseFloorDb + 1, peakDb - 3);
-  let left = peakIdx;
-  let right = peakIdx;
-  while (left > 0 && Number.isFinite(bins[left - 1]) && bins[left - 1] >= edge) left--;
-  while (right < n - 1 && Number.isFinite(bins[right + 1]) && bins[right + 1] >= edge) right++;
-  const bw3DbHz = Math.max(hzPerBin, (right - left + 1) * hzPerBin);
-
-  // Master peak/low over the full sampled span (edge bins skipped).
-  const skip = Math.max(1, Math.floor(frameLen * 0.01));
-  let fullPeakDb = -Infinity;
-  let fullPeakIdx = 0;
-  let fullLowDb = Infinity;
-  let fullLowIdx = 0;
-  for (let i = skip; i < frameLen - skip; i++) {
-    const v = frame[i];
-    if (!Number.isFinite(v)) continue;
-    if (v > fullPeakDb) { fullPeakDb = v; fullPeakIdx = i; }
-    if (v < fullLowDb) { fullLowDb = v; fullLowIdx = i; }
-  }
-  const fullBinHz = (index: number) => frameLow + (index + 0.5) * hzPerBin;
-
-  // Measurement window (independent of the analysis zoom).
-  const measHalfBins = Math.max(1, Math.round(cfg.measureBwHz / 2 / hzPerBin));
-  const tuneIdx = Math.round((cfg.tuneHz - frameLow) / hzPerBin);
-  const measStart = clamp(tuneIdx - measHalfBins, 0, frameLen - 1);
-  const measEnd = clamp(tuneIdx + measHalfBins + 1, measStart + 1, frameLen);
-  const chanPower = sumLinearPower(frame, measStart, measEnd);
-  const chanPowerDb = linearToDb(chanPower);
-  const chanNoiseDb = linearToDb(dbToLinear(noiseFloorDb) * (measEnd - measStart));
-  const chanSnrDb = chanPowerDb - chanNoiseDb;
-
-  // 99 % occupied bandwidth inside the analysis window.
-  let totalPower = 0;
-  for (let i = 0; i < n; i++) {
-    if (Number.isFinite(bins[i])) totalPower += dbToLinear(bins[i]);
-  }
-  let accum = 0;
-  let occLow = 0;
-  let occHigh = n - 1;
-  for (let i = 0; i < n; i++) {
-    if (!Number.isFinite(bins[i])) continue;
-    accum += dbToLinear(bins[i]);
-    if (accum >= totalPower * 0.005) { occLow = i; break; }
-  }
-  accum = 0;
-  for (let i = 0; i < n; i++) {
-    if (!Number.isFinite(bins[i])) continue;
-    accum += dbToLinear(bins[i]);
-    if (accum >= totalPower * 0.995) { occHigh = i; break; }
-  }
-  const occupiedBwHz = Math.max(hzPerBin, (occHigh - occLow + 1) * hzPerBin);
-
-  // AM/AMS carrier search around the tuned frequency.
-  const carrierSearchHz = Math.max(500, Math.min(5000, cfg.bandwidth / 2 || 2000));
-  const carrierStart = clamp(
-    Math.floor((cfg.tuneHz - carrierSearchHz - frameLow) / hzPerBin),
-    0,
-    frameLen - 1,
-  );
-  const carrierEnd = clamp(
-    Math.ceil((cfg.tuneHz + carrierSearchHz - frameLow) / hzPerBin),
-    carrierStart + 1,
-    frameLen,
-  );
-  let carrierDb = -Infinity;
-  let carrierIdx = carrierStart;
-  for (let i = carrierStart; i < carrierEnd; i++) {
-    if (Number.isFinite(frame[i]) && frame[i] > carrierDb) {
-      carrierDb = frame[i];
-      carrierIdx = i;
-    }
-  }
-  const carrierHz = frameLow + (carrierIdx + 0.5) * hzPerBin;
-  const carrierPower = Number.isFinite(carrierDb) ? dbToLinear(carrierDb) : 0;
-
-  // Upper/lower sideband power inside the demod bandwidth, excluding the
-  // carrier region. Used for AM depth and sideband balance estimates.
-  const sbInnerHz = Math.max(300, hzPerBin * 3);
-  const sbOuterHz = Math.max(sbInnerHz + hzPerBin, cfg.bandwidth / 2 || 3000);
-  const upperPower = sumLinearPower(
-    frame,
-    Math.floor((cfg.tuneHz + sbInnerHz - frameLow) / hzPerBin),
-    Math.ceil((cfg.tuneHz + sbOuterHz - frameLow) / hzPerBin),
-  );
-  const lowerPower = sumLinearPower(
-    frame,
-    Math.floor((cfg.tuneHz - sbOuterHz - frameLow) / hzPerBin),
-    Math.ceil((cfg.tuneHz - sbInnerHz - frameLow) / hzPerBin),
-  );
-  const usbPowerDb = linearToDb(upperPower);
-  const lsbPowerDb = linearToDb(lowerPower);
-  const sbMax = Math.max(upperPower, lowerPower);
-  const sbBalancePct = sbMax > 0 ? (Math.min(upperPower, lowerPower) / sbMax) * 100 : 0;
-  const amDepthPct = carrierPower > 0
-    ? clamp(Math.sqrt(Math.max(0, (2 * (upperPower + lowerPower)) / carrierPower)) * 100, 0, 200)
-    : 0;
-
-  return {
-    winLowHz: lowHz,
-    winHighHz: highHz,
-    spanHz: highHz - lowHz,
-    hzPerBin,
-    start,
-    end,
-    bins,
-    peakDb,
-    peakHz: binHz(peakIdx),
-    minDb: lowDb,
-    minHz: binHz(lowIdx),
-    noiseFloorDb,
-    meanDb,
-    snrDb: peakDb - noiseFloorDb,
-    crestDb: peakDb - meanDb,
-    bw3DbHz,
-    peaks,
-    lows,
-    fullPeakDb,
-    fullPeakHz: fullBinHz(fullPeakIdx),
-    fullLowDb,
-    fullLowHz: fullBinHz(fullLowIdx),
-    measureBwHz: (measEnd - measStart) * hzPerBin,
-    chanPowerDb,
-    chanNoiseDb,
-    chanSnrDb,
-    occupiedBwHz,
-    carrierDb,
-    carrierHz,
-    carrierOffsetHz: carrierHz - cfg.tuneHz,
-    carrierToNoiseDb: carrierDb - noiseFloorDb,
-    usbPowerDb,
-    lsbPowerDb,
-    sbBalancePct,
-    amDepthPct,
-  };
-}
-
 type TraceMode = 'live' | 'avg' | 'min' | 'max';
 
 interface EventEntry {
@@ -435,12 +145,18 @@ const SignalAnalysis: Component = () => {
   const [historyCount, setHistoryCount] = createSignal(0);
   const [syncLock, setSyncLock] = createSignal(-1);
   const [stereoBlend, setStereoBlend] = createSignal(-1);
+  const [modQuality, setModQuality] = createSignal<ModQuality | null>(null);
+  let modQualityHold = 0;
+  let modQualitySeen = false;
 
   let history: Float32Array[] = [];
   let levelHistory: LevelPoint[] = [];
   let traceData: Float32Array | null = null;
   let lastFrame: Float32Array | null = null;
   let lastCoverage: FrameCoverage | null = null;
+  // Wide (main-FFT) frame captured when Freeze is pressed, so the splatter /
+  // opposite-sideband half of the meter stays frozen while scrubbing history.
+  let frozenWide: Float32Array | null = null;
   let lastScopeFrame: AnalysisScopeFrame | null = null;
   let lastKey = '';
   let waterfallKey = '';
@@ -464,6 +180,17 @@ const SignalAnalysis: Component = () => {
 
   const fmtLevel = (db: number): string =>
     `${(db + dbmOffset()).toFixed(1)} ${dbmOffset() === 0 ? 'dB' : 'dBm'}`;
+
+  const modMode = (): boolean =>
+    store.mode() === 'am' || store.mode() === 'sam' || store.mode() === 'am-stereo'
+    || store.mode() === 'usb' || store.mode() === 'lsb';
+  const modTone = (score: number): string =>
+    score >= 80 ? 'text-green' : score >= 60 ? 'text-amber' : 'text-red';
+  const modBar = (score: number): string =>
+    score >= 80 ? 'bg-green' : score >= 60 ? 'bg-amber' : 'bg-red';
+  const modChips = (q: ModQuality): string => q.kind === 'am'
+    ? `Depth ${(q.depthPct ?? 0).toFixed(0)}% · Splatter ${q.splatterDb.toFixed(0)} dB · Sym ${(q.symmetryPct ?? 0).toFixed(0)}% · C/N ${q.snrDb.toFixed(0)} dB`
+    : `Opp SB ${(q.oppSbDb ?? 0).toFixed(0)} dB · Carrier ${(q.carrierSuppDb ?? 0).toFixed(0)} dB · BW ${fmtSpan(q.bwHz ?? 0)} · C/N ${q.snrDb.toFixed(0)} dB`;
 
   const markerReadout = () => {
     const s = stats();
@@ -980,6 +707,47 @@ const SignalAnalysis: Component = () => {
     ctx.stroke();
   };
 
+  const updateModQuality = (s: AnalysisStats, cfg: AnalysisConfig, live: boolean): void => {
+    const mode = store.mode();
+    const isMod = mode === 'am' || mode === 'sam' || mode === 'am-stereo' || mode === 'usb' || mode === 'lsb';
+    if (!isMod) {
+      modQualitySeen = false;
+      modQualityHold = 0;
+      setModQuality(null);
+      return;
+    }
+    // Wide frame from the main FFT (full dongle span): the analysis scope is
+    // clipped to the demod filter (one-sided for SSB), so it cannot see the
+    // opposite sideband or far-out splatter.
+    const wideFrame = live ? engine.getLatestFftFrame() : frozenWide;
+    const wideSpan = Math.max(cfg.bandwidth * 8, 24_000);
+    const wide = wideFrame ? analyse(wideFrame, cfg, wideSpan) : null;
+    const q = computeModQuality(s, wide ?? s, wide !== null, mode, cfg.tuneHz, cfg.bandwidth);
+    if (!q) {
+      modQualitySeen = false;
+      modQualityHold = 0;
+      setModQuality(null);
+      return;
+    }
+    // Frozen/history frame: show exactly what that frame contains. Live:
+    // fast attack / slow release, the way a modulation meter behaves on
+    // speech peaks.
+    if (!live) {
+      modQualityHold = q.score;
+      modQualitySeen = true;
+      setModQuality(q);
+      return;
+    }
+    if (!modQualitySeen) {
+      modQualityHold = q.score;
+      modQualitySeen = true;
+    } else {
+      const alpha = q.score > modQualityHold ? 0.35 : 0.04;
+      modQualityHold += alpha * (q.score - modQualityHold);
+    }
+    setModQuality({ ...q, score: modQualityHold, grade: modGrade(modQualityHold) });
+  };
+
   const renderFrame = (
     frame: Float32Array,
     pushHistory: boolean,
@@ -1004,6 +772,8 @@ const SignalAnalysis: Component = () => {
     setStats(s);
     setSyncLock(engine.getSyncLock());
     setStereoBlend(engine.getStereoBlend());
+    if (pushHistory) updateModQuality(s, cfg, true);
+    else if (frozen()) updateModQuality(s, cfg, false);
     if (pushHistory) {
       levelHistory.push({ peak: s.peakDb, floor: s.noiseFloorDb });
       if (levelHistory.length > MAX_LEVEL_FRAMES) levelHistory.shift();
@@ -1120,6 +890,9 @@ const SignalAnalysis: Component = () => {
         `Carrier: ${fmtLevel(s.carrierDb)} @ ${fmtFreq(s.carrierHz)} (Δ ${fmtOffset(s.carrierOffsetHz)})  C/N ${s.carrierToNoiseDb.toFixed(1)} dB`,
         `AM depth (est.): ${s.amDepthPct.toFixed(1)}%  Sideband balance: ${s.sbBalancePct.toFixed(1)}%  USB ${s.usbPowerDb.toFixed(1)} dB  LSB ${s.lsbPowerDb.toFixed(1)} dB`,
         `Activity: ${activityPct().toFixed(1)}%  Peak drift: ${fmtOffset(driftHz())}`,
+        ...(modQuality()
+          ? [`Mod quality: ${modQuality()!.score.toFixed(0)}% (${modQuality()!.grade}) — ${modChips(modQuality()!)}`]
+          : []),
         `Master peak: ${s.fullPeakDb.toFixed(1)} dB @ ${fmtFreq(s.fullPeakHz)}`,
         `Master low: ${s.fullLowDb.toFixed(1)} dB @ ${fmtFreq(s.fullLowHz)}`,
         'Peaks:',
@@ -1175,6 +948,22 @@ const SignalAnalysis: Component = () => {
         ['marker', 'A', String(Math.round(store.tunedFrequency() + markerA())), markerA().toFixed(0), (markerReadout()?.aDb ?? 0).toFixed(2), ''],
         ['marker', 'B', String(Math.round(store.tunedFrequency() + markerB())), markerB().toFixed(0), (markerReadout()?.bDb ?? 0).toFixed(2), ''],
       );
+      const mq = modQuality();
+      if (mq) {
+        rows.push(
+          ['measurement', 'mod_quality_pct', '', '', '', mq.score.toFixed(1)],
+          ['measurement', 'mod_grade', '', '', '', mq.grade],
+          ['measurement', 'splatter_db', '', '', '', mq.splatterDb.toFixed(1)],
+        );
+        if (mq.kind === 'am') {
+          rows.push(['measurement', 'am_depth_held_pct', '', '', '', (mq.depthPct ?? 0).toFixed(1)]);
+        } else {
+          rows.push(
+            ['measurement', 'opp_sb_db', '', '', '', (mq.oppSbDb ?? 0).toFixed(1)],
+            ['measurement', 'carrier_supp_db', '', '', '', (mq.carrierSuppDb ?? 0).toFixed(1)],
+          );
+        }
+      }
       for (const p of [...s.peaks, ...s.lows]) {
         rows.push(['peak', p.db > s.noiseFloorDb ? 'peak' : 'low', String(Math.round(p.hz)), p.offsetHz.toFixed(0), p.db.toFixed(2), '']);
       }
@@ -1330,10 +1119,16 @@ const SignalAnalysis: Component = () => {
     store.centerFrequency();
     store.sampleRate();
     store.bandwidth();
+    store.mode();
     store.waterfallMin();
     store.waterfallMax();
-    if (isFrozen && history.length > 0) renderHistory();
-    else if (lastFrame) renderFrame(lastFrame, false, lastCoverage);
+    if (isFrozen) {
+      if (!frozenWide) frozenWide = engine.getLatestFftFrame()?.slice() ?? null;
+      if (history.length > 0) renderHistory();
+    } else {
+      frozenWide = null;
+      if (lastFrame) renderFrame(lastFrame, false, lastCoverage);
+    }
   });
 
   return (
@@ -1506,27 +1301,57 @@ const SignalAnalysis: Component = () => {
             />
           </div>
 
+          {/* Modulation quality meter (AM/SSB amateurs) */}
+          <Show when={modMode()}>
+            <div
+              class="flex items-center gap-3 px-2 py-1.5 border-t border-border/40 shrink-0 bg-black/15"
+              title="Estimated from the received spectrum: depth, splatter, carrier/sideband purity and SNR. Use a steady tone or two-tone test for repeatable readings; widen the filter to reveal splatter."
+            >
+              <span class="text-[9px] uppercase tracking-wider text-text-dim">Mod Quality</span>
+              <Show when={modQuality()} fallback={<span class="text-[10px] text-text-dim">no signal</span>}>
+                {(q) => (
+                  <>
+                    <span class={`text-[17px] leading-none font-mono font-bold tabular-nums ${modTone(q().score)}`}>
+                      {q().score.toFixed(0)}<span class="text-[9px]">%</span>
+                    </span>
+                    <span class={`text-[9px] px-1 py-px rounded-sm border border-border/50 ${modTone(q().score)}`}>
+                      {q().grade}
+                    </span>
+                    <div class="flex-1 min-w-[60px] h-1.5 rounded-sm bg-black/50 overflow-hidden">
+                      <div class={`h-full ${modBar(q().score)}`} style={{ width: `${q().score.toFixed(0)}%` }} />
+                    </div>
+                    <span class="text-[9px] font-mono text-text-dim whitespace-nowrap hidden xl:inline">
+                      {modChips(q())}
+                    </span>
+                  </>
+                )}
+              </Show>
+            </div>
+          </Show>
+
           {/* Mode-specific analysis */}
           <Show when={store.mode() === 'am' || store.mode() === 'sam' || store.mode() === 'am-stereo'}>
             <div class="grid grid-cols-5 gap-px bg-border/40 border-t border-border/40 shrink-0">
               <Stat label="Carrier" value={stats() ? fmtFreqCompact(stats()!.carrierHz) : '—'} sub={stats() ? fmtLevel(stats()!.carrierDb) : undefined} title="Strongest carrier near the tuned frequency" tone="text-amber" />
               <Stat label="Carrier Δ" value={stats() ? fmtOffset(stats()!.carrierOffsetHz) : '—'} title="Carrier offset from the tuned frequency" />
-              <Stat label="AM Depth" value={stats() ? `${stats()!.amDepthPct.toFixed(0)}%` : '—'} title="Estimated AM modulation depth from sideband/carrier power" tone="text-cyan" />
-              <Stat label="SB Balance" value={stats() ? `${stats()!.sbBalancePct.toFixed(0)}%` : '—'} title="Upper/lower sideband balance (100% = symmetric)" />
+              <Stat label="AM Depth" value={modQuality()?.depthPct !== undefined ? `${(modQuality()!.depthPct ?? 0).toFixed(0)}%` : stats() ? `${stats()!.amDepthPct.toFixed(0)}%` : '—'} title="Estimated AM modulation depth from sideband/carrier power, measured around the detected carrier" tone="text-cyan" />
+              <Stat label="SB Balance" value={modQuality()?.symmetryPct !== undefined ? `${(modQuality()!.symmetryPct ?? 0).toFixed(0)}%` : stats() ? `${stats()!.sbBalancePct.toFixed(0)}%` : '—'} title="Upper/lower sideband balance around the carrier (100% = symmetric)" />
               <Stat
-                label={store.mode() === 'sam' ? 'Sync Lock' : 'Mode'}
-                value={store.mode() === 'sam'
+                label={store.mode() === 'sam' ? 'Sync Lock' : store.mode() === 'am-stereo' ? 'C-QUAM Lock' : 'Mode'}
+                value={store.mode() === 'sam' || store.mode() === 'am-stereo'
                   ? (syncLock() >= 0 ? `${(syncLock() * 100).toFixed(0)}%` : 'n/a')
                   : store.mode().toUpperCase()}
-                title="Synchronous AM PLL lock confidence"
-                tone={store.mode() === 'sam' && syncLock() >= 0.6 ? 'text-cyan' : undefined}
+                title={store.mode() === 'am-stereo'
+                  ? 'C-QUAM carrier/pilot lock confidence'
+                  : 'Synchronous AM PLL lock confidence'}
+                tone={(store.mode() === 'sam' || store.mode() === 'am-stereo') && syncLock() >= 0.6 ? 'text-cyan' : undefined}
               />
             </div>
           </Show>
 
           <Show when={store.mode() === 'wfm' || store.mode() === 'am-stereo'}>
             <div class="grid grid-cols-4 gap-px bg-border/40 border-t border-border/40 shrink-0">
-              <Stat label="Stereo Blend" value={stereoBlend() >= 0 ? `${(stereoBlend() * 100).toFixed(0)}%` : 'n/a'} title="Pilot-derived stereo blend" tone="text-cyan" />
+              <Stat label="Stereo Blend" value={stereoBlend() >= 0 ? `${(stereoBlend() * 100).toFixed(0)}%` : 'n/a'} title={store.mode() === 'am-stereo' ? 'C-QUAM lock (IQ) or decoded L/R stereo width (Opus); 0% = mono' : 'Pilot-derived stereo blend (IQ) or decoded L/R width (Opus)'} tone="text-cyan" />
               <Stat label="Carrier" value={stats() ? fmtFreqCompact(stats()!.carrierHz) : '—'} sub={stats() ? fmtLevel(stats()!.carrierDb) : undefined} title="Strongest carrier near the tuned frequency" />
               <Stat label="Activity" value={`${activityPct().toFixed(0)}%`} sub="last 200 frames" title="Percentage of recent frames above noise floor + 6 dB" />
               <Stat label="Occ BW 99%" value={stats() ? fmtSpan(stats()!.occupiedBwHz) : '—'} title="Occupied bandwidth estimate" />

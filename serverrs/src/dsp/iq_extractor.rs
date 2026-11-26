@@ -236,6 +236,18 @@ impl IqExtractor {
         self.nco.set_offset(hz as f64);
     }
 
+    /// Retunes with a short glide instead of an instantaneous offset change.
+    /// Used for user tuning: the demodulator sees a continuous sweep, which
+    /// (with the DSP state kept running) avoids the click a step produces.
+    pub fn set_tune_offset_smooth(&mut self, hz: i32, ramp_ms: f64) {
+        let samples = (self.input_rate as f64 * ramp_ms.max(0.0) / 1000.0).round() as usize;
+        if samples == 0 {
+            self.set_tune_offset(hz);
+        } else {
+            self.nco.set_offset_smooth(hz as f64, samples);
+        }
+    }
+
     /// Changes the output rate at runtime, rebuilding the decimator and
     /// reinitializing the rate-dependent stages.
     pub fn set_output_sample_rate(&mut self, rate: i32) {

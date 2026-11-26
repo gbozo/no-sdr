@@ -1135,8 +1135,16 @@ class CQuamDemodulator implements Demodulator {
   private gSampleCount = 0;
   private _pilotMag = 0;
   private _lockLevel = 0;
+  private _stereoDetected = false;
   get pilotMag(): number  { return this._pilotMag; }
   get lockLevel(): number { return this._lockLevel; }
+  /** PLL lock confidence, exposed for the signal-analysis lock readout. */
+  getLockLevel(): number { return this._lockLevel; }
+  /**
+   * 0 when C-QUAM stereo is not detected, otherwise the carrier lock level.
+   * Kept as a getter so the generic engine stereo readout works for C-QUAM too.
+   */
+  get blendFactor(): number { return this._stereoDetected ? this._lockLevel : 0; }
 
   // Notch filter state (biquad, per-channel)
   private nb0 = 0; private nb1 = 0; private nb2 = 0;
@@ -1307,6 +1315,7 @@ class CQuamDemodulator implements Demodulator {
 
     // Stereo detection: PLL locked + 25 Hz pilot present
     const isStereo = lockLevel > 0.8 && this._pilotMag > 0.001;
+    this._stereoDetected = isStereo;
 
     return { left, right, stereo: isStereo };
   }
@@ -1321,6 +1330,7 @@ class CQuamDemodulator implements Demodulator {
     this.gSampleCount = 0;
     this._pilotMag = 0;
     this._lockLevel = 0;
+    this._stereoDetected = false;
     this.w1L = 0;
     this.w2L = 0;
     this.w1R = 0;

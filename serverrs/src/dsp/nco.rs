@@ -20,9 +20,17 @@ use super::simd;
 
 const LANES: usize = 8;
 const RENORM_SAMPLES: u64 = 1 << 16;
+/// Number of frequency steps used to glide from the old offset to the new one.
+/// Each step is phase-continuous, so the result is a short, smooth sweep
+/// instead of an instantaneous frequency jump.
+const RAMP_SEGMENTS: u32 = 16;
 
 pub struct NcoBlock {
+    /// Final (target) offset, in Hz.
     offset_hz: f64,
+    /// Offset currently applied, in Hz. Differs from `offset_hz` while a
+    /// smooth retune is in progress.
+    current_hz: f64,
     sample_rate: f64,
     /// e^{-j phase}, f64 for long-run phase accuracy.
     phasor: Complex<f64>,
@@ -33,26 +41,60 @@ pub struct NcoBlock {
     /// step^0 .. step^{LANES-1} as f32
     lanes: [Complex32; LANES],
     renorm_count: u64,
+
+    // Smooth-retune state. The ramp is a small number of phase-continuous
+    // fixed-frequency segments; only the segment boundaries recompute lanes
+    // (no per-sample trig on the hot path).
+    ramp_from_hz: f64,
+    ramp_segments_done: u32,
+    ramp_seg_samples: usize,
+    ramp_seg_remaining: usize,
 }
 
 impl NcoBlock {
     pub fn new(offset_hz: f64) -> Self {
         Self {
             offset_hz,
+            current_hz: offset_hz,
             sample_rate: 0.0,
             phasor: Complex::new(1.0, 0.0),
             step: Complex::new(1.0, 0.0),
             block_step: Complex::new(1.0, 0.0),
             lanes: [Complex32::new(1.0, 0.0); LANES],
             renorm_count: 0,
+            ramp_from_hz: offset_hz,
+            ramp_segments_done: RAMP_SEGMENTS,
+            ramp_seg_samples: 0,
+            ramp_seg_remaining: 0,
         }
     }
 
+    /// Jumps to `hz` immediately. The phase is preserved, so this is
+    /// continuous at the sample level.
     pub fn set_offset(&mut self, hz: f64) {
         self.offset_hz = hz;
+        self.current_hz = hz;
+        self.ramp_segments_done = RAMP_SEGMENTS;
+        self.ramp_seg_remaining = 0;
         if self.sample_rate > 0.0 {
             self.rebuild_step();
         }
+    }
+
+    /// Glides from the current offset to `hz` over `ramp_samples` input
+    /// samples. Used on user retune so the frequency change is a short sweep
+    /// rather than a step at the demodulator input.
+    pub fn set_offset_smooth(&mut self, hz: f64, ramp_samples: usize) {
+        if ramp_samples == 0 || self.sample_rate <= 0.0 {
+            self.set_offset(hz);
+            return;
+        }
+        self.offset_hz = hz;
+        self.ramp_from_hz = self.current_hz;
+        self.ramp_segments_done = 0;
+        self.ramp_seg_samples = (ramp_samples / RAMP_SEGMENTS as usize).max(LANES);
+        self.ramp_seg_remaining = self.ramp_seg_samples;
+        self.apply_ramp_step();
     }
 
     pub fn offset_hz(&self) -> f64 {
@@ -60,7 +102,11 @@ impl NcoBlock {
     }
 
     fn rebuild_step(&mut self) {
-        let w = 2.0 * PI * self.offset_hz / self.sample_rate;
+        self.rebuild_for(self.offset_hz);
+    }
+
+    fn rebuild_for(&mut self, hz: f64) {
+        let w = 2.0 * PI * hz / self.sample_rate;
         // e^{-jw}, matching `out = in * e^{-j phase}`.
         self.step = Complex::new(w.cos(), -w.sin());
 
@@ -70,6 +116,19 @@ impl NcoBlock {
             p *= self.step;
         }
         self.block_step = p;
+    }
+
+    /// Computes the fixed step for the segment that is about to run.
+    fn apply_ramp_step(&mut self) {
+        let done = self.ramp_segments_done + 1;
+        let hz = if done >= RAMP_SEGMENTS {
+            self.offset_hz
+        } else {
+            let t = done as f64 / RAMP_SEGMENTS as f64;
+            self.ramp_from_hz + (self.offset_hz - self.ramp_from_hz) * t
+        };
+        self.current_hz = hz;
+        self.rebuild_for(hz);
     }
 
     #[inline]
@@ -91,6 +150,9 @@ impl ProcessorBlock for NcoBlock {
         self.sample_rate = sample_rate;
         self.phasor = Complex::new(1.0, 0.0);
         self.renorm_count = 0;
+        self.current_hz = self.offset_hz;
+        self.ramp_segments_done = RAMP_SEGMENTS;
+        self.ramp_seg_remaining = 0;
         self.rebuild_step();
         Ok(())
     }
@@ -104,6 +166,9 @@ impl ProcessorBlock for NcoBlock {
     fn reset(&mut self) {
         self.phasor = Complex::new(1.0, 0.0);
         self.renorm_count = 0;
+        self.current_hz = self.offset_hz;
+        self.ramp_segments_done = RAMP_SEGMENTS;
+        self.ramp_seg_remaining = 0;
     }
 }
 
@@ -111,6 +176,44 @@ impl NcoBlock {
     /// Shifts `buf` by the NCO in place. Avoids allocating an output buffer
     /// and a full copy per chunk.
     pub fn process_complex_into(&mut self, buf: &mut [Complex32]) {
+        if self.ramp_seg_remaining > 0 || self.ramp_segments_done < RAMP_SEGMENTS {
+            self.process_ramped(buf);
+        } else {
+            self.mix_fast(buf);
+        }
+    }
+
+    /// Runs a smooth retune: a handful of phase-continuous fixed-frequency
+    /// segments, then the regular fast path for the remainder of the buffer.
+    fn process_ramped(&mut self, buf: &mut [Complex32]) {
+        let mut pos = 0;
+        while pos < buf.len() {
+            if self.ramp_seg_remaining == 0 {
+                self.ramp_segments_done += 1;
+                if self.ramp_segments_done >= RAMP_SEGMENTS {
+                    // Ramp finished — snap to the exact target and use the
+                    // normal mixer for the rest of this chunk.
+                    self.ramp_segments_done = RAMP_SEGMENTS;
+                    self.current_hz = self.offset_hz;
+                    self.rebuild_step();
+                    self.mix_fast(&mut buf[pos..]);
+                    return;
+                }
+                self.ramp_seg_remaining = self.ramp_seg_samples;
+                self.apply_ramp_step();
+            }
+            let n = self.ramp_seg_remaining.min(buf.len() - pos);
+            self.mix_fast(&mut buf[pos..pos + n]);
+            self.ramp_seg_remaining -= n;
+            pos += n;
+        }
+    }
+
+    /// Existing block-wise mixer for a fixed offset.
+    fn mix_fast(&mut self, buf: &mut [Complex32]) {
+        if buf.is_empty() {
+            return;
+        }
         let whole = buf.len() - buf.len() % LANES;
 
         mix_in_place_run(
@@ -126,8 +229,11 @@ impl NcoBlock {
             self.renorm_count = 0;
         }
 
-        let base = Complex32::new(self.phasor.re as f32, self.phasor.im as f32);
+        // Tail shorter than one lane block: advance the phasor per sample so
+        // the partial block stays phase-correct. (A single shared phase here
+        // caused a small phase jump whenever a chunk was not a multiple of 8.)
         for x in &mut buf[whole..] {
+            let base = Complex32::new(self.phasor.re as f32, self.phasor.im as f32);
             *x = *x * base;
             self.phasor *= self.step;
         }
@@ -239,5 +345,37 @@ mod tests {
         // No discontinuity larger than a sample step.
         let d = (after[0] - before[63]).norm();
         assert!(d < 0.2, "phase jumped by {d}");
+    }
+
+    #[test]
+    fn smooth_retune_is_phase_continuous_and_hits_target() {
+        let mut nco = NcoBlock::new(0.0);
+        nco.init(48_000.0).unwrap();
+        let mut buf = vec![Complex32::new(1.0, 0.0); 4096];
+        nco.process_complex_into(&mut buf);
+        nco.set_offset_smooth(1000.0, 960);
+        assert_eq!(nco.offset_hz(), 1000.0);
+        // Largest sample-to-sample phase step must stay bounded: the ramp is a
+        // glide, not a jump.
+        let mut prev = buf[4095];
+        let mut max_step = 0.0f32;
+        let mut max_idx = 0usize;
+        let mut out = vec![Complex32::new(1.0, 0.0); 4096];
+        nco.process_complex_into(&mut out);
+        for (i, s) in out.iter().enumerate() {
+            let d = (*s - prev).norm();
+            if d > max_step {
+                max_step = d;
+                max_idx = i;
+            }
+            prev = *s;
+        }
+        assert!(max_step < 0.2, "max phase step {max_step} at {max_idx}");
+        // Once the ramp is done, the NCO must sit on the requested offset.
+        let probe = nco.process_complex(&vec![Complex32::new(1.0, 0.0); 64]);
+        let rot = probe[32] * probe[33].conj();
+        let expected = 2.0 * std::f64::consts::PI * 1000.0 / 48_000.0;
+        let got = rot.arg() as f64;
+        assert!((got - expected).abs() < 0.01, "offset {got} != {expected}");
     }
 }

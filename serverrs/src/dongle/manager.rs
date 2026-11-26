@@ -273,6 +273,15 @@ struct ClientPipeline {
     /// Whether this client has audio switched on. A decoder-only pipeline can
     /// skip the whole extractor/encoder path and still receive decoder output.
     audio_enabled: bool,
+    /// Set when a user retune is waiting for the next IQ frame. The frame gets
+    /// a flag so the client can fade the demodulated audio at the boundary.
+    retune_flag: bool,
+    /// Last user retune, used to apply the crossfade only to discrete jumps
+    /// (a fine-tune drag should not ramp the audio on every step).
+    last_tune_at: Option<Instant>,
+    /// Deferred retune target for the Opus path: the old frequency is faded
+    /// out first, then the NCO is switched and the new frequency faded in.
+    pending_tune: Option<i32>,
     /// Per-client foreground decoder, built from the client's tune offset.
     #[cfg(feature = "decoders")]
     foreground: Option<crate::decoders::Channel>,
@@ -325,6 +334,15 @@ impl ClientPipeline {
     fn set_bandwidth(&mut self, hz: i32) {
         self.extractor.set_one_sided(is_one_sided_mode(&self.mode));
         self.extractor.set_bandwidth(hz);
+    }
+
+    /// Applies a deferred retune immediately. Called when another pipeline
+    /// change (mode, codec, rate) would otherwise leave the NCO on the old
+    /// frequency while `tune_offset` already points at the new one.
+    fn resolve_pending_tune(&mut self) {
+        if let Some(target) = self.pending_tune.take() {
+            self.extractor.set_tune_offset(target);
+        }
     }
 }
 
@@ -2091,15 +2109,29 @@ impl Manager {
             return;
         }
 
-        if let Some(opus) = cp.opus_pipeline.as_mut() {
-            let results = opus.process(&sub_band);
-            for r in results {
-                self.ws.send_to(
-                    client_id,
-                    pack_audio_opus_message(&r.packet, r.samples as u16, r.channels as u8),
-                );
-                if let Some(rds) = r.rds_json {
-                    self.ws.send_to(client_id, pack_rds_message(&rds));
+        if cp.opus_pipeline.is_some() {
+            let fade_out_finished = {
+                let opus = cp.opus_pipeline.as_mut().unwrap();
+                let results = opus.process(&sub_band);
+                for r in results {
+                    self.ws.send_to(
+                        client_id,
+                        pack_audio_opus_message(&r.packet, r.samples as u16, r.channels as u8),
+                    );
+                    if let Some(rds) = r.rds_json {
+                        self.ws.send_to(client_id, pack_rds_message(&rds));
+                    }
+                }
+                opus.fade_out_finished()
+            };
+            // The old frequency has now faded to silence: switch the NCO and
+            // fade the new frequency in. The next chunk carries the new audio.
+            if fade_out_finished {
+                if let Some(target) = cp.pending_tune.take() {
+                    cp.extractor.set_tune_offset_smooth(target, 6.0);
+                    if let Some(opus) = cp.opus_pipeline.as_mut() {
+                        opus.begin_fade_in(12.0);
+                    }
                 }
             }
             cp.sub_band = sub_band;
@@ -2108,6 +2140,7 @@ impl Manager {
 
         let out_rate = cp.extractor.output_sample_rate() as u32;
         let mut copied = 0;
+        let mut retune_flag = std::mem::take(&mut cp.retune_flag);
         while copied < sub_band.len() {
             let space = cp.chunk_size.saturating_sub(cp.accum_pos);
             let n = space.min(sub_band.len() - copied);
@@ -2124,14 +2157,22 @@ impl Manager {
                 } else {
                     None
                 };
+                let retune = retune_flag;
+                retune_flag = false;
                 match encoded {
                     Some(n) => self.ws.send_to(
                         client_id,
-                        pack_iq_adpcm_message(&cp.adpcm_buf[..n], cp.chunk_size as u32, out_rate),
+                        pack_iq_adpcm_message(
+                            &cp.adpcm_buf[..n],
+                            cp.chunk_size as u32,
+                            out_rate,
+                            retune,
+                        ),
                     ),
-                    None => self
-                        .ws
-                        .send_to(client_id, pack_iq_message(&cp.accum_buf, out_rate)),
+                    None => self.ws.send_to(
+                        client_id,
+                        pack_iq_message(&cp.accum_buf, out_rate, retune),
+                    ),
                 }
                 cp.accum_pos = 0;
             }
@@ -2302,6 +2343,9 @@ impl Manager {
             stereo_enabled,
             adpcm_buf: vec![0; (chunk_size + 1) / 2],
             audio_enabled,
+            retune_flag: false,
+            last_tune_at: None,
+            pending_tune: None,
             #[cfg(feature = "decoders")]
             foreground,
             #[cfg(feature = "decoders")]
@@ -2971,15 +3015,52 @@ impl Manager {
     fn handle_tune(&self, client_id: &str, cmd: &ClientCommand) {
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
-            cp.extractor.set_tune_offset(cmd.offset as i32);
-            cp.tune_offset = cmd.offset as i32;
-            cp.extractor.reset();
-            cp.accum_pos = 0;
-            cp.adpcm_enc.reset();
+            let target = cmd.offset as i32;
+            let previous = cp.tune_offset;
+            let delta = (target - previous).abs();
+            cp.tune_offset = target;
+            // Only discrete, non-trivial jumps get a crossfade. A small step
+            // (or a fine-tune drag) is handled by the NCO glide; re-arming a
+            // fade for every nudge would audibly flutter.
+            let now = Instant::now();
+            let discrete = delta >= 2_000
+                && cp
+                    .last_tune_at
+                    .is_none_or(|at| now.duration_since(at) > Duration::from_millis(180));
+            cp.last_tune_at = Some(now);
+
+            if cp.opus_pipeline.is_some() {
+                if discrete {
+                    // Defer the NCO switch: fade the old frequency out first,
+                    // then switch and fade the new one in (see the process loop).
+                    cp.pending_tune = Some(target);
+                    let opus = cp.opus_pipeline.as_mut().unwrap();
+                    if !opus.fade_out_active() {
+                        opus.begin_fade_out(6.0);
+                    }
+                } else {
+                    // Continuous tuning: glide immediately, cancel any pending
+                    // deferred fade and keep the stream running.
+                    cp.pending_tune = None;
+                    let opus = cp.opus_pipeline.as_mut().unwrap();
+                    if opus.fade_out_active() {
+                        opus.begin_fade_in(1.0);
+                    }
+                    cp.extractor.set_tune_offset_smooth(target, 6.0);
+                }
+            } else {
+                // IQ/ADPCM path: the client demodulates, so glide the NCO and
+                // flag the first frame after the switch for a client-side fade.
+                cp.extractor.set_tune_offset_smooth(target, 8.0);
+                if discrete {
+                    cp.retune_flag = true;
+                }
+            }
+
             #[cfg(feature = "decoders")]
             {
                 debug!(client = %client_id, offset = cmd.offset, "foreground decoder retune");
-                cp.foreground_offset = cmd.offset as i32;
+                cp.foreground_offset = target;
                 cp.foreground = None;
                 cp.foreground_window = None;
                 cp.scope = None;
@@ -2997,6 +3078,7 @@ impl Manager {
     fn handle_bandwidth(&self, client_id: &str, cmd: &ClientCommand) {
         if let Some(cp) = self.client_pipelines.lock().get(client_id) {
             let mut cp = cp.lock();
+            cp.resolve_pending_tune();
             let bandwidth = cmd.hz as i32;
             cp.set_bandwidth(bandwidth);
             if cp.mode == "raw" {
@@ -3026,6 +3108,9 @@ impl Manager {
         };
         let mut cp = cp.lock();
 
+        // A deferred Opus retune may still be fading out; make sure a mode
+        // change starts from the requested frequency, not the old one.
+        cp.resolve_pending_tune();
         let bandwidth = if cmd.bandwidth > 0 {
             cmd.bandwidth as i32
         } else {
@@ -3111,6 +3196,7 @@ impl Manager {
         if old_codec == new_codec {
             return;
         }
+        cp.resolve_pending_tune();
         let old_opus = is_opus_codec(&old_codec);
         let new_opus = is_opus_codec(&new_codec);
 

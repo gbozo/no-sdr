@@ -9,6 +9,7 @@ import { engine } from '../engine/sdr-engine.js';
 import { DEMOD_MODES } from '~/shared';
 import type { CodecType, FftCodecType, IqCodecType, DemodMode, DongleInfo, DongleProfile, WaterfallColorTheme } from '~/shared';
 import { getPaletteNames } from '../engine/palettes.js';
+import type { ModQuality } from '../engine/analysis.js';
 
 const ControlPanel: Component = () => {
   return (
@@ -2401,9 +2402,97 @@ const SMeter: Component = () => {
             style={{ height: '36px', 'image-rendering': 'crisp-edges' }}
           />
         </div>
+        <ModQualityContent />
       </div>
       </Show>
     </div>
+  );
+};
+
+// ---- Modulation Quality (inside the Signal panel) ----
+const ModQualityContent: Component = () => {
+  const [mq, setMq] = createSignal<ModQuality | null>(null);
+
+  // The engine computes the live reading from the main FFT; poll it rather
+  // than making the engine reactive.
+  onMount(() => {
+    const id = setInterval(() => setMq(engine.getModQuality()), 200);
+    onCleanup(() => clearInterval(id));
+  });
+
+  const modMode = (): boolean =>
+    store.mode() === 'am' || store.mode() === 'sam' || store.mode() === 'am-stereo'
+    || store.mode() === 'usb' || store.mode() === 'lsb';
+  const tone = (score: number): string =>
+    score >= 80 ? 'text-green' : score >= 60 ? 'text-amber' : 'text-red';
+  const bar = (score: number): string =>
+    score >= 80 ? 'bg-green' : score >= 60 ? 'bg-amber' : 'bg-red';
+  // Two fixed rows, two fixed columns. Keeping each metric in its own cell
+  // means a value changing width (9% → 100%) cannot shift the other column.
+  const metrics = (q: ModQuality): { label: string; value: string }[] => q.kind === 'am'
+    ? [
+        { label: 'Depth', value: `${(q.depthPct ?? 0).toFixed(0)}%` },
+        { label: 'Splatter', value: `${q.splatterDb.toFixed(0)} dB` },
+        { label: 'Sym', value: `${(q.symmetryPct ?? 0).toFixed(0)}%` },
+        { label: 'C/N', value: `${q.snrDb.toFixed(0)} dB` },
+      ]
+    : [
+        { label: 'Opp SB', value: `${(q.oppSbDb ?? 0).toFixed(0)} dB` },
+        { label: 'Carrier', value: `${(q.carrierSuppDb ?? 0).toFixed(0)} dB` },
+        { label: 'BW', value: `${((q.bwHz ?? 0) / 1000).toFixed(2)}k` },
+        { label: 'C/N', value: `${q.snrDb.toFixed(0)} dB` },
+      ];
+
+  return (
+    <Show when={modMode()}>
+      <div
+        class="mt-2 pt-2 border-t border-border/40"
+        title="Estimated from the received spectrum: depth, splatter, carrier/sideband purity and SNR. Use a tone or two-tone test for repeatable readings."
+      >
+        <Show
+          when={mq()}
+          fallback={
+            <>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[9px] uppercase tracking-wider text-text-dim shrink-0">Mod Quality</span>
+                <div class="flex-1 h-1.5 rounded-sm bg-sdr-base border border-border/40 overflow-hidden" />
+                <span class="text-[13px] leading-none font-mono font-bold tabular-nums text-text-dim">—</span>
+              </div>
+              <div class="mt-1 text-[9px] font-mono text-text-dim leading-[1.35] h-[25px] truncate">
+                No signal — tune an AM/SSB station.
+              </div>
+            </>
+          }
+        >
+          {(q) => (
+            <>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[9px] uppercase tracking-wider text-text-dim shrink-0">Mod Quality</span>
+                <div class="flex-1 h-1.5 rounded-sm bg-sdr-base border border-border/40 overflow-hidden">
+                  <div class={`h-full ${bar(q().score)}`} style={{ width: `${q().score.toFixed(0)}%` }} />
+                </div>
+                <span class={`text-[13px] leading-none font-mono font-bold tabular-nums ${tone(q().score)}`}>
+                  {q().score.toFixed(0)}<span class="text-[9px]">%</span>
+                </span>
+                <span class={`text-[9px] font-mono px-1 py-px border border-border/50 rounded-sm shrink-0 ${tone(q().score)}`}>
+                  {q().grade}
+                </span>
+              </div>
+              <div class="mt-1 text-[9px] font-mono leading-[1.35] h-[25px] grid grid-cols-2 gap-x-2 content-start">
+                <For each={metrics(q())}>
+                  {(m) => (
+                    <div class="flex items-baseline justify-between gap-1 min-w-0">
+                      <span class="text-text-dim shrink-0">{m.label}</span>
+                      <span class="text-text-secondary tabular-nums truncate">{m.value}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </>
+          )}
+        </Show>
+      </div>
+    </Show>
   );
 };
 
