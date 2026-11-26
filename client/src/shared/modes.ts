@@ -474,6 +474,19 @@ export const DIGITAL_MODES: Record<DigitalMode, DigitalModeInfo> = {
     baseDemod: 'usb',
     jsNative: false,
   },
+  cw: {
+    id: 'cw',
+    name: 'CW (Morse)',
+    shortName: 'CW',
+    description: 'Adaptive Morse decoder for keyed carriers',
+    binary: '',
+    defaultArgs: [],
+    typicalFrequency: 14_060_000,
+    bandwidth: 800,
+    sampleRate: 12_000,
+    baseDemod: 'cw',
+    jsNative: false,
+  },
   msk144: {
     id: 'msk144',
     name: 'MSK144',
@@ -572,7 +585,10 @@ export const DIGITAL_MODES: Record<DigitalMode, DigitalModeInfo> = {
  * POCSAG is defined for compatibility but has no server-side decoder.
  */
 export const DECODER_MODE_IDS: DigitalMode[] = (Object.keys(DIGITAL_MODES) as DigitalMode[])
-  .filter((id) => id !== 'pocsag');
+  // CW is also a demod mode: a plain "CW" bookmark must keep opening the
+  // listening demod, not the text decoder. The decoder is selected explicitly
+  // from the CW entry in the decoder panel.
+  .filter((id) => id !== 'pocsag' && id !== 'cw');
 
 /** Bookmark files use a mixture of protocol names and historical aliases. */
 const BOOKMARK_MODE_ALIASES: Record<string, string> = {

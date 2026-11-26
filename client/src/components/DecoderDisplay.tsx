@@ -59,6 +59,7 @@ const DECODERS = [
   { id: 'fsq', label: 'FSQ' },
   { id: 'psk31', label: 'PSK31' },
   { id: 'rtty', label: 'RTTY' },
+  { id: 'cw', label: 'CW' },
   { id: 'js8', label: 'JS8' },
   { id: 'dcf77', label: 'DCF77' },
   { id: 'als162', label: 'ALS162' },
@@ -188,7 +189,8 @@ const DecoderDisplay: Component = () => {
     store.decoderMode() === 'thor' ||
     store.decoderMode() === 'fsq' ||
     store.decoderMode() === 'psk31' ||
-    store.decoderMode() === 'rtty';
+    store.decoderMode() === 'rtty' ||
+    store.decoderMode() === 'cw';
 
   // Load previous decodes for the active mode. The history panel offers deep
   // browsing (search/date range); this copy is merged into the live table so

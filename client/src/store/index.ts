@@ -1078,6 +1078,13 @@ function createStore() {
           level: event.level ?? 0,
           audioHz: event.audioHz ?? 1500,
           listening: event.listening ?? true,
+          baud: event.baud,
+          shiftHz: event.shiftHz,
+          reverse: event.reverse,
+          afcHz: event.afcHz,
+          confidence: event.confidence,
+          wpm: event.wpm,
+          snrDb: event.snrDb,
         });
         return;
       }

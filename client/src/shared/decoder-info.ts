@@ -59,6 +59,12 @@ const HF_TEXT_TIPS = [
   'A narrow filter and noise reduction help; the decoder expects audio from the demodulator.',
 ];
 
+const CW_TIPS = [
+  'Tune the carrier to the dial centre: the decoder envelope-detects an 800 Hz channel, so it does not need a BFO offset.',
+  'Speed is learned from the first few characters. If a very slow or very fast signal does not lock, set settings.wpm.',
+  'A 300–500 Hz receiver filter and a stable carrier give the cleanest text; key clicks and chirp produce garbage.',
+];
+
 const VHF_BURST_TIPS = [
   'Use the stated demodulator/bandwidth and tune the channel centre.',
   'Bursts are intermittent — leave the decoder running over several minutes.',
@@ -565,6 +571,25 @@ export const DECODER_INFO: Record<DigitalMode, DecoderInfo> = {
       { label: '6 m', hz: 50_600_000 },
     ],
     preview: 'rtty',
+  },
+  cw: {
+    protocol: 'On/off keyed CW, 5–60 WPM with automatic speed tracking',
+    timing: 'Continuous; characters appear as their inter-character gap completes',
+    waterfall: 'One narrow keyed carrier. At a wide zoom the dots and dashes look like a dashed line; the keying envelope is much wider than the carrier itself.',
+    tips: CW_TIPS,
+    frequencies: [
+      { label: '160 m', hz: 1_810_000 },
+      { label: '80 m', hz: 3_560_000 },
+      { label: '40 m', hz: 7_030_000 },
+      { label: '30 m', hz: 10_110_000 },
+      { label: '20 m', hz: 14_060_000 },
+      { label: '17 m', hz: 18_080_000 },
+      { label: '15 m', hz: 21_060_000 },
+      { label: '12 m', hz: 24_910_000 },
+      { label: '10 m', hz: 28_060_000 },
+      { label: '6 m', hz: 50_090_000 },
+    ],
+    preview: 'narrow',
   },
   dcf77: {
     protocol: 'AM time code, 1 bit/s, 77.5 kHz longwave',

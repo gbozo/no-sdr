@@ -13,6 +13,7 @@ const MODE_NAMES: Record<string, string> = {
   fsq: 'FSQ',
   psk31: 'PSK31',
   rtty: 'RTTY',
+  cw: 'CW',
 };
 
 function formatTime(sec: number): string {
@@ -34,6 +35,7 @@ const TextModeDisplay: Component = () => {
   let logRef: HTMLPreElement | undefined;
   const [showChunks, setShowChunks] = createSignal(false);
   const mode = () => MODE_NAMES[store.decoderMode()] ?? store.decoderMode().toUpperCase();
+  const isCw = () => store.decoderMode() === 'cw';
   const status = () => store.textStatus();
   const messages = () => store.textMessages();
   const joined = createMemo(() => messages().map((message) => message.text).join(''));
@@ -56,7 +58,9 @@ const TextModeDisplay: Component = () => {
             {status().level.toFixed(1)} dB
           </span>
           <span class="text-[9px] font-mono text-text-dim">
-            {Math.round(status().audioHz)} Hz audio
+            {isCw()
+              ? `${Math.round(status().wpm ?? 0)} WPM`
+              : `${Math.round(status().audioHz)} Hz audio`}
           </span>
           <span class="ml-auto text-[9px] font-mono text-text-dim">
             {messages().length} chunks
@@ -146,6 +150,18 @@ const TextModeDisplay: Component = () => {
             <div class="text-text-dim uppercase text-[9px]">Chunks</div>
             <div class="text-text-primary">{messages().length}</div>
           </div>
+          <Show when={status().wpm !== undefined}>
+            <div class="border border-border/30 rounded-sm p-2">
+              <div class="text-text-dim uppercase text-[9px]">Speed</div>
+              <div class="text-text-primary">{Math.round(status().wpm ?? 0)} WPM</div>
+            </div>
+          </Show>
+          <Show when={status().snrDb !== undefined}>
+            <div class="border border-border/30 rounded-sm p-2">
+              <div class="text-text-dim uppercase text-[9px]">Keying SNR</div>
+              <div class="text-text-primary">{status().snrDb?.toFixed(1)} dB</div>
+            </div>
+          </Show>
           <Show when={status().baud !== undefined}>
             <div class="border border-border/30 rounded-sm p-2">
               <div class="text-text-dim uppercase text-[9px]">
@@ -178,17 +194,28 @@ const TextModeDisplay: Component = () => {
 
         <div class="text-[10px] font-mono text-text-dim leading-relaxed border-t border-border/30 pt-3">
           <p>
-            Continuous keyboard modes: text appears as it is decoded; there is no
-            slot timer or map.
+            Continuous text modes: characters appear as they are decoded; there
+            is no slot timer or map.
           </p>
-          <p class="mt-2">
-            Typical tuning: 14.070 MHz USB for Olivia/THOR/PSK31, 14.080 MHz for RTTY,
-            7.104 MHz for FSQ. Olivia supports <span class="text-text-primary">tones</span> and{' '}
-            <span class="text-text-primary">bandwidthHz</span>; THOR/FSQ/PSK31 support{' '}
-            <span class="text-text-primary">baud</span>; RTTY adds{' '}
-            <span class="text-text-primary">shiftHz</span>, <span class="text-text-primary">reverse</span>{' '}
-            and <span class="text-text-primary">afc</span>.
-          </p>
+          <Show
+            when={isCw()}
+            fallback={
+              <p class="mt-2">
+                Typical tuning: 14.070 MHz USB for Olivia/THOR/PSK31, 14.080 MHz for RTTY,
+                7.104 MHz for FSQ. Olivia supports <span class="text-text-primary">tones</span> and{' '}
+                <span class="text-text-primary">bandwidthHz</span>; THOR/FSQ/PSK31 support{' '}
+                <span class="text-text-primary">baud</span>; RTTY adds{' '}
+                <span class="text-text-primary">shiftHz</span>, <span class="text-text-primary">reverse</span>{' '}
+                and <span class="text-text-primary">afc</span>.
+              </p>
+            }
+          >
+            <p class="mt-2">
+              Tune the carrier to the dial centre — CW envelope-detects an 800 Hz
+              channel and does not need a BFO offset. Speed is learned from the
+              keying; the first character or two may be rough while it locks.
+            </p>
+          </Show>
         </div>
       </div>
     </div>

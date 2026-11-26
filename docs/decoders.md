@@ -1030,6 +1030,65 @@ frequency and clear/chunk controls. Olivia accepts `tones` and `bandwidthHz`;
 THOR, FSQ and PSK31 accept `baud`; RTTY adds `shiftHz`, `reverse` and `afc`.
 The status line shows RTTY AFC offset/reverse and the symbol/baud rate.
 
+## CW (Morse)
+
+CW is a single-signal decoder for the decoder panel. Unlike the keyboard modes
+it tunes to the **carrier itself**: the extractor pulls an 800 Hz channel around
+`frequencyHz`, and the decoder measures the keyed envelope. There is no BFO
+offset and no USB tuning convention to remember.
+
+```yaml
+decoders:
+  - id: cw-20m
+    enabled: true
+    dongleId: d1
+    mode: cw
+    frequencyHz: 14060000
+    bandwidthHz: 500
+    settings:
+      wpm: 20        # optional seed; speed is learned from the keying
+```
+
+Pipeline:
+
+```text
+raw IQ → IqExtractor (800 Hz) → envelope → adaptive slicer
+  → mark/gap timing → learned dot length → Morse table
+       └─ text chunks + status (WPM, keying SNR) → MSG_DECODER
+```
+
+The envelope slicer tracks the noise floor and signal peak, slices near 50% of
+the linear envelope (which preserves pulse timing through the smoothing
+filter), and uses 10% hysteresis. Key decisions are muted for the first 0.5 s
+while the floor and peak calibrate, so a burst of receiver noise cannot be
+mistaken for a dash. Marks and gaps are measured only after the inter-character
+gap, so a character is decoded with the dot length learned from all of its
+marks rather than the initial 20 WPM guess. The speed range is 5–60 WPM.
+`settings.wpm` seeds the estimate for unusually slow or fast stations; leave it
+unset for automatic tracking.
+
+Text event:
+
+```json
+{
+  "decoderType": "cw",
+  "data": {
+    "kind": "text",
+    "id": "cw-20m",
+    "mode": "cw",
+    "text": "CQ DE N0CALL",
+    "rfHz": 14060000,
+    "audioHz": 0,
+    "level": -38.4,
+    "at": 1760000000
+  }
+}
+```
+
+Status carries `wpm` and `snrDb`; the client shows speed and keying SNR in the
+text workspace. Unknown Morse sequences are dropped rather than printed as
+`?`, because on a noisy channel a fabricated character is worse than a gap.
+
 ## FST4 / Q65 / JT65 / JT9 (weak-signal slots)
 
 These are slotted mfsk-core modes with long T/R periods. They use the same
@@ -1187,6 +1246,7 @@ mode, text, RF, DT, SNR and confidence.
 20. WSPR/PI4. *(implemented)*
 21. JS8. *(implemented)*
 22. DCF77/ALS162 time signals. *(implemented)*
+23. CW/Morse single-signal decoder. *(implemented)*
 
 ## JS8
 

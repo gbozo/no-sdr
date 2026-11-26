@@ -162,7 +162,7 @@ export interface DecoderWindowInfo {
   handled: DecoderHandledRange[];
   display: DecoderRange;
   decodeBand?: DecoderRange;
-  windowKind: 'usb' | 'am' | 'fm' | 'lane' | 'fixed' | 'raw';
+  windowKind: 'usb' | 'am' | 'fm' | 'cw' | 'lane' | 'fixed' | 'raw';
   tunable: boolean;
   scope: boolean;
   expectedAudioHz: number;
@@ -253,6 +253,7 @@ export type DigitalMode =
   | 'fsq'
   | 'psk31'
   | 'rtty'
+  | 'cw'
   | 'msk144'
   | 'fsk441'
   | 'wspr'
@@ -648,6 +649,10 @@ export interface TextModeStatus {
   afcHz?: number;
   /** RTTY decoder confidence. */
   confidence?: number;
+  /** CW: estimated keying speed. */
+  wpm?: number;
+  /** CW: peak-to-noise separation of the keyed carrier. */
+  snrDb?: number;
 }
 
 // ---- Meteor scatter (MSK144 / FSK441) ----

@@ -31,6 +31,7 @@ use crate::ws::{pack_decoder_message, WsManager};
 
 mod acars;
 mod acars_channel;
+mod cw;
 #[cfg(feature = "adsb")]
 mod adsb;
 #[cfg(any(
@@ -158,7 +159,7 @@ pub(crate) struct WindowSpec {
     pub display: RangeSpec,
     /// A narrower band the decoder searches inside `window` (WSPR).
     pub decode_band: Option<RangeSpec>,
-    /// `usb`, `am`, `fm`, `lane`, `fixed` or `raw`.
+    /// `usb`, `am`, `fm`, `cw`, `lane`, `fixed` or `raw`.
     pub window_kind: &'static str,
     pub tunable: bool,
     pub scope: bool,
@@ -352,6 +353,7 @@ fn expected_audio_hz(mode: &str) -> f64 {
     let mode = mode.trim().to_ascii_lowercase();
     match mode.as_str() {
         "acars" => 1_800.0,
+        "cw" => 0.0,
         "aprs" | "packet" | "navtex" => 1_700.0,
         "wefax" | "sstv" => 1_900.0,
         "dcf77" | "als162" => 0.0,
@@ -412,6 +414,19 @@ pub(crate) fn window_spec(
     }
     if is_acars(mode) {
         let mut spec = centered_window(dial_hz, 6_000.0, "am", 1_800.0, period_s);
+        spec.scope = false;
+        return spec;
+    }
+    if is_cw(mode) {
+        // CW tunes to the carrier itself: the decoder measures the envelope of
+        // an 800 Hz channel centred on the dial. There is no audio offset.
+        let mut spec = centered_window(
+            dial_hz,
+            cw::CW_IF_BANDWIDTH_HZ as f64,
+            "cw",
+            0.0,
+            period_s,
+        );
         spec.scope = false;
         return spec;
     }
@@ -569,6 +584,7 @@ pub(crate) fn signal_bw_hz(mode: &str) -> f64 {    match mode.trim().to_ascii_lo
         "olivia" | "thor" | "fsq" => 500.0,
         "psk31" => 31.0,
         "rtty" => 170.0,
+        "cw" => 100.0,
         "dcf77" | "als162" => 100.0,
         _ => 0.0,
     }
@@ -818,6 +834,10 @@ fn is_pi4(mode: &str) -> bool {
 
 fn is_acars(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("acars")
+}
+
+fn is_cw(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("cw")
 }
 
 #[cfg(feature = "ais")]
@@ -1131,6 +1151,9 @@ pub fn is_background_mode(mode: &str) -> bool {
 }
 
 pub(crate) fn supported_mode(mode: &str) -> bool {
+    if is_cw(mode) {
+        return true;
+    }
     #[cfg(feature = "adsb")]
     if is_adsb(mode) {
         return true;
@@ -1307,6 +1330,7 @@ impl MfskChannel {
 pub(crate) enum Channel {
     Mfsk(Box<MfskChannel>),
     Acars(acars_channel::AcarsChannel),
+    Cw(cw::CwChannel),
     #[cfg(feature = "adsb")]
     Adsb(adsb::AdsbChannel),
     #[cfg(feature = "aprs")]
@@ -1376,6 +1400,7 @@ impl Channel {
         match self {
             Channel::Mfsk(channel) => &channel.cfg,
             Channel::Acars(channel) => &channel.cfg,
+            Channel::Cw(channel) => &channel.cfg,
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => &channel.cfg,
             #[cfg(feature = "aprs")]
@@ -1415,6 +1440,7 @@ impl Channel {
         match self {
             Channel::Mfsk(channel) => channel.take_results(),
             Channel::Acars(channel) => channel.take_results(),
+            Channel::Cw(channel) => channel.take_results(),
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => channel.take_results(),
             #[cfg(feature = "aprs")]
@@ -1461,6 +1487,7 @@ impl Channel {
         match self {
             Channel::Mfsk(channel) => channel.process_chunk(chunk, now_ns),
             Channel::Acars(channel) => channel.process_chunk(chunk, now_ms),
+            Channel::Cw(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "adsb")]
             Channel::Adsb(channel) => channel.process_chunk(chunk, now_ms),
             #[cfg(feature = "aprs")]
@@ -1513,6 +1540,9 @@ pub(crate) fn build_channel(
             center_hz,
             sample_rate as f64,
         )));
+    }
+    if is_cw(&cfg.mode) {
+        return cw::CwChannel::new(cfg, center_hz, sample_rate).map(Channel::Cw);
     }
     if is_acars(&cfg.mode) {
         return acars_channel::AcarsChannel::new(cfg, center_hz, sample_rate).map(Channel::Acars);

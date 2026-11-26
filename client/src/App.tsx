@@ -149,7 +149,7 @@ const App: Component = () => {
         store.applyHellEvent(data);
         return;
       }
-      if (type === 'olivia' || type === 'thor' || type === 'fsq' || type === 'psk31' || type === 'rtty') {
+      if (type === 'olivia' || type === 'thor' || type === 'fsq' || type === 'psk31' || type === 'rtty' || type === 'cw') {
         store.applyTextEvent(data);
         return;
       }
