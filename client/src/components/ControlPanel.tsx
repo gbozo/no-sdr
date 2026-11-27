@@ -2446,39 +2446,34 @@ const ModQualityContent: Component = () => {
   return (
     <Show when={modMode()}>
       <div
-        class="mt-2 pt-2 border-t border-border/40"
+        class="mt-2 pt-2 border-t border-border/40 min-h-[56px]"
         title="Estimated from the received spectrum: depth, splatter, carrier/sideband purity and SNR. Use a tone or two-tone test for repeatable readings."
       >
-        <Show
-          when={mq()}
-          fallback={
-            <>
-              <div class="flex items-center gap-1.5">
-                <span class="text-[9px] uppercase tracking-wider text-text-dim shrink-0">Mod Quality</span>
-                <div class="flex-1 h-1.5 rounded-sm bg-sdr-base border border-border/40 overflow-hidden" />
-                <span class="text-[13px] leading-none font-mono font-bold tabular-nums text-text-dim">—</span>
-              </div>
-              <div class="mt-1 text-[9px] font-mono text-text-dim leading-[1.35] h-[25px] truncate">
-                No signal — tune an AM/SSB station.
-              </div>
-            </>
-          }
-        >
-          {(q) => (
-            <>
-              <div class="flex items-center gap-1.5">
-                <span class="text-[9px] uppercase tracking-wider text-text-dim shrink-0">Mod Quality</span>
-                <div class="flex-1 h-1.5 rounded-sm bg-sdr-base border border-border/40 overflow-hidden">
-                  <div class={`h-full ${bar(q().score)}`} style={{ width: `${q().score.toFixed(0)}%` }} />
-                </div>
-                <span class={`text-[13px] leading-none font-mono font-bold tabular-nums ${tone(q().score)}`}>
-                  {q().score.toFixed(0)}<span class="text-[9px]">%</span>
-                </span>
-                <span class={`text-[9px] font-mono px-1 py-px border border-border/50 rounded-sm shrink-0 ${tone(q().score)}`}>
-                  {q().grade}
-                </span>
-              </div>
-              <div class="mt-1 text-[9px] font-mono leading-[1.35] h-[25px] grid grid-cols-2 gap-x-2 content-start">
+        <div class="flex items-center gap-1.5 h-[18px]">
+          <span class="text-[9px] uppercase tracking-wider text-text-dim shrink-0">Mod Quality</span>
+          <div class="flex-1 h-1.5 rounded-sm bg-sdr-base border border-border/40 overflow-hidden">
+            <Show when={mq()}>
+              {(q) => (
+                <div class={`h-full ${bar(q().score)}`} style={{ width: `${q().score.toFixed(0)}%` }} />
+              )}
+            </Show>
+          </div>
+          <span class={`text-[13px] leading-none font-mono font-bold tabular-nums ${mq() ? tone(mq()!.score) : 'text-text-dim'}`}>
+            <Show when={mq()} fallback="—">
+              {(q) => <>{q().score.toFixed(0)}<span class="text-[9px]">%</span></>}
+            </Show>
+          </span>
+          <span class={`text-[9px] font-mono px-1 py-px border border-border/50 rounded-sm shrink-0 ${mq() ? tone(mq()!.score) : 'text-text-dim'}`}>
+            {mq()?.grade ?? '—'}
+          </span>
+        </div>
+        <div class="mt-1 text-[9px] font-mono leading-[1.35] h-[25px] overflow-hidden">
+          <Show
+            when={mq()}
+            fallback={<div class="truncate text-text-dim">No signal — tune an AM/SSB station.</div>}
+          >
+            {(q) => (
+              <div class="grid grid-cols-2 gap-x-2 content-start">
                 <For each={metrics(q())}>
                   {(m) => (
                     <div class="flex items-baseline justify-between gap-1 min-w-0">
@@ -2488,9 +2483,9 @@ const ModQualityContent: Component = () => {
                   )}
                 </For>
               </div>
-            </>
-          )}
-        </Show>
+            )}
+          </Show>
+        </div>
       </div>
     </Show>
   );
