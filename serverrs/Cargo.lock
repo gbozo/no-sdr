@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "serverrs"
-version = "2.32.0"
+version = "2.32.1"
 dependencies = [
  "anyhow",
  "approx",
